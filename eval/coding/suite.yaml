@@ -1,0 +1,33 @@
+name: aether-coding-eval-v1
+# Real coding-task benchmark. Each task has:
+#   - dir:    relative directory containing starting code + verify.sh
+#   - prompt: the exact prompt aether sees (single user message)
+#   - timeout_secs: kill the agent loop after N seconds (default 300)
+#   - max_tokens_per_turn: cap per-turn token budget (default 4096)
+#
+# Pass criteria: the verify.sh script in the task dir exits 0 against
+# the post-aether working tree. verify.sh has no access to the prompt;
+# it tests OBSERVABLE behavior of the produced code.
+#
+# All tasks are bounded, executable, and verifiable WITHOUT model
+# judgment — pure exit-code semantics.
+tasks:
+  - dir: tasks/01_bug_fix
+    prompt: "There's a bug in count_words. Read the file, find it, fix it. Don't add unnecessary changes."
+    timeout_secs: 180
+
+  - dir: tasks/02_feature_add
+    prompt: "Add a --reverse flag to the CLI in main.py that reverses the output string. Update tests."
+    timeout_secs: 240
+
+  - dir: tasks/03_write_test
+    prompt: "Read math_helpers.py and write a complete pytest test file at test_math_helpers.py covering all functions. Run pytest to confirm it passes."
+    timeout_secs: 240
+
+  - dir: tasks/04_refactor
+    prompt: "The function process_request in handler.py is too long. Extract pure helpers and shrink the main function. Behavior must not change. Run the existing tests to confirm."
+    timeout_secs: 240
+
+  - dir: tasks/05_doc_fix
+    prompt: "The docstring in fetch_user is wrong — it claims behavior that the code does not implement. Fix the docstring to match what the code actually does. Don't change the code."
+    timeout_secs: 120
