@@ -5,7 +5,21 @@ Anthropic Messages API. It runs an explicit perceive → plan → tool-select �
 execute → observe → verify loop with a built-in self-check gate and reminder
 tamper-test — pipeline scaffolding most agents don't ship.
 
-## Status: v0.10.0
+## Status: v0.11.0
+
+Cleanup + new transport + CI surface:
+- **Stripped anthropic-internal retry** (G1) — the v0.7-era 5-attempt
+  retry loop inside `anthropic.rs` was double-firing with v0.10's
+  canonical `RetryingProvider` wrapper (3×5 = 15 worst-case attempts).
+  Removed; `RetryingProvider` is now the single retry layer.
+- **MCP WebSocket transport** (G2) — `ServerConfig::Ws { url }` is no
+  longer "not implemented". Connects via `tokio-tungstenite`, demuxes
+  JSON-RPC responses by id like the existing SSE client. Live ws://
+  round-trip UNVERIFIED (no public test MCP-over-WS server).
+- **`aether doctor --json`** (G3) — structured output for CI consumers.
+  Same data as the text path, stable JSON shape. Composes with `--probe`.
+
+v0.10.0 patch:
 
 Adds reliability + fourth cloud provider:
 - **Azure AI Foundry provider** — Claude on Azure via `AZURE_AI_ENDPOINT` +

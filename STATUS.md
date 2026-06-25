@@ -48,4 +48,9 @@ format: `[slice] [status] [commit] [verifier] [live-check] note`
 | F1 | DONE | af8ed8a | n/a | 4/4 azure tests · 57 aether-llm total | Azure Foundry provider (UNVERIFIED — no Azure creds) |
 | F2 | DONE | 55ddff3 | n/a | 7/7 retry tests · workspace green | Unified retry watchdog + AETHER_NO_RETRY |
 | F3 | DONE | 3d432bf | n/a | doctor --help shows --probe · workspace green | aether doctor --probe (latency + token counts) |
+| F4 | DONE | b52373f | n/a | exit 0 · pushed · tag v0.10.0 live | Bump 0.10.0, docs, tag, push |
+| F5 | DONE | 20ce322 | n/a | exit 0 · 1 MED closed (Azure env-lock) | Self-audit + lock-gap fix |
+| G1 | DONE | c14455b | n/a | -43 LoC in anthropic.rs · workspace green | Stripped anthropic-internal retry (F2 follow-up) |
+| G2 | DONE | 2b5ec01 | n/a | 8/8 aether-mcp (+4) · workspace green | MCP WebSocket transport (UNVERIFIED for live ws://) |
+| G3 | DONE | 878b034 | n/a | --json + text output verified · workspace green | aether doctor --json for CI consumers |
 

@@ -145,12 +145,33 @@ A self-contained surface for authorized security work, end-to-end:
   Default behavior (no flag) unchanged; emits "probe: skipped (pass
   `--probe` to make a 1-token round-trip)" so users discover the flag.
 
-## v0.11 — plugins + IDE surfaces (next)
+## v0.11 — cleanup + MCP WS + CI surface — shipped 2026-06-25
+
+- **Stripped anthropic-internal retry** (G1): closes F2's weakest point.
+  The v0.7-era `send_with_retries` in `anthropic.rs` (5 attempts +
+  exponential backoff + jitter) was double-firing with v0.10's
+  `RetryingProvider` wrapper, producing 3×5=15 worst-case attempts and
+  minutes of cumulative sleep on real 5xx storms. Removed the inner
+  loop (-43 LoC); `RetryingProvider` is now the single retry layer.
+  Updated `LlmError::actionable()` text to match.
+- **MCP WebSocket transport** (G2): new `WsClient` in aether-mcp alongside
+  `StdioClient` + `SseClient`. Connects via `tokio-tungstenite::connect_async`,
+  splits into writer (Mutex) + reader (spawn task), demuxes JSON-RPC
+  responses by id. Implements the full `Client` trait. `spawn_client`
+  factory now dispatches `ServerConfig::Ws` → `WsClient`. 4 new unit
+  tests (URL scheme validation, wrong-config rejection, serde round-trip,
+  factory dispatch). Live ws:// round-trip UNVERIFIED (no public test
+  MCP-over-WS server).
+- **`aether doctor --json`** (G3): structured output for CI consumers.
+  Built progressively alongside the text path, same data fields, stable
+  shape. Composes with `--probe`. Exit-code semantics preserved
+  (0 on success, 1 on any failure).
+
+## v0.12 — plugins + IDE surfaces (next)
 
 - Plugin system via WASM modules registered as tools
 - BYOC: Mantle
 - VS Code extension, JetBrains plugin
-- MCP websocket transport
 - HTTP server WebSocket chat for browser clients
 
 ## v0.9 — enterprise
