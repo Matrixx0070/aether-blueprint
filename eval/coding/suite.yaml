@@ -1,4 +1,4 @@
-name: aether-coding-eval-v2
+name: aether-coding-eval-v3
 # Real coding-task benchmark. v2 doubles the suite from 5 → 10 tasks
 # and adds Rust + JavaScript + SQL + multi-file + perf dimensions.
 #
@@ -52,3 +52,24 @@ tasks:
   - dir: tasks/10_perf_opt
     prompt: "dedup in dedup.py is O(n²) — it scans the output list for each input element. Rewrite it as O(n) average using a set for membership lookup while still preserving the first-seen order of elements. Don't change the function signature."
     timeout_secs: 180
+
+  # ─── v3 expansion (Go / TS / Bash / Dockerfile / Java) ─────────────
+  - dir: tasks/11_go_nil_deref
+    prompt: "user.go has nil-pointer dereferences in SummaryLine and CountEmailDomains — they panic when User.Email or User.Profile is nil. Run `go test ./...` to see the panics, then fix the code so all tests pass without changing the test file."
+    timeout_secs: 240
+
+  - dir: tasks/12_ts_type_bug
+    prompt: "parser.ts uses `as Config` to silence the type system about a function that returns an object with possibly-undefined fields. Make the return type honest — either change Config to allow optional fields with proper Partial<>, return Config | null, or throw on missing input. Don't keep the `as Config` cast. Run `tsc` to confirm clean."
+    timeout_secs: 240
+
+  - dir: tasks/13_bash_quoting
+    prompt: "backup.sh has unquoted variable expansions ($SRC and $DEST) so paths with spaces break. Fix the quoting so directories containing spaces are handled correctly. Also fix the missing-arg check that has the same bug. Run shellcheck to verify (if available)."
+    timeout_secs: 180
+
+  - dir: tasks/14_dockerfile_security
+    prompt: "Harden the Dockerfile: pin the Python base image to a specific tag (not :latest), add a non-root USER, switch ADD to COPY for local files, add --no-install-recommends to apt-get install, and add a HEALTHCHECK directive."
+    timeout_secs: 240
+
+  - dir: tasks/15_java_npe
+    prompt: "Inventory.java throws NullPointerException whenever a SKU is queried or restocked for the first time. Fix restock, available, and canFulfill so that querying a missing SKU returns 0 and restocking a new SKU starts at the given quantity. Don't change InventoryTest.java; just make the existing tests pass."
+    timeout_secs: 240
