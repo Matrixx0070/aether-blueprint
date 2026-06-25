@@ -124,6 +124,13 @@ impl LlmProvider for AzureProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex as StdMutex;
+
+    /// Process-wide lock for tests that touch AZURE_AI_* env vars. The
+    /// missing-endpoint test calls `remove_var`; a future live-Azure test
+    /// would call `set_var`. Both must serialize against each other under
+    /// cargo-test's parallel runner.
+    static ENV_LOCK: StdMutex<()> = StdMutex::new(());
 
     #[test]
     fn messages_url_includes_api_version() {
@@ -157,6 +164,7 @@ mod tests {
 
     #[test]
     fn from_env_errors_when_endpoint_missing() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
         // Make sure no stale value is in scope.
         std::env::remove_var("AZURE_AI_ENDPOINT");
         std::env::remove_var("AZURE_AI_API_KEY");
