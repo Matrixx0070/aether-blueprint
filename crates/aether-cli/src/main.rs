@@ -16,6 +16,10 @@
 use aether_core::context::ConversationItem;
 use aether_core::{agent_turn, agent_turn_streamed, Session, SessionConfig, TurnOutcome};
 use aether_overlay::aether_hook::{Reminder, ReminderKind, Source};
+use aether_tools::{Tool, ToolError};
+use async_trait::async_trait;
+use serde::Deserialize;
+use serde_json::Value;
 use aether_llm::{
     anthropic::AnthropicProvider, ContentBlock, LlmProvider, Message, MessagesRequest,
 };
@@ -173,7 +177,13 @@ async fn run_print_agent(
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("self-check gate: {e}"))?;
     let mut tools = ToolRegistry::new();
     register_builtins(&mut tools);
-    let mut session = Session::new(config, overlay, Arc::new(provider), gate, tools);
+    let provider_arc: Arc<dyn aether_llm::LlmProvider> = Arc::new(provider);
+    tools.register(Box::new(AgentTool::new(
+        Arc::clone(&provider_arc),
+        model.to_string(),
+        permission_mode,
+    )));
+    let mut session = Session::new(config, overlay, provider_arc, gate, tools);
     inject_project_context(&mut session);
 
     let mut next_input: Option<String> = Some(prompt.to_string());
@@ -264,8 +274,14 @@ async fn run_repl(
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("self-check gate: {e}"))?;
     let mut tools = ToolRegistry::new();
     register_builtins(&mut tools);
+    let provider_arc: Arc<dyn aether_llm::LlmProvider> = Arc::new(provider);
+    tools.register(Box::new(AgentTool::new(
+        Arc::clone(&provider_arc),
+        model.to_string(),
+        permission_mode,
+    )));
 
-    let mut session = Session::new(config, overlay, Arc::new(provider), gate, tools);
+    let mut session = Session::new(config, overlay, provider_arc, gate, tools);
     // Install an interactive permission prompter for mutating tools when in
     // Default mode. Reads y / n / a from stderr; `a` upgrades to always-allow
     // for that tool name for the remainder of the session.
@@ -699,6 +715,109 @@ fn parse_permission_mode(s: &str) -> Result<aether_perm::PermissionMode> {
         "plan" => Ok(Plan),
         "bypassPermissions" => Ok(BypassPermissions),
         other => anyhow::bail!("unknown permission mode: {other}"),
+    }
+}
+
+// ── Agent tool (sub-loop) ─────────────────────────────────────────────────
+
+const SUB_AGENT_MAX_TURNS: usize = 20;
+const SUB_AGENT_MAX_TOKENS: u32 = 8192;
+
+#[derive(Debug, Deserialize)]
+struct AgentInput {
+    #[allow(dead_code)]
+    description: Option<String>,
+    prompt: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    subagent_type: Option<String>,
+}
+
+/// Tool that spawns a fresh `Session` (using the same provider + bundled
+/// gate rules + built-in tool set, but NOT including this AgentTool — so
+/// nested recursion is bounded by the SUB_AGENT_MAX_TURNS cap as well as
+/// by the missing recursion edge).
+pub struct AgentTool {
+    provider: Arc<dyn aether_llm::LlmProvider>,
+    model: String,
+    permission_mode: aether_perm::PermissionMode,
+}
+
+impl AgentTool {
+    pub fn new(
+        provider: Arc<dyn aether_llm::LlmProvider>,
+        model: String,
+        permission_mode: aether_perm::PermissionMode,
+    ) -> Self {
+        Self {
+            provider,
+            model,
+            permission_mode,
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for AgentTool {
+    fn name(&self) -> &str {
+        "Agent"
+    }
+    fn description(&self) -> &str {
+        "Spawn a sub-agent to handle a self-contained task. The sub-agent \
+         starts with no prior conversation context — provide a complete \
+         brief in `prompt`. It has the same tool set (no Agent itself) and \
+         returns its final reply as the tool result. Best for parallel \
+         research or wrapping a long exploration so it doesn't bloat the \
+         parent context."
+    }
+    fn input_schema(&self) -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "description":   { "type": "string", "description": "Short 3-5 word description" },
+                "prompt":        { "type": "string", "description": "Self-contained brief for the sub-agent" },
+                "subagent_type": { "type": "string", "description": "Optional: hint about sub-agent role" }
+            },
+            "required": ["prompt"]
+        })
+    }
+    async fn run(&self, input: Value) -> Result<String, ToolError> {
+        let inp: AgentInput = serde_json::from_value(input)
+            .map_err(|e| ToolError::Schema(e.to_string()))?;
+        let config = SessionConfig {
+            model: self.model.clone(),
+            permission_mode: self.permission_mode,
+            max_tokens_per_turn: SUB_AGENT_MAX_TOKENS,
+        };
+        let overlay = Fable5Overlay::new(OverlayConfig::default());
+        let gate = Gate::new(default_rules())
+            .map_err(|e| ToolError::Schema(format!("gate: {e}")))?;
+        let mut tools = ToolRegistry::new();
+        // Only built-ins — explicitly NO Agent, so recursion is structural.
+        register_builtins(&mut tools);
+        let mut session =
+            Session::new(config, overlay, Arc::clone(&self.provider), gate, tools);
+        let mut next_input: Option<String> = Some(inp.prompt);
+        let mut last_text: Option<String> = None;
+        for _ in 0..SUB_AGENT_MAX_TURNS {
+            let outcome = agent_turn(&mut session, next_input.take())
+                .await
+                .map_err(|e| ToolError::Io(format!("sub-agent: {e}")))?;
+            if let Some(ConversationItem::Assistant { text, .. }) = session.history.last() {
+                if let Some(t) = text {
+                    last_text = Some(t.clone());
+                }
+            }
+            match outcome {
+                TurnOutcome::AwaitUser | TurnOutcome::Exit => break,
+                TurnOutcome::ContinueImmediately => continue,
+                TurnOutcome::Sleep { seconds } => {
+                    tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
+                    continue;
+                }
+            }
+        }
+        Ok(last_text.unwrap_or_else(|| "(sub-agent exhausted turn budget without final reply)".to_string()))
     }
 }
 

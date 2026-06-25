@@ -13,6 +13,7 @@ dependencies = [
  "aether-selfcheck",
  "aether-tools",
  "anyhow",
+ "async-trait",
  "clap",
  "serde",
  "serde_json",
