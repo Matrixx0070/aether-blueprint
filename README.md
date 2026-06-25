@@ -5,6 +5,24 @@ Anthropic Messages API. It runs an explicit perceive → plan → tool-select �
 execute → observe → verify loop with a built-in self-check gate and reminder
 tamper-test — pipeline scaffolding most agents don't ship.
 
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Matrixx0070/aether-blueprint/main/install.sh | bash
+```
+
+Pin a version or install location:
+
+```sh
+AETHER_VERSION=v0.12.0 AETHER_PREFIX=/usr/local \
+  curl -fsSL https://raw.githubusercontent.com/Matrixx0070/aether-blueprint/main/install.sh | bash
+```
+
+Supported platforms: Linux x86_64, Linux aarch64, macOS x86_64, macOS aarch64.
+Each tarball ships with a SHA256 the script verifies before extraction. See
+`INSTALL.md` for the manual download + verify path and the source-build
+fallback.
+
 ## Status: v0.11.0
 
 Cleanup + new transport + CI surface:
