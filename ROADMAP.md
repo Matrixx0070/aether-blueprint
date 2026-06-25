@@ -260,12 +260,42 @@ A self-contained surface for authorized security work, end-to-end:
 - **Coverage**: 9 languages (Python ×7, Rust, JavaScript, TypeScript,
   Go, Bash, Java, Dockerfile, SQL).
 
-## v0.16 — plugins + IDE surfaces (next)
+## v0.16 — plugins + IDE surfaces — shipped 2026-06-25
 
-- Plugin system via WASM modules registered as tools
+- **L1 HTTP WebSocket chat** on `aether serve`: new GET /ws/chat
+  route streams agent text deltas as JSON frames. One prompt per
+  connection; clients reconnect. axum ws feature + tokio-tungstenite.
+- **L2 VS Code extension skeleton** (TypeScript) at `editor/vscode/`:
+  3 commands (Ask / Ask about selection / Doctor), 3 settings,
+  bare-minimum activation. `tsc -p .` compiles clean. Roadmap items
+  (multi-turn webview panel, diff preview, WS backend) documented in
+  the extension's own README.
+- **L3 multi-turn coding tasks** added to coding-eval (3 new tasks,
+  18 total). Tests whether the agent will commit to a design choice
+  AND document the assumption in deliberately ambiguous prompts. Live
+  on Sonnet 4.6: **3/3 PASS, $0.61** — agent chose half-up rounding,
+  score-DESC sort with name-ASC tiebreaker, LRU(128) caching, each
+  with rationale.
+- **L4 subprocess plugin loader** in new `aether-plugin` crate.
+  Manifest-based at `~/.aether/plugins/<name>/manifest.json` (or
+  `$AETHER_PLUGIN_DIR`); tool input written to stdin, stdout becomes
+  the reply. Zero new compile-time deps (no wasmtime — that's a v0.17+
+  upgrade). 4/4 unit tests + LIVE end-to-end verified with a
+  shell-script `plugin__hello` example.
+
+WASM plugin sandboxing remains the v0.17+ goal — subprocess is the
+practical v1 surface that ships now and gives users immediate
+extensibility.
+
+## v0.17 — plugin sandboxing + IDE polish (next)
+
+- WASM plugin loader via wasmtime (sandboxed alternative to L4
+  subprocess plugins)
+- VS Code extension: dedicated webview panel with multi-turn chat
+- VS Code extension: WebSocket backend integration (talk to long-lived
+  `aether serve` instead of spawn-per-prompt)
+- JetBrains plugin (Kotlin, separate language stack)
 - BYOC: Mantle
-- VS Code extension, JetBrains plugin
-- HTTP server WebSocket chat for browser clients
 
 ## v0.9 — enterprise
 

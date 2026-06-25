@@ -23,7 +23,25 @@ Each tarball ships with a SHA256 the script verifies before extraction. See
 `INSTALL.md` for the manual download + verify path and the source-build
 fallback.
 
-## Status: v0.15.0
+## Status: v0.16.0
+
+Plan L shipped four new surfaces (24h autonomous run):
+
+- **L1 WebSocket chat endpoint** on `aether serve` — `GET /ws/chat`
+  streams agent text deltas as JSON frames; live-verified Haiku
+  round-trip (`Pong`, $0.0025).
+- **L2 VS Code extension skeleton** in `editor/vscode/` — 3 commands
+  (Ask / Ask about selection / Doctor), 3 settings, compiles clean
+  (`tsc -p .`).
+- **L3 Multi-turn coding tasks** — 3 new fixtures with deliberately
+  ambiguous prompts; agent must commit to a design choice AND
+  document the assumption. Live: **3/3 PASS, $0.61** on Sonnet 4.6
+  (chose half-up rounding, score-DESC sort, LRU caching — each with
+  rationale).
+- **L4 Subprocess plugin loader** in a new `aether-plugin` crate —
+  manifests at `~/.aether/plugins/<name>/manifest.json` expose
+  user-supplied tools to the LLM. Live end-to-end verified: agent
+  called a shell-script plugin and quoted its output back.
 
 **Coding benchmark v3**: `aether coding-eval` produces **30/30 PASS
 across 2 independent runs** on **15 real coding tasks across 9

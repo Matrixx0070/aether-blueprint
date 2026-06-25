@@ -73,4 +73,11 @@ format: `[slice] [status] [commit] [verifier] [live-check] note`
 | K1 | DONE | 32d27a3 | n/a | task 4 now reports $0.25 (was $0.00) | [aether-usage] emits even when agent_turn errors |
 | K2 | DONE | 365aaed | n/a | 5/5 new verify.sh fail on starting state | suite v3: Go/TS/Bash/Docker/Java |
 | K3-K6 | DONE | bcdab8e | n/a | **30/30 cumulative across 2 runs · $4.63 total** | stability + verify-bug class closed |
+| K10 | DONE | e8347cd | n/a | v0.15.0 binary release LIVE (4 platforms) | bump 0.15.0 |
+| K11-12 | DONE | 60fd992 | n/a | STRUCTURAL_ADVANTAGES.md with file:line citations | 9-category catalogue vs CC |
+| K13 | DONE | 469212f | n/a | zero workspace warnings (was 2) | dead-code cleanup |
+| L1 | DONE | 0461332 | n/a | live ws://127.0.0.1:7779/ws/chat → Pong, $0.0025 | WebSocket chat endpoint |
+| L2 | DONE | (commit) | n/a | tsc -p . clean, 211-line extension.js | VS Code skeleton |
+| L3 | DONE | 8bbdf9e | n/a | **3/3 PASS, $0.61, agent committed+rationaled** | 3 multi-turn design-decision tasks |
+| L4 | DONE | (commit) | n/a | 4/4 plugin tests + live end-to-end echo | subprocess plugin loader |
 
