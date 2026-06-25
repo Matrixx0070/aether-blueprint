@@ -374,29 +374,75 @@ async fn run_repl(
     .await;
     push_hook_reminders(&mut session, outs, "SessionStart");
 
-    let stdin = std::io::stdin();
-    let mut input_buf = String::new();
     let mut pending_user: Option<String> = initial_prompt;
     let custom_commands = load_custom_commands();
+
+    // rustyline editor: history, arrow-key edit, Ctrl-R search.
+    let history_path = std::env::var_os("HOME")
+        .map(|h| PathBuf::from(h).join(".aether/history"));
+    let mut editor: rustyline::Editor<(), rustyline::history::DefaultHistory> =
+        rustyline::Editor::new().context("init rustyline editor")?;
+    if let Some(p) = history_path.as_ref() {
+        let _ = editor.load_history(p);
+    }
+    let mut ctrlc_armed = false; // first Ctrl-C clears input, second exits
 
     loop {
         let user_msg = match pending_user.take() {
             Some(p) => p,
             None => {
-                print!("\nyou › ");
-                std::io::stdout().flush().ok();
-                input_buf.clear();
-                match stdin.read_line(&mut input_buf) {
-                    Ok(0) => {
-                        println!();
-                        break;
+                // Multi-line input: a trailing backslash means "continue".
+                let mut accumulated = String::new();
+                let mut prompt = String::from("you › ");
+                loop {
+                    let line = match editor.readline(&prompt) {
+                        Ok(s) => s,
+                        Err(rustyline::error::ReadlineError::Interrupted) => {
+                            if !accumulated.is_empty() {
+                                eprintln!("[input cleared]");
+                                accumulated.clear();
+                                ctrlc_armed = false;
+                                prompt = "you › ".into();
+                                continue;
+                            }
+                            if ctrlc_armed {
+                                eprintln!("[exit]");
+                                if let Some(p) = history_path.as_ref() {
+                                    let _ = editor.save_history(p);
+                                }
+                                return Ok(());
+                            }
+                            ctrlc_armed = true;
+                            eprintln!("[Ctrl-C again to exit]");
+                            continue;
+                        }
+                        Err(rustyline::error::ReadlineError::Eof) => {
+                            if let Some(p) = history_path.as_ref() {
+                                let _ = editor.save_history(p);
+                            }
+                            println!();
+                            return Ok(());
+                        }
+                        Err(e) => {
+                            eprintln!("[input error] {e}");
+                            return Ok(());
+                        }
+                    };
+                    ctrlc_armed = false;
+                    if line.ends_with('\\') {
+                        accumulated.push_str(&line[..line.len() - 1]);
+                        accumulated.push('\n');
+                        prompt = "  … ".into();
+                        continue;
                     }
-                    Ok(_) => input_buf.trim().to_string(),
-                    Err(e) => {
-                        eprintln!("stdin: {e}");
-                        break;
-                    }
+                    accumulated.push_str(&line);
+                    break;
                 }
+                let trimmed = accumulated.trim().to_string();
+                if !trimmed.is_empty() {
+                    let _ = editor.add_history_entry(trimmed.as_str());
+                }
+                trimmed
             }
         };
 
@@ -485,11 +531,19 @@ async fn run_repl(
                     tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
                     continue;
                 }
-                TurnOutcome::Exit => return Ok(()),
+                TurnOutcome::Exit => {
+                    if let Some(p) = history_path.as_ref() {
+                        let _ = editor.save_history(p);
+                    }
+                    return Ok(());
+                }
             }
         }
     }
 
+    if let Some(p) = history_path.as_ref() {
+        let _ = editor.save_history(p);
+    }
     Ok(())
 }
 
