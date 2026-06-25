@@ -1,0 +1,5 @@
+name: smoke-task-01-only
+tasks:
+  - dir: tasks/01_bug_fix
+    prompt: "There's a bug in count_words. Read the file, find it, fix it. Don't add unnecessary changes."
+    timeout_secs: 180
