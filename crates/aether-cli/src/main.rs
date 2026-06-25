@@ -106,9 +106,25 @@ enum ConfigCmd {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Load settings before parsing CLI so settings.env can populate the
+    // environment that clap's `env` attributes read from.
+    let settings = load_settings();
+    apply_settings_env(&settings);
+
     let cli = Cli::parse();
-    let permission_mode = parse_permission_mode(&cli.permission_mode)?;
-    let model = cli.model.clone().unwrap_or_else(|| DEFAULT_MODEL.to_string());
+    // Resolve permission mode: CLI flag wins, else settings.permission_mode,
+    // else built-in "default".
+    let perm_str = if cli.permission_mode != "default" {
+        cli.permission_mode.clone()
+    } else {
+        settings.permission_mode.clone().unwrap_or_else(|| "default".into())
+    };
+    let permission_mode = parse_permission_mode(&perm_str)?;
+    let model = cli
+        .model
+        .clone()
+        .or_else(|| settings.default_model.clone())
+        .unwrap_or_else(|| DEFAULT_MODEL.to_string());
 
     if let Some(d) = &cli.cwd {
         std::env::set_current_dir(d).with_context(|| format!("cwd: {}", d.display()))?;
@@ -125,9 +141,21 @@ async fn main() -> Result<()> {
         }
         Some(Cmd::Config { sub }) => {
             match sub {
-                ConfigCmd::Show => eprintln!("config show — not yet implemented"),
+                ConfigCmd::Show => {
+                    let path = std::env::var_os("HOME")
+                        .map(|h| PathBuf::from(h).join(SETTINGS_PATH))
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default();
+                    println!("settings file: {path}");
+                    println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                        "default_model": settings.default_model,
+                        "permission_mode": settings.permission_mode,
+                        "always_allow_tools": settings.always_allow_tools,
+                        "env": settings.env,
+                    })).unwrap_or_else(|_| "(encode error)".into()));
+                }
                 ConfigCmd::Set { key, value } => {
-                    eprintln!("config set {key}={value} — not yet implemented")
+                    eprintln!("config set {key}={value} — edit ~/.aether/settings.json directly for v0.2");
                 }
             }
             return Ok(());
@@ -305,6 +333,10 @@ async fn run_repl(
     // Default mode. Reads y / n / a from stderr; `a` upgrades to always-allow
     // for that tool name for the remainder of the session.
     session.executor.set_prompter(Box::new(prompt_permission));
+    let settings = load_settings();
+    session
+        .executor
+        .allow_tools(settings.always_allow_tools.iter().cloned());
     inject_project_context(&mut session);
 
     let session_id = match &resume {
@@ -758,6 +790,43 @@ fn parse_permission_mode(s: &str) -> Result<aether_perm::PermissionMode> {
         "plan" => Ok(Plan),
         "bypassPermissions" => Ok(BypassPermissions),
         other => anyhow::bail!("unknown permission mode: {other}"),
+    }
+}
+
+// ── Settings (~/.aether/settings.json) ────────────────────────────────────
+
+const SETTINGS_PATH: &str = ".aether/settings.json";
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct Settings {
+    default_model: Option<String>,
+    permission_mode: Option<String>,
+    always_allow_tools: Vec<String>,
+    /// Extra env vars set at process start (does not override existing vars).
+    env: std::collections::HashMap<String, String>,
+}
+
+fn load_settings() -> Settings {
+    if let Some(home) = std::env::var_os("HOME") {
+        let p = PathBuf::from(home).join(SETTINGS_PATH);
+        if let Ok(s) = std::fs::read_to_string(&p) {
+            match serde_json::from_str::<Settings>(&s) {
+                Ok(v) => return v,
+                Err(e) => eprintln!("[warn] {}: {e}", p.display()),
+            }
+        }
+    }
+    Settings::default()
+}
+
+/// Apply settings.env entries via `std::env::set_var` for any key not
+/// already in the environment. This is a one-shot at startup.
+fn apply_settings_env(settings: &Settings) {
+    for (k, v) in &settings.env {
+        if std::env::var_os(k).is_none() {
+            std::env::set_var(k, v);
+        }
     }
 }
 
