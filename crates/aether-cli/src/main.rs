@@ -175,6 +175,12 @@ enum Cmd {
         suite: PathBuf,
         #[arg(long)]
         json: bool,
+        /// Number of times to run each fixture (default 1). Use ≥3 for stability testing.
+        #[arg(long, default_value = "1")]
+        runs: u32,
+        /// Minimum fraction of runs that must pass to count a fixture as passing (0.0–1.0).
+        #[arg(long, default_value = "1.0")]
+        threshold: f64,
     },
     /// Session admin (export to markdown, branch off at a turn).
     Session {
@@ -337,14 +343,15 @@ async fn main() -> Result<()> {
             return run_threat_model(&spec, &model, permission_mode).await
         }
         Some(Cmd::Ctf { dir }) => return run_ctf(&dir, &model, permission_mode).await,
-        Some(Cmd::SecurityEval { suite, json }) => {
+        Some(Cmd::SecurityEval { suite, json, runs, threshold }) => {
             let disabled = std::env::var(SECURITY_NO_AUTOROUTE_ENV).ok().as_deref() == Some("1");
             let (effective, notice) =
                 route_for_security(&model, explicit_model_on_cli(), disabled);
             if let Some(n) = notice {
                 eprintln!("{n}");
             }
-            return run_security_eval(&suite, &effective, permission_mode, json).await;
+            return run_security_eval(&suite, &effective, permission_mode, json, runs, threshold)
+                .await;
         }
         Some(Cmd::Tui) => return run_tui(&model, permission_mode).await,
         Some(Cmd::Serve { bind }) => return run_serve(&bind, &model, permission_mode).await,
@@ -2222,6 +2229,17 @@ struct SecurityFixtureResult {
     detail: String,
     issues_found: usize,
     elapsed_ms: u128,
+    // Stability fields — populated when runs > 1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pass_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pass_rate: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    median_ms: Option<u128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    min_ms: Option<u128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_ms: Option<u128>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -2230,7 +2248,31 @@ struct SecurityReport {
     total: usize,
     passed: usize,
     failed: usize,
+    runs: u32,
+    threshold: f64,
     fixtures: Vec<SecurityFixtureResult>,
+}
+
+/// Compute the median of a list of durations. Sorts in-place.
+fn compute_median(mut times: Vec<u128>) -> u128 {
+    times.sort_unstable();
+    let n = times.len();
+    if n == 0 {
+        return 0;
+    }
+    if n % 2 == 1 {
+        times[n / 2]
+    } else {
+        (times[n / 2 - 1] + times[n / 2]) / 2
+    }
+}
+
+/// True when `pass_count / runs >= threshold`.
+fn meets_threshold(pass_count: u32, runs: u32, threshold: f64) -> bool {
+    if runs == 0 {
+        return false;
+    }
+    (pass_count as f64 / runs as f64) >= threshold
 }
 
 async fn run_security_eval(
@@ -2238,7 +2280,10 @@ async fn run_security_eval(
     model: &str,
     permission_mode: aether_perm::PermissionMode,
     json_out: bool,
+    runs: u32,
+    threshold: f64,
 ) -> Result<()> {
+    let runs = runs.max(1);
     let text = std::fs::read_to_string(suite_path)
         .with_context(|| format!("read {}", suite_path.display()))?;
     let suite: SecuritySuite = serde_yaml::from_str(&text)
@@ -2247,7 +2292,6 @@ async fn run_security_eval(
         .name
         .clone()
         .unwrap_or_else(|| suite_path.display().to_string());
-    // Resolve fixture paths relative to the suite file's directory.
     let suite_dir = suite_path
         .parent()
         .map(|p| p.to_path_buf())
@@ -2259,60 +2303,101 @@ async fn run_security_eval(
 
     for fix in &suite.fixtures {
         let path = suite_dir.join(&fix.file);
-        let started = std::time::Instant::now();
-        let (passed, detail, issues_found) =
-            match review_security_file(&path, model, permission_mode).await {
-                Ok((_raw, issues, _lang)) => {
-                    let min_rank = severity_rank(&fix.severity_min);
-                    // Pass if ANY parsed block has (a) a CWE field containing
-                    // one of the expected CWEs and (b) severity >= severity_min.
-                    let mut matched: Option<&ReviewIssue> = None;
-                    for blk in &issues {
-                        let blk_cwe = blk.cwe.to_ascii_uppercase();
-                        let cwe_hit = fix
-                            .expected_cwe
-                            .iter()
-                            .any(|c| blk_cwe.contains(&c.to_ascii_uppercase()));
-                        let sev_hit = severity_rank(&blk.severity) >= min_rank;
-                        if cwe_hit && sev_hit {
-                            matched = Some(blk);
-                            break;
+        let min_rank = severity_rank(&fix.severity_min);
+
+        let mut run_times: Vec<u128> = Vec::with_capacity(runs as usize);
+        let mut run_pass: u32 = 0;
+        let mut last_detail = String::new();
+        let mut last_issues: usize = 0;
+        let mut best_detail: Option<String> = None;
+
+        for _r in 0..runs {
+            let started = std::time::Instant::now();
+            let (r_passed, r_detail, r_issues) =
+                match review_security_file(&path, model, permission_mode).await {
+                    Ok((_raw, issues, _lang)) => {
+                        let mut matched: Option<String> = None;
+                        for blk in &issues {
+                            let blk_cwe = blk.cwe.to_ascii_uppercase();
+                            let cwe_hit = fix
+                                .expected_cwe
+                                .iter()
+                                .any(|c| blk_cwe.contains(&c.to_ascii_uppercase()));
+                            let sev_hit = severity_rank(&blk.severity) >= min_rank;
+                            if cwe_hit && sev_hit {
+                                matched = Some(format!(
+                                    "matched {} @ {}",
+                                    blk.cwe.trim(),
+                                    blk.severity.trim()
+                                ));
+                                break;
+                            }
+                        }
+                        let n = issues.len();
+                        match matched {
+                            Some(d) => (true, d, n),
+                            None => {
+                                let want = fix.expected_cwe.join(" | ");
+                                (
+                                    false,
+                                    format!(
+                                        "no block matched [{want}] at severity >= {} (got {n} other findings)",
+                                        fix.severity_min
+                                    ),
+                                    n,
+                                )
+                            }
                         }
                     }
-                    let n = issues.len();
-                    match matched {
-                        Some(blk) => (
-                            true,
-                            format!("matched {} @ {}", blk.cwe.trim(), blk.severity.trim()),
-                            n,
-                        ),
-                        None => {
-                            let want = fix.expected_cwe.join(" | ");
-                            (
-                                false,
-                                format!(
-                                    "no block matched [{want}] at severity >= {} (got {n} other findings)",
-                                    fix.severity_min
-                                ),
-                                n,
-                            )
-                        }
-                    }
+                    Err(e) => (false, format!("review error: {e}"), 0),
+                };
+            let elapsed_ms = started.elapsed().as_millis();
+            run_times.push(elapsed_ms);
+            last_issues = r_issues;
+            if r_passed {
+                run_pass += 1;
+                if best_detail.is_none() {
+                    best_detail = Some(r_detail.clone());
                 }
-                Err(e) => (false, format!("review error: {e}"), 0),
+            }
+            last_detail = r_detail;
+        }
+
+        let fixture_passed = meets_threshold(run_pass, runs, threshold);
+        let detail = if fixture_passed {
+            best_detail.unwrap_or(last_detail)
+        } else {
+            last_detail
+        };
+        let elapsed_ms = run_times.first().copied().unwrap_or(0);
+
+        let (pass_count_field, pass_rate_field, median_ms_field, min_ms_field, max_ms_field) =
+            if runs > 1 {
+                let rate = run_pass as f64 / runs as f64;
+                let med = compute_median(run_times.clone());
+                let mn = run_times.iter().copied().min().unwrap_or(0);
+                let mx = run_times.iter().copied().max().unwrap_or(0);
+                (Some(run_pass), Some(rate), Some(med), Some(mn), Some(mx))
+            } else {
+                (None, None, None, None, None)
             };
-        let elapsed_ms = started.elapsed().as_millis();
-        if passed {
+
+        if fixture_passed {
             passed_count += 1;
         } else {
             failed_count += 1;
         }
         out.push(SecurityFixtureResult {
             file: fix.file.clone(),
-            passed,
+            passed: fixture_passed,
             detail,
-            issues_found,
+            issues_found: last_issues,
             elapsed_ms,
+            pass_count: pass_count_field,
+            pass_rate: pass_rate_field,
+            median_ms: median_ms_field,
+            min_ms: min_ms_field,
+            max_ms: max_ms_field,
         });
     }
 
@@ -2321,22 +2406,47 @@ async fn run_security_eval(
         total: out.len(),
         passed: passed_count,
         failed: failed_count,
+        runs,
+        threshold,
         fixtures: out,
     };
 
     if json_out {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        println!(
-            "\n=== SECURITY EVAL: {} === {}/{} passed",
-            report.suite, report.passed, report.total
-        );
+        let hdr = if runs > 1 {
+            format!(
+                "\n=== SECURITY EVAL: {} === {}/{} passed  ({}× runs, threshold {:.0}%)",
+                report.suite,
+                report.passed,
+                report.total,
+                runs,
+                threshold * 100.0
+            )
+        } else {
+            format!(
+                "\n=== SECURITY EVAL: {} === {}/{} passed",
+                report.suite, report.passed, report.total
+            )
+        };
+        println!("{hdr}");
         for f in &report.fixtures {
             let sym = if f.passed { "✓" } else { "✗" };
-            println!(
-                "  {sym} {}  ({} findings, {} ms) — {}",
-                f.file, f.issues_found, f.elapsed_ms, f.detail
-            );
+            if runs > 1 {
+                let rate_pct = f.pass_rate.unwrap_or(0.0) * 100.0;
+                let med = f.median_ms.unwrap_or(0);
+                let mn = f.min_ms.unwrap_or(0);
+                let mx = f.max_ms.unwrap_or(0);
+                println!(
+                    "  {sym} {}  (pass {:.0}%, med {}ms [{mn}–{mx}ms]) — {}",
+                    f.file, rate_pct, med, f.detail
+                );
+            } else {
+                println!(
+                    "  {sym} {}  ({} findings, {} ms) — {}",
+                    f.file, f.issues_found, f.elapsed_ms, f.detail
+                );
+            }
         }
         println!();
     }
@@ -4194,5 +4304,31 @@ mod tests {
         let (m, n) = route_for_security("claude-haiku-4-5-20251001", false, false);
         assert_eq!(m, "claude-haiku-4-5-20251001");
         assert!(n.is_none());
+    }
+
+    // ── A2: stability helpers ────────────────────────────────────────────
+
+    #[test]
+    fn compute_median_odd_count() {
+        // [5, 8, 10] sorted → median = 8
+        assert_eq!(compute_median(vec![10, 5, 8]), 8);
+    }
+
+    #[test]
+    fn compute_median_even_count() {
+        // [2, 4, 6, 8] sorted → median = (4+6)/2 = 5
+        assert_eq!(compute_median(vec![4, 8, 2, 6]), 5);
+    }
+
+    #[test]
+    fn meets_threshold_above() {
+        // 2/3 ≈ 0.667 >= 0.60 → passes
+        assert!(meets_threshold(2, 3, 0.60));
+    }
+
+    #[test]
+    fn meets_threshold_below() {
+        // 1/3 ≈ 0.333 < 0.50 → fails
+        assert!(!meets_threshold(1, 3, 0.50));
     }
 }
