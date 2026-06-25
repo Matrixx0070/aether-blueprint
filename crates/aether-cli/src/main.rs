@@ -546,8 +546,17 @@ async fn run_print_agent(
 
     let mut next_input: Option<String> = Some(prompt.to_string());
     let mut last_text: Option<String> = None;
+    let stream_disabled = std::env::var("AETHER_NO_STREAM").ok().as_deref() == Some("1");
     loop {
-        let outcome = agent_turn(&mut session, next_input.take()).await?;
+        let outcome = if stream_disabled {
+            agent_turn(&mut session, next_input.take()).await?
+        } else {
+            let sink: aether_llm::TextDeltaSink = Box::new(move |delta: &str| {
+                print!("{delta}");
+                let _ = std::io::stdout().flush();
+            });
+            agent_turn_streamed(&mut session, next_input.take(), sink).await?
+        };
         if let Some(ConversationItem::Assistant { text, tool_uses }) = session.history.last() {
             if let Some(t) = text {
                 last_text = Some(t.clone());
@@ -565,10 +574,21 @@ async fn run_print_agent(
             }
         }
     }
-    if let Some(t) = last_text {
-        print!("{t}");
-        if !t.ends_with('\n') {
-            println!();
+    if stream_disabled {
+        // Buffered mode: print the final assistant text once at the end.
+        if let Some(t) = last_text {
+            print!("{t}");
+            if !t.ends_with('\n') {
+                println!();
+            }
+        }
+    } else {
+        // Streaming mode already wrote every delta to stdout; add a trailing
+        // newline so script consumers see a clean line-terminated record.
+        if let Some(t) = &last_text {
+            if !t.ends_with('\n') {
+                println!();
+            }
         }
     }
     Ok(())
@@ -864,27 +884,43 @@ async fn run_repl(
         push_hook_reminders(&mut session, outs, "UserPromptSubmit");
 
         let mut next_input: Option<String> = Some(user_msg);
+        let stream_disabled = std::env::var("AETHER_NO_STREAM").ok().as_deref() == Some("1");
         loop {
             // Stream text deltas to stdout as they arrive. The leading
             // "aether › " is printed up-front so the cursor is in the
-            // right place before any tokens land.
-            let mut started = false;
-            let sink: aether_llm::TextDeltaSink = Box::new(move |delta: &str| {
-                if !started {
-                    print!("\naether › ");
-                    started = true;
+            // right place before any tokens land. Falls back to buffered
+            // mode when AETHER_NO_STREAM=1.
+            let result = if stream_disabled {
+                let r = agent_turn(&mut session, next_input.take()).await;
+                if r.is_ok() {
+                    if let Some(ConversationItem::Assistant { text: Some(t), .. }) =
+                        session.history.last()
+                    {
+                        print!("\naether › {t}");
+                        let _ = std::io::stdout().flush();
+                    }
                 }
-                print!("{delta}");
-                let _ = std::io::stdout().flush();
-            });
-            let outcome = match agent_turn_streamed(&mut session, next_input.take(), sink).await {
+                r
+            } else {
+                let mut started = false;
+                let sink: aether_llm::TextDeltaSink = Box::new(move |delta: &str| {
+                    if !started {
+                        print!("\naether › ");
+                        started = true;
+                    }
+                    print!("{delta}");
+                    let _ = std::io::stdout().flush();
+                });
+                agent_turn_streamed(&mut session, next_input.take(), sink).await
+            };
+            let outcome = match result {
                 Ok(o) => o,
                 Err(e) => {
                     eprintln!("\n[error] {}", explain_agent_error(&e));
                     break;
                 }
             };
-            // Newline after the streamed assistant text.
+            // Newline after the streamed (or buffered) assistant text.
             println!();
 
             // Persist + display whatever was just appended (last 1-2 items).
