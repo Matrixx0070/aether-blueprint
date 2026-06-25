@@ -9,6 +9,7 @@ dependencies = [
  "aether-core",
  "aether-llm",
  "aether-mcp",
+ "aether-mem",
  "aether-overlay",
  "aether-perm",
  "aether-render",
@@ -94,9 +95,12 @@ dependencies = [
 name = "aether-mem"
 version = "0.4.0"
 dependencies = [
+ "aether-tools",
+ "async-trait",
  "serde",
  "serde_json",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

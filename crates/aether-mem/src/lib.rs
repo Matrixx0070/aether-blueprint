@@ -1,11 +1,174 @@
-//! Memory orchestrator.
+//! Memory orchestrator + on-disk file store.
 //!
-//! Skeleton: hit type + `MemoryPolicyStore` (D5 user-editable edit log).
-//! Episodic / semantic / procedural backends, the hybrid retriever, and the
-//! local embedding pipeline land in feature-gated submodules once a target
-//! vector backend is chosen (likely `lancedb`).
+//! Today: file-backed memory at `~/.aether/memory/<name>.md` plus the
+//! `MemoryRead` / `MemoryWrite` tools and the index-builder consumed at
+//! session start. The `MemoryPolicyStore` is the D5 user-editable edit log
+//! (kept as a future hook for fully-managed memory semantics).
+//!
+//! Future: episodic / semantic / procedural backends + hybrid retrieval
+//! land here once a vector backend is chosen (likely lancedb).
 
+use aether_tools::{Tool, ToolError};
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
+const MEMORY_REL_PATH: &str = ".aether/memory";
+
+pub fn memory_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join(MEMORY_REL_PATH)
+}
+
+/// Return (file_name_stem, first_line) for every *.md in the memory dir,
+/// sorted by name. Used by both `/memory` and the index reminder builder.
+pub fn memory_index() -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let dir = memory_dir();
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return out,
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        let stem = match p.file_stem().and_then(|s| s.to_str()) {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        let first = std::fs::read_to_string(&p)
+            .ok()
+            .and_then(|s| {
+                s.lines()
+                    .next()
+                    .map(|l| l.trim_start_matches('#').trim().to_string())
+            })
+            .unwrap_or_default();
+        out.push((stem, first));
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// Compose the `<memory-index>` kernel reminder. None when nothing's there.
+pub fn memory_index_reminder() -> Option<String> {
+    let idx = memory_index();
+    if idx.is_empty() {
+        return None;
+    }
+    let mut body = String::from("<memory-index>\n");
+    for (name, hint) in idx {
+        body.push_str(&format!("- {name}"));
+        if !hint.is_empty() {
+            body.push_str(&format!(" — {hint}"));
+        }
+        body.push('\n');
+    }
+    body.push_str("</memory-index>");
+    Some(body)
+}
+
+/// `MemoryRead` tool — reads a single named memory file.
+pub struct MemoryReadTool;
+
+#[derive(Debug, Deserialize)]
+struct MemoryReadInput {
+    name: String,
+}
+
+#[async_trait]
+impl Tool for MemoryReadTool {
+    fn name(&self) -> &str {
+        "MemoryRead"
+    }
+    fn description(&self) -> &str {
+        "Read a named memory file from ~/.aether/memory/. Use the memory-index \
+         system reminder to discover available names. Returns the file contents \
+         verbatim."
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": { "name": {"type": "string", "description": "Memory name (filename stem, no .md)"} },
+            "required": ["name"]
+        })
+    }
+    async fn run(&self, input: serde_json::Value) -> Result<String, ToolError> {
+        let inp: MemoryReadInput =
+            serde_json::from_value(input).map_err(|e| ToolError::Schema(e.to_string()))?;
+        if inp.name.contains('/') || inp.name.contains("..") {
+            return Err(ToolError::Schema("invalid memory name".into()));
+        }
+        let p = memory_dir().join(format!("{}.md", inp.name));
+        tokio::fs::read_to_string(&p)
+            .await
+            .map_err(|e| ToolError::Io(format!("{}: {e}", p.display())))
+    }
+}
+
+/// `MemoryWrite` tool — save or overwrite a named memory file.
+pub struct MemoryWriteTool;
+
+#[derive(Debug, Deserialize)]
+struct MemoryWriteInput {
+    name: String,
+    content: String,
+}
+
+#[async_trait]
+impl Tool for MemoryWriteTool {
+    fn name(&self) -> &str {
+        "MemoryWrite"
+    }
+    fn description(&self) -> &str {
+        "Save or overwrite a memory file at ~/.aether/memory/<name>.md. Use \
+         for facts you want to remember across sessions (project conventions, \
+         user preferences, decisions). Content should be self-contained — \
+         future sessions read it without context."
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "name":    {"type": "string", "description": "Short slug, [a-z0-9-]"},
+                "content": {"type": "string", "description": "Markdown body of the memory"}
+            },
+            "required": ["name", "content"]
+        })
+    }
+    async fn run(&self, input: serde_json::Value) -> Result<String, ToolError> {
+        let inp: MemoryWriteInput =
+            serde_json::from_value(input).map_err(|e| ToolError::Schema(e.to_string()))?;
+        if inp.name.is_empty()
+            || inp.name.contains('/')
+            || inp.name.contains("..")
+            || inp.name.contains(' ')
+        {
+            return Err(ToolError::Schema(
+                "invalid memory name (no /, .., or spaces)".into(),
+            ));
+        }
+        let dir = memory_dir();
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(|e| ToolError::Io(format!("mkdir: {e}")))?;
+        let p = dir.join(format!("{}.md", inp.name));
+        tokio::fs::write(&p, &inp.content)
+            .await
+            .map_err(|e| ToolError::Io(format!("{}: {e}", p.display())))?;
+        Ok(format!(
+            "saved {} bytes to {}",
+            inp.content.len(),
+            p.display()
+        ))
+    }
+}
+
+// ── Below: the D5 user-editable memory edit log (kept from skeleton) ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryHit {
