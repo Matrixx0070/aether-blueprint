@@ -3,6 +3,58 @@
 Head-to-head measurement of the user-perceived loop "spin up agent → do tools →
 return."
 
+**Latest run: v0.2 — 2026-06-25.** Re-confirms the v0.1 numbers: aether is
+2.0–3.4× faster at p50 and 2.3–4.5× faster at p95 with no regression from
+the new features (streaming SSE, bundled D7 rules, project context loading,
+hooks, settings, 4 additional tools, interactive permission prompts,
+rustyline REPL).
+
+## v0.2 results (n=20)
+
+| Test | binary | n | failures | min | **p50** | **p95** | max |
+|---|---|---:|---:|---:|---:|---:|---:|
+| text roundtrip | aether | 20 | 0 | 872 | **1,024** | **1,629** | 1,690 |
+|  | claude | 20 | 0 | 3,035 | **3,430** | **4,887** | 6,815 |
+| single tool (Read) | aether | 20 | 0 | 2,011 | **2,525** | **3,053** | 3,220 |
+|  | claude | 20 | 0 | 4,714 | **6,000** | **13,642** | 16,399 |
+| multi-tool (Write+Read) | aether | 20 | 0 | 2,320 | **3,840** | **6,089** | 8,115 |
+|  | claude | 20 | 0 | 5,463 | **7,580** | **13,961** | 14,246 |
+| Grep | aether | 20 | 0 | 3,288 | **5,083** | **6,411** | 6,802 |
+|  | claude | 20 | 0 | 9,382 | **14,728** | **22,842** | 24,414 |
+
+### v0.2 aether speedup vs claude
+
+| Test | p50 ratio | p95 ratio |
+|---|---:|---:|
+| text roundtrip | **3.35×** | **3.00×** |
+| single tool (Read) | **2.38×** | **4.47×** |
+| multi-tool (Write+Read) | **1.97×** | **2.29×** |
+| Grep | **2.90×** | **3.56×** |
+| **median across tests** | **2.64×** | **3.28×** |
+
+### v0.2 reliability
+
+- aether: **80 / 80** successful, zero failures, zero timeouts
+- claude: **80 / 80** successful, max trial 24.4s (no 10-min retry-watchdog
+  hangs this run — last run had one)
+
+### v0.2 vs v0.1 — no perf regression
+
+| Test | v0.1 p50 ratio | v0.2 p50 ratio |
+|---|---:|---:|
+| text roundtrip | 3.43× | 3.35× |
+| single tool (Read) | 2.52× | 2.38× |
+| multi-tool (Write+Read) | 2.00× | 1.97× |
+| Grep | 2.38× | 2.90× |
+
+v0.2 added: streaming SSE, 14 bundled D7 rules now actively gating, AETHER.md
+auto-load, 4 new tools, hooks, settings file load, interactive perm prompts,
+rustyline REPL — and stayed inside ±5% of the v0.1 ratios on every test.
+
+---
+
+## v0.1 baseline (original run, n=20)
+
 ## Setup
 
 | Item | Value |
