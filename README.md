@@ -5,19 +5,21 @@ Anthropic Messages API. It runs an explicit perceive → plan → tool-select �
 execute → observe → verify loop with a built-in self-check gate and reminder
 tamper-test — pipeline scaffolding most agents don't ship.
 
-## Status: v0.4
+## Status: v0.5
 
-Adds: **ratatui TUI** (`aether tui`), **HTTP API server** (`aether serve`),
-**MCP SSE transport**, **retry watchdog** (exp-backoff on 5xx + transport
-errors), **actionable error messages**, **streaming tool cancellation** via
-Ctrl-C, **persistent always-allow**, **`aether mcp test`** probe, **per-model
-cost estimation** in `/usage`. D7 rule 06 now uses a context-aware
-applies_when predicate instead of the v0.3 structural-only fix.
+Adds: **FleetView** for parallel sub-agents (TUI pane + `/fleet` command +
+cancellation), **`aether eval`** harness for YAML test suites (CI-friendly
+exit codes + JSON output), **`aether session export/branch`** for transcript
+dump + session forking, **TUI markdown rendering** (bold / inline code /
+code blocks / headings) + **bracketed paste**, and internal cleanup
+(settings → `aether-store`, skills → `aether-skill`, memory → `aether-mem`).
 
-End-to-end working: MCP client (stdio + SSE), sub-agent delegation,
-persistent memory, markdown skills, 4-event hooks, interactive permission
-prompts, token tracking + cost, streaming SSE, rustyline REPL with tab
-completion, `aether doctor`, full TUI with three panes, HTTP API.
+End-to-end working: MCP client (stdio + SSE), sub-agent delegation with
+FleetView, persistent memory, markdown skills, 4-event hooks, interactive
+permission prompts, token tracking + cost, streaming SSE, rustyline REPL
+with tab completion, `aether doctor`, full TUI with up-to-4 panes (chat /
+tools / fleet / status / input), HTTP API, eval harness, session export/
+branch.
 13 built-in tools + every MCP server's tools auto-mounted. Verified live
 against Opus 4.7 / 4.8 / Sonnet 4.6 / Haiku 4.5.
 
@@ -78,6 +80,14 @@ aether mcp add fs -- npx -y @modelcontextprotocol/server-filesystem /tmp
 aether mcp list
 aether mcp test fs
 aether mcp remove fs
+
+# Eval harness (CI-friendly; exit 1 on any case failure)
+aether eval eval/example.yaml
+aether eval eval/example.yaml --json
+
+# Session admin
+aether session export <id>                 # markdown transcript on stdout
+aether session branch <id> --at-turn 3     # fork at exchange 3, prints new id
 ```
 
 ### Slash commands (in REPL)
@@ -90,6 +100,7 @@ aether mcp remove fs
 | `/tools` | List registered tools |
 | `/memory` | List `~/.aether/memory/` entries |
 | `/usage` | Show token totals for the session |
+| `/fleet` | List sub-agents (use `/fleet cancel <id>` to signal cancel) |
 | `/commands` | List custom commands |
 | `/<custom>` | Run a `~/.aether/commands/<custom>.md` template |
 | `/quit` | Exit |
@@ -270,10 +281,13 @@ crates/
 | **Retry watchdog (exp-backoff on 5xx)** | ✅ | ✅ |
 | **Actionable error messages** | ✅ | ✅ |
 | **Streaming tool cancel (Ctrl-C)** | ✅ | ✅ |
-| FleetView (parallel sub-agent UI) | ✅ | ⬜ (v0.5) |
-| Plugin system (dylib / WASM) | ✅ | ⬜ (v0.5) |
-| BYOC providers (Bedrock / Vertex / Foundry) | ✅ | ⬜ (v0.5) |
-| IDE integrations | ✅ | ⬜ |
+| **FleetView (parallel sub-agent TUI pane + /fleet)** | ✅ | ✅ |
+| **`aether eval` harness (YAML suites + JSON output)** | ⬜ | ✅ |
+| **`aether session export/branch`** | ✅ | ✅ |
+| **TUI markdown rendering + bracketed paste** | ✅ | ✅ |
+| Plugin system (dylib / WASM) | ✅ | ⬜ (v0.6) |
+| BYOC providers (Bedrock / Vertex / Foundry) | ✅ | ⬜ (v0.6) |
+| IDE integrations | ✅ | ⬜ (v0.6) |
 | **D1 reminder tamper-test (34-signal classifier)** | ⬜ | ✅ |
 | **D7 self-check gate (14 rules, structural-line aware)** | ⬜ | ✅ |
 | **Deterministic first-match routing (D3)** | ⬜ | ✅ |
