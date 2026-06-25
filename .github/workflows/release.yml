@@ -9,6 +9,15 @@ on:
   push:
     tags:
       - 'v*'
+  # Allow manual dispatch against an existing tag — useful when a tag
+  # was pushed before the workflow file was registered (the first-tag
+  # bootstrap problem).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing git tag to release (e.g. v0.12.0)'
+        required: true
+        type: string
 
 permissions:
   contents: write  # needed to create the GitHub Release + upload assets
@@ -40,8 +49,22 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
+      - name: resolve tag
+        id: tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "ref=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "version=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=${{ github.ref }}" >> "$GITHUB_OUTPUT"
+            echo "version=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.ref }}
 
       - name: install rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -82,7 +105,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME}"
+          VERSION="${{ steps.tag.outputs.version }}"
           ARCHIVE_NAME="aether-${VERSION}-${{ matrix.archive_suffix }}.tar.gz"
           STAGE=$(mktemp -d)
           cp "target/${{ matrix.target }}/release/aether" "$STAGE/aether"
@@ -109,6 +132,16 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - name: resolve tag
+        id: tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: checkout
         uses: actions/checkout@v4
 
@@ -132,8 +165,8 @@ jobs:
       - name: create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          tag_name: ${{ steps.tag.outputs.version }}
+          name: ${{ steps.tag.outputs.version }}
           draft: false
           prerelease: false
           generate_release_notes: true
