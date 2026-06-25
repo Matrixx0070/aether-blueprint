@@ -2434,7 +2434,8 @@ impl Tool for AgentTool {
 /// summary to stderr and reads a single character + Enter from stdin.
 ///   y = allow this call only
 ///   n = deny this call
-///   a = allow this tool name for the rest of the session
+///   a = allow this tool name for the rest of the session AND persist
+///       to ~/.aether/settings.json so future sessions inherit it
 fn prompt_permission(tool_name: &str, summary: &str) -> aether_core::executor::PermissionAnswer {
     use aether_core::executor::PermissionAnswer;
     eprintln!(
@@ -2446,9 +2447,58 @@ fn prompt_permission(tool_name: &str, summary: &str) -> aether_core::executor::P
     let _ = std::io::stdin().read_line(&mut input);
     match input.trim() {
         "y" | "Y" | "yes" => PermissionAnswer::Allow,
-        "a" | "A" | "always" => PermissionAnswer::AllowAlwaysForTool,
+        "a" | "A" | "always" => {
+            // Persist to settings.json so subsequent sessions don't re-prompt.
+            if let Err(e) = persist_always_allow(tool_name) {
+                eprintln!("[warn] could not persist always-allow: {e}");
+            }
+            PermissionAnswer::AllowAlwaysForTool
+        }
         _ => PermissionAnswer::Deny,
     }
+}
+
+/// Append `tool_name` to settings.always_allow_tools, atomic write,
+/// dedup-aware. No-op if already present.
+fn persist_always_allow(tool_name: &str) -> Result<()> {
+    let path = settings_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let mut current: serde_json::Value = match std::fs::read_to_string(&path) {
+        Ok(s) if !s.trim().is_empty() => {
+            serde_json::from_str(&s).unwrap_or_else(|_| serde_json::json!({}))
+        }
+        _ => serde_json::json!({}),
+    };
+    if !current.is_object() {
+        current = serde_json::json!({});
+    }
+    let obj = current.as_object_mut().expect("object");
+    let arr = obj
+        .entry("always_allow_tools")
+        .or_insert_with(|| serde_json::Value::Array(vec![]));
+    if let Some(list) = arr.as_array_mut() {
+        let already = list
+            .iter()
+            .any(|v| v.as_str() == Some(tool_name));
+        if !already {
+            list.push(serde_json::Value::String(tool_name.to_string()));
+        } else {
+            return Ok(()); // nothing to write
+        }
+    }
+    let body = serde_json::to_vec_pretty(&current)?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, &body)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+    }
+    std::fs::rename(&tmp, &path)?;
+    eprintln!("[persisted] {tool_name} added to always_allow_tools");
+    Ok(())
 }
 
 /// Push the resolved project context into the session as a kernel
