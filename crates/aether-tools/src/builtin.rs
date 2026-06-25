@@ -724,6 +724,139 @@ fn html_to_text(html: &str) -> String {
     s.trim().to_string()
 }
 
+// ── NotebookEdit ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct NotebookEditInput {
+    notebook_path: String,
+    new_source: String,
+    #[serde(default)]
+    cell_id: Option<String>,
+    #[serde(default)]
+    cell_index: Option<usize>,
+    #[serde(default)]
+    cell_type: Option<String>, // "code" | "markdown" — only used on insert/conversion
+    #[serde(default)]
+    edit_mode: Option<String>, // "replace" (default) | "insert" | "delete"
+}
+
+pub struct NotebookEditTool;
+
+#[async_trait]
+impl Tool for NotebookEditTool {
+    fn name(&self) -> &str {
+        "NotebookEdit"
+    }
+    fn description(&self) -> &str {
+        "Edit a Jupyter notebook (.ipynb). Identify the cell by `cell_id` or \
+         `cell_index` (0-based). edit_mode = 'replace' (default) overwrites \
+         the cell's source; 'insert' adds a new cell after the target; \
+         'delete' removes the target. cell_type ('code' or 'markdown') is \
+         used when inserting."
+    }
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "notebook_path": { "type": "string", "description": "Absolute path to the .ipynb" },
+                "new_source":    { "type": "string", "description": "Replacement cell source (or new cell source on insert)" },
+                "cell_id":       { "type": "string", "description": "Target cell id (preferred when notebook has ids)" },
+                "cell_index":    { "type": "number", "description": "Target cell index (0-based, used when cell_id absent)" },
+                "cell_type":     { "type": "string", "enum": ["code","markdown"] },
+                "edit_mode":     { "type": "string", "enum": ["replace","insert","delete"] }
+            },
+            "required": ["notebook_path", "new_source"]
+        })
+    }
+    async fn run(&self, input: Value) -> Result<String, ToolError> {
+        let inp: NotebookEditInput = parse_input(input)?;
+        let path = absolute_path(&inp.notebook_path)?;
+        if !inp.notebook_path.ends_with(".ipynb") {
+            return Err(ToolError::Schema(format!(
+                "not a .ipynb file: {}",
+                path.display()
+            )));
+        }
+        let bytes = tokio::fs::read(&path)
+            .await
+            .map_err(|e| ToolError::Io(format!("{}: {e}", path.display())))?;
+        let mut nb: Value = serde_json::from_slice(&bytes)
+            .map_err(|e| ToolError::Schema(format!("parse notebook: {e}")))?;
+        let cells = nb
+            .get_mut("cells")
+            .and_then(|v| v.as_array_mut())
+            .ok_or_else(|| ToolError::Schema("notebook has no `cells` array".into()))?;
+
+        let target_idx: usize = match (inp.cell_id.as_deref(), inp.cell_index) {
+            (Some(id), _) => cells
+                .iter()
+                .position(|c| c.get("id").and_then(|v| v.as_str()) == Some(id))
+                .ok_or_else(|| ToolError::Schema(format!("cell_id not found: {id}")))?,
+            (None, Some(i)) => {
+                if i >= cells.len() {
+                    return Err(ToolError::Schema(format!(
+                        "cell_index {i} out of range (0..{})",
+                        cells.len()
+                    )));
+                }
+                i
+            }
+            (None, None) => {
+                return Err(ToolError::Schema(
+                    "must provide cell_id or cell_index".into(),
+                ))
+            }
+        };
+
+        let mode = inp.edit_mode.as_deref().unwrap_or("replace");
+        match mode {
+            "replace" => {
+                let cell = &mut cells[target_idx];
+                cell["source"] = lines_value(&inp.new_source);
+                if let Some(ct) = inp.cell_type.as_deref() {
+                    cell["cell_type"] = json!(ct);
+                }
+                if cell.get("outputs").is_some() && cell["cell_type"] == json!("code") {
+                    cell["outputs"] = json!([]);
+                    cell["execution_count"] = json!(null);
+                }
+            }
+            "insert" => {
+                let cell_type = inp.cell_type.as_deref().unwrap_or("code");
+                let new_cell = json!({
+                    "cell_type": cell_type,
+                    "metadata": {},
+                    "source": lines_value(&inp.new_source),
+                    "outputs": if cell_type == "code" { json!([]) } else { json!(null) },
+                    "execution_count": if cell_type == "code" { json!(null) } else { json!(null) },
+                });
+                cells.insert(target_idx + 1, new_cell);
+            }
+            "delete" => {
+                cells.remove(target_idx);
+            }
+            other => return Err(ToolError::Schema(format!("unknown edit_mode: {other}"))),
+        }
+
+        let buf = serde_json::to_vec_pretty(&nb)
+            .map_err(|e| ToolError::Schema(format!("encode notebook: {e}")))?;
+        tokio::fs::write(&path, &buf)
+            .await
+            .map_err(|e| ToolError::Io(format!("write: {e}")))?;
+        Ok(format!(
+            "{} cell #{target_idx} in {}",
+            mode,
+            path.display()
+        ))
+    }
+}
+
+/// Notebook sources can be stored as either a single string or a list of
+/// lines. We write as a single string (jupyter accepts both on read).
+fn lines_value(s: &str) -> Value {
+    json!(s)
+}
+
 // ── TodoWrite (model's own task tracker) ──────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -845,6 +978,7 @@ pub fn register_builtins(registry: &mut crate::ToolRegistry) {
     registry.register(Box::new(GlobTool));
     registry.register(Box::new(LsTool));
     registry.register(Box::new(WebFetchTool));
+    registry.register(Box::new(NotebookEditTool));
     registry.register(Box::new(TodoWriteTool::new()));
 }
 
@@ -933,9 +1067,35 @@ mod tests {
         let mut r = ToolRegistry::new();
         register_builtins(&mut r);
         let names = r.names();
-        for expected in ["Bash", "Read", "Write", "Edit", "Grep", "Glob", "LS", "WebFetch", "TodoWrite"] {
+        for expected in ["Bash", "Read", "Write", "Edit", "Grep", "Glob", "LS", "WebFetch", "NotebookEdit", "TodoWrite"] {
             assert!(names.contains(&expected.to_string()), "missing: {expected}");
         }
+    }
+
+    #[tokio::test]
+    async fn notebook_edit_replace_cell() {
+        let dir = std::env::temp_dir().join("aether-nb");
+        let _ = tokio::fs::create_dir_all(&dir).await;
+        let p = dir.join("test.ipynb");
+        let original = serde_json::json!({
+            "cells": [
+                {"cell_type": "code", "id": "c1", "metadata": {}, "source": "print('a')", "outputs": [], "execution_count": null},
+                {"cell_type": "code", "id": "c2", "metadata": {}, "source": "print('b')", "outputs": [], "execution_count": null}
+            ],
+            "metadata": {},
+            "nbformat": 4,
+            "nbformat_minor": 5
+        });
+        tokio::fs::write(&p, serde_json::to_vec(&original).unwrap()).await.unwrap();
+        let path = p.to_string_lossy().to_string();
+        NotebookEditTool
+            .run(json!({"notebook_path": path, "cell_id": "c2", "new_source": "print('replaced')"}))
+            .await
+            .unwrap();
+        let after: serde_json::Value =
+            serde_json::from_slice(&tokio::fs::read(&p).await.unwrap()).unwrap();
+        assert_eq!(after["cells"][1]["source"], "print('replaced')");
+        let _ = tokio::fs::remove_file(&p).await;
     }
 
     #[test]
