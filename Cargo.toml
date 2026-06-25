@@ -51,6 +51,7 @@ aether-store     = { path = "crates/aether-store",     version = "0.15.0" }
 aether-render    = { path = "crates/aether-render",    version = "0.15.0" }
 aether-core      = { path = "crates/aether-core",      version = "0.15.0" }
 aether-sec       = { path = "crates/aether-sec",       version = "0.15.0" }
+aether-plugin    = { path = "crates/aether-plugin",    version = "0.15.0" }
 
 [profile.release]
 lto = "thin"

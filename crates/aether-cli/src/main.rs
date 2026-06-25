@@ -553,6 +553,7 @@ async fn run_print_agent(
     }
     tools.register(Box::new(MemoryReadTool));
     tools.register(Box::new(MemoryWriteTool));
+    register_subprocess_plugins(&mut tools);
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
     inject_project_context(&mut session);
     if let Some(idx) = memory_index_reminder() {
@@ -785,6 +786,7 @@ async fn run_repl(
     }
     tools.register(Box::new(MemoryReadTool));
     tools.register(Box::new(MemoryWriteTool));
+    register_subprocess_plugins(&mut tools);
 
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
     // Install an interactive permission prompter for mutating tools when in
@@ -1967,6 +1969,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
     }
     tools.register(Box::new(MemoryReadTool));
     tools.register(Box::new(MemoryWriteTool));
+    register_subprocess_plugins(&mut tools);
 
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
     inject_project_context(&mut session);
@@ -4115,6 +4118,27 @@ async fn run_doctor(probe: bool, json_out: bool) -> Result<()> {
 
 /// Read the model name from settings.json, or fall back to DEFAULT_MODEL.
 /// Used by the probe so we hit the same model the user normally uses.
+/// Discover subprocess plugins under `~/.aether/plugins/` (or
+/// `$AETHER_PLUGIN_DIR`) and register each as a tool. Prints a brief
+/// stderr line summarising what was loaded.
+fn register_subprocess_plugins(tools: &mut ToolRegistry) {
+    let plugins = aether_plugin::discover_plugins();
+    if plugins.is_empty() {
+        return;
+    }
+    let count = plugins.len();
+    let mut names: Vec<String> = Vec::with_capacity(count);
+    for p in plugins {
+        let name = p.name().to_string();
+        tools.register(Box::new(p));
+        names.push(name);
+    }
+    eprintln!(
+        "[plugin] loaded {count} subprocess plugin(s): {}",
+        names.join(", ")
+    );
+}
+
 fn settings_or_default_model() -> String {
     load_settings()
         .default_model
