@@ -1,15 +1,12 @@
 //! Google Cloud Vertex AI provider for Anthropic models.
 //!
+//! Auth modes:
+//!   StaticToken  — Bearer from `VERTEX_ACCESS_TOKEN` / `GCP_ACCESS_TOKEN` env.
+//!   ServiceAccount — RS256 JWT exchange from a service-account JSON file;
+//!                    token is auto-refreshed when within 5 minutes of expiry.
+//!
 //! Non-streaming: POST `.../models/{model}:rawPredict`
-//! Streaming:     POST `.../models/{model}:streamRawPredict` — SSE response,
-//! same delta JSON shape as the Anthropic native streaming API.
-//!
-//! Auth: Bearer token from `VERTEX_ACCESS_TOKEN` (or `GCP_ACCESS_TOKEN`).
-//! Obtain with `gcloud auth print-access-token`. Auto-rotation via ADC /
-//! service-account files is B4.
-//!
-//! Region: `VERTEX_REGION` (default `us-central1`).
-//! Project: `VERTEX_PROJECT` (or `GCLOUD_PROJECT` / `GOOGLE_CLOUD_PROJECT`).
+//! Streaming:     POST `.../models/{model}:streamRawPredict` — SSE response.
 
 use crate::{
     ContentBlock, LlmError, LlmProvider, MessagesRequest, MessagesResponse, StopReason,
@@ -17,23 +14,65 @@ use crate::{
 };
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use std::time::Duration;
+use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+use serde::{Deserialize, Serialize};
+use std::{path::Path, sync::Arc, time::Duration};
+use tokio::sync::RwLock;
 
 const DEFAULT_REGION: &str = "us-central1";
 const VERTEX_ANTHROPIC_VERSION: &str = "vertex-2023-10-16";
 const DEFAULT_TIMEOUT_SECS: u64 = 300;
+const GCP_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
+// Refresh the token when it has fewer than 5 minutes left.
+const REFRESH_BUFFER_SECS: u64 = 300;
+
+// ── auth variants ─────────────────────────────────────────────────────────────
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct ServiceAccountFile {
+    pub client_email: String,
+    pub private_key: String,
+    #[serde(default = "default_token_uri")]
+    pub token_uri: String,
+}
+
+fn default_token_uri() -> String {
+    GCP_TOKEN_ENDPOINT.to_string()
+}
+
+#[derive(Debug, Clone)]
+pub struct GcpToken {
+    pub access_token: String,
+    pub expires_at: std::time::Instant,
+}
+
+impl GcpToken {
+    pub fn needs_refresh(&self) -> bool {
+        self.expires_at
+            .checked_sub(Duration::from_secs(REFRESH_BUFFER_SECS))
+            .map(|t| std::time::Instant::now() >= t)
+            .unwrap_or(true) // saturated subtraction → refresh
+    }
+}
+
+enum VertexAuth {
+    StaticToken(String),
+    ServiceAccount {
+        sa: ServiceAccountFile,
+        token: Arc<RwLock<Option<GcpToken>>>,
+    },
+}
+
+// ── provider ──────────────────────────────────────────────────────────────────
 
 pub struct VertexProvider {
-    access_token: String,
+    auth: VertexAuth,
     project: String,
     region: String,
     client: reqwest::Client,
 }
 
 impl VertexProvider {
-    /// Construct from env: `VERTEX_ACCESS_TOKEN` (or `GCP_ACCESS_TOKEN`),
-    /// `VERTEX_PROJECT` (or `GCLOUD_PROJECT`), `VERTEX_REGION` (default
-    /// `us-central1`).
     pub fn from_env() -> Result<Self, LlmError> {
         let access_token = std::env::var("VERTEX_ACCESS_TOKEN")
             .or_else(|_| std::env::var("GCP_ACCESS_TOKEN"))
@@ -55,7 +94,7 @@ impl VertexProvider {
             })?;
         let region = std::env::var("VERTEX_REGION").unwrap_or_else(|_| DEFAULT_REGION.to_string());
         Ok(Self {
-            access_token,
+            auth: VertexAuth::StaticToken(access_token),
             project,
             region,
             client: reqwest::Client::builder()
@@ -67,13 +106,86 @@ impl VertexProvider {
 
     pub fn with_token(access_token: String, project: String, region: String) -> Self {
         Self {
-            access_token,
+            auth: VertexAuth::StaticToken(access_token),
             project,
             region,
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
                 .build()
                 .expect("reqwest"),
+        }
+    }
+
+    /// Construct from a GCP service-account JSON file. The file is read once;
+    /// tokens are minted on first use and auto-refreshed before expiry.
+    ///
+    /// Project is taken from the `VERTEX_PROJECT` env var (or the SA JSON's
+    /// `project_id` field if present), region from `VERTEX_REGION`.
+    pub fn from_service_account_file(path: impl AsRef<Path>) -> Result<Self, LlmError> {
+        let text = std::fs::read_to_string(path.as_ref()).map_err(|e| {
+            LlmError::Transport(format!(
+                "read service-account file {}: {e}",
+                path.as_ref().display()
+            ))
+        })?;
+        let sa: ServiceAccountFile = serde_json::from_str(&text)
+            .map_err(|e| LlmError::Schema(format!("parse service-account JSON: {e}")))?;
+        let project = std::env::var("VERTEX_PROJECT")
+            .or_else(|_| std::env::var("GCLOUD_PROJECT"))
+            .or_else(|_| std::env::var("GOOGLE_CLOUD_PROJECT"))
+            // Fallback: try to extract project_id from the raw JSON
+            .or_else(|_| {
+                serde_json::from_str::<serde_json::Value>(&text)
+                    .ok()
+                    .and_then(|v| v["project_id"].as_str().map(str::to_string))
+                    .ok_or(())
+            })
+            .map_err(|()| {
+                LlmError::Transport(
+                    "VERTEX_PROJECT not set and no project_id in service-account file".into(),
+                )
+            })?;
+        let region = std::env::var("VERTEX_REGION").unwrap_or_else(|_| DEFAULT_REGION.to_string());
+        Ok(Self {
+            auth: VertexAuth::ServiceAccount {
+                sa,
+                token: Arc::new(RwLock::new(None)),
+            },
+            project,
+            region,
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+                .build()
+                .expect("reqwest"),
+        })
+    }
+
+    /// Return a valid Bearer token, minting or refreshing as needed.
+    async fn get_token(&self) -> Result<String, LlmError> {
+        match &self.auth {
+            VertexAuth::StaticToken(t) => Ok(t.clone()),
+            VertexAuth::ServiceAccount { sa, token } => {
+                // Fast path: read lock, check if token is fresh.
+                {
+                    let guard = token.read().await;
+                    if let Some(t) = guard.as_ref() {
+                        if !t.needs_refresh() {
+                            return Ok(t.access_token.clone());
+                        }
+                    }
+                }
+                // Slow path: write lock, re-check, then mint.
+                let mut guard = token.write().await;
+                if let Some(t) = guard.as_ref() {
+                    if !t.needs_refresh() {
+                        return Ok(t.access_token.clone());
+                    }
+                }
+                let new_token = mint_gcp_token(sa, &self.client).await?;
+                let access = new_token.access_token.clone();
+                *guard = Some(new_token);
+                Ok(access)
+            }
         }
     }
 
@@ -92,8 +204,74 @@ impl VertexProvider {
     }
 }
 
-/// Map a canonical Anthropic model id (`claude-haiku-4-5-20251001`) to the
-/// Vertex catalog id (`claude-haiku-4-5@20251001`).
+// ── JWT / token exchange ──────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct JwtClaims {
+    iss: String,
+    sub: String,
+    aud: String,
+    iat: u64,
+    exp: u64,
+    scope: String,
+}
+
+#[derive(Deserialize)]
+struct TokenResponse {
+    access_token: String,
+    expires_in: u64,
+}
+
+/// Build a signed RS256 JWT for `sa`, POST it to the token endpoint, and
+/// return a `GcpToken` with the resulting Bearer token and expiry.
+pub async fn mint_gcp_token(
+    sa: &ServiceAccountFile,
+    client: &reqwest::Client,
+) -> Result<GcpToken, LlmError> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let claims = JwtClaims {
+        iss: sa.client_email.clone(),
+        sub: sa.client_email.clone(),
+        aud: sa.token_uri.clone(),
+        iat: now,
+        exp: now + 3600,
+        scope: "https://www.googleapis.com/auth/cloud-platform".to_string(),
+    };
+
+    let key = EncodingKey::from_rsa_pem(sa.private_key.as_bytes())
+        .map_err(|e| LlmError::Schema(format!("parse private key: {e}")))?;
+    let jwt = encode(&Header::new(Algorithm::RS256), &claims, &key)
+        .map_err(|e| LlmError::Schema(format!("sign JWT: {e}")))?;
+
+    let form = [
+        ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
+        ("assertion", jwt.as_str()),
+    ];
+    let resp: TokenResponse = client
+        .post(&sa.token_uri)
+        .form(&form)
+        .send()
+        .await
+        .map_err(|e| LlmError::Transport(format!("token exchange: {e}")))?
+        .json()
+        .await
+        .map_err(|e| LlmError::Schema(format!("token exchange response: {e}")))?;
+
+    let expires_at = std::time::Instant::now()
+        + Duration::from_secs(resp.expires_in.saturating_sub(REFRESH_BUFFER_SECS));
+
+    Ok(GcpToken {
+        access_token: resp.access_token,
+        expires_at,
+    })
+}
+
+// ── model id mapping ──────────────────────────────────────────────────────────
+
 pub fn map_model_id(canonical: &str) -> String {
     if canonical.contains('@') {
         return canonical.to_string();
@@ -109,8 +287,6 @@ pub fn map_model_id(canonical: &str) -> String {
     canonical.to_string()
 }
 
-/// Serialize a MessagesRequest into the Vertex wire body (strips `model` +
-/// `stream`, injects `anthropic_version`).
 fn vertex_body(req: &MessagesRequest) -> Result<serde_json::Value, LlmError> {
     let mut body = serde_json::to_value(req)
         .map_err(|e| LlmError::Schema(format!("encode request: {e}")))?;
@@ -134,6 +310,8 @@ fn parse_stop_reason(s: &str) -> StopReason {
     }
 }
 
+// ── LlmProvider impl ──────────────────────────────────────────────────────────
+
 #[async_trait]
 impl LlmProvider for VertexProvider {
     async fn complete(&self, mut req: MessagesRequest) -> Result<MessagesResponse, LlmError> {
@@ -141,11 +319,12 @@ impl LlmProvider for VertexProvider {
         let vertex_model = map_model_id(&req.model);
         let url = self.endpoint(&vertex_model);
         let body = vertex_body(&req)?;
+        let token = self.get_token().await?;
 
         let resp = self
             .client
             .post(&url)
-            .bearer_auth(&self.access_token)
+            .bearer_auth(&token)
             .header("content-type", "application/json")
             .json(&body)
             .send()
@@ -191,11 +370,10 @@ impl LlmProvider for VertexProvider {
         })
     }
 
-    /// Streaming via `:streamRawPredict` — SSE response, same delta JSON shape
-    /// as Anthropic native streaming.
+    /// Streaming via `:streamRawPredict` (SSE). Token auto-refreshed if SA auth.
     ///
-    /// UNVERIFIED: live Vertex streaming requires a valid GCP access token with
-    /// `aiplatform.endpoints.predict` permission on the project.
+    /// UNVERIFIED: live Vertex streaming requires a valid GCP token with
+    /// `aiplatform.endpoints.predict` permission.
     async fn complete_streamed(
         &self,
         mut req: MessagesRequest,
@@ -205,11 +383,12 @@ impl LlmProvider for VertexProvider {
         let vertex_model = map_model_id(&req.model);
         let url = self.streaming_endpoint(&vertex_model);
         let body = vertex_body(&req)?;
+        let token = self.get_token().await?;
 
         let resp = self
             .client
             .post(&url)
-            .bearer_auth(&self.access_token)
+            .bearer_auth(&token)
             .header("content-type", "application/json")
             .header("Accept", "text/event-stream")
             .json(&body)
@@ -291,37 +470,24 @@ impl LlmProvider for VertexProvider {
 
 // ── SSE parser ────────────────────────────────────────────────────────────────
 
-/// Extract all complete `data:` payloads from an SSE byte buffer.
-///
-/// Scans line by line. Lines starting with `data: ` yield a payload (the
-/// bytes after the `data: ` prefix). Blank lines and comment lines (starting
-/// with `:`) are skipped. An incomplete last line (no trailing `\n`) is left
-/// in the buffer — the returned `bytes_consumed` value reflects only the bytes
-/// that have been fully processed.
-///
-/// Returns `(payloads, bytes_consumed)`.
 pub fn parse_sse_data_events(buf: &[u8]) -> (Vec<Vec<u8>>, usize) {
     let mut payloads = Vec::new();
     let mut pos = 0;
 
     while pos < buf.len() {
         match buf[pos..].iter().position(|&b| b == b'\n') {
-            None => break, // incomplete line — stop, leave in buffer
+            None => break,
             Some(nl_offset) => {
                 let line_end = pos + nl_offset;
                 let raw_line = &buf[pos..line_end];
-                // Strip trailing \r (CRLF line endings)
                 let line = if raw_line.ends_with(b"\r") {
                     &raw_line[..raw_line.len() - 1]
                 } else {
                     raw_line
                 };
-
                 if line.starts_with(b"data: ") {
                     payloads.push(line[6..].to_vec());
                 }
-                // blank lines and `:comment` lines are skipped
-
                 pos = line_end + 1;
             }
         }
@@ -400,6 +566,45 @@ mod tests {
         assert!(url.contains("us-central1"));
     }
 
+    // ── SA / JWT ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn service_account_file_parses_required_fields() {
+        let json = r#"{
+            "type": "service_account",
+            "project_id": "my-proj",
+            "client_email": "sa@my-proj.iam.gserviceaccount.com",
+            "private_key": "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCA==\n-----END RSA PRIVATE KEY-----\n",
+            "token_uri": "https://oauth2.googleapis.com/token"
+        }"#;
+        let sa: ServiceAccountFile = serde_json::from_str(json).unwrap();
+        assert_eq!(sa.client_email, "sa@my-proj.iam.gserviceaccount.com");
+        assert_eq!(sa.token_uri, "https://oauth2.googleapis.com/token");
+        assert!(sa.private_key.contains("RSA PRIVATE KEY"));
+    }
+
+    #[test]
+    fn gcp_token_needs_refresh_when_expired() {
+        let t = GcpToken {
+            access_token: "tok".into(),
+            // Already in the past
+            expires_at: std::time::Instant::now()
+                .checked_sub(Duration::from_secs(1))
+                .unwrap_or(std::time::Instant::now()),
+        };
+        assert!(t.needs_refresh());
+    }
+
+    #[test]
+    fn gcp_token_no_refresh_when_plenty_of_time_left() {
+        let t = GcpToken {
+            access_token: "tok".into(),
+            // Expires 30 minutes from now (well beyond the 5-min refresh buffer)
+            expires_at: std::time::Instant::now() + Duration::from_secs(1800),
+        };
+        assert!(!t.needs_refresh());
+    }
+
     // ── SSE parser ────────────────────────────────────────────────────────────
 
     #[test]
@@ -432,12 +637,10 @@ mod tests {
 
     #[test]
     fn parse_sse_leaves_incomplete_line_in_buffer() {
-        // The last "data: incomplete" has no trailing \n — should not be parsed
         let buf = b"data: complete\n\ndata: incomplete";
         let (payloads, consumed) = parse_sse_data_events(buf);
         assert_eq!(payloads.len(), 1);
         assert_eq!(payloads[0], b"complete");
-        // consumed should stop before the incomplete line
         assert!(consumed < buf.len());
         let remaining = &buf[consumed..];
         assert!(remaining.starts_with(b"data: incomplete"));
