@@ -72,9 +72,10 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Cmd {
-    /// Resume a previous session by id.
+    /// Resume a previous session by id, or pick interactively when id omitted.
     Resume {
-        id: String,
+        /// Session id to resume. Omit for an interactive picker.
+        id: Option<String>,
         /// Optional initial prompt to add to the resumed session.
         prompt: Option<String>,
     },
@@ -168,7 +169,17 @@ async fn main() -> Result<()> {
             return Ok(());
         }
         Some(Cmd::Resume { id, prompt }) => {
-            return run_repl(ResumeMode::ById(id), &model, permission_mode, prompt).await;
+            let chosen_id = match id {
+                Some(s) => s,
+                None => match pick_session_interactively()? {
+                    Some(s) => s,
+                    None => {
+                        eprintln!("[resume cancelled]");
+                        return Ok(());
+                    }
+                },
+            };
+            return run_repl(ResumeMode::ById(chosen_id), &model, permission_mode, prompt).await;
         }
         None => {}
     }
@@ -906,6 +917,68 @@ fn run_list(limit: usize) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Interactive resume picker. Shows the 20 most-recent sessions, prompts
+/// for a number, returns the session id.
+fn pick_session_interactively() -> Result<Option<String>> {
+    let dir = sessions_dir();
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => {
+            eprintln!("[no sessions: {}]", dir.display());
+            return Ok(None);
+        }
+    };
+    let mut sessions: Vec<(String, std::time::SystemTime, PathBuf)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            let stem = p.file_stem()?.to_str()?.to_string();
+            if p.extension()?.to_str() != Some("jsonl") {
+                return None;
+            }
+            let mtime = p.metadata().ok()?.modified().ok()?;
+            Some((stem, mtime, p))
+        })
+        .collect();
+    sessions.sort_by(|a, b| b.1.cmp(&a.1));
+    sessions.truncate(20);
+    if sessions.is_empty() {
+        eprintln!("[no sessions in {}]", dir.display());
+        return Ok(None);
+    }
+
+    eprintln!("recent sessions:");
+    for (i, (id, mtime, path)) in sessions.iter().enumerate() {
+        let preview = first_user_message(path).unwrap_or_else(|| "(no preview)".into());
+        let ts = mtime
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        eprintln!(
+            "  {:>2}. {id}  [{}]  {}",
+            i + 1,
+            unix_ts_to_compact(ts),
+            preview
+        );
+    }
+    eprint!("\npick a number (or q to cancel): ");
+    let _ = std::io::stderr().flush();
+    let mut buf = String::new();
+    std::io::stdin().read_line(&mut buf)?;
+    let trimmed = buf.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("q") {
+        return Ok(None);
+    }
+    let n: usize = match trimmed.parse() {
+        Ok(n) if n >= 1 && n <= sessions.len() => n,
+        _ => {
+            eprintln!("[invalid selection]");
+            return Ok(None);
+        }
+    };
+    Ok(Some(sessions[n - 1].0.clone()))
 }
 
 fn first_user_message(path: &std::path::Path) -> Option<String> {
