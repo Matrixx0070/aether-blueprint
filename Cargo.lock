@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "aether-cli"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "aether-core",
  "aether-llm",
@@ -35,7 +35,7 @@ dependencies = [
 
 [[package]]
 name = "aether-core"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "aether-hook",
  "aether-llm",
@@ -59,7 +59,7 @@ dependencies = [
 
 [[package]]
 name = "aether-hook"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "once_cell",
  "regex",
@@ -69,7 +69,7 @@ dependencies = [
 
 [[package]]
 name = "aether-llm"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -89,7 +89,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -103,7 +103,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mem"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "aether-tools",
  "async-trait",
@@ -115,7 +115,7 @@ dependencies = [
 
 [[package]]
 name = "aether-overlay"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "aether-hook",
  "aether-selfcheck",
@@ -125,7 +125,7 @@ dependencies = [
 
 [[package]]
 name = "aether-perm"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -134,7 +134,7 @@ dependencies = [
 
 [[package]]
 name = "aether-render"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -145,7 +145,7 @@ dependencies = [
 
 [[package]]
 name = "aether-sec"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -158,7 +158,7 @@ dependencies = [
 
 [[package]]
 name = "aether-selfcheck"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "once_cell",
  "regex",
@@ -168,7 +168,7 @@ dependencies = [
 
 [[package]]
 name = "aether-skill"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "aether-tools",
  "async-trait",
@@ -181,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "aether-store"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -191,7 +191,7 @@ dependencies = [
 
 [[package]]
 name = "aether-tools"
-version = "0.7.3"
+version = "0.8.0"
 dependencies = [
  "aether-sec",
  "async-trait",

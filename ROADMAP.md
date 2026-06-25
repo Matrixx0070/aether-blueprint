@@ -69,17 +69,27 @@ A self-contained surface for authorized security work, end-to-end:
 - **Stability benchmark**: 23×3 run on Sonnet 4.6 — 23/23 at threshold 1.0.
   Per-fixture median/min/max ms table in `BENCHMARK.md`.
 
-## v0.8 — BYOC provider parity (next)
+## v0.8 — BYOC provider parity — shipped 2026-06-25
 
-- Bedrock streaming via `invoke-with-response-stream` (AWS event-stream)
-- Vertex streaming via `:streamRawPredict` (SSE)
-- AWS credential provider chain: profile file at `~/.aws/credentials`,
-  IMDS, ECS task role
-- GCP credential auto-rotation via `gcp_auth` crate (ADC + service-account
-  JSON file)
-- BYOC retry watchdog parity (Bedrock 5xx + 429 retry-after parsing,
-  Vertex 5xx retry)
-- `aether eval --provider <name>` to run the same suite across providers
+- **Bedrock streaming** (B1): `invoke-with-response-stream` + AWS binary
+  event-stream parser (total/headers_len + header type-7 extraction +
+  base64 payload decode). No CRC dependency — TLS provides transport
+  integrity. `complete_streamed()` live on `BedrockProvider`.
+- **Vertex streaming** (B2): `:streamRawPredict` SSE endpoint + `parse_sse_data_events`
+  line-by-line parser. `complete_streamed()` live on `VertexProvider`.
+- **AWS credential provider chain** (B3): env vars → `~/.aws/credentials`
+  INI → IMDSv2 (three-step: PUT token → GET role → GET creds) → ECS task
+  role. `CredentialSource` enum reported by `aether doctor`. Pure
+  `parse_credentials_file` covered by workspace tests.
+- **GCP service-account JWT auto-refresh** (B4): RS256 JWT (iss/sub/aud/
+  iat/exp/scope) via `jsonwebtoken = "9"`. Double-check `RwLock` pattern:
+  fast read-lock check, write-lock mint only on miss/near-expiry (5 min
+  buffer). `VertexProvider::from_service_account_file(path)` public API.
+- **Cross-provider security-eval sweep** (B5): `aether security-eval
+  --provider anthropic,bedrock,vertex` runs the same fixture suite through
+  each provider and prints a comparison table. Human or `--json` output.
+  `build_named_provider(name)` rejects unknown slugs with a clear error.
+  3 new unit tests; 18/18 aether-cli tests green.
 
 ## v0.9 — plugins + IDE surfaces
 

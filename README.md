@@ -5,9 +5,15 @@ Anthropic Messages API. It runs an explicit perceive → plan → tool-select �
 execute → observe → verify loop with a built-in self-check gate and reminder
 tamper-test — pipeline scaffolding most agents don't ship.
 
-## Status: v0.7.3
+## Status: v0.8.0
 
-Patch over v0.7.2: **7 new gap-filling fixtures (→23 total), stability
+Adds **Bedrock streaming** (AWS event-stream binary parser), **Vertex streaming**
+(SSE via `:streamRawPredict`), **AWS credential provider chain** (env → shared
+credentials file → IMDSv2 → ECS task role), **GCP service-account JWT auto-refresh**,
+and **cross-provider security-eval sweep** (`--provider anthropic,bedrock,vertex`
+comparison table).
+
+v0.7.3 patch: **7 new gap-filling fixtures (→23 total), stability
 harness (`--runs N --threshold P`), and benchmark verification.**
 
 New fixtures cover: Python ReDoS (CWE-1333) and Jinja2 XSS (CWE-79); Java

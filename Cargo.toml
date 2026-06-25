@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.7.3"
+version = "0.8.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "AetherCode — a 10x Claude Code clone (workspace)"
@@ -38,19 +38,19 @@ clap = { version = "4", features = ["derive", "env"] }
 
 # Internal — workspace-relative path deps. Versioned so each crate can be
 # published independently later without changing call sites.
-aether-hook      = { path = "crates/aether-hook",      version = "0.7.2" }
-aether-selfcheck = { path = "crates/aether-selfcheck", version = "0.7.2" }
-aether-overlay   = { path = "crates/aether-overlay",   version = "0.7.2" }
-aether-llm       = { path = "crates/aether-llm",       version = "0.7.2" }
-aether-tools     = { path = "crates/aether-tools",     version = "0.7.2" }
-aether-mcp       = { path = "crates/aether-mcp",       version = "0.7.2" }
-aether-perm      = { path = "crates/aether-perm",      version = "0.7.2" }
-aether-mem       = { path = "crates/aether-mem",       version = "0.7.2" }
-aether-skill     = { path = "crates/aether-skill",     version = "0.7.2" }
-aether-store     = { path = "crates/aether-store",     version = "0.7.2" }
-aether-render    = { path = "crates/aether-render",    version = "0.7.2" }
-aether-core      = { path = "crates/aether-core",      version = "0.7.2" }
-aether-sec       = { path = "crates/aether-sec",       version = "0.7.2" }
+aether-hook      = { path = "crates/aether-hook",      version = "0.8.0" }
+aether-selfcheck = { path = "crates/aether-selfcheck", version = "0.8.0" }
+aether-overlay   = { path = "crates/aether-overlay",   version = "0.8.0" }
+aether-llm       = { path = "crates/aether-llm",       version = "0.8.0" }
+aether-tools     = { path = "crates/aether-tools",     version = "0.8.0" }
+aether-mcp       = { path = "crates/aether-mcp",       version = "0.8.0" }
+aether-perm      = { path = "crates/aether-perm",      version = "0.8.0" }
+aether-mem       = { path = "crates/aether-mem",       version = "0.8.0" }
+aether-skill     = { path = "crates/aether-skill",     version = "0.8.0" }
+aether-store     = { path = "crates/aether-store",     version = "0.8.0" }
+aether-render    = { path = "crates/aether-render",    version = "0.8.0" }
+aether-core      = { path = "crates/aether-core",      version = "0.8.0" }
+aether-sec       = { path = "crates/aether-sec",       version = "0.8.0" }
 
 [profile.release]
 lto = "thin"
