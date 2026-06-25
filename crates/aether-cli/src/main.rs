@@ -221,8 +221,11 @@ async fn run_print_agent(
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
     inject_project_context(&mut session);
 
-    // Run SessionStart hooks once at construction.
+    // Install Pre/PostToolUse hook callback on the executor.
     let hooks = load_hooks();
+    install_tool_hook(&mut session, &hooks);
+
+    // Run SessionStart hooks once at construction.
     let outs = run_hooks(
         &hooks.session_start,
         "SessionStart",
@@ -344,6 +347,8 @@ async fn run_repl(
     session
         .executor
         .allow_tools(settings.always_allow_tools.iter().cloned());
+    let hooks_clone_for_tool_hook = load_hooks();
+    install_tool_hook(&mut session, &hooks_clone_for_tool_hook);
     inject_project_context(&mut session);
 
     let session_id = match &resume {
@@ -1066,22 +1071,30 @@ fn apply_settings_env(settings: &Settings) {
 const HOOKS_PATH: &str = ".aether/hooks.json";
 const HOOK_TIMEOUT_SECS: u64 = 30;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct HookConfig {
     #[serde(default)]
     command: String,
     #[serde(default)]
     #[allow(dead_code)]
     description: Option<String>,
+    /// Optional substring filter on tool name (PreToolUse/PostToolUse only).
+    /// When set, the hook only runs for tool calls matching this filter.
+    #[serde(default)]
+    tool_matcher: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, Clone)]
 #[serde(default)]
 struct HooksFile {
     #[serde(rename = "SessionStart", default)]
     session_start: Vec<HookConfig>,
     #[serde(rename = "UserPromptSubmit", default)]
     user_prompt_submit: Vec<HookConfig>,
+    #[serde(rename = "PreToolUse", default)]
+    pre_tool_use: Vec<HookConfig>,
+    #[serde(rename = "PostToolUse", default)]
+    post_tool_use: Vec<HookConfig>,
 }
 
 fn load_hooks() -> HooksFile {
@@ -1156,6 +1169,136 @@ async fn run_hooks(hooks: &[HookConfig], event: &str, payload: serde_json::Value
         }
     }
     outputs
+}
+
+/// Synchronous hook runner for PreToolUse / PostToolUse. Uses
+/// `std::process::Command` (no tokio) because these run from a
+/// `Fn`-bounded callback inside the Executor and we'd otherwise need to
+/// bridge async-to-sync. Each hook is short-lived; the 30s timeout is
+/// enforced via `wait_timeout` (no extra dep needed — we set up a thread).
+fn run_hooks_sync(hooks: &[HookConfig], event: &str, payload: serde_json::Value) -> Vec<String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let payload_str = serde_json::to_string(&payload).unwrap_or_default();
+    let mut outputs = Vec::new();
+    for h in hooks {
+        if h.command.trim().is_empty() {
+            continue;
+        }
+        // Optional tool_matcher filter — only used by Pre/PostToolUse where
+        // payload has "tool" field. Free-pass for other events.
+        if let Some(m) = h.tool_matcher.as_deref() {
+            if let Some(tn) = payload.get("tool").and_then(|v| v.as_str()) {
+                if !tn.contains(m) {
+                    continue;
+                }
+            }
+        }
+        let mut child = match Command::new("/bin/bash")
+            .arg("-c")
+            .arg(&h.command)
+            .env("AETHER_HOOK_EVENT", event)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[hook:{event}] spawn failed: {e}");
+                continue;
+            }
+        };
+        if let Some(stdin) = child.stdin.as_mut() {
+            let _ = stdin.write_all(payload_str.as_bytes());
+        }
+        // Drop stdin to close it.
+        let stdin = child.stdin.take();
+        drop(stdin);
+
+        // Bounded wait: 30 s.
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(HOOK_TIMEOUT_SECS);
+        let result = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Some(status),
+                Ok(None) => {
+                    if start.elapsed() >= timeout {
+                        let _ = child.kill();
+                        eprintln!("[hook:{event}] timeout after {HOOK_TIMEOUT_SECS}s");
+                        break None;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(e) => {
+                    eprintln!("[hook:{event}] wait failed: {e}");
+                    break None;
+                }
+            }
+        };
+        if result.is_none() {
+            continue;
+        }
+        let output = match child.wait_with_output() {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("[hook:{event}] wait_with_output failed: {e}");
+                continue;
+            }
+        };
+        let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !s.is_empty() {
+            let truncated = if s.len() > 64 * 1024 {
+                format!("{}\n[…truncated]", &s[..64 * 1024])
+            } else {
+                s
+            };
+            outputs.push(format!("<{event}-hook>\n{truncated}\n</{event}-hook>"));
+        }
+    }
+    outputs
+}
+
+/// Install a tool-hook callback on the session's executor. The callback
+/// runs PreToolUse hooks before each Allowed tool call and PostToolUse
+/// hooks after every attempt (including refused). Hook stdout becomes a
+/// kernel reminder injected before the next LLM call.
+fn install_tool_hook(session: &mut Session, hooks: &HooksFile) {
+    use aether_core::executor::ToolHookPhase;
+    let pre = hooks.pre_tool_use.clone();
+    let post = hooks.post_tool_use.clone();
+    if pre.is_empty() && post.is_empty() {
+        return;
+    }
+    session.executor.set_tool_hook(Box::new(
+        move |phase: ToolHookPhase,
+              tool_name: &str,
+              input: &serde_json::Value,
+              output: Option<&str>,
+              is_error: bool|
+              -> Vec<String> {
+            match phase {
+                ToolHookPhase::Pre => run_hooks_sync(
+                    &pre,
+                    "PreToolUse",
+                    serde_json::json!({
+                        "tool": tool_name,
+                        "input": input,
+                    }),
+                ),
+                ToolHookPhase::Post => run_hooks_sync(
+                    &post,
+                    "PostToolUse",
+                    serde_json::json!({
+                        "tool": tool_name,
+                        "input": input,
+                        "output": output,
+                        "is_error": is_error,
+                    }),
+                ),
+            }
+        },
+    ));
 }
 
 fn push_hook_reminders(session: &mut Session, outputs: Vec<String>, event: &str) {

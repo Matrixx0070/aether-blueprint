@@ -69,9 +69,31 @@ pub enum PermissionAnswer {
 /// callers can read from stdin without spawning a task.
 pub type PermissionPrompter = Box<dyn Fn(&str, &str) -> PermissionAnswer + Send + Sync>;
 
+/// Phase of a tool-hook call.
+#[derive(Debug, Clone, Copy)]
+pub enum ToolHookPhase {
+    Pre,
+    Post,
+}
+
+/// Tool-hook callback: receives the phase, tool name, input JSON value, and
+/// (post-phase only) the captured tool output + is_error flag. Returns a
+/// list of strings to be injected as kernel reminders before the next LLM
+/// call. Synchronous so the callback can use blocking `std::process` to
+/// invoke shell hooks.
+pub type ToolHookCallback = Box<
+    dyn Fn(ToolHookPhase, &str, &serde_json::Value, Option<&str>, bool) -> Vec<String>
+        + Send
+        + Sync,
+>;
+
 pub struct Executor {
     pub mode: PermissionMode,
     prompter: Option<PermissionPrompter>,
+    tool_hook: Option<ToolHookCallback>,
+    /// Collected hook outputs to be drained by `agent_turn` and pushed as
+    /// reminders for the next turn.
+    pending_reminders: std::sync::Mutex<Vec<String>>,
     always_allowed: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
@@ -80,6 +102,8 @@ impl Executor {
         Self {
             mode,
             prompter: None,
+            tool_hook: None,
+            pending_reminders: std::sync::Mutex::new(Vec::new()),
             always_allowed: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
@@ -89,6 +113,20 @@ impl Executor {
     /// are refused in `Default` mode (current behavior).
     pub fn set_prompter(&mut self, p: PermissionPrompter) {
         self.prompter = Some(p);
+    }
+
+    /// Install a tool-hook callback that's invoked Pre and Post each tool
+    /// call. Stdout from each hook is collected via `pending_reminders` and
+    /// drained by the next `agent_turn`.
+    pub fn set_tool_hook(&mut self, h: ToolHookCallback) {
+        self.tool_hook = Some(h);
+    }
+
+    /// Drain any reminders the tool hooks emitted during the most recent
+    /// `execute()` call. Cleared on each `agent_turn`.
+    pub fn drain_pending_reminders(&self) -> Vec<String> {
+        let mut g = self.pending_reminders.lock().expect("hook reminders mutex");
+        std::mem::take(&mut *g)
     }
 
     /// Pre-populate the in-session "always allow" set (e.g. from settings.json).
@@ -159,6 +197,23 @@ impl Executor {
                 }
             }
 
+            // PreToolUse hook: only fires if the call is going to actually run
+            // (Allowed). Hook outputs accumulate as reminders for the next turn.
+            if matches!(decision, PermissionOutcome::Allowed) {
+                if let Some(h) = &self.tool_hook {
+                    let outs = h(ToolHookPhase::Pre, &tu.name, &tu.input, None, false);
+                    if !outs.is_empty() {
+                        let mut g = self
+                            .pending_reminders
+                            .lock()
+                            .expect("hook reminders mutex");
+                        for s in outs {
+                            g.push(s);
+                        }
+                    }
+                }
+            }
+
             let (content, is_error) = match decision {
                 PermissionOutcome::Allowed => match registry.get(&tu.name) {
                     Some(tool) => match tool.run(tu.input.clone()).await {
@@ -169,6 +224,28 @@ impl Executor {
                 },
                 PermissionOutcome::Refused(why) => (format!("refused: {why}"), true),
             };
+
+            // PostToolUse hook: always fires after a call attempt (even
+            // refused ones) so operators can audit failed permission decisions.
+            if let Some(h) = &self.tool_hook {
+                let outs = h(
+                    ToolHookPhase::Post,
+                    &tu.name,
+                    &tu.input,
+                    Some(&content),
+                    is_error,
+                );
+                if !outs.is_empty() {
+                    let mut g = self
+                        .pending_reminders
+                        .lock()
+                        .expect("hook reminders mutex");
+                    for s in outs {
+                        g.push(s);
+                    }
+                }
+            }
+
             out.push(RecordedToolResult {
                 tool_use_id: tu.id.clone(),
                 content,

@@ -296,6 +296,18 @@ async fn agent_turn_inner(
         session.executor.execute(&session.tools, &tool_uses).await
     };
 
+    // Drain any reminders the PreToolUse / PostToolUse hooks emitted
+    // during execute() and queue them for the NEXT turn so the model
+    // sees the hook commentary on its next call.
+    let hook_reminders = session.executor.drain_pending_reminders();
+    for body in hook_reminders {
+        session.pending_reminders.push(Reminder::new(
+            ReminderKind::SystemWarning,
+            Source::Kernel,
+            body,
+        ));
+    }
+
     // ── observe — record the turn ────────────────────────────────────
     session.history.push(ConversationItem::Assistant {
         text: final_text,
