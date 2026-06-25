@@ -69,4 +69,8 @@ format: `[slice] [status] [commit] [verifier] [live-check] note`
 | J1 | DONE | 4a21b62 | n/a | 5 new verify.sh scripts fail on starting state | Rust + JS + SQL + multi-file + perf tasks |
 | J2 | DONE | 53637bf | n/a | **10/10 PASS · 388s · $1.12 on Sonnet 4.6** | live multi-language run |
 | J3 | DONE | 53637bf | n/a | RESULTS.md v2 + COMPARISON.md updated | cross-language proof |
+| J4 | DONE | 8cfab9d | n/a | exit 0 · v0.14.0 binary release LIVE on 4 platforms | bump 0.14.0 + ./aether --version 0.14.0 confirmed |
+| K1 | DONE | 32d27a3 | n/a | task 4 now reports $0.25 (was $0.00) | [aether-usage] emits even when agent_turn errors |
+| K2 | DONE | 365aaed | n/a | 5/5 new verify.sh fail on starting state | suite v3: Go/TS/Bash/Docker/Java |
+| K3-K6 | DONE | bcdab8e | n/a | **30/30 cumulative across 2 runs · $4.63 total** | stability + verify-bug class closed |
 

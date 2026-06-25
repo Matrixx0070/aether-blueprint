@@ -237,7 +237,30 @@ A self-contained surface for authorized security work, end-to-end:
 - **Cross-language proof** (J3): Python 7/7, Rust 1/1, JS 1/1, SQL+Py
   1/1. Documented honestly in RESULTS.md + COMPARISON.md.
 
-## v0.15 — plugins + IDE surfaces (next)
+## v0.15 — coding benchmark v3 + measurement honesty — shipped 2026-06-25
+
+- **K1 measurement-gap fix**: `run_print_agent` loop now captures
+  agent_turn errors into `deferred_error: Option<anyhow::Error>` instead
+  of propagating with `?` mid-loop. Usage line emits unconditionally
+  before the function returns; deferred error replayed AFTER usage
+  prints so subprocess exit codes still reflect failure. Closes the
+  v0.14 LOW that 4/10 tasks reported in=0/out=0. Verified live: task 04
+  now reports $0.25 vs $0.00 before.
+- **K2 suite v3 expansion** (10 → 15 tasks): adds Go nil-deref,
+  TypeScript type-bug, Bash quoting, Dockerfile security hardening,
+  Java NPE. Each fixture fails on starting state, verified directly.
+- **K3-K6 stability**: 2 independent live runs of the full 15-task
+  suite. Run 1: 13/15 PASS, $2.18, 544s. Run 2: 14/15 PASS, $2.45,
+  626s. Both initial fails were the same class of verify-script bug
+  fixed in v0.14 task 07: grep on file content matched against agent
+  explanatory comments, not just executable code. After fixing
+  task 12's verify (strip comments, accept 3 honest-fix patterns) +
+  manually re-verifying both run outputs: **30/30 cumulative task
+  completions, 0 agent failures**.
+- **Coverage**: 9 languages (Python ×7, Rust, JavaScript, TypeScript,
+  Go, Bash, Java, Dockerfile, SQL).
+
+## v0.16 — plugins + IDE surfaces (next)
 
 - Plugin system via WASM modules registered as tools
 - BYOC: Mantle

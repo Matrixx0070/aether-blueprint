@@ -23,7 +23,22 @@ Each tarball ships with a SHA256 the script verifies before extraction. See
 `INSTALL.md` for the manual download + verify path and the source-build
 fallback.
 
-## Status: v0.14.0
+## Status: v0.15.0
+
+**Coding benchmark v3**: `aether coding-eval` produces **30/30 PASS
+across 2 independent runs** on **15 real coding tasks across 9
+languages** (Python, Rust, JavaScript, TypeScript, Go, Bash, Java,
+Dockerfile, SQL). Task categories: bug fix, feature add, write tests,
+refactor, doc fix, security patch (XSS+SQLi), perf optimization,
+multi-file dedup, type honesty, nil-deref hardening, container
+hardening. Each run ~$2.18-$2.45 on Sonnet 4.6, ~9-10 min wall.
+
+**K1 measurement-gap fix** (v0.15): `aether -p` now emits the
+`[aether-usage ...]` line even when the agent loop errors mid-run.
+Previously 4/10 tasks reported in=0/out=0 — verified resolved
+(task 04 now reports $0.25 vs $0.00 before).
+
+v0.14.0 — coding benchmark v2 (10 tasks, 4 languages).
 
 **Coding benchmark v2**: `aether coding-eval` produces **10/10 PASS** on
 10 real coding tasks across **4 languages** (Python ×7 + Rust ×1 +
