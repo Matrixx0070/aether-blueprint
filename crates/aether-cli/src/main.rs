@@ -1703,6 +1703,7 @@ async fn run_serve(
                 }
             }),
         )
+        .route("/ws/chat", axum::routing::get(ws_chat_handler))
         .route("/healthz", axum::routing::get(|| async { "ok" }))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(bind)
@@ -1710,9 +1711,163 @@ async fn run_serve(
         .with_context(|| format!("bind {bind}"))?;
     eprintln!("[aether serve] listening on http://{bind}");
     eprintln!("  POST /v1/messages  {{\"prompt\": \"...\", \"model\": \"...\"}}  (default model: {model})");
+    eprintln!("  GET  /ws/chat      (WebSocket; send {{\"prompt\":\"...\"}} text frames, receive delta + done frames)");
     eprintln!("  GET  /healthz");
     axum::serve(listener, app).await.context("axum serve")?;
     Ok(())
+}
+
+/// WebSocket chat handler. Each client connection accepts a JSON text frame
+/// `{"prompt": "...", "model": "..."}` and streams back JSON delta frames
+/// (`{"type":"delta","text":"..."}`) followed by a terminal frame
+/// (`{"type":"done","usage":{...},"cost_usd":N}`) or an error frame
+/// (`{"type":"error","message":"..."}`). One prompt per connection, then
+/// connection closes — keeps server logic simple; clients reconnect.
+async fn ws_chat_handler(
+    axum::extract::State(state): axum::extract::State<ServeState>,
+    ws: axum::extract::WebSocketUpgrade,
+) -> axum::response::Response {
+    ws.on_upgrade(move |socket| handle_ws_chat(socket, state))
+}
+
+async fn handle_ws_chat(mut socket: axum::extract::ws::WebSocket, state: ServeState) {
+    use axum::extract::ws::Message;
+
+    // First message: the prompt.
+    let prompt_msg = match socket.recv().await {
+        Some(Ok(Message::Text(s))) => s,
+        Some(Ok(Message::Close(_))) | None => return,
+        Some(Ok(_)) => {
+            let _ = socket
+                .send(Message::Text(
+                    r#"{"type":"error","message":"first frame must be text"}"#.into(),
+                ))
+                .await;
+            return;
+        }
+        Some(Err(e)) => {
+            eprintln!("[ws] recv error: {e}");
+            return;
+        }
+    };
+
+    #[derive(Deserialize)]
+    struct WsRequest {
+        prompt: String,
+        #[serde(default)]
+        model: Option<String>,
+    }
+
+    let req: WsRequest = match serde_json::from_str(&prompt_msg) {
+        Ok(r) => r,
+        Err(e) => {
+            let msg = format!(r#"{{"type":"error","message":"bad json: {e}"}}"#);
+            let _ = socket.send(Message::Text(msg)).await;
+            return;
+        }
+    };
+    let model = req.model.unwrap_or(state.default_model);
+
+    // Run one turn and stream deltas. We use the same serve_one_turn body
+    // pattern but with a streaming sink that emits over the WebSocket.
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let model_for_task = model.clone();
+    let prompt = req.prompt.clone();
+    let pm = state.permission_mode;
+
+    let agent_task = tokio::spawn(async move {
+        ws_run_one_turn_streamed(&model_for_task, pm, &prompt, tx).await
+    });
+
+    // Pump deltas → WebSocket frames as they arrive.
+    while let Some(delta_json) = rx.recv().await {
+        if socket.send(Message::Text(delta_json)).await.is_err() {
+            // Client disconnected — abort the agent task.
+            agent_task.abort();
+            return;
+        }
+    }
+
+    // Agent task finished — get the terminal report.
+    let terminal_json = match agent_task.await {
+        Ok(Ok(r)) => serde_json::to_string(&serde_json::json!({
+            "type": "done",
+            "usage": {
+                "input_tokens": r.tokens_in,
+                "output_tokens": r.tokens_out,
+            },
+            "cost_usd": r.cost_usd,
+            "text": r.text,
+            "error": r.error,
+        }))
+        .unwrap_or_default(),
+        Ok(Err(e)) => format!(r#"{{"type":"error","message":"{}"}}"#, e),
+        Err(e) => format!(r#"{{"type":"error","message":"agent task: {}"}}"#, e),
+    };
+    let _ = socket.send(Message::Text(terminal_json)).await;
+    let _ = socket.close().await;
+}
+
+/// Streaming variant of `serve_one_turn` — feeds text deltas over an mpsc
+/// channel as `{"type":"delta","text":"..."}` JSON frames. Returns the
+/// final `ServeResponse` for the terminal frame.
+async fn ws_run_one_turn_streamed(
+    model: &str,
+    permission_mode: aether_perm::PermissionMode,
+    prompt: &str,
+    delta_tx: tokio::sync::mpsc::UnboundedSender<String>,
+) -> Result<ServeResponse> {
+    let config = SessionConfig {
+        model: model.to_string(),
+        permission_mode,
+        max_tokens_per_turn: PRINT_MODE_MAX_TOKENS,
+    };
+    let overlay = Fable5Overlay::new(OverlayConfig::default());
+    let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
+    let mut tools = ToolRegistry::new();
+    register_builtins(&mut tools);
+    if aether_sec::load_scope().is_ok() {
+        aether_tools::pentest::register_pentest(&mut tools);
+    }
+    let provider_arc: Arc<dyn aether_llm::LlmProvider> = build_provider().await?;
+    tools.register(Box::new(AgentTool::new(
+        Arc::clone(&provider_arc),
+        model.to_string(),
+        permission_mode,
+    )));
+    let mut session = Session::new(config, overlay, provider_arc, gate, tools);
+
+    let mut next_input: Option<String> = Some(prompt.to_string());
+    let mut last_text: Option<String> = None;
+    loop {
+        let tx_clone = delta_tx.clone();
+        let sink: aether_llm::TextDeltaSink = Box::new(move |delta: &str| {
+            let frame = serde_json::json!({"type": "delta", "text": delta});
+            let _ = tx_clone.send(frame.to_string());
+        });
+        let outcome = agent_turn_streamed(&mut session, next_input.take(), sink).await?;
+        if let Some(ConversationItem::Assistant { text, .. }) = session.history.last() {
+            if let Some(t) = text {
+                last_text = Some(t.clone());
+            }
+        }
+        match outcome {
+            TurnOutcome::AwaitUser | TurnOutcome::Exit => break,
+            TurnOutcome::ContinueImmediately => continue,
+            TurnOutcome::Sleep { seconds } => {
+                tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
+                continue;
+            }
+        }
+    }
+    let u = &session.usage_total;
+    Ok(ServeResponse {
+        text: last_text.unwrap_or_default(),
+        tokens_in: u.input_tokens,
+        tokens_out: u.output_tokens,
+        cost_usd: estimate_cost_usd(&session.config.model, u),
+        error: None,
+    })
 }
 
 /// Run one agent turn for the HTTP server. Spins up a fresh session per
