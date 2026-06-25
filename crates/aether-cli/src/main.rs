@@ -776,13 +776,15 @@ fn handle_slash(
         "usage" => {
             let u = &session.usage_total;
             let total = u.input_tokens + u.output_tokens;
+            let cost = estimate_cost_usd(&session.config.model, u);
             eprintln!(
-                "[usage  in={}  out={}  cache_create={}  cache_read={}  total={}]",
+                "[usage  in={}  out={}  cache_create={}  cache_read={}  total={}  est~${:.4}]",
                 u.input_tokens,
                 u.output_tokens,
                 u.cache_creation_input_tokens,
                 u.cache_read_input_tokens,
                 total,
+                cost,
             );
             SlashAction::Continue
         }
@@ -2494,6 +2496,30 @@ fn prompt_permission(tool_name: &str, summary: &str) -> aether_core::executor::P
         }
         _ => PermissionAnswer::Deny,
     }
+}
+
+/// Per-model pricing in USD per million tokens. Substring match against
+/// the model id keeps us forward-compatible across point releases. Cache
+/// pricing follows Anthropic's documented multipliers: write = 1.25× input,
+/// read = 0.1× input.
+fn estimate_cost_usd(model: &str, usage: &aether_llm::Usage) -> f64 {
+    let m = model.to_ascii_lowercase();
+    let (in_pm, out_pm) = if m.contains("opus") {
+        (15.0_f64, 75.0_f64)
+    } else if m.contains("sonnet") {
+        (3.0, 15.0)
+    } else if m.contains("haiku") {
+        (0.80, 4.0)
+    } else if m.contains("fable") {
+        (15.0, 75.0) // assume opus-class pricing for fable until announced
+    } else {
+        (3.0, 15.0) // default to sonnet rates
+    };
+    let input = usage.input_tokens as f64 * in_pm / 1_000_000.0;
+    let output = usage.output_tokens as f64 * out_pm / 1_000_000.0;
+    let cache_w = usage.cache_creation_input_tokens as f64 * (in_pm * 1.25) / 1_000_000.0;
+    let cache_r = usage.cache_read_input_tokens as f64 * (in_pm * 0.10) / 1_000_000.0;
+    input + output + cache_w + cache_r
 }
 
 /// Append `tool_name` to settings.always_allow_tools, atomic write,
