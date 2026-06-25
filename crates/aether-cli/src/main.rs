@@ -114,6 +114,9 @@ enum McpCmd {
     },
     /// Remove an MCP server by name.
     Remove { name: String },
+    /// Probe a server: spawn, initialize, list tools, shutdown. Does not
+    /// start a chat session — useful for verifying an mcp.json entry.
+    Test { name: String },
 }
 
 #[derive(Subcommand, Debug)]
@@ -153,7 +156,7 @@ async fn main() -> Result<()> {
         Some(Cmd::Init) => return run_init(),
         Some(Cmd::Doctor) => return run_doctor().await,
         Some(Cmd::Mcp { sub }) => {
-            return mcp_cmd(sub);
+            return mcp_cmd(sub).await;
         }
         Some(Cmd::Config { sub }) => {
             match sub {
@@ -2146,8 +2149,43 @@ fn read_mcp_config_value() -> serde_json::Value {
         .unwrap_or_else(|| serde_json::json!({"servers": {}}))
 }
 
-fn mcp_cmd(sub: McpCmd) -> Result<()> {
+async fn mcp_cmd(sub: McpCmd) -> Result<()> {
     match sub {
+        McpCmd::Test { name } => {
+            let cfg = load_mcp_config();
+            let entry = cfg.servers.get(&name).ok_or_else(|| {
+                anyhow!("no MCP server named '{name}' in ~/.aether/mcp.json")
+            })?;
+            eprintln!("[probing] {name}");
+            let client = aether_mcp::StdioClient::spawn(&entry.config)
+                .await
+                .map_err(|e| anyhow!("spawn: {e}"))?;
+            let init = client
+                .initialize()
+                .await
+                .map_err(|e| anyhow!("initialize: {e}"))?;
+            let tools = client
+                .list_tools()
+                .await
+                .map_err(|e| anyhow!("list_tools: {e}"))?;
+            eprintln!("  protocol: {}", init.protocol_version);
+            eprintln!("  tools:    {}", tools.len());
+            for t in tools.iter().take(20) {
+                eprintln!(
+                    "    - {}{}",
+                    t.name,
+                    match &t.description {
+                        Some(d) => format!(" — {}", d.lines().next().unwrap_or("")),
+                        None => String::new(),
+                    }
+                );
+            }
+            if tools.len() > 20 {
+                eprintln!("    ... and {} more", tools.len() - 20);
+            }
+            let _ = client.shutdown().await;
+            Ok(())
+        }
         McpCmd::List => {
             let file = read_mcp_config_value();
             let servers = file
