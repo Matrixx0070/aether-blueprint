@@ -87,6 +87,8 @@ enum Cmd {
     },
     /// Scaffold an AETHER.md context file in the working directory.
     Init,
+    /// Health check: token expiry, settings, hooks, MCP, disk usage.
+    Doctor,
     /// MCP server administration (stub).
     Mcp {
         #[command(subcommand)]
@@ -149,6 +151,7 @@ async fn main() -> Result<()> {
     match cli.cmd {
         Some(Cmd::List { limit }) => return run_list(limit),
         Some(Cmd::Init) => return run_init(),
+        Some(Cmd::Doctor) => return run_doctor().await,
         Some(Cmd::Mcp { sub }) => {
             return mcp_cmd(sub);
         }
@@ -1070,6 +1073,134 @@ fn julian_to_ymd(jdn: i64) -> (i32, u32, u32) {
     let mo = j + 2 - 12 * l;
     let y = 100 * (n - 49) + i + l;
     (y as i32, mo as u32, d as u32)
+}
+
+// ── doctor ───────────────────────────────────────────────────────────────
+
+async fn run_doctor() -> Result<()> {
+    let mut ok = true;
+    let mut report = String::new();
+
+    // 1) Auth
+    report.push_str("auth:\n");
+    match AnthropicProvider::from_env_or_credentials() {
+        Ok(_) => report.push_str("  ✓ credentials reachable\n"),
+        Err(e) => {
+            ok = false;
+            report.push_str(&format!("  ✗ no auth source: {e}\n"));
+        }
+    }
+    let creds_path = std::env::var_os("HOME")
+        .map(|h| PathBuf::from(h).join(".claude/.credentials.json"));
+    if let Some(p) = &creds_path {
+        match std::fs::read_to_string(p) {
+            Ok(s) => {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+                    let exp_ms = v
+                        .get("claudeAiOauth")
+                        .and_then(|o| o.get("expiresAt"))
+                        .and_then(|n| n.as_i64())
+                        .unwrap_or(0);
+                    if exp_ms > 0 {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as i64)
+                            .unwrap_or(0);
+                        let hours_left = (exp_ms - now) as f64 / 3_600_000.0;
+                        report.push_str(&format!(
+                            "  • token expires in {:.1}h\n",
+                            hours_left
+                        ));
+                        if hours_left < 0.0 {
+                            ok = false;
+                        }
+                    }
+                }
+            }
+            Err(_) => report.push_str("  • no credentials file (env vars only)\n"),
+        }
+    }
+
+    // 2) Settings
+    report.push_str("settings:\n");
+    let sp = settings_path();
+    match std::fs::read_to_string(&sp) {
+        Ok(s) => match serde_json::from_str::<Settings>(&s) {
+            Ok(_) => report.push_str(&format!("  ✓ valid: {}\n", sp.display())),
+            Err(e) => {
+                ok = false;
+                report.push_str(&format!("  ✗ invalid: {e}\n"));
+            }
+        },
+        Err(_) => report.push_str(&format!("  • no settings file (using defaults)\n")),
+    }
+
+    // 3) Hooks
+    report.push_str("hooks:\n");
+    let hp = std::env::var_os("HOME")
+        .map(|h| PathBuf::from(h).join(HOOKS_PATH));
+    if let Some(p) = &hp {
+        match std::fs::read_to_string(p) {
+            Ok(s) => match serde_json::from_str::<HooksFile>(&s) {
+                Ok(h) => report.push_str(&format!(
+                    "  ✓ valid: SessionStart={}, UserPromptSubmit={}, PreToolUse={}, PostToolUse={}\n",
+                    h.session_start.len(),
+                    h.user_prompt_submit.len(),
+                    h.pre_tool_use.len(),
+                    h.post_tool_use.len(),
+                )),
+                Err(e) => {
+                    ok = false;
+                    report.push_str(&format!("  ✗ invalid: {e}\n"));
+                }
+            },
+            Err(_) => report.push_str("  • no hooks file\n"),
+        }
+    }
+
+    // 4) MCP
+    report.push_str("mcp:\n");
+    let mcp = load_mcp_config();
+    if mcp.servers.is_empty() {
+        report.push_str("  • no MCP servers configured\n");
+    } else {
+        for (name, _) in &mcp.servers {
+            report.push_str(&format!("  • {name} (not probed — `aether mcp test` planned)\n"));
+        }
+    }
+
+    // 5) Disk usage
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    if let Some(home) = home {
+        let dir = home.join(".aether");
+        let bytes = dir_size_bytes(&dir).unwrap_or(0);
+        report.push_str(&format!(
+            "storage:\n  • ~/.aether/ uses {} bytes (~{:.1} MiB)\n",
+            bytes,
+            bytes as f64 / 1024.0 / 1024.0
+        ));
+    }
+
+    print!("{report}");
+    if !ok {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn dir_size_bytes(p: &std::path::Path) -> std::io::Result<u64> {
+    let mut total = 0;
+    if !p.exists() {
+        return Ok(0);
+    }
+    for entry in walkdir::WalkDir::new(p).into_iter().filter_map(|e| e.ok()) {
+        if entry.file_type().is_file() {
+            if let Ok(md) = entry.metadata() {
+                total += md.len();
+            }
+        }
+    }
+    Ok(total)
 }
 
 // ── init ─────────────────────────────────────────────────────────────────
