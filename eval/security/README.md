@@ -57,3 +57,30 @@ Exit code is 1 if any fixture fails.
 | 14_go_command_injection.go | `exec.Command("sh","-c",…)` with user input | CWE-78 | HIGH |
 | 15_go_path_traversal.go | `filepath.Join(uploadDir, name)` + `os.Open` | CWE-22 | HIGH |
 | 16_go_hardcoded_key.go | HMAC signing key in source | CWE-798 | HIGH |
+
+### Python — gap-fill (v0.7.3)
+
+| File | Bug | CWE | Min severity |
+|------|-----|-----|--------------|
+| 17_py_redos.py | Catastrophic backtracking in email regex | CWE-1333 / CWE-400 | MEDIUM |
+| 18_py_jinja_autoescape.py | Jinja2 `Environment(autoescape=False)` | CWE-79 | HIGH |
+
+### Java — gap-fill (v0.7.3)
+
+| File | Bug | CWE | Min severity |
+|------|-----|-----|--------------|
+| 19_java_jndi.java | `ctx.lookup(req.getParameter("ref"))` | CWE-74 / CWE-917 | HIGH |
+| 20_java_jackson_polymorphic.java | Jackson `activateDefaultTyping(LaissezFaire, NON_FINAL)` | CWE-502 | HIGH |
+
+### Go — gap-fill (v0.7.3)
+
+| File | Bug | CWE | Min severity |
+|------|-----|-----|--------------|
+| 21_go_map_race.go | Concurrent map read/write without mutex | CWE-362 / CWE-366 | HIGH |
+| 22_go_missing_ctx_timeout.go | `http.Get` with no client timeout | CWE-400 / CWE-770 | MEDIUM |
+
+### C++ — gap-fill (v0.7.3)
+
+| File | Bug | CWE | Min severity |
+|------|-----|-----|--------------|
+| 23_cpp_use_after_free.cpp | Conditional `free` then read of same pointer | CWE-416 | HIGH |

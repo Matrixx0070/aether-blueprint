@@ -56,3 +56,28 @@ fixtures:
   - file: fixtures/16_go_hardcoded_key.go
     expected_cwe: ["CWE-798"]
     severity_min: HIGH
+  # Python (17–18) — v0.7.3 gap-fill
+  - file: fixtures/17_py_redos.py
+    expected_cwe: ["CWE-1333", "CWE-400"]
+    severity_min: MEDIUM
+  - file: fixtures/18_py_jinja_autoescape.py
+    expected_cwe: ["CWE-79"]
+    severity_min: HIGH
+  # Java (19–20) — v0.7.3 gap-fill
+  - file: fixtures/19_java_jndi.java
+    expected_cwe: ["CWE-74", "CWE-917", "CWE-116"]
+    severity_min: HIGH
+  - file: fixtures/20_java_jackson_polymorphic.java
+    expected_cwe: ["CWE-502"]
+    severity_min: HIGH
+  # Go (21–22) — v0.7.3 gap-fill
+  - file: fixtures/21_go_map_race.go
+    expected_cwe: ["CWE-362", "CWE-366"]
+    severity_min: HIGH
+  - file: fixtures/22_go_missing_ctx_timeout.go
+    expected_cwe: ["CWE-400", "CWE-770"]
+    severity_min: MEDIUM
+  # C++ (23) — v0.7.3 gap-fill
+  - file: fixtures/23_cpp_use_after_free.cpp
+    expected_cwe: ["CWE-416"]
+    severity_min: HIGH
