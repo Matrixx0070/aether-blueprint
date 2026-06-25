@@ -5,3 +5,8 @@
 # Python bytecode from eval/coding fixtures
 **/__pycache__/
 *.pyc
+
+# VS Code extension build artifacts
+editor/vscode/out/
+editor/vscode/node_modules/
+editor/vscode/*.vsix

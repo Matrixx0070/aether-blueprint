@@ -1,0 +1,77 @@
+{
+    "name": "aether",
+    "displayName": "aether",
+    "description": "Agentic coding via aether — runs aether-cli as a child process, streams output into VS Code.",
+    "version": "0.16.0",
+    "publisher": "matrixx0070",
+    "license": "Apache-2.0",
+    "engines": {
+        "vscode": "^1.85.0"
+    },
+    "main": "./out/extension.js",
+    "categories": [
+        "Programming Languages",
+        "Other"
+    ],
+    "activationEvents": [],
+    "contributes": {
+        "commands": [
+            {
+                "command": "aether.ask",
+                "title": "aether: Ask"
+            },
+            {
+                "command": "aether.askAboutSelection",
+                "title": "aether: Ask about selection"
+            },
+            {
+                "command": "aether.doctor",
+                "title": "aether: Doctor (health check)"
+            }
+        ],
+        "configuration": {
+            "title": "aether",
+            "properties": {
+                "aether.binaryPath": {
+                    "type": "string",
+                    "default": "aether",
+                    "description": "Path to the aether binary. Default uses $PATH lookup."
+                },
+                "aether.model": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Model override (e.g. claude-sonnet-4-6). Empty = aether's own default."
+                },
+                "aether.permissionMode": {
+                    "type": "string",
+                    "default": "default",
+                    "enum": [
+                        "default",
+                        "acceptEdits",
+                        "plan",
+                        "bypassPermissions"
+                    ],
+                    "description": "Permission mode passed to `aether -p`. bypassPermissions allows aether to Edit/Write/Bash without prompting (use with care)."
+                }
+            }
+        },
+        "menus": {
+            "editor/context": [
+                {
+                    "command": "aether.askAboutSelection",
+                    "group": "navigation@9"
+                }
+            ]
+        }
+    },
+    "scripts": {
+        "compile": "tsc -p .",
+        "watch": "tsc -p . -w",
+        "package": "vsce package"
+    },
+    "devDependencies": {
+        "@types/node": "^22.0.0",
+        "@types/vscode": "^1.85.0",
+        "typescript": "^5.0.0"
+    }
+}
