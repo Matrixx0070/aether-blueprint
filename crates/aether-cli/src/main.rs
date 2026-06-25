@@ -89,6 +89,8 @@ enum Cmd {
     Init,
     /// Health check: token expiry, settings, hooks, MCP, disk usage.
     Doctor,
+    /// Launch the ratatui TUI (chat pane + tool log + status bar + input).
+    Tui,
     /// MCP server administration (stub).
     Mcp {
         #[command(subcommand)]
@@ -155,6 +157,7 @@ async fn main() -> Result<()> {
         Some(Cmd::List { limit }) => return run_list(limit),
         Some(Cmd::Init) => return run_init(),
         Some(Cmd::Doctor) => return run_doctor().await,
+        Some(Cmd::Tui) => return run_tui(&model, permission_mode).await,
         Some(Cmd::Mcp { sub }) => {
             return mcp_cmd(sub).await;
         }
@@ -1232,6 +1235,258 @@ fn julian_to_ymd(jdn: i64) -> (i32, u32, u32) {
     let mo = j + 2 - 12 * l;
     let y = 100 * (n - 49) + i + l;
     (y as i32, mo as u32, d as u32)
+}
+
+// ── TUI ───────────────────────────────────────────────────────────────────
+
+async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> Result<()> {
+    use aether_render::{
+        channels, draw_frame, ChatLine, TerminalGuard, UiCommand, UiEvent, UiState,
+    };
+    use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+
+    let provider = AnthropicProvider::from_env_or_credentials().context(
+        "no auth source — set ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, \
+         or run `claude` / `aether` to populate ~/.claude/.credentials.json",
+    )?;
+    let config = SessionConfig {
+        model: model.to_string(),
+        permission_mode,
+        max_tokens_per_turn: REPL_MAX_TOKENS,
+    };
+    let overlay = Fable5Overlay::new(OverlayConfig::default());
+    let gate = Gate::new(default_rules()).map_err(|e| anyhow!("self-check gate: {e}"))?;
+    let mut tools = ToolRegistry::new();
+    register_builtins(&mut tools);
+    let provider_arc: Arc<dyn aether_llm::LlmProvider> = Arc::new(provider);
+    tools.register(Box::new(AgentTool::new(
+        Arc::clone(&provider_arc),
+        model.to_string(),
+        permission_mode,
+    )));
+    let mcp_config = load_mcp_config();
+    let _mcp_clients = install_mcp_servers(&mut tools, &mcp_config).await;
+    let skills = load_skills();
+    if !skills.is_empty() {
+        tools.register(Box::new(SkillTool { skills }));
+    }
+    tools.register(Box::new(MemoryReadTool));
+    tools.register(Box::new(MemoryWriteTool));
+
+    let mut session = Session::new(config, overlay, provider_arc, gate, tools);
+    inject_project_context(&mut session);
+    if let Some(idx) = memory_index_reminder() {
+        session.push_reminder(Reminder::new(
+            ReminderKind::SystemWarning,
+            Source::Kernel,
+            idx,
+        ));
+    }
+    let hooks = load_hooks();
+    install_tool_hook(&mut session, &hooks);
+    let outs = run_hooks(
+        &hooks.session_start,
+        "SessionStart",
+        serde_json::json!({"cwd": std::env::current_dir().ok().map(|p| p.display().to_string())}),
+    )
+    .await;
+    push_hook_reminders(&mut session, outs, "SessionStart");
+
+    let session_id = new_session_id();
+    let perm_str = format!("{:?}", permission_mode);
+    let mut ui = UiState::new(model.to_string(), session_id.clone(), perm_str);
+
+    let (etx, mut erx, _ctx, mut crx) = channels();
+    let etx_for_driver = etx.clone();
+
+    // Move ownership of session + hooks into the driver task. Communication
+    // back to UI via `etx_for_driver`. Commands from UI come over `crx`.
+    let driver_handle = tokio::spawn(async move {
+        let mut session = session;
+        let hooks = hooks;
+        loop {
+            let cmd = match crx.recv().await {
+                Some(c) => c,
+                None => break,
+            };
+            let user_msg = match cmd {
+                UiCommand::UserMessage(s) => s,
+                UiCommand::Cancel => continue,
+                UiCommand::Quit => break,
+            };
+            let outs = run_hooks(
+                &hooks.user_prompt_submit,
+                "UserPromptSubmit",
+                serde_json::json!({"prompt": user_msg}),
+            )
+            .await;
+            push_hook_reminders(&mut session, outs, "UserPromptSubmit");
+
+            let mut next_input: Option<String> = Some(user_msg);
+            loop {
+                let etx_inner = etx_for_driver.clone();
+                let mut started = false;
+                let sink: aether_llm::TextDeltaSink = Box::new(move |delta: &str| {
+                    if !started {
+                        started = true;
+                    }
+                    let _ = etx_inner.send(UiEvent::AssistantDelta(delta.to_string()));
+                });
+                let outcome = match agent_turn_streamed(&mut session, next_input.take(), sink)
+                    .await
+                {
+                    Ok(o) => o,
+                    Err(e) => {
+                        let _ = etx_for_driver.send(UiEvent::Error(e.to_string()));
+                        break;
+                    }
+                };
+
+                // Drain just-appended history items into UI events.
+                if let Some(last_two) = session
+                    .history
+                    .get(session.history.len().saturating_sub(2)..)
+                {
+                    for item in last_two {
+                        match item {
+                            ConversationItem::Assistant { text, tool_uses } => {
+                                if let Some(t) = text {
+                                    let _ = etx_for_driver
+                                        .send(UiEvent::AssistantDone(t.clone()));
+                                }
+                                for tu in tool_uses {
+                                    let summary = brief_tool_summary(tu);
+                                    let _ = etx_for_driver.send(UiEvent::ToolStart {
+                                        name: tu.name.clone(),
+                                        summary,
+                                    });
+                                }
+                            }
+                            ConversationItem::ToolResults(results) => {
+                                for r in results {
+                                    // Match against the most recent ToolStart by id is
+                                    // not feasible without threading id; we use name +
+                                    // FIFO running entry in the UI.
+                                    let preview: String =
+                                        r.content.lines().take(3).collect::<Vec<_>>().join(" / ");
+                                    let _ = etx_for_driver.send(UiEvent::ToolDone {
+                                        name: tool_name_for_result(&session, &r.tool_use_id)
+                                            .unwrap_or_else(|| "?".into()),
+                                        summary: String::new(),
+                                        is_error: r.is_error,
+                                        preview,
+                                    });
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                let u = &session.usage_total;
+                let cost = estimate_cost_usd(&session.config.model, u);
+                let _ = etx_for_driver.send(UiEvent::Usage {
+                    input: u.input_tokens,
+                    output: u.output_tokens,
+                    total: u.input_tokens + u.output_tokens,
+                    cost_usd: cost,
+                });
+
+                match outcome {
+                    TurnOutcome::AwaitUser => break,
+                    TurnOutcome::ContinueImmediately => continue,
+                    TurnOutcome::Sleep { seconds } => {
+                        tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
+                        continue;
+                    }
+                    TurnOutcome::Exit => break,
+                }
+            }
+            let _ = etx_for_driver.send(UiEvent::AwaitUser);
+        }
+    });
+
+    // ── TUI loop ──────────────────────────────────────────────────────
+    let mut guard = TerminalGuard::new().context("enter TUI alternate screen")?;
+    'outer: loop {
+        // Drain pending events
+        while let Ok(ev) = erx.try_recv() {
+            ui.apply(ev);
+        }
+        draw_frame(guard.terminal(), &ui).ok();
+        // Poll for input with a short timeout so the UI tick refreshes.
+        if event::poll(std::time::Duration::from_millis(80))? {
+            match event::read()? {
+                Event::Key(k) if k.kind == KeyEventKind::Press => match k.code {
+                    KeyCode::Esc => break 'outer,
+                    KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        if ui.input_buffer.is_empty() && !ui.status_running {
+                            break 'outer;
+                        }
+                        ui.input_buffer.clear();
+                    }
+                    KeyCode::Char('q') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        break 'outer;
+                    }
+                    KeyCode::Enter => {
+                        if k.modifiers.contains(KeyModifiers::SHIFT) {
+                            ui.input_buffer.push('\n');
+                        } else if !ui.input_buffer.trim().is_empty() && !ui.status_running {
+                            let msg = std::mem::take(&mut ui.input_buffer);
+                            ui.chat_lines.push(ChatLine::User(msg.clone()));
+                            ui.status_running = true;
+                            if _ctx.send(UiCommand::UserMessage(msg)).is_err() {
+                                break 'outer;
+                            }
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        ui.input_buffer.pop();
+                    }
+                    KeyCode::PageUp => {
+                        ui.chat_scroll = ui.chat_scroll.saturating_sub(5);
+                    }
+                    KeyCode::PageDown => {
+                        ui.chat_scroll = ui.chat_scroll.saturating_add(5);
+                    }
+                    KeyCode::Char(c) => {
+                        ui.input_buffer.push(c);
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+    }
+    let _ = _ctx.send(UiCommand::Quit);
+    drop(guard); // cooks the terminal
+    let _ = driver_handle.await;
+    Ok(())
+}
+
+fn brief_tool_summary(tu: &aether_core::context::RecordedToolUse) -> String {
+    tu.input
+        .get("command")
+        .or_else(|| tu.input.get("file_path"))
+        .or_else(|| tu.input.get("pattern"))
+        .or_else(|| tu.input.get("url"))
+        .or_else(|| tu.input.get("path"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.lines().next().unwrap_or("").chars().take(60).collect())
+        .unwrap_or_default()
+}
+
+fn tool_name_for_result(session: &Session, tool_use_id: &str) -> Option<String> {
+    for item in session.history.iter().rev() {
+        if let ConversationItem::Assistant { tool_uses, .. } = item {
+            for tu in tool_uses {
+                if tu.id == tool_use_id {
+                    return Some(tu.name.clone());
+                }
+            }
+        }
+    }
+    None
 }
 
 // ── doctor ───────────────────────────────────────────────────────────────

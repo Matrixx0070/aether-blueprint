@@ -8,3 +8,6 @@ description = "AetherCode TUI/ANSI renderer: streaming markdown, unified diff co
 [dependencies]
 serde.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+ratatui = { version = "0.28", default-features = false, features = ["crossterm"] }
+crossterm = "0.28"
