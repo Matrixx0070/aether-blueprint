@@ -1020,6 +1020,349 @@ impl Tool for TodoWriteTool {
     }
 }
 
+// ── security scanners ────────────────────────────────────────────────────
+//
+// All scanners shell out to a CLI binary if it's installed. When the
+// binary is missing, the tool returns a structured "missing" sentinel so
+// the model can route around it. Output is normalised to:
+//
+//   { tool, available, findings: [{finding_id, severity, location, summary, references}] }
+//
+// The model can iterate over `findings` directly without per-tool
+// JSON-shape gymnastics.
+
+#[derive(Debug, Deserialize)]
+struct ScanInput {
+    path: Option<String>,
+}
+
+fn binary_available(name: &str) -> bool {
+    std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!("command -v {} >/dev/null 2>&1", name))
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+async fn run_capture(
+    cmd: &str,
+    args: &[&str],
+    cwd: Option<&std::path::Path>,
+) -> Result<(i32, String, String), ToolError> {
+    let mut c = Command::new(cmd);
+    c.args(args);
+    if let Some(d) = cwd {
+        c.current_dir(d);
+    }
+    c.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let out = c
+        .spawn()
+        .map_err(|e| ToolError::Io(format!("spawn {cmd}: {e}")))?
+        .wait_with_output()
+        .await
+        .map_err(|e| ToolError::Io(format!("wait: {e}")))?;
+    let code = out.status.code().unwrap_or(-1);
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    Ok((code, stdout, stderr))
+}
+
+fn missing_tool(name: &str) -> Value {
+    json!({
+        "tool": name,
+        "available": false,
+        "note": format!("`{name}` binary not found on PATH. Install it and re-run."),
+        "findings": []
+    })
+}
+
+// ── Gitleaks ──────────────────────────────────────────────────────────────
+
+pub struct GitleaksTool;
+
+#[async_trait]
+impl Tool for GitleaksTool {
+    fn name(&self) -> &str {
+        "Gitleaks"
+    }
+    fn description(&self) -> &str {
+        "Scan a directory for committed secrets using gitleaks (must be on PATH). \
+         Returns a normalised list of findings with location + secret type."
+    }
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Directory to scan (defaults to cwd)" }
+            }
+        })
+    }
+    async fn run(&self, input: Value) -> Result<String, ToolError> {
+        let inp: ScanInput = parse_input(input)?;
+        if !binary_available("gitleaks") {
+            return Ok(missing_tool("gitleaks").to_string());
+        }
+        let path = inp.path.clone().unwrap_or_else(|| ".".to_string());
+        let report_path = format!(
+            "{}/aether-gitleaks-{}.json",
+            std::env::temp_dir().display(),
+            std::process::id()
+        );
+        let (_code, _stdout, _stderr) = run_capture(
+            "gitleaks",
+            &[
+                "detect",
+                "--no-banner",
+                "--report-format",
+                "json",
+                "--report-path",
+                &report_path,
+                "--source",
+                &path,
+            ],
+            None,
+        )
+        .await?;
+        let raw = tokio::fs::read_to_string(&report_path).await.unwrap_or_default();
+        let _ = tokio::fs::remove_file(&report_path).await;
+        let parsed: Vec<Value> = serde_json::from_str(&raw).unwrap_or_default();
+        let findings: Vec<Value> = parsed
+            .iter()
+            .map(|f| {
+                json!({
+                    "finding_id": f.get("RuleID").cloned().unwrap_or(Value::Null),
+                    "severity": "HIGH",
+                    "location": format!(
+                        "{}:{}",
+                        f.get("File").and_then(|v| v.as_str()).unwrap_or(""),
+                        f.get("StartLine").and_then(|v| v.as_u64()).unwrap_or(0)
+                    ),
+                    "summary": f.get("Description").cloned().unwrap_or(Value::Null),
+                    "references": []
+                })
+            })
+            .collect();
+        Ok(json!({"tool":"gitleaks","available":true,"findings":findings}).to_string())
+    }
+}
+
+// ── CargoAudit ────────────────────────────────────────────────────────────
+
+pub struct CargoAuditTool;
+
+#[async_trait]
+impl Tool for CargoAuditTool {
+    fn name(&self) -> &str {
+        "CargoAudit"
+    }
+    fn description(&self) -> &str {
+        "Run `cargo audit` (must be installed) against a Rust project. \
+         Returns advisory IDs with severity + description."
+    }
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Path to Cargo project (defaults to cwd)" }
+            }
+        })
+    }
+    async fn run(&self, input: Value) -> Result<String, ToolError> {
+        let inp: ScanInput = parse_input(input)?;
+        if !binary_available("cargo-audit") && !binary_available("cargo") {
+            return Ok(missing_tool("cargo-audit").to_string());
+        }
+        let cwd = inp.path.clone().unwrap_or_else(|| ".".to_string());
+        let (_code, stdout, _stderr) = run_capture(
+            "cargo",
+            &["audit", "--json"],
+            Some(std::path::Path::new(&cwd)),
+        )
+        .await?;
+        let parsed: Value = serde_json::from_str(&stdout).unwrap_or(Value::Null);
+        let vulns = parsed
+            .get("vulnerabilities")
+            .and_then(|v| v.get("list"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let findings: Vec<Value> = vulns
+            .iter()
+            .map(|v| {
+                let adv = v.get("advisory").cloned().unwrap_or(Value::Null);
+                json!({
+                    "finding_id": adv.get("id").cloned().unwrap_or(Value::Null),
+                    "severity": adv.get("severity").cloned().unwrap_or(Value::String("HIGH".into())),
+                    "location": v.get("package").and_then(|p| p.get("name")).cloned().unwrap_or(Value::Null),
+                    "summary": adv.get("title").cloned().unwrap_or(Value::Null),
+                    "references": adv.get("references").cloned().unwrap_or(Value::Array(vec![]))
+                })
+            })
+            .collect();
+        Ok(json!({"tool":"cargo-audit","available":true,"findings":findings}).to_string())
+    }
+}
+
+// ── NpmAudit ──────────────────────────────────────────────────────────────
+
+pub struct NpmAuditTool;
+
+#[async_trait]
+impl Tool for NpmAuditTool {
+    fn name(&self) -> &str {
+        "NpmAudit"
+    }
+    fn description(&self) -> &str {
+        "Run `npm audit --json` against a Node project. Normalises the \
+         resulting advisories list."
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type": "object", "properties": {"path": {"type":"string"}}})
+    }
+    async fn run(&self, input: Value) -> Result<String, ToolError> {
+        let inp: ScanInput = parse_input(input)?;
+        if !binary_available("npm") {
+            return Ok(missing_tool("npm").to_string());
+        }
+        let cwd = inp.path.clone().unwrap_or_else(|| ".".to_string());
+        let (_code, stdout, _stderr) =
+            run_capture("npm", &["audit", "--json"], Some(std::path::Path::new(&cwd)))
+                .await?;
+        let parsed: Value = serde_json::from_str(&stdout).unwrap_or(Value::Null);
+        let vulns = parsed
+            .get("vulnerabilities")
+            .cloned()
+            .unwrap_or(Value::Object(Default::default()));
+        let findings: Vec<Value> = vulns
+            .as_object()
+            .map(|obj| {
+                obj.iter()
+                    .map(|(name, v)| {
+                        json!({
+                            "finding_id": v.get("via").cloned().unwrap_or(Value::Null),
+                            "severity": v.get("severity").cloned().unwrap_or(Value::String("UNKNOWN".into())),
+                            "location": name,
+                            "summary": v.get("range").cloned().unwrap_or(Value::Null),
+                            "references": []
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(json!({"tool":"npm-audit","available":true,"findings":findings}).to_string())
+    }
+}
+
+// ── PipAudit ──────────────────────────────────────────────────────────────
+
+pub struct PipAuditTool;
+
+#[async_trait]
+impl Tool for PipAuditTool {
+    fn name(&self) -> &str {
+        "PipAudit"
+    }
+    fn description(&self) -> &str {
+        "Run `pip-audit -f json` against a Python project. Normalises the \
+         resulting vulnerabilities."
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type": "object", "properties": {"path": {"type":"string"}}})
+    }
+    async fn run(&self, input: Value) -> Result<String, ToolError> {
+        let inp: ScanInput = parse_input(input)?;
+        if !binary_available("pip-audit") {
+            return Ok(missing_tool("pip-audit").to_string());
+        }
+        let cwd = inp.path.clone().unwrap_or_else(|| ".".to_string());
+        let (_code, stdout, _stderr) = run_capture(
+            "pip-audit",
+            &["-f", "json"],
+            Some(std::path::Path::new(&cwd)),
+        )
+        .await?;
+        let parsed: Vec<Value> = serde_json::from_str(&stdout).unwrap_or_default();
+        let findings: Vec<Value> = parsed
+            .iter()
+            .flat_map(|dep| {
+                let name = dep.get("name").cloned().unwrap_or(Value::Null);
+                let version = dep.get("version").cloned().unwrap_or(Value::Null);
+                dep.get("vulns")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(move |vuln| {
+                        json!({
+                            "finding_id": vuln.get("id").cloned().unwrap_or(Value::Null),
+                            "severity": "HIGH",
+                            "location": format!("{} {}", name.as_str().unwrap_or(""), version.as_str().unwrap_or("")),
+                            "summary": vuln.get("description").cloned().unwrap_or(Value::Null),
+                            "references": vuln.get("fix_versions").cloned().unwrap_or(Value::Null)
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        Ok(json!({"tool":"pip-audit","available":true,"findings":findings}).to_string())
+    }
+}
+
+// ── OsvScanner ────────────────────────────────────────────────────────────
+
+pub struct OsvScannerTool;
+
+#[async_trait]
+impl Tool for OsvScannerTool {
+    fn name(&self) -> &str {
+        "OsvScanner"
+    }
+    fn description(&self) -> &str {
+        "Run Google's osv-scanner against a directory. Multi-ecosystem \
+         supply-chain vuln scanner."
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type": "object", "properties": {"path": {"type":"string"}}})
+    }
+    async fn run(&self, input: Value) -> Result<String, ToolError> {
+        let inp: ScanInput = parse_input(input)?;
+        if !binary_available("osv-scanner") {
+            return Ok(missing_tool("osv-scanner").to_string());
+        }
+        let path = inp.path.clone().unwrap_or_else(|| ".".to_string());
+        let (_code, stdout, _stderr) =
+            run_capture("osv-scanner", &["--format", "json", &path], None).await?;
+        let parsed: Value = serde_json::from_str(&stdout).unwrap_or(Value::Null);
+        let mut findings = Vec::new();
+        if let Some(results) = parsed.get("results").and_then(|v| v.as_array()) {
+            for r in results {
+                if let Some(pkgs) = r.get("packages").and_then(|v| v.as_array()) {
+                    for p in pkgs {
+                        let name = p
+                            .get("package")
+                            .and_then(|x| x.get("name"))
+                            .cloned()
+                            .unwrap_or(Value::Null);
+                        if let Some(vulns) = p.get("vulnerabilities").and_then(|v| v.as_array()) {
+                            for v in vulns {
+                                findings.push(json!({
+                                    "finding_id": v.get("id").cloned().unwrap_or(Value::Null),
+                                    "severity": "HIGH",
+                                    "location": name.clone(),
+                                    "summary": v.get("summary").cloned().unwrap_or(Value::Null),
+                                    "references": v.get("references").cloned().unwrap_or(Value::Null)
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(json!({"tool":"osv-scanner","available":true,"findings":findings}).to_string())
+    }
+}
+
 // ── registry helper ───────────────────────────────────────────────────────
 
 pub fn register_builtins(registry: &mut crate::ToolRegistry) {
@@ -1033,6 +1376,14 @@ pub fn register_builtins(registry: &mut crate::ToolRegistry) {
     registry.register(Box::new(WebFetchTool));
     registry.register(Box::new(NotebookEditTool));
     registry.register(Box::new(TodoWriteTool::new()));
+    // Security scanners — safe by default (read-only on local filesystem),
+    // shell out to external binaries when present. Each tool reports
+    // `available: false` when the binary is missing rather than erroring.
+    registry.register(Box::new(GitleaksTool));
+    registry.register(Box::new(CargoAuditTool));
+    registry.register(Box::new(NpmAuditTool));
+    registry.register(Box::new(PipAuditTool));
+    registry.register(Box::new(OsvScannerTool));
 }
 
 #[cfg(test)]
