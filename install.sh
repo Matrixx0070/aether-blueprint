@@ -110,7 +110,10 @@ else
 fi
 
 echo "[install] verifying SHA256…"
-EXPECTED_SHA="$(grep " $ARCHIVE\$" "$TMPDIR/SHA256SUMS" | awk '{print $1}')"
+# Field-2 string match (NOT regex) so archive names containing `.` are
+# matched literally — `aether-v0.12.0-...tar.gz` has wildcards that a
+# regex match would treat as any-character.
+EXPECTED_SHA="$(awk -v f="$ARCHIVE" '$2 == f { print $1 }' "$TMPDIR/SHA256SUMS")"
 if [ -z "$EXPECTED_SHA" ]; then
   echo "error: $ARCHIVE not found in SHA256SUMS" >&2
   echo "  available entries:" >&2
