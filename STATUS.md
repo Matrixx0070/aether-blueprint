@@ -43,4 +43,9 @@ format: `[slice] [status] [commit] [verifier] [live-check] note`
 | D2 | DONE | 651b302 | n/a | exit 0 · 24/24 aether-cli (+5) | 5 cost-estimator tests (cost calc + /usage cmd existed already) |
 | D3 | DONE | 76c125e | n/a | exit 0 · 28/28 aether-core (+8) | Context compaction at 80% window + AETHER_NO_COMPACT + 8 tests |
 | D4 | DONE | fe36c89,1fb51cd | n/a | exit 0 · 33/33 aether-core (+5) | Parallel safe-tool execution + AETHER_NO_PARALLEL_TOOLS + 5 tests |
+| D5 | DONE | 01f9e83 | n/a | exit 0 · pushed · tag v0.9.0 live | Bump 0.9.0, docs, tag, push |
+| E1 | DONE | 602fad9 | n/a | exit 0 · 2 MED closed | ENV_TEST_LOCK coverage gap + compaction fail-soft |
+| F1 | DONE | af8ed8a | n/a | 4/4 azure tests · 57 aether-llm total | Azure Foundry provider (UNVERIFIED — no Azure creds) |
+| F2 | DONE | 55ddff3 | n/a | 7/7 retry tests · workspace green | Unified retry watchdog + AETHER_NO_RETRY |
+| F3 | DONE | 3d432bf | n/a | doctor --help shows --probe · workspace green | aether doctor --probe (latency + token counts) |
 

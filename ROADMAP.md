@@ -118,10 +118,37 @@ A self-contained surface for authorized security work, end-to-end:
   switch tests across compaction + executor don't race under cargo-test's
   parallel runner.
 
-## v0.10 — plugins + IDE surfaces (next)
+## v0.10 — reliability + Foundry — shipped 2026-06-25
+
+- **Azure AI Foundry provider** (F1): new `aether-llm::azure` module.
+  Anthropic Messages-API-compatible endpoints on Azure subscriptions
+  via per-resource URL + `?api-version=...` query + `api-key` header.
+  `AzureProvider::from_env()` reads `AZURE_AI_ENDPOINT` +
+  `AZURE_AI_API_KEY` + optional `AZURE_AI_API_VERSION`. Slugs accepted
+  by `build_named_provider`: `azure` / `azure-foundry` / `foundry`.
+  4 unit tests (URL construction, trailing-slash strip, env validation,
+  name stability). UNVERIFIED for live — no Azure subscription in env.
+- **Unified retry watchdog** (F2): new `aether-llm::retry` module +
+  `RetryingProvider` decorator wrapping any `LlmProvider`. Retries
+  5xx / 429 / transport errors with exponential backoff (1s → 2s → 4s
+  by default, 3 attempts). 4xx (non-429) and schema errors return
+  immediately. `build_provider` + `build_named_provider` both wrap
+  via `with_retry()` so REPL/print + sweep paths inherit retry. Streaming
+  intentionally NOT retried (partial deltas already emitted; duplicate
+  text on retry would corrupt the conversation). Kill-switch
+  `AETHER_NO_RETRY=1`. 7 unit tests (classification, backoff math,
+  retry-on-5xx, no-retry-on-4xx, max-attempts, kill-switch).
+- **`aether doctor --probe`** (F3): opt-in 1-token round-trip against
+  the active provider. Reports latency + token counts (from `usage`
+  field) + provider name. Goes through retry wrapper so transient 5xx/429
+  don't false-positive the health check. Exit 1 on probe failure.
+  Default behavior (no flag) unchanged; emits "probe: skipped (pass
+  `--probe` to make a 1-token round-trip)" so users discover the flag.
+
+## v0.11 — plugins + IDE surfaces (next)
 
 - Plugin system via WASM modules registered as tools
-- BYOC: Foundry (Azure) + Mantle
+- BYOC: Mantle
 - VS Code extension, JetBrains plugin
 - MCP websocket transport
 - HTTP server WebSocket chat for browser clients

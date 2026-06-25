@@ -5,7 +5,21 @@ Anthropic Messages API. It runs an explicit perceive → plan → tool-select �
 execute → observe → verify loop with a built-in self-check gate and reminder
 tamper-test — pipeline scaffolding most agents don't ship.
 
-## Status: v0.9.0
+## Status: v0.10.0
+
+Adds reliability + fourth cloud provider:
+- **Azure AI Foundry provider** — Claude on Azure via `AZURE_AI_ENDPOINT` +
+  `AZURE_AI_API_KEY`. Slugs: `azure` / `azure-foundry` / `foundry`. UNVERIFIED
+  for live (no Azure creds in test env); 4 unit tests pin URL + auth shape.
+- **Unified retry watchdog** — exponential backoff (1s → 2s → 4s) on 5xx /
+  429 / transport errors, applied to every provider via `RetryingProvider`
+  decorator at `build_provider`. Streaming intentionally NOT retried
+  (partial output already emitted). Kill-switch `AETHER_NO_RETRY=1`.
+- **`aether doctor --probe`** — opt-in 1-token round-trip to the active
+  provider; reports latency + token counts + auth source. CI-friendly
+  exit 1 on failure. Default behavior (no flag) unchanged.
+
+v0.9.0 patch:
 
 Closes the biggest user-visible UX gaps vs Claude Code:
 - **Print mode streaming** — `aether -p` writes tokens to stdout as the model
