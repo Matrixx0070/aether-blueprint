@@ -1,0 +1,13 @@
+name: example-xor
+category: crypto
+description: |
+  Decode a flag that has been XOR'd with a single-byte repeating key.
+  The encoded bytes are in `secret.bin`. The flag is in `flag{...}` form
+  and ASCII-printable when decoded.
+files:
+  - secret.bin
+expected_flag: flag{single_byte_xor_is_no_crypto}
+hints:
+  - The encoded bytes are short (~40 bytes). Brute-force the 256 possible key bytes.
+  - The decoded text should be ASCII-printable and contain "flag{".
+max_turns: 8
