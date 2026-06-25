@@ -56,7 +56,20 @@ A self-contained surface for authorized security work, end-to-end:
   `AETHER_SECURITY_NO_AUTOROUTE=1`, or just call with Sonnet/Haiku
   directly. Closes the 5/7 Opus truncation reported in v0.7's BENCHMARK.
 
-## v0.7.2 — patch (next)
+## v0.7.3 — shipped 2026-06-25 (patch)
+
+- **7 new gap-filling fixtures** (→23 total): Python ReDoS (CWE-1333) +
+  Jinja2 XSS (CWE-79), Java JNDI injection (CWE-917) + Jackson polymorphic
+  deserialization (CWE-502), Go concurrent map race (CWE-362) + missing
+  HTTP timeout (CWE-400), C++ use-after-free (CWE-416).
+- **`aether security-eval --runs N --threshold P`**: repeat each fixture N
+  times, assert pass_rate ≥ threshold. Four new unit tests
+  (`compute_median_{odd,even}_count`, `meets_threshold_{above,below}`).
+  `--runs 1` default preserves backward-compat. 15/15 unit tests passing.
+- **Stability benchmark**: 23×3 run on Sonnet 4.6 — 23/23 at threshold 1.0.
+  Per-fixture median/min/max ms table in `BENCHMARK.md`.
+
+## v0.8 — BYOC provider parity (next)
 
 - Bedrock streaming via `invoke-with-response-stream` (AWS event-stream)
 - Vertex streaming via `:streamRawPredict` (SSE)
@@ -68,7 +81,7 @@ A self-contained surface for authorized security work, end-to-end:
   Vertex 5xx retry)
 - `aether eval --provider <name>` to run the same suite across providers
 
-## v0.8 — plugins + IDE surfaces
+## v0.9 — plugins + IDE surfaces
 
 - Plugin system via WASM modules registered as tools
 - BYOC: Foundry (Azure) + Mantle

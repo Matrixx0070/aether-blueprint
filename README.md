@@ -5,16 +5,25 @@ Anthropic Messages API. It runs an explicit perceive → plan → tool-select �
 execute → observe → verify loop with a built-in self-check gate and reminder
 tamper-test — pipeline scaffolding most agents don't ship.
 
-## Status: v0.7.2
+## Status: v0.7.3
 
-Patch over v0.7.1: **security eval suite expanded from 7 Python fixtures to
-16 across 4 languages** — adds Java (SQLi via Statement, XXE in
-DocumentBuilder, DES/ECB crypto), C++ (`strcpy` buffer overflow, format
-string in `printf`, integer overflow in `malloc`), and Go (`exec.Command`
-injection, `filepath.Join` traversal, HMAC signing key in source). Single
-autoroute run (Sonnet 4.6) detects **16/16 at BLOCKER severity**, 5m21s
-total wall-clock; see `BENCHMARK.md`. No tooling changes — only fixtures +
-suite YAML + README/BENCHMARK docs.
+Patch over v0.7.2: **7 new gap-filling fixtures (→23 total), stability
+harness (`--runs N --threshold P`), and benchmark verification.**
+
+New fixtures cover: Python ReDoS (CWE-1333) and Jinja2 XSS (CWE-79); Java
+JNDI injection (CWE-917) and Jackson polymorphic deserialization (CWE-502);
+Go concurrent map race (CWE-362) and missing HTTP timeout (CWE-400); C++
+use-after-free (CWE-416). `aether security-eval` gains `--runs N` (repeat
+each fixture N times) and `--threshold P` (minimum pass fraction, default
+1.0). Stability run: **23/23 at threshold 1.0 across 3 runs** — no flaky
+fixtures; see `BENCHMARK.md` v0.7.3 section.
+
+v0.7.2: security eval suite expanded from 7 Python fixtures to
+16 across 4 languages — Java (SQLi via Statement, XXE in DocumentBuilder,
+DES/ECB crypto), C++ (`strcpy` buffer overflow, format string in `printf`,
+integer overflow in `malloc`), and Go (`exec.Command` injection,
+`filepath.Join` traversal, HMAC signing key in source). Sonnet 4.6 detects
+**16/16 at BLOCKER severity**, 5m21s total wall-clock.
 
 v0.7.1: `aether review --kind security` and `aether security-eval` auto-route
 Opus-class models (`claude-opus-*`) to Sonnet 4.6 when `--model` was not
