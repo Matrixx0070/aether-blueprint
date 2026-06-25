@@ -186,6 +186,25 @@ async fn run_print_agent(
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
     inject_project_context(&mut session);
 
+    // Run SessionStart hooks once at construction.
+    let hooks = load_hooks();
+    let outs = run_hooks(
+        &hooks.session_start,
+        "SessionStart",
+        serde_json::json!({"cwd": std::env::current_dir().ok().map(|p| p.display().to_string())}),
+    )
+    .await;
+    push_hook_reminders(&mut session, outs, "SessionStart");
+
+    // Run UserPromptSubmit hooks on the initial prompt.
+    let outs = run_hooks(
+        &hooks.user_prompt_submit,
+        "UserPromptSubmit",
+        serde_json::json!({"prompt": prompt}),
+    )
+    .await;
+    push_hook_reminders(&mut session, outs, "UserPromptSubmit");
+
     let mut next_input: Option<String> = Some(prompt.to_string());
     let mut last_text: Option<String> = None;
     loop {
@@ -309,6 +328,20 @@ async fn run_repl(
 
     print_banner(&session_id, model, &resume);
 
+    let hooks = load_hooks();
+    // SessionStart hook fires once per REPL launch (incl. resumed sessions).
+    let outs = run_hooks(
+        &hooks.session_start,
+        "SessionStart",
+        serde_json::json!({
+            "session_id": session_id,
+            "model": model,
+            "cwd": std::env::current_dir().ok().map(|p| p.display().to_string())
+        }),
+    )
+    .await;
+    push_hook_reminders(&mut session, outs, "SessionStart");
+
     let stdin = std::io::stdin();
     let mut input_buf = String::new();
     let mut pending_user: Option<String> = initial_prompt;
@@ -346,6 +379,16 @@ async fn run_repl(
         }
 
         append_session_line(&session_path, &SessionLine::user(&user_msg)).ok();
+
+        // UserPromptSubmit hooks fire before the LLM call. Their stdout
+        // is injected as a kernel-source reminder for the next turn.
+        let outs = run_hooks(
+            &hooks.user_prompt_submit,
+            "UserPromptSubmit",
+            serde_json::json!({"prompt": user_msg}),
+        )
+        .await;
+        push_hook_reminders(&mut session, outs, "UserPromptSubmit");
 
         let mut next_input: Option<String> = Some(user_msg);
         loop {
@@ -715,6 +758,114 @@ fn parse_permission_mode(s: &str) -> Result<aether_perm::PermissionMode> {
         "plan" => Ok(Plan),
         "bypassPermissions" => Ok(BypassPermissions),
         other => anyhow::bail!("unknown permission mode: {other}"),
+    }
+}
+
+// ── Hooks (SessionStart, UserPromptSubmit) ───────────────────────────────
+
+const HOOKS_PATH: &str = ".aether/hooks.json";
+const HOOK_TIMEOUT_SECS: u64 = 30;
+
+#[derive(Debug, Deserialize)]
+struct HookConfig {
+    #[serde(default)]
+    command: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    description: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct HooksFile {
+    #[serde(rename = "SessionStart", default)]
+    session_start: Vec<HookConfig>,
+    #[serde(rename = "UserPromptSubmit", default)]
+    user_prompt_submit: Vec<HookConfig>,
+}
+
+fn load_hooks() -> HooksFile {
+    if let Some(home) = std::env::var_os("HOME") {
+        let p = PathBuf::from(home).join(HOOKS_PATH);
+        if let Ok(s) = std::fs::read_to_string(&p) {
+            match serde_json::from_str::<HooksFile>(&s) {
+                Ok(h) => return h,
+                Err(e) => eprintln!("[warn] {}: {e}", p.display()),
+            }
+        }
+    }
+    HooksFile::default()
+}
+
+/// Run a hook list with a JSON payload on stdin. Captures stdout up to 64 KiB
+/// per hook. Returns the concatenated non-empty outputs — each becomes a
+/// kernel-source reminder for the next LLM call.
+async fn run_hooks(hooks: &[HookConfig], event: &str, payload: serde_json::Value) -> Vec<String> {
+    use std::process::Stdio;
+    use tokio::io::AsyncWriteExt;
+    use tokio::process::Command;
+    let payload_str = serde_json::to_string(&payload).unwrap_or_default();
+    let mut outputs = Vec::new();
+    for h in hooks {
+        if h.command.trim().is_empty() {
+            continue;
+        }
+        let mut child = match Command::new("/bin/bash")
+            .arg("-c")
+            .arg(&h.command)
+            .env("AETHER_HOOK_EVENT", event)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[hook:{event}] spawn failed: {e}");
+                continue;
+            }
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(payload_str.as_bytes()).await;
+            let _ = stdin.shutdown().await;
+        }
+        let timeout = std::time::Duration::from_secs(HOOK_TIMEOUT_SECS);
+        let result = tokio::time::timeout(timeout, child.wait_with_output()).await;
+        match result {
+            Ok(Ok(out)) => {
+                let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !s.is_empty() {
+                    let truncated = if s.len() > 64 * 1024 {
+                        format!("{}\n[…truncated]", &s[..64 * 1024])
+                    } else {
+                        s
+                    };
+                    outputs.push(truncated);
+                }
+                if !out.status.success() {
+                    let err = String::from_utf8_lossy(&out.stderr);
+                    eprintln!(
+                        "[hook:{event}] non-zero exit ({:?}): {}",
+                        out.status.code(),
+                        err.trim()
+                    );
+                }
+            }
+            Ok(Err(e)) => eprintln!("[hook:{event}] wait failed: {e}"),
+            Err(_) => eprintln!("[hook:{event}] timeout after {HOOK_TIMEOUT_SECS}s"),
+        }
+    }
+    outputs
+}
+
+fn push_hook_reminders(session: &mut Session, outputs: Vec<String>, event: &str) {
+    for body in outputs {
+        let wrapped = format!("<{event}-hook>\n{body}\n</{event}-hook>");
+        session.push_reminder(Reminder::new(
+            ReminderKind::SystemWarning,
+            Source::Kernel,
+            wrapped,
+        ));
     }
 }
 
