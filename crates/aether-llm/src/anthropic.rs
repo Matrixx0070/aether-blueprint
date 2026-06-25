@@ -29,7 +29,7 @@
 //!     agent loop's verifier-driven re-plan handles this naturally for
 //!     blocks; rate-limit retry belongs in a separate slice).
 
-use crate::{ContentBlock, LlmError, LlmProvider, MessagesRequest, MessagesResponse, StopReason, TextDeltaSink};
+use crate::{ContentBlock, LlmError, LlmProvider, MessagesRequest, MessagesResponse, StopReason, TextDeltaSink, Usage};
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -524,6 +524,7 @@ impl AnthropicProvider {
         let mut blocks: std::collections::BTreeMap<u64, PendingBlock> =
             std::collections::BTreeMap::new();
         let mut stop_reason: Option<StopReason> = None;
+        let mut usage: Usage = Usage::default();
 
         while let Some(chunk) = byte_stream.next().await {
             let chunk = chunk
@@ -545,6 +546,16 @@ impl AnthropicProvider {
                 };
                 let ev_type = ev.get("type").and_then(|v| v.as_str()).unwrap_or("");
                 match ev_type {
+                    "message_start" => {
+                        // initial usage block
+                        if let Some(u) = ev
+                            .get("message")
+                            .and_then(|m| m.get("usage"))
+                            .and_then(|v| serde_json::from_value::<Usage>(v.clone()).ok())
+                        {
+                            usage = u;
+                        }
+                    }
                     "content_block_start" => {
                         let idx = ev.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
                         let block = ev.get("content_block");
@@ -617,6 +628,14 @@ impl AnthropicProvider {
                                 stop_reason = Some(parsed);
                             }
                         }
+                        if let Some(u) = ev
+                            .get("usage")
+                            .and_then(|v| serde_json::from_value::<Usage>(v.clone()).ok())
+                        {
+                            // message_delta usage overrides — typically
+                            // carries the final output_tokens count
+                            usage.output_tokens = u.output_tokens.max(usage.output_tokens);
+                        }
                     }
                     "message_stop" => {}
                     "ping" => {}
@@ -660,6 +679,7 @@ impl AnthropicProvider {
         Ok(MessagesResponse {
             content,
             stop_reason: stop_reason.unwrap_or(StopReason::EndTurn),
+            usage: Some(usage),
         })
     }
 }

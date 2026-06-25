@@ -66,6 +66,31 @@ pub struct ToolDef {
 pub struct MessagesResponse {
     pub content: Vec<ContentBlock>,
     pub stop_reason: StopReason,
+    #[serde(default)]
+    pub usage: Option<Usage>,
+}
+
+/// Token accounting from Anthropic's `usage` block. Cache fields are
+/// optional and only present when prompt-caching is in use.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Usage {
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub cache_creation_input_tokens: u64,
+    #[serde(default)]
+    pub cache_read_input_tokens: u64,
+}
+
+impl Usage {
+    pub fn add(&mut self, other: &Usage) {
+        self.input_tokens += other.input_tokens;
+        self.output_tokens += other.output_tokens;
+        self.cache_creation_input_tokens += other.cache_creation_input_tokens;
+        self.cache_read_input_tokens += other.cache_read_input_tokens;
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -648,6 +648,7 @@ fn handle_slash(
             eprintln!("  /model [NAME]       show or change the active model");
             eprintln!("  /tools              list registered tools");
             eprintln!("  /memory             list ~/.aether/memory/ entries");
+            eprintln!("  /usage              show token totals for this session");
             eprintln!("  /commands           list custom commands from ~/.aether/commands/");
             eprintln!("  /quit | /exit       quit");
             if !custom.is_empty() {
@@ -707,6 +708,19 @@ fn handle_slash(
                     eprintln!("  - {name}{}", if hint.is_empty() { String::new() } else { format!(" — {hint}") });
                 }
             }
+            SlashAction::Continue
+        }
+        "usage" => {
+            let u = &session.usage_total;
+            let total = u.input_tokens + u.output_tokens;
+            eprintln!(
+                "[usage  in={}  out={}  cache_create={}  cache_read={}  total={}]",
+                u.input_tokens,
+                u.output_tokens,
+                u.cache_creation_input_tokens,
+                u.cache_read_input_tokens,
+                total,
+            );
             SlashAction::Continue
         }
         "quit" | "exit" | "q" => SlashAction::Quit,
@@ -2470,6 +2484,7 @@ mod tests {
                 ContentBlock::Text { text: "world".into() },
             ],
             stop_reason: StopReason::EndTurn,
+            usage: None,
         });
         let out = run_print(&llm, DEFAULT_MODEL, "hi", 256).await.unwrap();
         assert_eq!(out, "hello world");
@@ -2489,6 +2504,7 @@ mod tests {
                 ContentBlock::Text { text: "result.".into() },
             ],
             stop_reason: StopReason::EndTurn,
+            usage: None,
         });
         let out = run_print(&llm, DEFAULT_MODEL, "hi", 256).await.unwrap();
         assert_eq!(out, "checking result.");

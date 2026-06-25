@@ -83,6 +83,10 @@ pub struct Session {
     pub last_assembly_telemetry: Option<AssemblyTelemetry>,
     pub pending_reminders: Vec<Reminder>,
     pub selfcheck_ctx: SelfCheckCtx,
+    /// Running token totals across the session — accumulated from each
+    /// model response's `usage` field. None on responses where the model
+    /// didn't return usage.
+    pub usage_total: aether_llm::Usage,
 }
 
 impl Session {
@@ -110,6 +114,7 @@ impl Session {
             last_assembly_telemetry: None,
             pending_reminders: Vec::new(),
             selfcheck_ctx: SelfCheckCtx::default(),
+            usage_total: aether_llm::Usage::default(),
         }
     }
 
@@ -210,6 +215,9 @@ async fn agent_turn_inner(
         None => session.llm.complete(req).await?,
         Some(cb) => session.llm.complete_streamed(req, cb).await?,
     };
+    if let Some(u) = &resp.usage {
+        session.usage_total.add(u);
+    }
 
     let mut text_parts: Vec<String> = Vec::new();
     let mut tool_uses: Vec<RecordedToolUse> = Vec::new();

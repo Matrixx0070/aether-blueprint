@@ -58,6 +58,7 @@ fn text_resp(text: &str, stop: StopReason) -> MessagesResponse {
     MessagesResponse {
         content: vec![ContentBlock::Text { text: text.into() }],
         stop_reason: stop,
+            usage: None,
     }
 }
 
@@ -69,6 +70,7 @@ fn tool_resp(id: &str, name: &str, input: serde_json::Value, stop: StopReason) -
             input,
         }],
         stop_reason: stop,
+            usage: None,
     }
 }
 
@@ -251,6 +253,7 @@ async fn d7_block_replaces_text_with_sentinel_records_plan_and_skips_tools() {
             },
         ],
         stop_reason: StopReason::EndTurn,
+            usage: None,
     });
     let mut session = make_session(llm.clone(), false, PermissionMode::BypassPermissions);
     session
