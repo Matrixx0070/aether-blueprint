@@ -721,6 +721,24 @@ fn handle_slash(
     }
 }
 
+const C_DIM: &str = "\x1b[2m";
+const C_RED: &str = "\x1b[31m";
+const C_GREEN: &str = "\x1b[32m";
+const C_RESET: &str = "\x1b[0m";
+
+fn use_color() -> bool {
+    // Respect NO_COLOR (https://no-color.org). Otherwise enable when stderr
+    // is a tty — but we don't depend on isatty crate; assume tty if TERM is
+    // set and not 'dumb'.
+    if std::env::var_os("NO_COLOR").is_some() {
+        return false;
+    }
+    match std::env::var("TERM") {
+        Ok(t) => !t.is_empty() && t != "dumb",
+        Err(_) => false,
+    }
+}
+
 fn format_tool_use(tu: &aether_core::context::RecordedToolUse) -> String {
     let summary = match tu.name.as_str() {
         "Bash" => tu
@@ -729,9 +747,10 @@ fn format_tool_use(tu: &aether_core::context::RecordedToolUse) -> String {
             .and_then(|v| v.as_str())
             .map(|s| s.lines().next().unwrap_or("").to_string())
             .unwrap_or_default(),
-        "Read" | "Write" | "Edit" => tu
+        "Read" | "Write" | "Edit" | "NotebookEdit" => tu
             .input
             .get("file_path")
+            .or_else(|| tu.input.get("notebook_path"))
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
@@ -747,13 +766,74 @@ fn format_tool_use(tu: &aether_core::context::RecordedToolUse) -> String {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
+        "WebFetch" => tu
+            .input
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        "Agent" => tu
+            .input
+            .get("description")
+            .and_then(|v| v.as_str())
+            .or_else(|| tu.input.get("prompt").and_then(|v| v.as_str()))
+            .map(|s| s.lines().next().unwrap_or("").to_string())
+            .unwrap_or_default(),
+        _ if tu.name.starts_with("mcp__") => format!("{}", tu.input),
         _ => String::new(),
     };
-    if summary.is_empty() {
+    let mut header = if summary.is_empty() {
         tu.name.clone()
     } else {
         format!("{} {}", tu.name, truncate(&summary, 90))
+    };
+
+    // For Edit: append a tiny inline diff preview.
+    if tu.name == "Edit" {
+        let old = tu.input.get("old_string").and_then(|v| v.as_str()).unwrap_or("");
+        let new = tu.input.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
+        let diff = inline_diff_preview(old, new);
+        if !diff.is_empty() {
+            header.push('\n');
+            header.push_str(&diff);
+        }
     }
+    header
+}
+
+/// One-pass mini-diff: lines unique to `old` get a leading `- ` (red when
+/// colour is on); lines unique to `new` get `+ ` (green). Symmetric line-set
+/// difference — fast, no algorithm dep.
+fn inline_diff_preview(old: &str, new: &str) -> String {
+    let color = use_color();
+    let red = if color { C_RED } else { "" };
+    let green = if color { C_GREEN } else { "" };
+    let dim = if color { C_DIM } else { "" };
+    let reset = if color { C_RESET } else { "" };
+
+    use std::collections::HashSet;
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+    let old_set: HashSet<&&str> = old_lines.iter().collect();
+    let new_set: HashSet<&&str> = new_lines.iter().collect();
+
+    let mut out = String::new();
+    out.push_str(&format!("{dim}    --- diff ---{reset}\n"));
+    for l in &old_lines {
+        if !new_set.contains(l) {
+            out.push_str(&format!("    {red}- {}{reset}\n", truncate(l, 100)));
+        }
+    }
+    for l in &new_lines {
+        if !old_set.contains(l) {
+            out.push_str(&format!("    {green}+ {}{reset}\n", truncate(l, 100)));
+        }
+    }
+    if out.lines().count() <= 1 {
+        // No unique lines either way → trivial change, skip diff
+        return String::new();
+    }
+    out.trim_end().to_string()
 }
 
 fn truncate(s: &str, n: usize) -> String {
