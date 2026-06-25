@@ -1,32 +1,48 @@
 # Roadmap
 
-## v0.6 — shipped 2026-06-25 (this release)
+## v0.7 — Security Edge — shipped 2026-06-25 (this release)
 
-BYOC providers — AWS Bedrock + GCP Vertex AI:
+A self-contained surface for authorized security work, end-to-end:
 
-- `aether-llm::bedrock::BedrockProvider`: hand-rolled SigV4 against the
-  AWS-published test vector, model-id translation
-  (`claude-haiku-4-5-20251001` → `anthropic.claude-haiku-4-5-20251001-v1:0`),
-  reads `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN`
-  / `AWS_REGION` from env. Non-streaming for v0.6.
-- `aether-llm::vertex::VertexProvider`: Bearer-token auth from
-  `VERTEX_ACCESS_TOKEN`, model-id translation
-  (`claude-haiku-4-5-20251001` → `claude-haiku-4-5@20251001`), reads
-  `VERTEX_PROJECT` / `VERTEX_REGION` from env. Non-streaming for v0.6.
-- Provider selection: `AETHER_PROVIDER` env > `settings.provider` >
-  `anthropic` default. `aether config set provider bedrock` persists.
-- `aether doctor` reports the active provider and runs the right per-
-  provider auth check (AWS env vars / Vertex token / Anthropic creds).
-- `aether-cli`'s 6 LLM construction sites refactored to a central
-  `build_provider() -> Arc<dyn LlmProvider>` factory.
+- **Scope file** (`~/.aether/scope.json`): hosts / CIDR ranges / repos
+  declared up front, with `--authorized-by` + `--ticket-id` + expiry.
+  CIDR ranges larger than /16 refused at `scope add-range` time.
+- **Tamper-evident audit log** (`~/.aether/audit.jsonl`): `prev_hash`-
+  chained JSONL, `aether audit verify` walks the chain end-to-end.
+- **Scope-gated network tools**: `NetworkScan` (nmap), `WebProbe` (curl),
+  `DnsLookup` (dig). Auto-registered ONLY when the scope file loads;
+  every call (allowed OR refused) logs to the audit chain.
+- **`aether review --kind security`**: single-turn critic, no tools.
+  Structured `SEVERITY / CWE / LOCATION / SUMMARY / WHY / FIX` blocks
+  per issue, language-specific focus lists for Rust / Python /
+  JavaScript / Go / Java / C / C++ / SQL. `--json` returns parsed blocks.
+- **STRIDE `aether threat-model <spec>`**: trust boundaries, data
+  classes, per-category threats with mitigations + residual risk.
+- **`aether ctf <dir>`**: bubblewrap-sandboxed challenge runner; mounts
+  the challenge's listed files into `/work` and loops the agent until
+  the expected flag is produced. Ships with an example XOR challenge.
+- **Scanner tool wrappers**: gitleaks, cargo-audit, osv-scanner.
+- **`Sandbox` tool**: bubblewrap-isolated command execution.
+- **`aether security-eval <suite.yaml>`**: fixture-based OWASP-class
+  regression. Seven Python fixtures (SQLi / path traversal /
+  hard-coded creds / command injection / weak crypto / insecure
+  deserialization / SSRF), each asserts the critic flags the expected
+  CWE at the configured minimum severity. CI-friendly exit 1 on miss.
 
-29 aether-llm unit tests (up from 18 in v0.5): includes SigV4 signing
-math (AWS published test vector), model-id mapping, body-shape
-verification per provider.
+**Security Edge benchmark** — `aether security-eval eval/security/suite.yaml`:
 
-## v0.6.1 — patch (next)
+- Sonnet 4.6: **7/7 (100%)** at correct CWE + severity, 110s total
+- Opus 4.7: 2/7 (29%); 5 calls truncate mid-stream because Anthropic's
+  cyber-safeguards classifier engages on adversarial-framing +
+  structured-output + classic-injection-code combinations. Not a bug
+  in aether; the same prompt clears on Sonnet 4.6. v0.7 docs
+  recommend `AETHER_MODEL=claude-sonnet-4-6` for security review.
 
-- Bedrock streaming via `invoke-with-response-stream` (AWS event-stream framing)
+## v0.7.1 — patch (next)
+
+- Auto-route `aether review --kind security` to Sonnet 4.6 when the
+  active model is Opus 4.7+ (overridable by `--model`).
+- Bedrock streaming via `invoke-with-response-stream` (AWS event-stream)
 - Vertex streaming via `:streamRawPredict` (SSE)
 - AWS credential provider chain: profile file at `~/.aws/credentials`,
   IMDS, ECS task role
@@ -36,7 +52,7 @@ verification per provider.
   Vertex 5xx retry)
 - `aether eval --provider <name>` to run the same suite across providers
 
-## v0.7 — TUI + integration surfaces
+## v0.8 — plugins + IDE surfaces
 
 - Plugin system via WASM modules registered as tools
 - BYOC: Foundry (Azure) + Mantle
@@ -44,7 +60,7 @@ verification per provider.
 - MCP websocket transport
 - HTTP server WebSocket chat for browser clients
 
-## v0.8 — enterprise
+## v0.9 — enterprise
 
 - SAML / OIDC federation
 - Audit log forwarding to SIEM

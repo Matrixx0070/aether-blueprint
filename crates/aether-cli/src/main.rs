@@ -119,6 +119,13 @@ enum Cmd {
     ThreatModel { spec: PathBuf },
     /// Solve a CTF challenge inside the sandbox.
     Ctf { dir: PathBuf },
+    /// Security eval suite: run `review --kind security` on each fixture
+    /// in the YAML and assert on expected CWE detection.
+    SecurityEval {
+        suite: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     /// Session admin (export to markdown, branch off at a turn).
     Session {
         #[command(subcommand)]
@@ -270,6 +277,9 @@ async fn main() -> Result<()> {
             return run_threat_model(&spec, &model, permission_mode).await
         }
         Some(Cmd::Ctf { dir }) => return run_ctf(&dir, &model, permission_mode).await,
+        Some(Cmd::SecurityEval { suite, json }) => {
+            return run_security_eval(&suite, &model, permission_mode, json).await
+        }
         Some(Cmd::Tui) => return run_tui(&model, permission_mode).await,
         Some(Cmd::Serve { bind }) => return run_serve(&bind, &model, permission_mode).await,
         Some(Cmd::Mcp { sub }) => {
@@ -1931,16 +1941,14 @@ If you find NO issues, say so explicitly with the exact line: \
 Do not pad with praise. Do not say 'overall the code is good'. Focus on bugs.
 ";
 
-async fn run_review(
-    kind: &str,
+/// Core security-review call: runs one critic turn against the file body
+/// and returns (raw text, parsed blocks, detected language). Used by both
+/// `aether review` and `aether security-eval`.
+async fn review_security_file(
     path: &std::path::Path,
     model: &str,
     permission_mode: aether_perm::PermissionMode,
-    json_out: bool,
-) -> Result<()> {
-    if kind != "security" {
-        anyhow::bail!("only --kind security is implemented in v0.7 (perf and arch planned)");
-    }
+) -> Result<(String, Vec<ReviewIssue>, &'static str)> {
     let body = std::fs::read_to_string(path)
         .with_context(|| format!("read {}", path.display()))?;
     let lang = detect_language(path);
@@ -1954,7 +1962,6 @@ async fn run_review(
         path.display()
     );
 
-    // Spin up a single-turn agent. No tools available — pure review.
     let config = SessionConfig {
         model: model.to_string(),
         permission_mode,
@@ -1967,12 +1974,10 @@ async fn run_review(
     // user-facing prose, it's emitting an analysis report.
     let gate = Gate::new(Vec::new()).map_err(|e| anyhow!("gate: {e}"))?;
     let tools = ToolRegistry::new();
-    // No tools — review-only mode. Faster + deterministic.
     let provider_arc = build_provider()?;
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
 
-    let outcome = agent_turn(&mut session, Some(user_prompt)).await?;
-    let _ = outcome;
+    let _ = agent_turn(&mut session, Some(user_prompt)).await?;
     let final_text = session
         .history
         .iter()
@@ -1982,9 +1987,23 @@ async fn run_review(
             _ => None,
         })
         .unwrap_or_default();
+    let parsed = parse_review_blocks(&final_text);
+    Ok((final_text, parsed, lang))
+}
 
+async fn run_review(
+    kind: &str,
+    path: &std::path::Path,
+    model: &str,
+    permission_mode: aether_perm::PermissionMode,
+    json_out: bool,
+) -> Result<()> {
+    if kind != "security" {
+        anyhow::bail!("only --kind security is implemented in v0.7 (perf and arch planned)");
+    }
+    let (final_text, parsed, lang) =
+        review_security_file(path, model, permission_mode).await?;
     if json_out {
-        let parsed = parse_review_blocks(&final_text);
         let report = serde_json::json!({
             "kind": kind,
             "file": path.display().to_string(),
@@ -2094,6 +2113,171 @@ fn parse_review_blocks(s: &str) -> Vec<ReviewIssue> {
         out.push(last);
     }
     out
+}
+
+// ── security eval (Phase 7) ──────────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize)]
+struct SecuritySuite {
+    #[serde(default)]
+    name: Option<String>,
+    fixtures: Vec<SecurityFixture>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SecurityFixture {
+    file: String,
+    expected_cwe: Vec<String>,
+    #[serde(default = "default_severity_min")]
+    severity_min: String,
+}
+
+fn default_severity_min() -> String {
+    "MEDIUM".into()
+}
+
+/// Severity rank: higher = more severe. BLOCKER=4, HIGH=3, MEDIUM=2, LOW=1, INFO=0.
+fn severity_rank(s: &str) -> i32 {
+    match s.trim().to_ascii_uppercase().as_str() {
+        "BLOCKER" => 4,
+        "HIGH" => 3,
+        "MEDIUM" | "MED" => 2,
+        "LOW" => 1,
+        "INFO" => 0,
+        _ => -1,
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+struct SecurityFixtureResult {
+    file: String,
+    passed: bool,
+    /// Why pass/fail: e.g. "matched CWE-89 @ HIGH" or "no block matched CWE-22".
+    detail: String,
+    issues_found: usize,
+    elapsed_ms: u128,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct SecurityReport {
+    suite: String,
+    total: usize,
+    passed: usize,
+    failed: usize,
+    fixtures: Vec<SecurityFixtureResult>,
+}
+
+async fn run_security_eval(
+    suite_path: &std::path::Path,
+    model: &str,
+    permission_mode: aether_perm::PermissionMode,
+    json_out: bool,
+) -> Result<()> {
+    let text = std::fs::read_to_string(suite_path)
+        .with_context(|| format!("read {}", suite_path.display()))?;
+    let suite: SecuritySuite = serde_yaml::from_str(&text)
+        .with_context(|| format!("parse YAML in {}", suite_path.display()))?;
+    let suite_name = suite
+        .name
+        .clone()
+        .unwrap_or_else(|| suite_path.display().to_string());
+    // Resolve fixture paths relative to the suite file's directory.
+    let suite_dir = suite_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    let mut out: Vec<SecurityFixtureResult> = Vec::new();
+    let mut passed_count = 0usize;
+    let mut failed_count = 0usize;
+
+    for fix in &suite.fixtures {
+        let path = suite_dir.join(&fix.file);
+        let started = std::time::Instant::now();
+        let (passed, detail, issues_found) =
+            match review_security_file(&path, model, permission_mode).await {
+                Ok((_raw, issues, _lang)) => {
+                    let min_rank = severity_rank(&fix.severity_min);
+                    // Pass if ANY parsed block has (a) a CWE field containing
+                    // one of the expected CWEs and (b) severity >= severity_min.
+                    let mut matched: Option<&ReviewIssue> = None;
+                    for blk in &issues {
+                        let blk_cwe = blk.cwe.to_ascii_uppercase();
+                        let cwe_hit = fix
+                            .expected_cwe
+                            .iter()
+                            .any(|c| blk_cwe.contains(&c.to_ascii_uppercase()));
+                        let sev_hit = severity_rank(&blk.severity) >= min_rank;
+                        if cwe_hit && sev_hit {
+                            matched = Some(blk);
+                            break;
+                        }
+                    }
+                    let n = issues.len();
+                    match matched {
+                        Some(blk) => (
+                            true,
+                            format!("matched {} @ {}", blk.cwe.trim(), blk.severity.trim()),
+                            n,
+                        ),
+                        None => {
+                            let want = fix.expected_cwe.join(" | ");
+                            (
+                                false,
+                                format!(
+                                    "no block matched [{want}] at severity >= {} (got {n} other findings)",
+                                    fix.severity_min
+                                ),
+                                n,
+                            )
+                        }
+                    }
+                }
+                Err(e) => (false, format!("review error: {e}"), 0),
+            };
+        let elapsed_ms = started.elapsed().as_millis();
+        if passed {
+            passed_count += 1;
+        } else {
+            failed_count += 1;
+        }
+        out.push(SecurityFixtureResult {
+            file: fix.file.clone(),
+            passed,
+            detail,
+            issues_found,
+            elapsed_ms,
+        });
+    }
+
+    let report = SecurityReport {
+        suite: suite_name,
+        total: out.len(),
+        passed: passed_count,
+        failed: failed_count,
+        fixtures: out,
+    };
+
+    if json_out {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "\n=== SECURITY EVAL: {} === {}/{} passed",
+            report.suite, report.passed, report.total
+        );
+        for f in &report.fixtures {
+            let sym = if f.passed { "✓" } else { "✗" };
+            println!(
+                "  {sym} {}  ({} findings, {} ms) — {}",
+                f.file, f.issues_found, f.elapsed_ms, f.detail
+            );
+        }
+        println!();
+    }
+    if failed_count > 0 {
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 // ── threat modelling ─────────────────────────────────────────────────────

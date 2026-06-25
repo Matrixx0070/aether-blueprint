@@ -3,6 +3,61 @@
 Head-to-head measurement of the user-perceived loop "spin up agent → do tools →
 return."
 
+---
+
+## v0.7 — Security Edge benchmark (2026-06-25)
+
+A new axis for v0.7: how well does `aether review --kind security` (a single-
+turn critic with structured output) detect the planted bug in each of seven
+hand-written Python fixtures? Fixtures live in `eval/security/fixtures/`, the
+runner is `aether security-eval eval/security/suite.yaml`.
+
+Pass criteria per fixture: at least one parsed review block has a `CWE:` field
+matching the expected CWE for that fixture **and** a severity at or above the
+fixture's `severity_min`. Exit code 1 on any miss.
+
+### Detection rate by model (n=1 per fixture, single-turn)
+
+| Fixture | Bug | CWE | severity_min | Sonnet 4.6 | Opus 4.7 |
+|---|---|---|---|---|---|
+| 01_sqli.py | SQL injection via concat | CWE-89 | HIGH | ✓ BLOCKER, 3 findings | ✗ refused (1.1s) |
+| 02_path_traversal.py | Path traversal in `send_file` | CWE-22 | HIGH | ✓ BLOCKER, 3 findings | ✓ HIGH, 1 finding |
+| 03_hardcoded_secret.py | AWS + JWT keys in source | CWE-798 | HIGH | ✓ BLOCKER, 4 findings | ✗ refused (3.1s) |
+| 04_command_injection.py | `subprocess(shell=True)` | CWE-78 | HIGH | ✓ BLOCKER, 1 finding | ✗ refused (2.7s) |
+| 05_weak_crypto.py | MD5 unsalted password | CWE-327 / 916 | MEDIUM | ✓ HIGH, 2 findings | ✓ HIGH, 3 findings |
+| 06_insecure_deserialization.py | `pickle.loads` on request | CWE-502 | HIGH | ✓ BLOCKER, 4 findings | ✗ refused (1.5s) |
+| 07_ssrf.py | Unvalidated `requests.get` | CWE-918 | HIGH | ✓ BLOCKER, 4 findings | ✗ refused (1.1s) |
+| **Total** | | | | **7 / 7 (100%)** | **2 / 7 (29%)** |
+
+### Wall-clock
+
+| Model | Total wall-clock | Mean per-fixture | Mean findings on pass |
+|---|---:|---:|---:|
+| Sonnet 4.6 | 110s | 16s | 3.0 |
+| Opus 4.7 | 31s | 4.5s | 2.0 |
+
+Opus's lower wall-clock is **not** a speed win — it's because 5 of 7 calls
+terminated mid-stream after partial output (raw text ends at e.g. `"```\nSEVERIT"`).
+The Anthropic API's cyber-safeguards classifier is engaging on the combination
+of "be adversarial / assume bugs exist" framing + structured-finding output
+shape + classic injection-pattern code (SQLi, hardcoded creds, command
+injection, pickle RCE, SSRF). Path traversal and MD5 crypto don't trip it.
+
+Sonnet 4.6 ships clean on the same suite. **Recommendation for v0.7: default
+`aether review --kind security` to Sonnet 4.6** (`AETHER_MODEL=claude-sonnet-4-6`).
+Opus 4.7 is still the right default for general code editing.
+
+### Reproduce
+
+```bash
+aether --model claude-sonnet-4-6 security-eval eval/security/suite.yaml --json
+aether --model claude-opus-4-7    security-eval eval/security/suite.yaml --json
+```
+
+Same fixtures, same prompt, same parser — only the model differs.
+
+---
+
 **Latest run: v0.5 — 2026-06-25.** Same axis, same protocol. aether is
 2.9–5.9× faster at p50 and 2.2–4.8× faster at p95 vs `claude` v2.1.191 on
 this run (claude was slower than usual today — see trend table for the

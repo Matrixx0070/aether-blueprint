@@ -5,15 +5,22 @@ Anthropic Messages API. It runs an explicit perceive → plan → tool-select �
 execute → observe → verify loop with a built-in self-check gate and reminder
 tamper-test — pipeline scaffolding most agents don't ship.
 
-## Status: v0.6
+## Status: v0.7
 
-Adds: **BYOC providers** — AWS Bedrock (hand-rolled SigV4 against AWS-
-published test vector) and GCP Vertex AI (Bearer-token auth). Provider
-selection via `AETHER_PROVIDER` env or `settings.provider`. `aether doctor`
-reports the active provider and runs per-provider auth checks.
+Adds: **Security Edge** — scope-gated network tools (NetworkScan / WebProbe /
+DnsLookup) for authorized engagements, tamper-evident audit log
+(`~/.aether/audit.jsonl`, `prev_hash`-chained), the `aether review --kind
+security` critic with structured (CWE / severity / location / why / fix)
+output, STRIDE `aether threat-model`, `aether ctf` sandboxed challenge
+runner, bubblewrap-backed `Sandbox` tool, and `aether security-eval` — a YAML
+regression suite of seven Python fixtures (one OWASP class each: SQLi, path
+traversal, hard-coded secrets, command injection, weak crypto, insecure
+deserialization, SSRF). On Sonnet 4.6 the suite detects 7/7 with correct CWE
++ severity; see `BENCHMARK.md` for the head-to-head with Opus 4.7.
 
-(v0.5: FleetView, eval harness, session export/branch, TUI markdown +
-bracketed paste, placeholder-crate cleanup.)
+(v0.6: BYOC providers — AWS Bedrock SigV4 + GCP Vertex AI Bearer; `aether
+doctor` per-provider auth checks. v0.5: FleetView, eval harness, session
+export/branch, TUI markdown + bracketed paste, placeholder-crate cleanup.)
 
 End-to-end working: MCP client (stdio + SSE), sub-agent delegation with
 FleetView, persistent memory, markdown skills, 4-event hooks, interactive
@@ -112,6 +119,17 @@ aether eval eval/example.yaml --json
 # Session admin
 aether session export <id>                 # markdown transcript on stdout
 aether session branch <id> --at-turn 3     # fork at exchange 3, prints new id
+
+# Security edge (v0.7)
+aether scope init --authorized-by alice --ticket-id ENG-123 --days 14
+aether scope add-host example.com
+aether scope show
+aether audit show --limit 50
+aether audit verify                                # hash-chain integrity
+aether review --kind security path/to/file.py      # structured critic, --json for parsed
+aether threat-model docs/architecture.md           # STRIDE walkthrough
+aether ctf eval/security/ctf/example/              # solve a challenge in sandbox
+aether security-eval eval/security/suite.yaml      # 7-fixture OWASP regression
 ```
 
 ### Slash commands (in REPL)
@@ -223,6 +241,36 @@ Review the staged diff. Produce BLOCKER/HIGH/MEDIUM/LOW sections...
 Each `.md` becomes a `/name` command. `$ARGS`, `$1`, `$2`, … substitute
 the rest of the line.
 
+### Security Edge (v0.7)
+
+A self-contained surface for authorized security work:
+
+- **Scope file** (`~/.aether/scope.json`) — declares hosts, CIDR ranges,
+  and repos this aether process may act against. `aether scope init`
+  requires `--authorized-by` + `--ticket-id` and an expiry. No scope file
+  ⇒ the three scope-gated tools (`NetworkScan`, `WebProbe`, `DnsLookup`)
+  do not appear in the tool registry at all. The surface stays honest.
+- **Tamper-evident audit log** (`~/.aether/audit.jsonl`) — every
+  scope-gated call writes a JSONL entry with `prev_hash` chaining. `aether
+  audit verify` walks the chain and reports the first break, if any.
+  CIDR ranges larger than /16 are rejected at `scope add-range` time.
+- **`aether review --kind security`** — single-turn critic, no tools.
+  Emits structured `SEVERITY / CWE / LOCATION / SUMMARY / WHY / FIX` blocks
+  per issue, plus a `TOTAL:` summary line. `--json` gives parsed blocks.
+  Language-specific focus lists for Rust / Python / JavaScript / Go / Java
+  / C / C++ / SQL bias the critic's attention.
+- **`aether threat-model`** — STRIDE walkthrough over an architecture
+  spec: trust boundaries, data classes, assumptions, per-category threats
+  with mitigations + residual risk, open questions.
+- **`aether ctf <dir>`** — challenge runner. Reads `challenge.yaml`, mounts
+  the listed files into the sandbox, and runs the agent until the model
+  produces the expected flag. Sandbox uses bubblewrap (`bwrap`) with a
+  read-only root and only `/work` writable.
+- **`aether security-eval`** — fixture-based regression. The seven
+  `eval/security/fixtures/*.py` files each plant one OWASP-class bug; the
+  suite passes only if `review --kind security` flags the expected CWE at
+  or above the configured minimum severity. CI-friendly: exit 1 on miss.
+
 ### Project context auto-load
 
 At session start aether walks cwd up to root and reads any `AETHER.md` or
@@ -279,7 +327,7 @@ crates/
 
 ## aether vs claude-code
 
-| Capability | Claude Code | aether (v0.4) |
+| Capability | Claude Code | aether (v0.7) |
 |---|:---:|:---:|
 | Single-binary CLI | ✅ | ✅ |
 | OAuth + Max-subscription auth + auto-refresh | ✅ | ✅ |
@@ -311,23 +359,34 @@ crates/
 | **TUI markdown rendering + bracketed paste** | ✅ | ✅ |
 | **BYOC: AWS Bedrock** | ✅ | ✅ |
 | **BYOC: GCP Vertex AI** | ✅ | ✅ |
-| BYOC: Foundry / Mantle | ✅ | ⬜ (v0.7) |
-| Plugin system (dylib / WASM) | ✅ | ⬜ (v0.7) |
-| IDE integrations | ✅ | ⬜ (v0.7) |
+| BYOC: Foundry / Mantle | ✅ | ⬜ (v0.8) |
+| Plugin system (dylib / WASM) | ✅ | ⬜ (v0.8) |
+| IDE integrations | ✅ | ⬜ (v0.8) |
 | **D1 reminder tamper-test (34-signal classifier)** | ⬜ | ✅ |
 | **D7 self-check gate (14 rules, structural-line aware)** | ⬜ | ✅ |
 | **Deterministic first-match routing (D3)** | ⬜ | ✅ |
+| **Scope file + tamper-evident audit log (v0.7)** | ⬜ | ✅ |
+| **`aether review --kind security` structured critic (v0.7)** | ⬜ | ✅ |
+| **STRIDE `aether threat-model` (v0.7)** | ⬜ | ✅ |
+| **`aether ctf` bubblewrap-sandboxed runner (v0.7)** | ⬜ | ✅ |
+| **Scope-gated network tools (NetworkScan/WebProbe/DnsLookup, v0.7)** | ⬜ | ✅ |
+| **`aether security-eval` OWASP-class regression (v0.7)** | ⬜ | ✅ |
+| **Scanner wrappers (gitleaks / cargo-audit / osv-scanner, v0.7)** | ⬜ | ✅ |
 
 aether ships the three Fable-5 deltas Claude Code doesn't (D1 prompt-injection
-filter, D7 pre-emission gate, D3 deterministic routing). For everything else,
-v0.3 is at functional parity on the core agent loop; v0.4 picks up TUI +
-plugin surfaces.
+filter, D7 pre-emission gate, D3 deterministic routing) plus the entire v0.7
+Security Edge surface (scope + audit + critic + STRIDE + CTF + scope-gated
+network tools + OWASP regression). For everything else, v0.6 is at functional
+parity on the core agent loop; v0.7 adds the security column.
 
 ## Performance
 
 See [`BENCHMARK.md`](BENCHMARK.md). aether is consistently 2–3× faster at p50
 and 2–4× faster at p95 than `claude` for the agent-loop+IO axis, across v0.1
-through v0.3.
+through v0.5. v0.7 adds a new axis — the Security Edge benchmark on the
+seven-fixture OWASP regression: **7/7 on Sonnet 4.6**, 2/7 on Opus 4.7
+(Anthropic's cyber-safeguards classifier interferes with the latter; see
+BENCHMARK.md).
 
 ## License
 

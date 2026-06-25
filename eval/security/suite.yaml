@@ -1,0 +1,27 @@
+name: aether-security-edge
+# Each fixture has exactly ONE intended bug. The expected_cwe list is the
+# critic's job to surface; we substring-match it against the CWE: field of
+# every parsed review block. severity_min is the lowest severity that still
+# counts as "found" (model often calls the same bug HIGH, sometimes MEDIUM).
+fixtures:
+  - file: fixtures/01_sqli.py
+    expected_cwe: ["CWE-89"]
+    severity_min: HIGH
+  - file: fixtures/02_path_traversal.py
+    expected_cwe: ["CWE-22"]
+    severity_min: HIGH
+  - file: fixtures/03_hardcoded_secret.py
+    expected_cwe: ["CWE-798"]
+    severity_min: HIGH
+  - file: fixtures/04_command_injection.py
+    expected_cwe: ["CWE-78"]
+    severity_min: HIGH
+  - file: fixtures/05_weak_crypto.py
+    expected_cwe: ["CWE-327", "CWE-916"]
+    severity_min: MEDIUM
+  - file: fixtures/06_insecure_deserialization.py
+    expected_cwe: ["CWE-502"]
+    severity_min: HIGH
+  - file: fixtures/07_ssrf.py
+    expected_cwe: ["CWE-918"]
+    severity_min: HIGH
