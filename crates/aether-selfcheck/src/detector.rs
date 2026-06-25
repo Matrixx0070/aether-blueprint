@@ -139,6 +139,31 @@ pub fn quotes_per_cite_source(body: &str, max_per_source: usize) -> Vec<Hit> {
 // each with ≤ M words. Empty lines do not break the run (they delineate
 // stanzas).
 // ---------------------------------------------------------------------------
+/// Returns true if a trimmed line begins with a markdown structural marker
+/// — bullet (`-`, `*`, `+`), ordered list (`1.`, `12.`), block quote (`>`),
+/// heading (`#`), table separator (`|`), or code fence (```). These are
+/// structural, not stanza-shaped: a bulleted answer is not a poem.
+fn is_markdown_structural_line(trimmed: &str) -> bool {
+    let bytes = trimmed.as_bytes();
+    if bytes.is_empty() {
+        return false;
+    }
+    let first = bytes[0];
+    match first {
+        b'-' | b'*' | b'+' | b'>' | b'#' | b'|' => true,
+        b'`' => trimmed.starts_with("```"),
+        c if c.is_ascii_digit() => {
+            // ordered list: digits followed by '.' then space (or end)
+            let mut i = 0;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            i < bytes.len() && bytes[i] == b'.'
+        }
+        _ => false,
+    }
+}
+
 pub fn short_line_stanza(body: &str, min_consec: usize, max_words: usize) -> Vec<Hit> {
     // Compute byte offset of each line within `body`.
     let mut line_offsets: Vec<usize> = Vec::new();
@@ -171,6 +196,16 @@ pub fn short_line_stanza(body: &str, min_consec: usize, max_words: usize) -> Vec
     for (i, ln) in lines.iter().enumerate() {
         let trimmed = ln.trim();
         let w = trimmed.split_whitespace().count();
+        // Structural markdown lines (bullets, ordered lists, headings,
+        // quotes, tables, code fences) reset the run. A bulleted answer
+        // is not a poem; without this we false-positive on every list.
+        if is_markdown_structural_line(trimmed) {
+            if run >= min_consec {
+                emit(&mut hits, run, run_start_idx, i);
+            }
+            run = 0;
+            continue;
+        }
         let is_short = !trimmed.is_empty() && w > 0 && w <= max_words;
         if is_short {
             if run == 0 {
