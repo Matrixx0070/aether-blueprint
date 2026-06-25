@@ -213,7 +213,31 @@ A self-contained surface for authorized security work, end-to-end:
   binary); (3) UNVERIFIED items I cannot compare head-to-head because
   Claude Code isn't runnable in the test env.
 
-## v0.14 — plugins + IDE surfaces (next)
+## v0.14 — coding benchmark v2 — shipped 2026-06-25
+
+- **5 new cross-language tasks** (J1) bringing the suite from 5 → 10:
+  - `06_rust_bug` (Rust): off-by-one bugs in `binary_search`; verify
+    runs `cargo test` + a 1000-element stress test against `Vec::position`.
+  - `07_js_xss` (Node.js): renderComment interpolates user input as raw
+    HTML; verify exercises 4 XSS probes (script tag + img/onerror +
+    ampersand corner + happy path).
+  - `08_sql_injection` (Python+SQL): find_user concatenates username
+    into SELECT; verify hits in-memory sqlite + injection probe +
+    apostrophe escaping.
+  - `09_multifile_refactor` (Python): order.py + invoice.py duplicate
+    TAX_RATE + identical math; verify checks a new module exists,
+    holds TAX_RATE, and both original fns shrink to ≤8 LOC.
+  - `10_perf_opt` (Python): dedup is O(n²); verify asserts 50k inputs
+    complete in ≤200ms (proves O(n) algorithm via timing, not source
+    inspection).
+- **Live run** (J2): **10/10 PASS, 388s wall, ~$1.12 USD on Sonnet 4.6**.
+  Initial run was 9/10 due to a buggy verify check on task 7 (asserted
+  escaped `onerror=` was bad, but escaped-as-text is harmless); test
+  fixed to check raw `<img` is absent, agent's original output passed.
+- **Cross-language proof** (J3): Python 7/7, Rust 1/1, JS 1/1, SQL+Py
+  1/1. Documented honestly in RESULTS.md + COMPARISON.md.
+
+## v0.15 — plugins + IDE surfaces (next)
 
 - Plugin system via WASM modules registered as tools
 - BYOC: Mantle

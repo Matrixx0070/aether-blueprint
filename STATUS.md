@@ -64,4 +64,9 @@ format: `[slice] [status] [commit] [verifier] [live-check] note`
 | I2 | DONE | 6fdbbd3 | n/a | `aether coding-eval --help` lists options | coding-eval command + verify harness |
 | I3 | DONE | 7083bea | n/a | **5/5 PASS · 184s · $0.58 on Sonnet 4.6** | live benchmark run |
 | I4 | DONE | 7083bea | n/a | RESULTS.md + COMPARISON.md authored | honest comparison vs Claude Code |
+| I5 | DONE | dcb9f6f | n/a | v0.13.0 binary release LIVE on GitHub (4 platforms) | bump 0.13.0 + tag autotrigger working |
+| I6 | DONE | d11aa9d | n/a | stability 5/5 + 5/5 = 10/10 cumulative | 2nd run verification |
+| J1 | DONE | 4a21b62 | n/a | 5 new verify.sh scripts fail on starting state | Rust + JS + SQL + multi-file + perf tasks |
+| J2 | DONE | 53637bf | n/a | **10/10 PASS · 388s · $1.12 on Sonnet 4.6** | live multi-language run |
+| J3 | DONE | 53637bf | n/a | RESULTS.md v2 + COMPARISON.md updated | cross-language proof |
 

@@ -23,11 +23,18 @@ Each tarball ships with a SHA256 the script verifies before extraction. See
 `INSTALL.md` for the manual download + verify path and the source-build
 fallback.
 
-## Status: v0.13.0
+## Status: v0.14.0
 
-**Coding benchmark**: `aether coding-eval` produces 5/5 PASS on 5 real
-coding tasks (bug fix, feature add, test write, refactor, doc fix) for
-~$0.58 USD on Sonnet 4.6, 184s total agent wall. Full per-task table
+**Coding benchmark v2**: `aether coding-eval` produces **10/10 PASS** on
+10 real coding tasks across **4 languages** (Python ×7 + Rust ×1 +
+JavaScript ×1 + SQL+Python ×1) for ~$1.12 USD on Sonnet 4.6, 388s total
+agent wall. Tasks include: binary-search bug fix in Rust, HTML-escape
+XSS fix in Node.js, parameterized-query SQL injection patch, multi-file
+duplication refactor extracting a shared `pricing` module, and an
+O(n²) → O(n) `dedup` perf optimization verified by 50k-element timing
+assertion.
+
+v0.13.0 — initial 5-task coding benchmark. Full per-task table
 and honest comparison vs Claude Code at
 [`eval/coding/RESULTS.md`](eval/coding/RESULTS.md) and
 [`eval/coding/COMPARISON.md`](eval/coding/COMPARISON.md).
