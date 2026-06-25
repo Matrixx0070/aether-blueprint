@@ -9,9 +9,17 @@
 use aether_llm::{LlmError, LlmProvider, MessagesRequest, MessagesResponse};
 use aether_tools::{Tool, ToolError};
 use async_trait::async_trait;
+use once_cell::sync::Lazy;
 use serde_json::Value;
 use std::collections::VecDeque;
 use std::sync::Mutex;
+
+/// Process-wide lock for tests that mutate environment variables.
+/// `cargo test` runs tests in parallel by default — any pair of tests
+/// that touch the same env var would race without this. Tests grab
+/// the lock with `let _guard = ENV_TEST_LOCK.lock().expect("env lock");`
+/// before set_var / remove_var, and the guard releases on scope exit.
+pub static ENV_TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 pub struct MockLlmProvider {
     script: Mutex<VecDeque<MessagesResponse>>,
