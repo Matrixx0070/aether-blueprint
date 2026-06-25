@@ -5,9 +5,19 @@ Anthropic Messages API. It runs an explicit perceive → plan → tool-select �
 execute → observe → verify loop with a built-in self-check gate and reminder
 tamper-test — pipeline scaffolding most agents don't ship.
 
-## Status: v0.7
+## Status: v0.7.1
 
-Adds: **Security Edge** — scope-gated network tools (NetworkScan / WebProbe /
+Patch over v0.7 Security Edge: `aether review --kind security` and `aether
+security-eval` now auto-route Opus-class models (`claude-opus-*`) to Sonnet 4.6
+when `--model` was not passed explicitly. A one-line stderr notice tells the
+user what changed and how to opt out (`--model claude-opus-4-7` overrides;
+`AETHER_SECURITY_NO_AUTOROUTE=1` disables globally). Reason: the Anthropic
+cyber-safeguards classifier truncates Opus mid-stream on the
+adversarial-framing + structured-finding + classic-injection-pattern shape; on
+Sonnet 4.6 the same prompt ships 7/7. 6 new unit tests pin the pure-function
+router. v0.7 Security Edge surface (below) is unchanged.
+
+v0.7: **Security Edge** — scope-gated network tools (NetworkScan / WebProbe /
 DnsLookup) for authorized engagements, tamper-evident audit log
 (`~/.aether/audit.jsonl`, `prev_hash`-chained), the `aether review --kind
 security` critic with structured (CWE / severity / location / why / fix)
@@ -270,6 +280,14 @@ A self-contained surface for authorized security work:
   `eval/security/fixtures/*.py` files each plant one OWASP-class bug; the
   suite passes only if `review --kind security` flags the expected CWE at
   or above the configured minimum severity. CI-friendly: exit 1 on miss.
+- **Security auto-route (v0.7.1)** — both `aether review --kind security`
+  and `aether security-eval` auto-route Opus-class models to Sonnet 4.6
+  when `--model` is not on the command line. The Anthropic cyber-safeguards
+  classifier truncates Opus mid-stream on the structured-finding-output +
+  classic-injection-code shape (see `BENCHMARK.md`); the same prompt ships
+  clean on Sonnet 4.6. A one-line stderr notice fires per invocation;
+  override with explicit `--model claude-opus-4-7`, disable globally with
+  `AETHER_SECURITY_NO_AUTOROUTE=1`.
 
 ### Project context auto-load
 

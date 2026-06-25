@@ -37,6 +37,56 @@ const DEFAULT_MODEL: &str = "claude-opus-4-7";
 const PRINT_MODE_MAX_TOKENS: u32 = 4096;
 const REPL_MAX_TOKENS: u32 = 8192;
 
+/// Target model when auto-routing security operations away from Opus-class.
+/// Sonnet 4.6 ships the v0.7 7-fixture suite at 7/7; Opus 4.7 ships at 2/7
+/// because Anthropic's cyber-safeguards classifier truncates the structured
+/// review mid-stream on classic-injection patterns. See BENCHMARK.md.
+const SECURITY_AUTOROUTE_TARGET: &str = "claude-sonnet-4-6";
+
+/// Kill-switch: when set to "1", disable the v0.7.1 security auto-route.
+const SECURITY_NO_AUTOROUTE_ENV: &str = "AETHER_SECURITY_NO_AUTOROUTE";
+
+/// True for any model identifier in the `claude-opus-*` family. Conservative:
+/// covers 4.7, 4.8, and any future Opus release (we don't know which one will
+/// soften the classifier, so all of them route until proven otherwise).
+fn is_opus_class(model: &str) -> bool {
+    model.starts_with("claude-opus-")
+}
+
+/// Decide which model to use for a security operation.
+///
+/// - `requested`: the resolved model (CLI > settings > default).
+/// - `explicit_cli`: true if `--model` appeared literally on argv.
+/// - `disabled`: true if the kill-switch env var is set.
+///
+/// Returns `(effective_model, optional_notice)`. The notice goes to stderr
+/// so the user sees what changed and how to opt out.
+fn route_for_security(
+    requested: &str,
+    explicit_cli: bool,
+    disabled: bool,
+) -> (String, Option<String>) {
+    if explicit_cli || disabled || !is_opus_class(requested) {
+        return (requested.to_string(), None);
+    }
+    let notice = format!(
+        "[security-autoroute] {requested} -> {SECURITY_AUTOROUTE_TARGET} \
+         (Anthropic cyber-safeguards classifier truncates Opus on this prompt shape; \
+         pass `--model {requested}` to override, or set {SECURITY_NO_AUTOROUTE_ENV}=1 \
+         to disable)"
+    );
+    (SECURITY_AUTOROUTE_TARGET.to_string(), Some(notice))
+}
+
+/// Returns true if `--model` (or `--model=X`) appeared literally on the
+/// command line. We deliberately do NOT count `AETHER_MODEL` env, since env
+/// is an ambient default (closer to settings.default_model) and should still
+/// auto-route. Only a per-invocation flag means "I really want this model".
+fn explicit_model_on_cli() -> bool {
+    std::env::args()
+        .any(|a| a == "--model" || a.starts_with("--model="))
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "aether",
@@ -271,14 +321,30 @@ async fn main() -> Result<()> {
         Some(Cmd::Scope { sub }) => return scope_cmd(sub),
         Some(Cmd::Audit { sub }) => return audit_cmd(sub),
         Some(Cmd::Review { kind, path, json }) => {
-            return run_review(&kind, &path, &model, permission_mode, json).await
+            let effective = if kind == "security" {
+                let disabled = std::env::var(SECURITY_NO_AUTOROUTE_ENV).ok().as_deref() == Some("1");
+                let (m, notice) = route_for_security(&model, explicit_model_on_cli(), disabled);
+                if let Some(n) = notice {
+                    eprintln!("{n}");
+                }
+                m
+            } else {
+                model.clone()
+            };
+            return run_review(&kind, &path, &effective, permission_mode, json).await;
         }
         Some(Cmd::ThreatModel { spec }) => {
             return run_threat_model(&spec, &model, permission_mode).await
         }
         Some(Cmd::Ctf { dir }) => return run_ctf(&dir, &model, permission_mode).await,
         Some(Cmd::SecurityEval { suite, json }) => {
-            return run_security_eval(&suite, &model, permission_mode, json).await
+            let disabled = std::env::var(SECURITY_NO_AUTOROUTE_ENV).ok().as_deref() == Some("1");
+            let (effective, notice) =
+                route_for_security(&model, explicit_model_on_cli(), disabled);
+            if let Some(n) = notice {
+                eprintln!("{n}");
+            }
+            return run_security_eval(&suite, &effective, permission_mode, json).await;
         }
         Some(Cmd::Tui) => return run_tui(&model, permission_mode).await,
         Some(Cmd::Serve { bind }) => return run_serve(&bind, &model, permission_mode).await,
@@ -4076,5 +4142,57 @@ mod tests {
         assert!(p.ends_with("abc-123.jsonl"));
         let s = p.to_string_lossy();
         assert!(s.contains(".aether/sessions"));
+    }
+
+    // ── v0.7.1 security auto-route ────────────────────────────────────────
+
+    #[test]
+    fn is_opus_class_matches_opus_only() {
+        assert!(is_opus_class("claude-opus-4-7"));
+        assert!(is_opus_class("claude-opus-4-8"));
+        assert!(is_opus_class("claude-opus-5-0-20270101"));
+        assert!(!is_opus_class("claude-sonnet-4-6"));
+        assert!(!is_opus_class("claude-haiku-4-5-20251001"));
+        assert!(!is_opus_class(""));
+        assert!(!is_opus_class("opus")); // missing claude- prefix
+    }
+
+    #[test]
+    fn route_redirects_opus_to_sonnet_by_default() {
+        let (m, n) = route_for_security("claude-opus-4-7", false, false);
+        assert_eq!(m, SECURITY_AUTOROUTE_TARGET);
+        let notice = n.expect("expected stderr notice");
+        assert!(notice.contains("claude-opus-4-7"));
+        assert!(notice.contains(SECURITY_AUTOROUTE_TARGET));
+        assert!(notice.contains("--model"));
+        assert!(notice.contains(SECURITY_NO_AUTOROUTE_ENV));
+    }
+
+    #[test]
+    fn route_respects_explicit_cli_flag() {
+        let (m, n) = route_for_security("claude-opus-4-7", true, false);
+        assert_eq!(m, "claude-opus-4-7");
+        assert!(n.is_none());
+    }
+
+    #[test]
+    fn route_respects_kill_switch() {
+        let (m, n) = route_for_security("claude-opus-4-7", false, true);
+        assert_eq!(m, "claude-opus-4-7");
+        assert!(n.is_none());
+    }
+
+    #[test]
+    fn route_passes_sonnet_through_unchanged() {
+        let (m, n) = route_for_security("claude-sonnet-4-6", false, false);
+        assert_eq!(m, "claude-sonnet-4-6");
+        assert!(n.is_none());
+    }
+
+    #[test]
+    fn route_passes_haiku_through_unchanged() {
+        let (m, n) = route_for_security("claude-haiku-4-5-20251001", false, false);
+        assert_eq!(m, "claude-haiku-4-5-20251001");
+        assert!(n.is_none());
     }
 }

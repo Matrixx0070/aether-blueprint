@@ -38,10 +38,18 @@ A self-contained surface for authorized security work, end-to-end:
   in aether; the same prompt clears on Sonnet 4.6. v0.7 docs
   recommend `AETHER_MODEL=claude-sonnet-4-6` for security review.
 
-## v0.7.1 — patch (next)
+## v0.7.1 — shipped 2026-06-25 (patch)
 
-- Auto-route `aether review --kind security` to Sonnet 4.6 when the
-  active model is Opus 4.7+ (overridable by `--model`).
+- **Security auto-route**: `aether review --kind security` and `aether
+  security-eval` auto-route Opus-class models (`claude-opus-*`) to Sonnet
+  4.6 when `--model` was not passed explicitly. Pure-function router
+  (`route_for_security`) covered by 6 unit tests. One-line stderr notice
+  per invocation. Three override paths: explicit `--model X`,
+  `AETHER_SECURITY_NO_AUTOROUTE=1`, or just call with Sonnet/Haiku
+  directly. Closes the 5/7 Opus truncation reported in v0.7's BENCHMARK.
+
+## v0.7.2 — patch (next)
+
 - Bedrock streaming via `invoke-with-response-stream` (AWS event-stream)
 - Vertex streaming via `:streamRawPredict` (SSE)
 - AWS credential provider chain: profile file at `~/.aws/credentials`,
