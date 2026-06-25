@@ -46,6 +46,21 @@ const MAX_TOOL_OUTPUT: usize = 200_000;
 const DEFAULT_BASH_TIMEOUT_MS: u64 = 120_000;
 const MAX_BASH_TIMEOUT_MS: u64 = 600_000;
 
+/// Heuristic: if the first 8 KiB contain a NUL byte and the proportion of
+/// non-printable bytes exceeds 30%, treat the file as binary and refuse
+/// to inline it into a tool result.
+fn looks_binary(bytes: &[u8]) -> bool {
+    let head = &bytes[..bytes.len().min(8192)];
+    if !head.contains(&0u8) {
+        return false;
+    }
+    let nonprint = head
+        .iter()
+        .filter(|&&b| b != b'\n' && b != b'\r' && b != b'\t' && (b < 0x20 || b == 0x7F))
+        .count();
+    head.len() > 0 && (nonprint * 100 / head.len()) > 30
+}
+
 // ── Bash ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -187,6 +202,12 @@ impl Tool for ReadTool {
             .map_err(|e| ToolError::Io(format!("{}: {e}", path.display())))?;
         if bytes.is_empty() {
             return Ok("[empty file]".to_string());
+        }
+        if looks_binary(&bytes) {
+            return Ok(format!(
+                "[binary file: {} bytes — refusing to inline. Use Bash with `file`, `head`, or a domain-specific tool.]",
+                bytes.len()
+            ));
         }
         let text = String::from_utf8_lossy(&bytes);
         let start = inp.offset.unwrap_or(1).max(1);
@@ -1070,6 +1091,23 @@ mod tests {
         for expected in ["Bash", "Read", "Write", "Edit", "Grep", "Glob", "LS", "WebFetch", "NotebookEdit", "TodoWrite"] {
             assert!(names.contains(&expected.to_string()), "missing: {expected}");
         }
+    }
+
+    #[tokio::test]
+    async fn read_refuses_binary_files() {
+        let dir = std::env::temp_dir().join("aether-bin");
+        let _ = tokio::fs::create_dir_all(&dir).await;
+        let p = dir.join("data.bin");
+        // 9 KiB of garbage with lots of NULs and non-printables
+        let mut bytes = vec![0u8; 9000];
+        for (i, b) in bytes.iter_mut().enumerate() {
+            *b = (i % 256) as u8;
+        }
+        tokio::fs::write(&p, &bytes).await.unwrap();
+        let path = p.to_string_lossy().to_string();
+        let out = ReadTool.run(json!({"file_path": path})).await.unwrap();
+        assert!(out.contains("[binary file"), "got: {out}");
+        let _ = tokio::fs::remove_file(&p).await;
     }
 
     #[tokio::test]
