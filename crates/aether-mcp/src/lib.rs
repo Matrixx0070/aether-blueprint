@@ -768,12 +768,215 @@ fn find_double_newline_bytes(buf: &[u8]) -> Option<usize> {
     buf.windows(2).position(|w| w == b"\n\n")
 }
 
+// ── websocket client ──────────────────────────────────────────────────────
+//
+// MCP over WebSocket: the server URL is `ws://host:port/...` or
+// `wss://host:port/...`. Frames are text-encoded JSON-RPC 2.0 messages,
+// one per WebSocket frame (Anthropic's MCP spec for ws transport).
+// The client opens the connection, spawns a reader task that demuxes
+// incoming frames by id, and writes outgoing requests as text frames.
+
+pub struct WsClient {
+    /// Writer half of the WebSocket stream. Wrapped in a Mutex so multiple
+    /// concurrent `request()` callers can serialize their sends.
+    writer: Arc<Mutex<WsWriter>>,
+    next_id: AtomicU64,
+    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<JsonRpcResponse, McpError>>>>>,
+    reader_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+type WsWriter = futures_util::stream::SplitSink<
+    tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    tokio_tungstenite::tungstenite::Message,
+>;
+
+impl WsClient {
+    pub async fn spawn(config: &ServerConfig) -> Result<Self, McpError> {
+        use futures_util::StreamExt;
+        let url = match config {
+            ServerConfig::Ws { url } => url.clone(),
+            _ => return Err(McpError::Transport("not a Ws config".into())),
+        };
+        if !url.starts_with("ws://") && !url.starts_with("wss://") {
+            return Err(McpError::Transport(format!(
+                "ws URL must start with ws:// or wss://: {url}"
+            )));
+        }
+
+        let (stream, _resp) = tokio_tungstenite::connect_async(&url)
+            .await
+            .map_err(|e| McpError::Transport(format!("ws connect {url}: {e}")))?;
+        let (writer, mut reader) = stream.split();
+
+        let pending: Arc<
+            Mutex<HashMap<u64, oneshot::Sender<Result<JsonRpcResponse, McpError>>>>,
+        > = Arc::new(Mutex::new(HashMap::new()));
+        let pending_for_reader = Arc::clone(&pending);
+
+        let reader_handle = tokio::spawn(async move {
+            use tokio_tungstenite::tungstenite::Message;
+            while let Some(msg) = reader.next().await {
+                let Ok(msg) = msg else {
+                    break;
+                };
+                let text = match msg {
+                    Message::Text(t) => t,
+                    Message::Binary(b) => match String::from_utf8(b) {
+                        Ok(s) => s,
+                        Err(_) => continue,
+                    },
+                    Message::Close(_) => break,
+                    Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => continue,
+                };
+                if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&text) {
+                    if let serde_json::Value::Number(n) = &resp.id {
+                        if let Some(id) = n.as_u64() {
+                            let mut g = pending_for_reader.lock().await;
+                            if let Some(tx) = g.remove(&id) {
+                                let _ = tx.send(Ok(resp));
+                            }
+                        }
+                    }
+                }
+                // notifications and unparseable frames are ignored
+            }
+            // Stream closed — drain pending with err so callers don't hang.
+            let mut g = pending_for_reader.lock().await;
+            let mut p = std::mem::take(&mut *g);
+            for (_, tx) in p.drain() {
+                let _ = tx.send(Err(McpError::Transport("ws stream closed".into())));
+            }
+        });
+
+        Ok(Self {
+            writer: Arc::new(Mutex::new(writer)),
+            next_id: AtomicU64::new(1),
+            pending,
+            reader_handle: Mutex::new(Some(reader_handle)),
+        })
+    }
+
+    pub async fn request(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, McpError> {
+        use futures_util::SinkExt;
+        use tokio_tungstenite::tungstenite::Message;
+
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: serde_json::Value::Number(id.into()),
+            method: method.to_string(),
+            params,
+        };
+        let line = serde_json::to_string(&req)
+            .map_err(|e| McpError::Protocol(format!("encode request: {e}")))?;
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().await.insert(id, tx);
+        {
+            let mut w = self.writer.lock().await;
+            w.send(Message::Text(line))
+                .await
+                .map_err(|e| McpError::Transport(format!("ws send: {e}")))?;
+        }
+        let resp = match tokio::time::timeout(DEFAULT_TIMEOUT, rx).await {
+            Ok(Ok(r)) => r?,
+            Ok(Err(_)) => return Err(McpError::Transport("waiter closed".into())),
+            Err(_) => {
+                self.pending.lock().await.remove(&id);
+                return Err(McpError::Timeout(DEFAULT_TIMEOUT));
+            }
+        };
+        if let Some(err) = resp.error {
+            return Err(McpError::Server {
+                code: err.code,
+                message: err.message,
+            });
+        }
+        Ok(resp.result.unwrap_or(serde_json::Value::Null))
+    }
+
+    pub async fn notify(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<(), McpError> {
+        use futures_util::SinkExt;
+        use tokio_tungstenite::tungstenite::Message;
+
+        let n = JsonRpcNotification {
+            jsonrpc: "2.0".into(),
+            method: method.to_string(),
+            params,
+        };
+        let line = serde_json::to_string(&n)
+            .map_err(|e| McpError::Protocol(format!("encode notify: {e}")))?;
+        let mut w = self.writer.lock().await;
+        w.send(Message::Text(line))
+            .await
+            .map_err(|e| McpError::Transport(format!("ws send: {e}")))?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Client for WsClient {
+    async fn initialize(&self) -> Result<InitializeResult, McpError> {
+        let raw = self
+            .request(
+                "initialize",
+                serde_json::json!({
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "clientInfo": { "name": CLIENT_NAME, "version": CLIENT_VERSION },
+                    "capabilities": {}
+                }),
+            )
+            .await?;
+        let parsed: InitializeResult = serde_json::from_value(raw)
+            .map_err(|e| McpError::Protocol(format!("initialize result: {e}")))?;
+        self.notify("notifications/initialized", serde_json::json!({}))
+            .await?;
+        Ok(parsed)
+    }
+    async fn list_tools(&self) -> Result<Vec<ToolDef>, McpError> {
+        let raw = self.request("tools/list", serde_json::json!({})).await?;
+        let tools = raw
+            .get("tools")
+            .cloned()
+            .unwrap_or(serde_json::Value::Array(vec![]));
+        serde_json::from_value(tools).map_err(|e| McpError::Protocol(format!("tools/list: {e}")))
+    }
+    async fn call_tool(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<ToolCallResult, McpError> {
+        let raw = self
+            .request(
+                "tools/call",
+                serde_json::json!({ "name": name, "arguments": arguments }),
+            )
+            .await?;
+        serde_json::from_value(raw).map_err(|e| McpError::Protocol(format!("tools/call: {e}")))
+    }
+    async fn shutdown(&self) -> Result<(), McpError> {
+        if let Some(h) = self.reader_handle.lock().await.take() {
+            h.abort();
+        }
+        Ok(())
+    }
+}
+
 /// Factory that picks the right transport from the config variant.
 pub async fn spawn_client(config: &ServerConfig) -> Result<Box<dyn Client>, McpError> {
     match config {
         ServerConfig::Stdio { .. } => Ok(Box::new(StdioClient::spawn(config).await?)),
         ServerConfig::Sse { .. } => Ok(Box::new(SseClient::spawn(config).await?)),
-        ServerConfig::Ws { .. } => Err(McpError::Transport("ws transport not implemented".into())),
+        ServerConfig::Ws { .. } => Ok(Box::new(WsClient::spawn(config).await?)),
     }
 }
 
@@ -799,6 +1002,68 @@ mod tests {
         let r: InitializeResult = serde_json::from_str(json).unwrap();
         assert_eq!(r.protocol_version, "2024-11-05");
         assert!(r.capabilities.tools.is_some());
+    }
+
+    #[tokio::test]
+    async fn ws_client_rejects_non_ws_scheme() {
+        let bad = ServerConfig::Ws {
+            url: "http://example.com/mcp".into(),
+        };
+        let err = WsClient::spawn(&bad).await.err().expect("should fail");
+        assert!(
+            format!("{err}").contains("ws://"),
+            "expected scheme error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ws_client_refuses_wrong_config_variant() {
+        let bad = ServerConfig::Stdio {
+            command: "true".into(),
+            args: vec![],
+            env: Default::default(),
+        };
+        let err = WsClient::spawn(&bad).await.err().expect("should fail");
+        assert!(
+            format!("{err}").contains("not a Ws config"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn ws_config_round_trips_through_serde() {
+        let cfg = ServerConfig::Ws {
+            url: "wss://example.com/mcp".into(),
+        };
+        let s = serde_json::to_string(&cfg).unwrap();
+        assert!(s.contains(r#""transport":"ws""#), "json: {s}");
+        assert!(s.contains("wss://example.com/mcp"));
+        let back: ServerConfig = serde_json::from_str(&s).unwrap();
+        match back {
+            ServerConfig::Ws { url } => assert_eq!(url, "wss://example.com/mcp"),
+            _ => panic!("wrong variant after round-trip"),
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_client_dispatches_ws_variant_through_factory() {
+        // Bad URL → ws transport reachable, but connect fails. Proves the
+        // factory routes the ws variant to WsClient (not the old
+        // "ws transport not implemented" error).
+        let cfg = ServerConfig::Ws {
+            url: "ws://127.0.0.1:1/no-such-endpoint".into(),
+        };
+        let err = spawn_client(&cfg).await.err().expect("should fail");
+        let msg = format!("{err}");
+        assert!(
+            !msg.contains("not implemented"),
+            "factory should route to WsClient: {msg}"
+        );
+        // Should be a connect error of some kind.
+        assert!(
+            msg.contains("ws connect") || msg.contains("connect"),
+            "expected connect error: {msg}"
+        );
     }
 
     #[test]

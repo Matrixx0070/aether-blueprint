@@ -14,3 +14,4 @@ async-trait.workspace = true
 reqwest.workspace = true
 futures-util.workspace = true
 url = "2"
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
