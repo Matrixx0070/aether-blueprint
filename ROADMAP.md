@@ -1,62 +1,69 @@
 # Roadmap
 
-## v0.3 — shipped 2026-06-25 (this release)
+## v0.4 — shipped 2026-06-25 (this release)
 
-Phase 1 — v0.2.1 patches:
-- D7 rule 06 (`lyrics_and_poems`) tuning: skips markdown structural lines
-  (bullets, ordered lists, headings, block quotes, tables, code fences)
-- PreToolUse / PostToolUse hooks (Executor gains ToolHookCallback +
-  drain_pending_reminders)
-- `aether config set` writes atomically to settings.json (recognised:
-  default_model, permission_mode, always_allow_tools, env.KEY)
-- `aether resume` with no id shows interactive picker
+Phase 1 — v0.3.1 patches:
+- D7 rule 06 (`lyrics_and_poems`): `applies_when: not_creative_writing_context`
+  predicate; agent_turn detects creative-writing requests via substring
+  scan; structural-line guard from v0.3 kept as belt-and-suspenders
+- Persistent always-allow: answering `a` at the permission prompt writes
+  to `~/.aether/settings.json` so subsequent sessions inherit
+- `aether mcp test NAME` probes a configured server (spawn + initialize
+  + list_tools + shutdown, reports tool count + names)
+- `/usage` now estimates USD cost per session using a per-model price
+  table (Haiku / Sonnet / Opus / Fable), with cache write 1.25× and
+  cache read 0.10× multipliers
 
-Phase 2 — MCP client:
-- Real `aether-mcp` crate: stdio transport, JSON-RPC 2.0 codec, multiplexed
-  reader task, initialize handshake at protocolVersion 2024-11-05
-- tools/list, tools/call, resources/list, read_resource, prompts/list
-- `McpToolAdapter` mounts MCP tools as `mcp__<server>__<tool>`
-- `aether mcp add/list/remove` subcommands → `~/.aether/mcp.json`
+Phase 2 — Ratatui TUI (`aether tui`):
+- 3 panes: chat (70%, scrollable), tools (30%, live status icons),
+  status bar (model · session · perm · tokens · cost), input (5 rows)
+- Streaming SSE tokens flow into the chat pane in real time
+- Tool calls show ◌ (running) → ✓ (ok) / ✗ (err)
+- Enter sends, Shift+Enter newline, Esc/Ctrl-Q exit, Ctrl-C clears input
+- PgUp/PgDn scrolls the chat pane
+- TerminalGuard RAII restores cooked-mode on panic
 
-Phase 3 — Skills + memory:
-- `Skill` tool loads `~/.aether/skills/*.md` with YAML frontmatter
-- `MemoryRead` + `MemoryWrite` tools backed by `~/.aether/memory/*.md`
-- `<memory-index>` reminder auto-injected at session start (compounding
-  context across sessions without inlining every file)
-- `/memory` slash command lists entries
+Phase 3 — Network surfaces:
+- `aether serve` HTTP API: `POST /v1/messages`, `GET /healthz`; axum
+  with minimal feature set; loopback-only by default (`127.0.0.1:7777`)
+- MCP SSE transport: `Client` trait abstracts stdio + SSE; `SseClient`
+  follows the older `event: endpoint` flow (GET /sse for response
+  stream, POST to the advertised endpoint for requests); `spawn_client`
+  factory picks the right transport from the config variant
 
-Phase 4 — Polish:
-- `aether doctor` health check (auth, settings, hooks, mcp, disk)
-- Inline diff preview (red/green) when Edit runs
-- Token tracking: MessagesResponse gains `usage`; SSE parses
-  message_start + message_delta; Session accumulates totals; `/usage`
-  slash command
-- Tab completion in REPL for slash commands (built-in + custom)
+Phase 4 — Reliability:
+- `send_with_retries` in aether-llm: exp backoff (base 500ms, doubling,
+  cap 30s, full-jitter, max 5 attempts) on transport errors + HTTP 5xx
+  (incl. 529 overloaded); does NOT retry 4xx or successful 2xx
+- `LlmError::actionable()` returns user-readable explanations with
+  suggested fixes; CLI surfaces via `explain_agent_error`
+- Streaming tool cancel: global `CANCEL_FLAG` in aether-tools::builtin;
+  Bash tool's wait loop select!s timeout vs cancel-flag poll; CLI
+  installs a tokio::signal::ctrl_c handler that flips the flag
 
-## v0.3.1 — patch (next)
+## v0.4.1 — patch (next)
 
-- D7 rule 06: add `applies_when: creative_writing_context` predicate using
-  user-input introspection (rather than the current structural-only fix)
-- Persistent always-allow tools list from settings (already wired at startup,
-  but `a` answer at prompt currently only updates in-memory; persist back)
-- `aether mcp test NAME` to probe a server without entering a session
-- Per-model cost estimation in `/usage` (Haiku / Sonnet / Opus pricing table)
+- MCP SSE end-to-end smoke against a real server (currently transport
+  compiles + StdioClient still verified live; live SSE test deferred
+  because no sandbox public MCP SSE server was handy)
+- HTTP server streaming response (SSE flavor of POST /v1/messages)
+- TUI: bracketed-paste support; rendering markdown inline (bold, code)
+- More retry-watchdog telemetry (`/retries` slash command)
 
-## v0.4 — TUI + surfaces
+## v0.5 — feature parity push
 
-- Ink-style TUI: split panes (chat / tool log / diff viewer / status bar)
-- FleetView for parallel sub-agents
+- FleetView TUI for parallel sub-agents
 - Plugin system via WASM modules registered as tools
-- BYOC providers: Bedrock, Vertex, Foundry, Mantle (each ~3h slice)
-- HTTP API server mode (`aether serve`) for remote consumption
-- VS Code extension, JetBrains plugin
-- MCP SSE + websocket transports
+- BYOC providers: Bedrock, Vertex, Foundry, Mantle
+- MCP websocket transport
+- Real `aether-mem` crate (lift from aether-cli)
+- Real `aether-store` crate (lift settings from aether-cli)
+- Real `aether-skill` crate (lift skill loader from aether-cli)
 
-## v0.5 — enterprise
+## v0.6 — surfaces
 
-- SAML / OIDC federation
-- Audit log forwarding to standard SIEM
-- Per-org policy enforcement (tool blocklists, model restrictions)
+- IDE integrations: VS Code extension, JetBrains plugin
+- Enterprise gateway: SAML/OIDC federation, audit log forwarding
 - Trusted-device enrollment
 
 ## Explicit non-goals

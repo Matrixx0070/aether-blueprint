@@ -5,11 +5,19 @@ Anthropic Messages API. It runs an explicit perceive → plan → tool-select �
 execute → observe → verify loop with a built-in self-check gate and reminder
 tamper-test — pipeline scaffolding most agents don't ship.
 
-## Status: v0.3
+## Status: v0.4
 
-End-to-end working: MCP client, sub-agent delegation, persistent memory,
-markdown skills, hooks (4 events), interactive permission prompts, token
-tracking, streaming SSE, rustyline REPL with tab completion, `aether doctor`.
+Adds: **ratatui TUI** (`aether tui`), **HTTP API server** (`aether serve`),
+**MCP SSE transport**, **retry watchdog** (exp-backoff on 5xx + transport
+errors), **actionable error messages**, **streaming tool cancellation** via
+Ctrl-C, **persistent always-allow**, **`aether mcp test`** probe, **per-model
+cost estimation** in `/usage`. D7 rule 06 now uses a context-aware
+applies_when predicate instead of the v0.3 structural-only fix.
+
+End-to-end working: MCP client (stdio + SSE), sub-agent delegation,
+persistent memory, markdown skills, 4-event hooks, interactive permission
+prompts, token tracking + cost, streaming SSE, rustyline REPL with tab
+completion, `aether doctor`, full TUI with three panes, HTTP API.
 13 built-in tools + every MCP server's tools auto-mounted. Verified live
 against Opus 4.7 / 4.8 / Sonnet 4.6 / Haiku 4.5.
 
@@ -41,6 +49,13 @@ aether
 aether --model claude-opus-4-8
 aether --permission-mode bypassPermissions
 
+# Full TUI (chat + tool log + status + multi-line input)
+aether tui
+
+# HTTP API (loopback only by default)
+aether serve --bind 127.0.0.1:7777
+# then:  curl -X POST http://127.0.0.1:7777/v1/messages -d '{"prompt":"..."}'
+
 # One-shot
 aether --print "Write hello world in Rust to /tmp/hello.rs and run it"
 
@@ -61,6 +76,7 @@ aether config set env.AETHER_DEBUG 1
 # MCP servers
 aether mcp add fs -- npx -y @modelcontextprotocol/server-filesystem /tmp
 aether mcp list
+aether mcp test fs
 aether mcp remove fs
 ```
 
@@ -228,7 +244,7 @@ crates/
 
 ## aether vs claude-code
 
-| Capability | Claude Code | aether (v0.3) |
+| Capability | Claude Code | aether (v0.4) |
 |---|:---:|:---:|
 | Single-binary CLI | ✅ | ✅ |
 | OAuth + Max-subscription auth + auto-refresh | ✅ | ✅ |
@@ -238,20 +254,25 @@ crates/
 | Sub-agent (Agent tool) | ✅ | ✅ |
 | Memory (cross-session) | ✅ | ✅ |
 | Skills | ✅ | ✅ |
-| MCP client | ✅ | ✅ |
+| MCP client (stdio) | ✅ | ✅ |
+| MCP client (SSE) | ✅ | ✅ |
 | Hooks (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse) | ✅ | ✅ |
-| Interactive permission prompts | ✅ | ✅ |
+| Interactive permission prompts (with persistent always-allow) | ✅ | ✅ |
 | Settings file + `config set` | ✅ | ✅ |
 | Custom slash commands | ✅ | ✅ |
 | Project context auto-load | ✅ | ✅ |
-| Token / cost tracking | ✅ | ✅ |
+| Token / cost tracking ($) | ✅ | ✅ |
 | REPL: history, arrow keys, multi-line, Ctrl-C, tab completion | ✅ | ✅ |
 | Session list + resume picker | ✅ | ✅ |
 | `aether doctor` health check | ✅ | ✅ |
-| Ink-style TUI (split panes, live diff view) | ✅ | ⬜ (v0.4) |
-| FleetView (sub-agent UI) | ✅ | ⬜ (v0.4) |
-| Plugin system (dylib / WASM) | ✅ | ⬜ (v0.4) |
-| BYOC providers (Bedrock / Vertex / Foundry) | ✅ | ⬜ (v0.4) |
+| **Ink-style TUI (split panes, live tool log)** | ✅ | ✅ |
+| **HTTP API server (`aether serve`)** | ⬜ | ✅ |
+| **Retry watchdog (exp-backoff on 5xx)** | ✅ | ✅ |
+| **Actionable error messages** | ✅ | ✅ |
+| **Streaming tool cancel (Ctrl-C)** | ✅ | ✅ |
+| FleetView (parallel sub-agent UI) | ✅ | ⬜ (v0.5) |
+| Plugin system (dylib / WASM) | ✅ | ⬜ (v0.5) |
+| BYOC providers (Bedrock / Vertex / Foundry) | ✅ | ⬜ (v0.5) |
 | IDE integrations | ✅ | ⬜ |
 | **D1 reminder tamper-test (34-signal classifier)** | ⬜ | ✅ |
 | **D7 self-check gate (14 rules, structural-line aware)** | ⬜ | ✅ |
