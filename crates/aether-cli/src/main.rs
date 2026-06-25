@@ -95,6 +95,11 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Session admin (export to markdown, branch off at a turn).
+    Session {
+        #[command(subcommand)]
+        sub: SessionCmd,
+    },
     /// Launch the ratatui TUI (chat pane + tool log + status bar + input).
     Tui,
     /// Run an HTTP API server. Loopback-only by default; pass --bind to override.
@@ -136,6 +141,19 @@ enum McpCmd {
 enum ConfigCmd {
     Show,
     Set { key: String, value: String },
+}
+
+#[derive(Subcommand, Debug)]
+enum SessionCmd {
+    /// Export a session to a clean markdown transcript on stdout.
+    Export { id: String },
+    /// Fork a session at turn N into a new session id; prints the new id.
+    Branch {
+        id: String,
+        /// Number of user/assistant exchanges to keep from the source.
+        #[arg(long)]
+        at_turn: usize,
+    },
 }
 
 #[tokio::main]
@@ -185,6 +203,7 @@ async fn main() -> Result<()> {
         Some(Cmd::Eval { suite, json }) => {
             return run_eval(&suite, &model, permission_mode, json).await
         }
+        Some(Cmd::Session { sub }) => return session_cmd(sub),
         Some(Cmd::Tui) => return run_tui(&model, permission_mode).await,
         Some(Cmd::Serve { bind }) => return run_serve(&bind, &model, permission_mode).await,
         Some(Cmd::Mcp { sub }) => {
@@ -1703,6 +1722,111 @@ fn tool_name_for_result(session: &Session, tool_use_id: &str) -> Option<String> 
         }
     }
     None
+}
+
+// ── session admin ────────────────────────────────────────────────────────
+
+fn session_cmd(sub: SessionCmd) -> Result<()> {
+    match sub {
+        SessionCmd::Export { id } => session_export(&id),
+        SessionCmd::Branch { id, at_turn } => session_branch(&id, at_turn),
+    }
+}
+
+fn session_export(id: &str) -> Result<()> {
+    let path = session_file_path(id);
+    let data = std::fs::read_to_string(&path)
+        .with_context(|| format!("read {}", path.display()))?;
+    println!("# Session: {id}");
+    println!();
+    for line in data.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let v: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let kind = v.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        match kind {
+            "user" => {
+                if let Some(t) = v.get("text").and_then(|t| t.as_str()) {
+                    println!("## User\n\n{}\n", t);
+                }
+            }
+            "assistant" => {
+                if let Some(t) = v.get("text").and_then(|t| t.as_str()) {
+                    println!("## Assistant\n\n{}\n", t);
+                }
+            }
+            "tool_use" => {
+                let tool = v.get("tool").and_then(|t| t.as_str()).unwrap_or("?");
+                let input = v
+                    .get("input")
+                    .map(|i| serde_json::to_string(i).unwrap_or_default())
+                    .unwrap_or_default();
+                println!("### Tool call: `{tool}`\n\n```json\n{input}\n```\n");
+            }
+            "tool_result" => {
+                let output = v.get("output").and_then(|o| o.as_str()).unwrap_or("");
+                let truncated: String = output.chars().take(2000).collect();
+                println!("### Tool result\n\n```\n{truncated}\n```\n");
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn session_branch(src_id: &str, at_turn: usize) -> Result<()> {
+    let src_path = session_file_path(src_id);
+    let data = std::fs::read_to_string(&src_path)
+        .with_context(|| format!("read {}", src_path.display()))?;
+
+    // Pair user + assistant lines into exchanges; keep the first `at_turn`.
+    let mut lines: Vec<&str> = data.lines().filter(|l| !l.trim().is_empty()).collect();
+    let mut kept = Vec::<&str>::new();
+    let mut exchanges = 0usize;
+    for line in lines.drain(..) {
+        if exchanges >= at_turn {
+            // After hitting the cap, only keep until the next user line begins
+            let v: serde_json::Value = match serde_json::from_str(line) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if v.get("kind").and_then(|k| k.as_str()) == Some("user") {
+                break;
+            }
+            kept.push(line);
+            continue;
+        }
+        kept.push(line);
+        let v: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if v.get("kind").and_then(|k| k.as_str()) == Some("assistant") {
+            exchanges += 1;
+        }
+    }
+
+    let new_id = new_session_id();
+    let dst_path = session_file_path(&new_id);
+    if let Some(parent) = dst_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let mut out = String::new();
+    for line in kept {
+        out.push_str(line);
+        out.push('\n');
+    }
+    std::fs::write(&dst_path, &out)?;
+    println!("{new_id}");
+    eprintln!(
+        "[branched] {src_id} → {new_id}  (kept {at_turn} exchanges, {} bytes)",
+        out.len()
+    );
+    Ok(())
 }
 
 // ── eval harness ──────────────────────────────────────────────────────────
