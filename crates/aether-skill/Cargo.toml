@@ -12,3 +12,6 @@ thiserror.workspace = true
 serde_json.workspace = true
 async-trait.workspace = true
 aether-tools.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

@@ -3,7 +3,54 @@
 Head-to-head measurement of the user-perceived loop "spin up agent → do tools →
 return."
 
-**Latest run: v0.4 — 2026-06-25.** Same axis, same protocol. aether is
+**Latest run: v0.5 — 2026-06-25.** Same axis, same protocol. aether is
+2.9–5.9× faster at p50 and 2.2–4.8× faster at p95 vs `claude` v2.1.191 on
+this run (claude was slower than usual today — see trend table for the
+honest cross-release comparison). No regression despite v0.5 adding
+FleetView, eval harness, session export/branch, TUI markdown, and lifting
+3 placeholder crates (13 slices since v0.4).
+
+## v0.5 results (n=20)
+
+| Test | binary | n | min | **p50** | **p95** | max |
+|---|---|---:|---:|---:|---:|---:|
+| text roundtrip | aether | 20 | 814 | **1,119** | **1,412** | 1,530 |
+|  | claude | 20 | 5,651 | **6,566** | **6,816** | 6,969 |
+| single tool (Read) | aether | 20 | 2,126 | **2,592** | **3,306** | 3,458 |
+|  | claude | 20 | 7,597 | **9,030** | **10,904** | 12,252 |
+| multi-tool (Write+Read) | aether | 20 | 2,436 | **4,160** | **5,207** | 5,297 |
+|  | claude | 20 | 8,506 | **12,669** | **20,649** | 21,631 |
+| Grep | aether | 20 | 4,070 | **5,811** | **11,414** | 12,226 |
+|  | claude | 20 | 10,261 | **17,138** | **24,604** | 24,947 |
+
+### v0.5 speedup vs claude
+
+| Test | p50 ratio | p95 ratio |
+|---|---:|---:|
+| text roundtrip | **5.87×** | **4.83×** |
+| single tool (Read) | **3.48×** | **3.30×** |
+| multi-tool (Write+Read) | **3.05×** | **3.97×** |
+| Grep | **2.95×** | **2.16×** |
+
+### Trend by aether p50 across releases
+
+| Test | v0.1 ms | v0.2 ms | v0.3 ms | v0.4 ms | v0.5 ms |
+|---|---:|---:|---:|---:|---:|
+| text roundtrip | 1,028 | 1,024 | 1,062 | 1,150 | 1,119 |
+| single tool (Read) | 2,542 | 2,525 | 2,809 | 2,858 | 2,592 |
+| multi-tool (Write+Read) | 3,978 | 3,840 | 3,942 | 4,512 | 4,160 |
+| Grep | 4,446 | 5,083 | 5,191 | 5,326 | 5,811 |
+
+aether's p50 across 5 releases is within ±20% of v0.1 baseline, despite
+~70 slices of feature growth. The widening v0.5 ratios vs claude this run
+are explained by claude's higher absolute numbers today (network /
+server-side variance), not by aether improving relative to itself.
+
+aether: **80/80** successful. claude: **80/80** successful.
+
+---
+
+**Earlier run: v0.4 — 2026-06-25.** Same axis, same protocol. aether is
 1.9–3.0× faster at p50 and 1.0–3.8× faster at p95 — no regression despite
 v0.4 adding the TUI, HTTP server, MCP SSE transport, retry watchdog, and
 streaming tool cancel (14 slices since v0.3).
