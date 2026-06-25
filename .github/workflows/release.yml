@@ -1,0 +1,142 @@
+name: release
+
+# Fires on annotated/lightweight tags matching v* — e.g. `git tag v0.12.0 && git push --tags`.
+# Builds release binaries for 4 platforms in parallel, uploads each as a
+# tarball + SHA256 to a GitHub Release named after the tag. The install.sh
+# script downloads from this URL pattern.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write  # needed to create the GitHub Release + upload assets
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive_suffix: linux-x86_64
+            cross: false
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive_suffix: linux-aarch64
+            cross: true
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive_suffix: macos-x86_64
+            cross: false
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive_suffix: macos-aarch64
+            cross: false
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: cache cargo registry + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: install cross (linux-aarch64 only)
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross --rev v0.2.5
+
+      - name: build release binary (native)
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --target ${{ matrix.target }} -p aether-cli
+
+      - name: build release binary (cross)
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }} -p aether-cli
+
+      - name: strip binary (linux)
+        if: runner.os == 'Linux' && !matrix.cross
+        run: strip target/${{ matrix.target }}/release/aether
+
+      - name: strip binary (macos)
+        if: runner.os == 'macOS'
+        run: strip target/${{ matrix.target }}/release/aether
+
+      - name: package tarball
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME}"
+          ARCHIVE_NAME="aether-${VERSION}-${{ matrix.archive_suffix }}.tar.gz"
+          STAGE=$(mktemp -d)
+          cp "target/${{ matrix.target }}/release/aether" "$STAGE/aether"
+          # Bundle docs + licenses; tolerate missing files.
+          for f in README.md LICENSE-MIT LICENSE-APACHE; do
+            [ -f "$f" ] && cp "$f" "$STAGE/"
+          done
+          ( cd "$STAGE" && tar -czf "$GITHUB_WORKSPACE/$ARCHIVE_NAME" . )
+          SHA=$(shasum -a 256 "$ARCHIVE_NAME" | awk '{print $1}')
+          echo "$SHA  $ARCHIVE_NAME" > "${ARCHIVE_NAME}.sha256"
+          echo "archive=$ARCHIVE_NAME" >> "$GITHUB_OUTPUT"
+          echo "sha256_file=${ARCHIVE_NAME}.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: upload artifacts (intra-workflow)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.archive }}
+          path: |
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.sha256_file }}
+
+  release:
+    name: publish github release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: build combined SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          # Each per-tarball .sha256 line is "HASH  FILE". Concatenate into
+          # one SHA256SUMS file at the release root so consumers can fetch
+          # one file and `sha256sum -c` against the tarballs.
+          cat *.tar.gz.sha256 | sort > SHA256SUMS
+          ls -la
+
+      - name: create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
