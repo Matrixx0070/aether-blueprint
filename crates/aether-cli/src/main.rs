@@ -21,7 +21,8 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::Value;
 use aether_llm::{
-    anthropic::AnthropicProvider, ContentBlock, LlmProvider, Message, MessagesRequest,
+    anthropic::AnthropicProvider, bedrock::BedrockProvider, vertex::VertexProvider, ContentBlock,
+    LlmProvider, Message, MessagesRequest,
 };
 use aether_overlay::{Fable5Overlay, OverlayConfig};
 use aether_selfcheck::{Gate, Rule};
@@ -262,6 +263,50 @@ async fn main() -> Result<()> {
     run_repl(resume, &model, permission_mode, cli.prompt).await
 }
 
+// ── provider selection ───────────────────────────────────────────────────
+
+/// Resolve the active provider from (in priority): `AETHER_PROVIDER` env,
+/// settings.provider, default `anthropic`. Returns one of:
+///   - `anthropic` (OAuth Bearer or API key)
+///   - `bedrock`   (AWS SigV4)
+///   - `vertex`    (GCP Bearer token)
+fn active_provider_name() -> String {
+    if let Ok(p) = std::env::var("AETHER_PROVIDER") {
+        if !p.trim().is_empty() {
+            return p.trim().to_lowercase();
+        }
+    }
+    let s = aether_store::load();
+    s.provider
+        .as_deref()
+        .map(|s| s.to_lowercase())
+        .unwrap_or_else(|| "anthropic".to_string())
+}
+
+/// Construct the active provider as a trait object. All callers should
+/// route through this rather than direct AnthropicProvider construction.
+fn build_provider() -> Result<Arc<dyn aether_llm::LlmProvider>> {
+    match active_provider_name().as_str() {
+        "bedrock" => {
+            let p = BedrockProvider::from_env()
+                .map_err(|e| anyhow!("bedrock provider: {e}"))?;
+            Ok(Arc::new(p))
+        }
+        "vertex" => {
+            let p = VertexProvider::from_env()
+                .map_err(|e| anyhow!("vertex provider: {e}"))?;
+            Ok(Arc::new(p))
+        }
+        _ => {
+            let p = AnthropicProvider::from_env_or_credentials().context(
+                "no auth source — set ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, \
+                 or run `claude` / `aether` to populate ~/.claude/.credentials.json",
+            )?;
+            Ok(Arc::new(p))
+        }
+    }
+}
+
 // ── print mode ────────────────────────────────────────────────────────────
 
 /// Agent-loop-backed print mode: spins up a full session with tools and
@@ -272,11 +317,7 @@ async fn run_print_agent(
     permission_mode: aether_perm::PermissionMode,
     prompt: &str,
 ) -> Result<()> {
-    let provider = AnthropicProvider::from_env_or_credentials().context(
-        "no auth source — set ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, \
-         or run `claude` / `aether` to populate ~/.claude/.credentials.json",
-    )?;
-    let config = SessionConfig {
+        let config = SessionConfig {
         model: model.to_string(),
         permission_mode,
         max_tokens_per_turn: PRINT_MODE_MAX_TOKENS,
@@ -285,7 +326,7 @@ async fn run_print_agent(
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("self-check gate: {e}"))?;
     let mut tools = ToolRegistry::new();
     register_builtins(&mut tools);
-    let provider_arc: Arc<dyn aether_llm::LlmProvider> = Arc::new(provider);
+    let provider_arc: Arc<dyn aether_llm::LlmProvider> = build_provider()?;
     tools.register(Box::new(AgentTool::new(
         Arc::clone(&provider_arc),
         model.to_string(),
@@ -450,12 +491,7 @@ async fn run_repl(
     permission_mode: aether_perm::PermissionMode,
     initial_prompt: Option<String>,
 ) -> Result<()> {
-    let provider = AnthropicProvider::from_env_or_credentials().context(
-        "no auth source — set ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, \
-         or run `claude` / `aether` to populate ~/.claude/.credentials.json",
-    )?;
-
-    let config = SessionConfig {
+        let config = SessionConfig {
         model: model.to_string(),
         permission_mode,
         max_tokens_per_turn: REPL_MAX_TOKENS,
@@ -464,7 +500,7 @@ async fn run_repl(
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("self-check gate: {e}"))?;
     let mut tools = ToolRegistry::new();
     register_builtins(&mut tools);
-    let provider_arc: Arc<dyn aether_llm::LlmProvider> = Arc::new(provider);
+    let provider_arc: Arc<dyn aether_llm::LlmProvider> = build_provider()?;
     tools.register(Box::new(AgentTool::new(
         Arc::clone(&provider_arc),
         model.to_string(),
@@ -1399,7 +1435,6 @@ async fn serve_one_turn(
     permission_mode: aether_perm::PermissionMode,
     prompt: &str,
 ) -> Result<ServeResponse> {
-    let provider = AnthropicProvider::from_env_or_credentials()?;
     let config = SessionConfig {
         model: model.to_string(),
         permission_mode,
@@ -1409,7 +1444,7 @@ async fn serve_one_turn(
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
     let mut tools = ToolRegistry::new();
     register_builtins(&mut tools);
-    let provider_arc: Arc<dyn aether_llm::LlmProvider> = Arc::new(provider);
+    let provider_arc: Arc<dyn aether_llm::LlmProvider> = build_provider()?;
     tools.register(Box::new(AgentTool::new(
         Arc::clone(&provider_arc),
         model.to_string(),
@@ -1453,11 +1488,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
     };
     use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
-    let provider = AnthropicProvider::from_env_or_credentials().context(
-        "no auth source — set ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, \
-         or run `claude` / `aether` to populate ~/.claude/.credentials.json",
-    )?;
-    let config = SessionConfig {
+        let config = SessionConfig {
         model: model.to_string(),
         permission_mode,
         max_tokens_per_turn: REPL_MAX_TOKENS,
@@ -1466,7 +1497,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("self-check gate: {e}"))?;
     let mut tools = ToolRegistry::new();
     register_builtins(&mut tools);
-    let provider_arc: Arc<dyn aether_llm::LlmProvider> = Arc::new(provider);
+    let provider_arc: Arc<dyn aether_llm::LlmProvider> = build_provider()?;
     tools.register(Box::new(AgentTool::new(
         Arc::clone(&provider_arc),
         model.to_string(),
@@ -2005,7 +2036,6 @@ async fn run_eval_case(
     permission_mode: aether_perm::PermissionMode,
     case: &EvalCase,
 ) -> Result<(String, usize, Vec<String>)> {
-    let provider = AnthropicProvider::from_env_or_credentials()?;
     let config = SessionConfig {
         model: model.to_string(),
         permission_mode,
@@ -2015,7 +2045,7 @@ async fn run_eval_case(
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
     let mut tools = ToolRegistry::new();
     register_builtins(&mut tools);
-    let provider_arc: Arc<dyn aether_llm::LlmProvider> = Arc::new(provider);
+    let provider_arc: Arc<dyn aether_llm::LlmProvider> = build_provider()?;
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
 
     let mut next_input: Option<String> = Some(case.prompt.clone());
@@ -2056,14 +2086,32 @@ async fn run_doctor() -> Result<()> {
     let mut ok = true;
     let mut report = String::new();
 
-    // 1) Auth
+    // 1) Provider + auth
+    let provider_name = active_provider_name();
+    report.push_str(&format!("provider:\n  • active: {provider_name}\n"));
     report.push_str("auth:\n");
-    match AnthropicProvider::from_env_or_credentials() {
-        Ok(_) => report.push_str("  ✓ credentials reachable\n"),
-        Err(e) => {
-            ok = false;
-            report.push_str(&format!("  ✗ no auth source: {e}\n"));
-        }
+    match provider_name.as_str() {
+        "bedrock" => match BedrockProvider::from_env() {
+            Ok(_) => report.push_str("  ✓ AWS credentials in env\n"),
+            Err(e) => {
+                ok = false;
+                report.push_str(&format!("  ✗ bedrock auth: {e}\n"));
+            }
+        },
+        "vertex" => match VertexProvider::from_env() {
+            Ok(_) => report.push_str("  ✓ Vertex access token + project in env\n"),
+            Err(e) => {
+                ok = false;
+                report.push_str(&format!("  ✗ vertex auth: {e}\n"));
+            }
+        },
+        _ => match AnthropicProvider::from_env_or_credentials() {
+            Ok(_) => report.push_str("  ✓ credentials reachable\n"),
+            Err(e) => {
+                ok = false;
+                report.push_str(&format!("  ✗ no auth source: {e}\n"));
+            }
+        },
     }
     let creds_path = std::env::var_os("HOME")
         .map(|h| PathBuf::from(h).join(".claude/.credentials.json"));

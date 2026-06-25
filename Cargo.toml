@@ -26,6 +26,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "charset", "stream"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 bytes = "1"
+hex = "0.4"
+sha2 = "0.10"
+hmac = "0.12"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 # CLI
 clap = { version = "4", features = ["derive", "env"] }

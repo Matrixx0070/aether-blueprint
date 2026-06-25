@@ -14,3 +14,7 @@ reqwest.workspace = true
 tokio.workspace = true
 futures-util.workspace = true
 bytes.workspace = true
+hex.workspace = true
+sha2.workspace = true
+hmac.workspace = true
+chrono.workspace = true

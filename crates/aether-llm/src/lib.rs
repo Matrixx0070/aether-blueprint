@@ -6,6 +6,8 @@
 //! drop into the same trait.
 
 pub mod anthropic;
+pub mod bedrock;
+pub mod vertex;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

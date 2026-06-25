@@ -16,6 +16,9 @@ pub struct Settings {
     pub default_model: Option<String>,
     pub permission_mode: Option<String>,
     pub always_allow_tools: Vec<String>,
+    /// One of `anthropic` (default), `bedrock`, `vertex`. Selects the
+    /// LlmProvider used for inference.
+    pub provider: Option<String>,
     /// Extra env vars set at process start (does not override existing vars).
     pub env: HashMap<String, String>,
 }
@@ -84,7 +87,7 @@ pub fn set(key: &str, value: &str) -> anyhow::Result<usize> {
     }
     let obj = current.as_object_mut().expect("object");
     match key {
-        "default_model" | "permission_mode" => {
+        "default_model" | "permission_mode" | "provider" => {
             obj.insert(
                 key.to_string(),
                 serde_json::Value::String(value.to_string()),
@@ -112,7 +115,7 @@ pub fn set(key: &str, value: &str) -> anyhow::Result<usize> {
             }
         }
         other => anyhow::bail!(
-            "unknown settings key '{other}'. Recognised: default_model, permission_mode, always_allow_tools, env.KEY"
+            "unknown settings key '{other}'. Recognised: default_model, permission_mode, provider, always_allow_tools, env.KEY"
         ),
     }
     write_value(current)
