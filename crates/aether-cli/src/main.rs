@@ -1555,6 +1555,9 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
         // Poll for input with a short timeout so the UI tick refreshes.
         if event::poll(std::time::Duration::from_millis(80))? {
             match event::read()? {
+                Event::Paste(s) => {
+                    ui.input_buffer.push_str(&s);
+                }
                 Event::Key(k) if k.kind == KeyEventKind::Press => match k.code {
                     KeyCode::Esc => break 'outer,
                     KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {

@@ -209,12 +209,13 @@ impl UiState {
 // ── terminal lifecycle ────────────────────────────────────────────────────
 
 pub fn setup_terminal() -> io::Result<Terminal<CrosstermBackend<Stdout>>> {
-    use crossterm::{execute, terminal};
+    use crossterm::{event::EnableBracketedPaste, execute, terminal};
     terminal::enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(
         stdout,
         terminal::EnterAlternateScreen,
+        EnableBracketedPaste,
         crossterm::cursor::Hide
     )?;
     Terminal::new(CrosstermBackend::new(stdout))
@@ -223,10 +224,11 @@ pub fn setup_terminal() -> io::Result<Terminal<CrosstermBackend<Stdout>>> {
 pub fn teardown_terminal(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
 ) -> io::Result<()> {
-    use crossterm::{execute, terminal};
+    use crossterm::{event::DisableBracketedPaste, execute, terminal};
     terminal::disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
+        DisableBracketedPaste,
         terminal::LeaveAlternateScreen,
         crossterm::cursor::Show
     )?;
@@ -358,48 +360,136 @@ pub fn draw_frame(
 }
 
 fn chat_line_to_lines(cl: &ChatLine) -> Vec<Line<'static>> {
-    let (prefix, style, body) = match cl {
+    let (prefix, style, body, is_assistant) = match cl {
         ChatLine::User(s) => (
             " you › ",
             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
             s.clone(),
+            false,
         ),
         ChatLine::Assistant(s) => (
             " aether › ",
             Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
             s.clone(),
+            true,
         ),
         ChatLine::AssistantPartial(s) => (
             " aether › ",
             Style::default().fg(Color::Green),
             s.clone(),
+            true,
         ),
         ChatLine::SystemNote(s) => (
             " note › ",
             Style::default().fg(Color::DarkGray),
             s.clone(),
+            false,
         ),
     };
     let mut out = Vec::new();
     let mut first = true;
+    let mut in_fenced_code = false;
     for line in body.lines() {
-        if first {
-            out.push(Line::from(vec![
-                Span::styled(prefix, style),
-                Span::raw(line.to_string()),
-            ]));
-            first = false;
-        } else {
-            out.push(Line::from(vec![
-                Span::raw("           "),
-                Span::raw(line.to_string()),
-            ]));
+        // Toggle fenced-code state on ``` lines
+        let trimmed = line.trim_start();
+        let is_fence = trimmed.starts_with("```");
+        if is_fence {
+            in_fenced_code = !in_fenced_code;
         }
+        let leader: Line = if first {
+            first = false;
+            Line::from(Span::styled(prefix.to_string(), style))
+        } else {
+            Line::from(Span::raw("           ".to_string()))
+        };
+        let body_spans = if !is_assistant || is_fence {
+            // raw render for non-assistant lines and fence delimiters
+            vec![Span::raw(line.to_string())]
+        } else if in_fenced_code {
+            // inside a code block — render whole line in cyan
+            vec![Span::styled(
+                line.to_string(),
+                Style::default().fg(Color::Cyan),
+            )]
+        } else {
+            inline_markdown_spans(line)
+        };
+        let mut combined = leader.spans;
+        combined.extend(body_spans);
+        out.push(Line::from(combined));
     }
     if first {
-        out.push(Line::from(Span::styled(prefix, style)));
+        out.push(Line::from(Span::styled(prefix.to_string(), style)));
     }
     out.push(Line::from(""));
+    out
+}
+
+/// Lightweight inline markdown: **bold** + `inline code` + headings.
+/// Skips full CommonMark; what we ship is enough to make assistant
+/// output readable in a terminal without parser overhead.
+fn inline_markdown_spans(line: &str) -> Vec<Span<'static>> {
+    // Heading: '# ' prefix → bold + magenta
+    let stripped = line.trim_start_matches('#').trim_start();
+    if stripped.len() < line.len() && stripped.len() < line.len() {
+        let depth = line.len() - line.trim_start_matches('#').len();
+        if depth > 0 && depth <= 6 && line.chars().nth(depth) == Some(' ') {
+            return vec![Span::styled(
+                line.to_string(),
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            )];
+        }
+    }
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    let mut buf = String::new();
+    while i < bytes.len() {
+        // Inline code `...`
+        if bytes[i] == b'`' {
+            // emit pending buffer as plain
+            if !buf.is_empty() {
+                out.push(Span::raw(buf.clone()));
+                buf.clear();
+            }
+            // find closing backtick
+            if let Some(end) = line[i + 1..].find('`') {
+                let code = &line[i + 1..i + 1 + end];
+                out.push(Span::styled(
+                    code.to_string(),
+                    Style::default().fg(Color::Cyan).bg(Color::DarkGray),
+                ));
+                i += end + 2;
+                continue;
+            }
+        }
+        // Bold **...**
+        if i + 1 < bytes.len() && &bytes[i..i + 2] == b"**" {
+            if !buf.is_empty() {
+                out.push(Span::raw(buf.clone()));
+                buf.clear();
+            }
+            if let Some(end) = line[i + 2..].find("**") {
+                let bold = &line[i + 2..i + 2 + end];
+                out.push(Span::styled(
+                    bold.to_string(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ));
+                i += end + 4;
+                continue;
+            }
+        }
+        buf.push(line[i..].chars().next().unwrap());
+        i += line[i..].chars().next().unwrap().len_utf8();
+    }
+    if !buf.is_empty() {
+        out.push(Span::raw(buf));
+    }
+    if out.is_empty() {
+        out.push(Span::raw(String::new()));
+    }
     out
 }
 
