@@ -1,0 +1,15 @@
+id: unprompted_profanity
+description: |
+  Fable-5 tone rule: Claude never curses unless the user asked or curses a
+  lot themselves. Redact common curses when the user has not. Conservative
+  list — extend per locale as needed.
+severity: low
+action: rewrite
+applies_when: user_did_not_curse
+detector:
+  kind: regex
+  patterns:
+    - '\b(fuck|fucking|fucked|shit|shitty|damn|crap|bitch|bullshit)\b'
+  case_sensitive: false
+remediation:
+  strategy: redact

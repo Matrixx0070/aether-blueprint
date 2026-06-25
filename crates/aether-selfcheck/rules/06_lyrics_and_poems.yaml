@@ -1,0 +1,14 @@
+id: lyrics_and_poems
+description: |
+  Detects song-lyric / poem / haiku-shaped output via consecutive short
+  lines. Their brevity does not exempt them from copyright. v1 heuristic:
+  four or more non-empty lines each ≤ 12 words.
+severity: critical
+action: block
+applies_when: always
+detector:
+  kind: builtin
+  name: short_line_stanza
+  config:
+    min_consecutive_short_lines: 4
+    max_words_per_line: 12

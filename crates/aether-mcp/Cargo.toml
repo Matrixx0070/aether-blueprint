@@ -1,0 +1,11 @@
+[package]
+name = "aether-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AetherCode MCP client — JSON-RPC over stdio/SSE, surfaces remote tools under mcp__* namespace."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

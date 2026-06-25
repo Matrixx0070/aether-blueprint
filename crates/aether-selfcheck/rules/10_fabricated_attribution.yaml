@@ -1,0 +1,13 @@
+id: fabricated_attribution
+description: |
+  "According to X" / "X said" / "et al. found" patterns without a matching
+  cite block. Warn so the agent surfaces a source or rewrites.
+severity: medium
+action: warn
+applies_when: not_cite_tags_present
+detector:
+  kind: regex
+  patterns:
+    - '\baccording to (the )?(\w+ ){0,2}(report|study|paper|article|book|expert|spokesperson|company|press release)\b'
+    - '\b(Reuters|Bloomberg|the AP|the (New York Times|Washington Post|Wall Street Journal|Financial Times|Economist)) (said|reported|wrote|noted|claimed|disclosed)\b'
+    - '\b(\w+ )?et al\.? (found|showed|argued|claimed|reported)\b'

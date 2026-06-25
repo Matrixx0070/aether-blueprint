@@ -1,0 +1,13 @@
+id: copyright_quote_length
+description: |
+  Any quoted span ≥ 15 words from any source. Per Fable-5 copyright rules
+  this is a SEVERE violation. Block emission and surface the offending
+  quote so the agent can paraphrase.
+severity: critical
+action: block
+applies_when: always
+detector:
+  kind: builtin
+  name: quoted_span_length
+  config:
+    max_words: 15

@@ -1,0 +1,15 @@
+id: unverified_external_claim
+description: |
+  Sentences using temporal markers like "as of <date>", "currently", "right
+  now" make claims about external state. Warn when no WebFetch / WebSearch
+  / MCP read happened this turn — the claim may be hallucinated.
+severity: medium
+action: warn
+applies_when: no_recent_external_lookup
+detector:
+  kind: regex
+  patterns:
+    - '\bas of (today|now|\d{4}|January|February|March|April|May|June|July|August|September|October|November|December)\b'
+    - '\bcurrently\b[^.]{0,80}\b(is|has|holds|leads|costs|trades|sits)\b'
+    - '\bright now\b[^.]{0,80}\b(is|are|stands|costs)\b'
+    - '\bthe (current|latest|newest)\s+\S+(\s+\S+){0,2}\s+(is|has)\b'

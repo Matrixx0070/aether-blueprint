@@ -1,0 +1,20 @@
+id: empty_or_thin_output
+description: |
+  Output is below the floor (10 chars) and not a recognized short reply.
+  Likely a truncated or aborted emission. Warn — sometimes legit, but
+  worth surfacing in telemetry so the operator can spot a degradation.
+severity: medium
+action: warn
+applies_when: always
+detector:
+  kind: builtin
+  name: too_thin
+  config:
+    min_chars: 10
+    refusal_allowlist:
+      - "Done."
+      - "OK."
+      - "Yes."
+      - "No."
+      - "Sorry, no."
+      - "I can't help with that."

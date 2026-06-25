@@ -1,0 +1,11 @@
+[package]
+name = "aether-perm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AetherCode permission engine + sandbox dispatch. Includes the D4 three-stage gate for third-party tools."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

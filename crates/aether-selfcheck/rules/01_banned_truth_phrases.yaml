@@ -1,0 +1,22 @@
+id: banned_truth_phrases
+description: |
+  The CLAUDE.md discipline laws ban "should work", "probably", "likely
+  fixed", "seems fine" — they smuggle unverified claims past the verifier.
+  Annotate inline so the agent must either cite output or remove the claim.
+severity: high
+action: rewrite
+applies_when: always
+detector:
+  kind: phrase_match
+  patterns:
+    - "should work"
+    - "should be fine"
+    - "probably works"
+    - "probably fine"
+    - "likely fixed"
+    - "seems fine"
+    - "seems to work"
+  case_sensitive: false
+remediation:
+  strategy: annotate
+  template: "[UNVERIFIED: {match}]"

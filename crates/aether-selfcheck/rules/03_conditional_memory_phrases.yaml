@@ -1,0 +1,17 @@
+id: conditionally_allowed_memory_phrases
+description: |
+  Phrases like "As we discussed" / "You mentioned" are admissible only when
+  the user just asked about memory. Otherwise they reveal the subsystem.
+  Strip when the precondition is false.
+severity: medium
+action: rewrite
+applies_when: not_user_asked_about_memory
+detector:
+  kind: regex
+  patterns:
+    - '\bAs we discussed\b[^.]*'
+    - '\bIn our (past |previous )?conversations\b[^.]*'
+    - '\bYou (mentioned|told me|shared)\b[^.]*'
+    - '\bYou''ve (mentioned|told me|shared)\b[^.]*'
+remediation:
+  strategy: strip

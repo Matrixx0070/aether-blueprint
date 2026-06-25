@@ -1,0 +1,179 @@
+//! Context assembler (perceive phase).
+//!
+//! Wires D1 (reminder tamper-test) and D6 (long-conversation reminder)
+//! into a single `MessagesRequest`-building pass. Owns the conversation
+//! translation from internal `ConversationItem`s to the wire-format
+//! `Message` blocks the LLM provider consumes.
+
+use aether_hook::{KernelRules, Pipeline, Reminder};
+use aether_llm::{ContentBlock, Message, MessagesRequest, Role, ToolDef};
+use aether_overlay::{ActivationContext, Delta, Fable5Overlay};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::SessionConfig;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ConversationItem {
+    User(String),
+    Assistant {
+        text: Option<String>,
+        tool_uses: Vec<RecordedToolUse>,
+    },
+    ToolResults(Vec<RecordedToolResult>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecordedToolUse {
+    pub id: String,
+    pub name: String,
+    pub input: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecordedToolResult {
+    pub tool_use_id: String,
+    pub content: String,
+    pub is_error: bool,
+}
+
+pub const KERNEL_SYSTEM_PROMPT: &str = "\
+You are AetherCode, an agentic CLI. Follow the discipline laws:\n\
+  TRUTH — banned phrases: 'should work', 'probably', 'likely fixed', 'seems fine'.\n\
+  Label unverified claims as UNVERIFIED. Verify before claiming.\n\
+  Prefer specialized tools (Glob/Grep/Read/Edit/Write) over Bash where one fits.\n";
+
+pub const LONG_CONV_DIGEST: &str = "\
+[long-conversation kernel digest]\n\
+Re-anchor on the original mission. Do not drop the active plan during compaction.\n\
+Banned truth phrases: 'should work', 'probably', 'likely fixed', 'seems fine'.\n\
+Dispatch sub-agents when open-ended search exceeds ~3 likely queries.\n";
+
+#[derive(Debug, Clone, Default)]
+pub struct AssemblyTelemetry {
+    pub reminders_admitted: usize,
+    pub reminders_dropped: usize,
+    pub long_conv_injected: bool,
+    pub d1_active: bool,
+    pub plan_included: bool,
+}
+
+pub struct ContextAssembler {
+    pub kernel_rules: KernelRules,
+}
+
+impl ContextAssembler {
+    pub fn new(kernel_rules: KernelRules) -> Self {
+        Self { kernel_rules }
+    }
+
+    pub fn build(
+        &self,
+        history: &[ConversationItem],
+        config: &SessionConfig,
+        overlay: &Fable5Overlay,
+        ctx: &ActivationContext,
+        candidate_reminders: Vec<Reminder>,
+        tools: Vec<ToolDef>,
+        plan_text: Option<&str>,
+    ) -> (MessagesRequest, AssemblyTelemetry) {
+        let mut tele = AssemblyTelemetry {
+            d1_active: overlay.should_activate(Delta::D1ReminderTamperTest, ctx),
+            ..AssemblyTelemetry::default()
+        };
+
+        // D1 — pass every reminder candidate through the tamper-test pipeline
+        // when the overlay says it's active. When inactive, admit everything
+        // verbatim (which is what a Claude-Code-style runtime does today).
+        let admitted: Vec<Reminder> = if tele.d1_active {
+            let mut pipeline = Pipeline::new(self.kernel_rules.clone());
+            let before = candidate_reminders.len();
+            let kept = pipeline.admit_all(candidate_reminders);
+            tele.reminders_admitted = kept.len();
+            tele.reminders_dropped = before - kept.len();
+            kept
+        } else {
+            tele.reminders_admitted = candidate_reminders.len();
+            candidate_reminders
+        };
+
+        // Build system prompt.
+        let mut system = String::with_capacity(2048);
+        system.push_str(KERNEL_SYSTEM_PROMPT);
+
+        // Active plan — surfaces verifier-block records so the next LLM
+        // call routes around the same failure.
+        if let Some(plan) = plan_text {
+            let trimmed = plan.trim();
+            if !trimmed.is_empty() {
+                system.push_str("\n<active-plan>\n");
+                system.push_str(trimmed);
+                system.push_str("\n</active-plan>\n");
+                tele.plan_included = true;
+            }
+        }
+
+        for r in &admitted {
+            system.push_str("\n<system-reminder>");
+            system.push_str(&r.body);
+            system.push_str("</system-reminder>");
+        }
+        if overlay.should_activate(Delta::D6LongConversation, ctx) {
+            system.push('\n');
+            system.push_str(LONG_CONV_DIGEST);
+            tele.long_conv_injected = true;
+        }
+
+        let messages = translate_history(history);
+        let req = MessagesRequest {
+            model: config.model.clone(),
+            system: Some(system),
+            messages,
+            max_tokens: config.max_tokens_per_turn,
+            tools,
+            stream: false,
+        };
+        (req, tele)
+    }
+}
+
+fn translate_history(items: &[ConversationItem]) -> Vec<Message> {
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        match item {
+            ConversationItem::User(text) => out.push(Message::user_text(text)),
+            ConversationItem::Assistant { text, tool_uses } => {
+                let mut blocks = Vec::new();
+                if let Some(t) = text {
+                    blocks.push(ContentBlock::Text { text: t.clone() });
+                }
+                for tu in tool_uses {
+                    blocks.push(ContentBlock::ToolUse {
+                        id: tu.id.clone(),
+                        name: tu.name.clone(),
+                        input: tu.input.clone(),
+                    });
+                }
+                out.push(Message {
+                    role: Role::Assistant,
+                    content: blocks,
+                });
+            }
+            ConversationItem::ToolResults(results) => {
+                let blocks = results
+                    .iter()
+                    .map(|r| ContentBlock::ToolResult {
+                        tool_use_id: r.tool_use_id.clone(),
+                        content: r.content.clone(),
+                        is_error: r.is_error,
+                    })
+                    .collect();
+                out.push(Message {
+                    role: Role::User,
+                    content: blocks,
+                });
+            }
+        }
+    }
+    out
+}

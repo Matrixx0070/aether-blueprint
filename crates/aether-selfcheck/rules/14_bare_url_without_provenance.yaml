@@ -1,0 +1,13 @@
+id: bare_url_without_provenance
+description: |
+  Output contains a URL that did not appear in any tool result or in the
+  user's own messages this session. Warn — the model may be hallucinating
+  the link. v1 behavior: if `session.known_urls` is empty (we can't tell),
+  fail open and produce no findings.
+severity: medium
+action: warn
+applies_when: always
+detector:
+  kind: builtin
+  name: url_provenance
+  config: {}

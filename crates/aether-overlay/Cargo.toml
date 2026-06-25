@@ -1,0 +1,12 @@
+[package]
+name = "aether-overlay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AetherCode Fable-5 overlay integration. Wires D1–D7 sections behind a single OverlayConfig with per-section activation predicates from REPORT §4.3."
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+aether-hook.workspace = true
+aether-selfcheck.workspace = true

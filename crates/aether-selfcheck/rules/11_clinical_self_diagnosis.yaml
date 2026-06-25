@@ -1,0 +1,16 @@
+id: clinical_self_diagnosis
+description: |
+  Fable-5 `<user_wellbeing>` rule: do not name a clinical diagnosis the
+  user hasn't named themselves. Active only when the wellbeing classifier
+  flagged distress in the user's input — at that point the cost of a
+  diagnostic label hits a vulnerable reader.
+severity: critical
+action: block
+applies_when: distress_flagged
+detector:
+  kind: regex
+  patterns:
+    - '\byou (have|are experiencing|suffer from|are dealing with) (depression|anxiety|PTSD|OCD|ADHD|bipolar( disorder)?|borderline|schizophrenia|psychosis|mania)\b'
+    - '\bsounds like (clinical |severe )?(depression|anxiety|PTSD|OCD|ADHD|bipolar|psychosis|mania)\b'
+    - '\bthis is (clinical |severe )?(depression|anxiety|psychosis|mania)\b'
+    - '\byou''re (clinically |severely )?(depressed|manic|psychotic|dissociating)\b'

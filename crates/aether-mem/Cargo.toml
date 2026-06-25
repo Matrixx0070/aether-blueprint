@@ -1,0 +1,11 @@
+[package]
+name = "aether-mem"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AetherCode memory orchestrator: hybrid BM25 + embedding RAG + episodic/semantic/procedural stores. Hosts D5 MemoryPolicyStore."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

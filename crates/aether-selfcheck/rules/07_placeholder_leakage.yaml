@@ -1,0 +1,18 @@
+id: placeholder_leakage
+description: |
+  Template placeholders left in the final output: {{TODO}}, <INSERT_HERE>,
+  [REPLACE ME], TBD, XXX, FIXME. These indicate half-finished work and
+  must never be emitted to the user.
+severity: high
+action: block
+applies_when: always
+detector:
+  kind: regex
+  patterns:
+    - '\{\{[A-Z_]+\}\}'
+    - '<INSERT[_ ]?[A-Z]*>'
+    - '\[REPLACE[_ ]?ME?\]'
+    - '\[TODO[:\]]'
+    - '\bTBD\b'
+    - '\bFIXME\b'
+    - '\bXXX\b'

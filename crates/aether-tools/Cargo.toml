@@ -1,0 +1,16 @@
+[package]
+name = "aether-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AetherCode built-in tool implementations — Read, Write, Edit, Glob, Grep, Bash, etc."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+regex.workspace = true
+glob = "0.3"
+walkdir = "2"

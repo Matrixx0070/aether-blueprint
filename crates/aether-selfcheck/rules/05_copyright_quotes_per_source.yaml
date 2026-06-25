@@ -1,0 +1,13 @@
+id: copyright_quotes_per_source
+description: |
+  More than one quoted span from the same `<cite index="...">` source.
+  After the first quote, that source is closed; further quoting from the
+  same index is a SEVERE violation.
+severity: critical
+action: block
+applies_when: cite_tags_present
+detector:
+  kind: builtin
+  name: quotes_per_cite_source
+  config:
+    max_per_source: 1

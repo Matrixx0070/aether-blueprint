@@ -1,0 +1,11 @@
+[package]
+name = "aether-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AetherCode persistence layer — sessions, transcripts, checkpoints, settings.json, vector store."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

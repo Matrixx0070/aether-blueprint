@@ -1,0 +1,27 @@
+[package]
+name = "aether-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AetherCode agent loop + context assembler + verifier orchestrator. Composes every other crate."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+regex.workspace = true
+once_cell.workspace = true
+
+aether-llm.workspace = true
+aether-tools.workspace = true
+aether-mcp.workspace = true
+aether-perm.workspace = true
+aether-mem.workspace = true
+aether-hook.workspace = true
+aether-skill.workspace = true
+aether-store.workspace = true
+aether-render.workspace = true
+aether-selfcheck.workspace = true
+aether-overlay.workspace = true

@@ -1,0 +1,22 @@
+id: forbidden_memory_phrases
+description: |
+  Phrases from Fable-5 `<forbidden_memory_phrases>` that expose the memory
+  subsystem to the user. Strip data-retrieval verbs and attribution markers.
+severity: medium
+action: rewrite
+applies_when: memory_active
+detector:
+  kind: regex
+  patterns:
+    - '\bI can see\b'
+    - '\bI notice\b'
+    - '\bLooking at\b'
+    - '\bBased on (your|my|Claude''s|what I know about you)\b[^.]*'
+    - '\bAccording to my (knowledge|memory|memories)\b'
+    - '\bFrom memory\b'
+    - '\bMy memories show\b'
+    - '\bIn my memory\b'
+    - '\bI remember\b'
+    - '\bI recall\b'
+remediation:
+  strategy: strip

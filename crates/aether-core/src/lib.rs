@@ -1,0 +1,303 @@
+//! Agent loop + `Session` orchestrator.
+//!
+//! Six phases per turn:
+//!   1. perceive — assemble system prompt + messages via `ContextAssembler`.
+//!                 D1 (reminder tamper-test) and D6 (long-conversation
+//!                 reminder) fire here.
+//!   2. plan     — refresh the active plan if it's dirty (L1 plan-critic).
+//!   3. tool-sel — single LLM call. Returned `tool_uses` drive execute.
+//!   4. execute  — for each tool_use: permission decide → run → capture.
+//!   5. observe  — append the assistant turn + any tool results to history.
+//!   6. verify   — D7 self-check gate on the assistant text. On Pass, the
+//!                 (possibly rewritten) text is emitted. On Blocked, the
+//!                 turn returns ContinueImmediately with `plan.dirty = true`.
+
+pub mod context;
+pub mod executor;
+pub mod mock;
+pub mod planner;
+pub mod verifier;
+
+use aether_hook::{KernelRules, Reminder, ReminderKind, Source};
+use aether_llm::{ContentBlock, LlmError, LlmProvider, StopReason, ToolDef};
+use aether_overlay::{ActivationContext, Fable5Overlay};
+use aether_perm::PermissionMode;
+use aether_selfcheck::{Gate, SessionContext as SelfCheckCtx};
+use aether_tools::ToolRegistry;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+use context::{
+    AssemblyTelemetry, ContextAssembler, ConversationItem, RecordedToolResult, RecordedToolUse,
+};
+use executor::Executor;
+use planner::{Plan, Planner};
+use verifier::{VerificationResult, Verifier};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionConfig {
+    pub model: String,
+    pub permission_mode: PermissionMode,
+    pub max_tokens_per_turn: u32,
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self {
+            model: "claude-opus-4-7".into(),
+            permission_mode: PermissionMode::Default,
+            max_tokens_per_turn: 8_192,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TurnOutcome {
+    AwaitUser,
+    ContinueImmediately,
+    Sleep { seconds: u64 },
+    Exit,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AgentError {
+    #[error("llm: {0}")]
+    Llm(#[from] LlmError),
+}
+
+pub struct Session {
+    pub config: SessionConfig,
+    pub overlay: Fable5Overlay,
+    pub assembler: ContextAssembler,
+    pub planner: Planner,
+    pub executor: Executor,
+    pub verifier: Verifier,
+    pub llm: Arc<dyn LlmProvider>,
+    pub tools: ToolRegistry,
+
+    pub history: Vec<ConversationItem>,
+    pub plan: Plan,
+    pub turn_index: usize,
+
+    pub last_verification: Option<VerificationResult>,
+    pub last_assembly_telemetry: Option<AssemblyTelemetry>,
+    pub pending_reminders: Vec<Reminder>,
+    pub selfcheck_ctx: SelfCheckCtx,
+}
+
+impl Session {
+    pub fn new(
+        config: SessionConfig,
+        overlay: Fable5Overlay,
+        llm: Arc<dyn LlmProvider>,
+        gate: Gate,
+        tools: ToolRegistry,
+    ) -> Self {
+        let executor = Executor::new(config.permission_mode);
+        Self {
+            assembler: ContextAssembler::new(KernelRules::default()),
+            planner: Planner::new(),
+            executor,
+            verifier: Verifier::new(gate),
+            config,
+            overlay,
+            llm,
+            tools,
+            history: Vec::new(),
+            plan: Plan::default(),
+            turn_index: 0,
+            last_verification: None,
+            last_assembly_telemetry: None,
+            pending_reminders: Vec::new(),
+            selfcheck_ctx: SelfCheckCtx::default(),
+        }
+    }
+
+    pub fn activation_context(&self) -> ActivationContext {
+        ActivationContext {
+            turn_index: self.turn_index,
+            ctx_size_ratio: 0.0,
+            plan_active: self.plan.is_active(),
+            task_expected_hours: 0.0,
+            verifier_flagged: self
+                .last_verification
+                .as_ref()
+                .map(|v| !v.findings.is_empty() || v.is_blocked())
+                .unwrap_or(false),
+            tool_metadata_third_party: false,
+            memory_write_attempted: false,
+            user_requests_memory_change: false,
+            output_contains_quoted_text: false,
+            output_contains_external_claim: false,
+            persona_refusal_active: false,
+        }
+    }
+
+    pub fn push_reminder(&mut self, r: Reminder) {
+        self.pending_reminders.push(r);
+    }
+}
+
+pub async fn agent_turn(
+    session: &mut Session,
+    user_input: Option<String>,
+) -> Result<TurnOutcome, AgentError> {
+    // ── perceive (input) ──────────────────────────────────────────────
+    if let Some(s) = user_input {
+        session.history.push(ConversationItem::User(s));
+    }
+
+    // ── plan ─────────────────────────────────────────────────────────
+    // Always call refresh so the sliding-window prune runs even on clean
+    // turns. In monotonic mode (window=None) this is a cheap no-op when
+    // the plan is empty and idempotent when it isn't.
+    session.planner.refresh(&mut session.plan, session.turn_index);
+
+    let ctx = session.activation_context();
+
+    // ── perceive (assemble) — D1 + D6 fire here ──────────────────────
+    let candidate_reminders = std::mem::take(&mut session.pending_reminders);
+    let tool_defs: Vec<ToolDef> = session
+        .tools
+        .names()
+        .iter()
+        .filter_map(|n| {
+            session.tools.get(n).map(|t| ToolDef {
+                name: t.name().to_string(),
+                description: t.description().to_string(),
+                input_schema: t.input_schema(),
+            })
+        })
+        .collect();
+    let plan_text = if session.plan.is_active() {
+        Some(session.plan.text.clone())
+    } else {
+        None
+    };
+    let (req, telemetry) = session.assembler.build(
+        &session.history,
+        &session.config,
+        &session.overlay,
+        &ctx,
+        candidate_reminders,
+        tool_defs,
+        plan_text.as_deref(),
+    );
+    session.last_assembly_telemetry = Some(telemetry);
+
+    // ── tool-sel (LLM call) ──────────────────────────────────────────
+    let resp = session.llm.complete(req).await?;
+
+    let mut text_parts: Vec<String> = Vec::new();
+    let mut tool_uses: Vec<RecordedToolUse> = Vec::new();
+    for block in &resp.content {
+        match block {
+            ContentBlock::Text { text } => text_parts.push(text.clone()),
+            ContentBlock::ToolUse { id, name, input } => tool_uses.push(RecordedToolUse {
+                id: id.clone(),
+                name: name.clone(),
+                input: input.clone(),
+            }),
+            ContentBlock::ToolResult { .. } => {
+                // never emitted by a model in assistant role; drop silently
+            }
+        }
+    }
+    let raw_assistant_text = if text_parts.is_empty() {
+        None
+    } else {
+        Some(text_parts.join("\n"))
+    };
+
+    // ── verify — D7 runs BEFORE we commit anything to history so a
+    // rewrite lands in history correctly and a block can choose not to
+    // execute the model's tool_uses. ───────────────────────────────────
+    let mut final_text = raw_assistant_text.clone();
+    let mut blocked = false;
+    if let Some(t) = &raw_assistant_text {
+        let v = session.verifier.check_before_emit(t, &session.selfcheck_ctx);
+        if v.is_blocked() {
+            blocked = true;
+        } else {
+            final_text = Some(v.message.clone());
+        }
+        session.last_verification = Some(v);
+    }
+
+    // ── block handler — keep the original blocked text out of history,
+    // record the block in the plan, and queue a kernel reminder so the
+    // next LLM call sees concrete routing-around guidance instead of
+    // re-emitting the same pattern. ────────────────────────────────────
+    if blocked {
+        let v = session.last_verification.as_ref().unwrap();
+        let ids: Vec<String> = v
+            .blocked_reasons
+            .iter()
+            .map(|f| f.rule_id.clone())
+            .collect();
+        let mut unique_ids = ids.clone();
+        unique_ids.sort();
+        unique_ids.dedup();
+        let id_list = unique_ids.join(",");
+
+        // Sentinel replaces the original text in history — the raw blocked
+        // content never gets stored in-band.
+        final_text = Some(format!("[BLOCKED BY VERIFIER: rules={id_list}]"));
+
+        // Drop the model's tool_uses too. Execute was already going to skip,
+        // but we don't want them sitting in history pointing at calls that
+        // never ran.
+        tool_uses.clear();
+
+        session.plan.record_block(session.turn_index, &ids);
+
+        // The reminder lands in `pending_reminders`; it gets drained at the
+        // top of the next agent_turn call. Source::Kernel so D1 always
+        // admits it even when the overlay is on.
+        session.pending_reminders.push(Reminder::new(
+            ReminderKind::SystemWarning,
+            Source::Kernel,
+            format!(
+                "Previous emission was blocked by the self-check gate (rules={id_list}). \
+                 Do not repeat the blocked content. Refer to the active plan."
+            ),
+        ));
+    }
+
+    // ── execute — skip tool dispatch when blocked (tool_uses is now
+    // empty so this short-circuits naturally) so we don't run side
+    // effects for output the user will never see. ─────────────────────
+    let tool_results: Vec<RecordedToolResult> = if tool_uses.is_empty() {
+        Vec::new()
+    } else {
+        session.executor.execute(&session.tools, &tool_uses).await
+    };
+
+    // ── observe — record the turn ────────────────────────────────────
+    session.history.push(ConversationItem::Assistant {
+        text: final_text,
+        tool_uses: tool_uses.clone(),
+    });
+    if !tool_results.is_empty() {
+        session
+            .history
+            .push(ConversationItem::ToolResults(tool_results));
+    }
+
+    session.turn_index += 1;
+
+    // ── decide next outcome ──────────────────────────────────────────
+    if blocked {
+        return Ok(TurnOutcome::ContinueImmediately);
+    }
+    Ok(match resp.stop_reason {
+        StopReason::EndTurn => TurnOutcome::AwaitUser,
+        StopReason::ToolUse => TurnOutcome::ContinueImmediately,
+        StopReason::MaxTokens => TurnOutcome::ContinueImmediately,
+        StopReason::Refusal => TurnOutcome::AwaitUser,
+        // A configured stop sequence hit — model's "natural" end.
+        StopReason::StopSequence => TurnOutcome::AwaitUser,
+        // Server-side pause (extended-thinking style); resume immediately.
+        StopReason::PauseTurn => TurnOutcome::ContinueImmediately,
+    })
+}
