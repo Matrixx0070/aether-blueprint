@@ -444,6 +444,13 @@ fn active_provider_name() -> String {
         .unwrap_or_else(|| "anthropic".to_string())
 }
 
+/// Wrap a provider in the F2 retry watchdog. All callers go through this
+/// so retry policy is applied consistently regardless of which underlying
+/// cloud provider is active.
+fn with_retry(inner: Arc<dyn aether_llm::LlmProvider>) -> Arc<dyn aether_llm::LlmProvider> {
+    Arc::new(aether_llm::retry::RetryingProvider::new(inner))
+}
+
 /// Construct the active provider as a trait object. All callers should
 /// route through this rather than direct AnthropicProvider construction.
 async fn build_provider() -> Result<Arc<dyn aether_llm::LlmProvider>> {
@@ -452,19 +459,24 @@ async fn build_provider() -> Result<Arc<dyn aether_llm::LlmProvider>> {
             let (p, _src) = BedrockProvider::from_credential_chain()
                 .await
                 .map_err(|e| anyhow!("bedrock provider: {e}"))?;
-            Ok(Arc::new(p))
+            Ok(with_retry(Arc::new(p)))
         }
         "vertex" => {
             let p = VertexProvider::from_env()
                 .map_err(|e| anyhow!("vertex provider: {e}"))?;
-            Ok(Arc::new(p))
+            Ok(with_retry(Arc::new(p)))
+        }
+        "azure" | "azure-foundry" | "foundry" => {
+            let p = aether_llm::azure::AzureProvider::from_env()
+                .map_err(|e| anyhow!("azure provider: {e}"))?;
+            Ok(with_retry(Arc::new(p)))
         }
         _ => {
             let p = AnthropicProvider::from_env_or_credentials().context(
                 "no auth source — set ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, \
                  or run `claude` / `aether` to populate ~/.claude/.credentials.json",
             )?;
-            Ok(Arc::new(p))
+            Ok(with_retry(Arc::new(p)))
         }
     }
 }
@@ -2536,29 +2548,30 @@ async fn run_security_eval(
 }
 
 /// Build a named provider by string slug. Accepts "anthropic", "bedrock",
-/// "vertex", "azure".
+/// "vertex", "azure". The returned provider is wrapped in the F2 retry
+/// watchdog so all sweep-mode calls inherit retry semantics.
 async fn build_named_provider(name: &str) -> Result<Arc<dyn aether_llm::LlmProvider>> {
     match name.to_lowercase().as_str() {
         "bedrock" => {
             let (p, _src) = aether_llm::bedrock::BedrockProvider::from_credential_chain()
                 .await
                 .map_err(|e| anyhow!("bedrock provider: {e}"))?;
-            Ok(Arc::new(p))
+            Ok(with_retry(Arc::new(p)))
         }
         "vertex" => {
             let p = aether_llm::vertex::VertexProvider::from_env()
                 .map_err(|e| anyhow!("vertex provider: {e}"))?;
-            Ok(Arc::new(p))
+            Ok(with_retry(Arc::new(p)))
         }
         "azure" | "azure-foundry" | "foundry" => {
             let p = aether_llm::azure::AzureProvider::from_env()
                 .map_err(|e| anyhow!("azure provider: {e}"))?;
-            Ok(Arc::new(p))
+            Ok(with_retry(Arc::new(p)))
         }
         "anthropic" => {
             let p = aether_llm::anthropic::AnthropicProvider::from_env_or_credentials()
                 .context("no auth source for anthropic provider")?;
-            Ok(Arc::new(p))
+            Ok(with_retry(Arc::new(p)))
         }
         other => anyhow::bail!(
             "unknown provider '{other}' — valid: anthropic, bedrock, vertex, azure"

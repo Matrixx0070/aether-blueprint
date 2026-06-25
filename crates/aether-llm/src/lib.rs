@@ -8,6 +8,7 @@
 pub mod anthropic;
 pub mod azure;
 pub mod bedrock;
+pub mod retry;
 pub mod vertex;
 
 use async_trait::async_trait;
