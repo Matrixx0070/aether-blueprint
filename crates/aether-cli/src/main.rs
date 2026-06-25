@@ -239,6 +239,10 @@ async fn run_print_agent(
     // session — held in `_mcp_clients` below.
     let mcp_config = load_mcp_config();
     let _mcp_clients = install_mcp_servers(&mut tools, &mcp_config).await;
+    let skills = load_skills();
+    if !skills.is_empty() {
+        tools.register(Box::new(SkillTool { skills }));
+    }
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
     inject_project_context(&mut session);
 
@@ -360,6 +364,10 @@ async fn run_repl(
     )));
     let mcp_config = load_mcp_config();
     let _mcp_clients = install_mcp_servers(&mut tools, &mcp_config).await;
+    let skills = load_skills();
+    if !skills.is_empty() {
+        tools.register(Box::new(SkillTool { skills }));
+    }
 
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
     // Install an interactive permission prompter for mutating tools when in
@@ -1461,6 +1469,165 @@ fn push_hook_reminders(session: &mut Session, outputs: Vec<String>, event: &str)
             Source::Kernel,
             wrapped,
         ));
+    }
+}
+
+// ── Skills (~/.aether/skills/*.md) ────────────────────────────────────────
+
+const SKILLS_DIR: &str = ".aether/skills";
+
+#[derive(Debug, Clone)]
+struct LoadedSkill {
+    name: String,
+    description: String,
+    body: String,
+}
+
+/// Discover skills in `~/.aether/skills/*.md`. Each file may begin with a
+/// YAML frontmatter block (`--- ... ---`) declaring `name` and
+/// `description`; otherwise the file stem becomes the name and the first
+/// markdown heading becomes the description.
+fn load_skills() -> Vec<LoadedSkill> {
+    let mut out = Vec::new();
+    let dir = match std::env::var_os("HOME").map(|h| PathBuf::from(h).join(SKILLS_DIR)) {
+        Some(d) => d,
+        None => return out,
+    };
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return out,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        let stem = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let (mut name, mut description, body) = parse_skill_frontmatter(&raw);
+        if name.is_empty() {
+            name = stem.clone();
+        }
+        if description.is_empty() {
+            description = first_heading(&body).unwrap_or_default();
+        }
+        out.push(LoadedSkill {
+            name,
+            description,
+            body,
+        });
+    }
+    out
+}
+
+fn parse_skill_frontmatter(raw: &str) -> (String, String, String) {
+    let trimmed = raw.trim_start_matches('\u{feff}');
+    if let Some(rest) = trimmed.strip_prefix("---") {
+        if let Some(end) = rest.find("\n---") {
+            let fm = &rest[..end];
+            let body = rest[end + 4..].trim_start_matches('\n').to_string();
+            let mut name = String::new();
+            let mut desc = String::new();
+            for line in fm.lines() {
+                if let Some(v) = line.strip_prefix("name:") {
+                    name = v.trim().trim_matches('"').to_string();
+                } else if let Some(v) = line.strip_prefix("description:") {
+                    desc = v.trim().trim_matches('"').to_string();
+                }
+            }
+            return (name, desc, body);
+        }
+    }
+    (String::new(), String::new(), raw.to_string())
+}
+
+fn first_heading(body: &str) -> Option<String> {
+    for line in body.lines() {
+        let t = line.trim_start_matches('#').trim();
+        if !t.is_empty() {
+            return Some(t.chars().take(120).collect());
+        }
+    }
+    None
+}
+
+struct SkillTool {
+    skills: Vec<LoadedSkill>,
+}
+
+#[async_trait]
+impl Tool for SkillTool {
+    fn name(&self) -> &str {
+        "Skill"
+    }
+    fn description(&self) -> &str {
+        // The actual description is built at registration time below so it
+        // can list available skill names. The trait method just returns a
+        // static slice, so we cache the long form in a Box<str> here via
+        // a Lazy-ish pattern. Practical workaround for v0: rely on the
+        // skills' description text being short and let the model discover
+        // names from the input_schema enum.
+        "Invoke a named skill from ~/.aether/skills/. The skill's full body \
+         is returned as the tool result and incorporated into the model's \
+         next response. Use the input_schema enum to see available skill names."
+    }
+    fn input_schema(&self) -> Value {
+        let names: Vec<Value> = self
+            .skills
+            .iter()
+            .map(|s| Value::String(s.name.clone()))
+            .collect();
+        let descriptions: serde_json::Map<String, Value> = self
+            .skills
+            .iter()
+            .map(|s| (s.name.clone(), Value::String(s.description.clone())))
+            .collect();
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "skill_name": {
+                    "type": "string",
+                    "enum": names,
+                    "description": "Name of the skill to invoke"
+                },
+                "args": {
+                    "type": "string",
+                    "description": "Optional free-form args"
+                }
+            },
+            "required": ["skill_name"],
+            "x-skills": descriptions
+        })
+    }
+    async fn run(&self, input: Value) -> Result<String, ToolError> {
+        let name = input
+            .get("skill_name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::Schema("missing skill_name".into()))?;
+        let args = input
+            .get("args")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let skill = self
+            .skills
+            .iter()
+            .find(|s| s.name == name)
+            .ok_or_else(|| ToolError::Schema(format!("unknown skill: {name}")))?;
+        let mut out = String::new();
+        out.push_str(&format!("# skill: {}\n", skill.name));
+        if !args.is_empty() {
+            out.push_str(&format!("# args: {args}\n"));
+        }
+        out.push_str("\n");
+        out.push_str(&skill.body);
+        Ok(out)
     }
 }
 
