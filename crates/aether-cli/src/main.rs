@@ -695,10 +695,18 @@ fn parse_permission_mode(s: &str) -> Result<aether_perm::PermissionMode> {
     }
 }
 
-/// Default rule set for D7. Empty for v0 — rules will load from
-/// `~/.aether/rules.d/*.yaml` in a future slice.
+/// Default rule set for D7 — the 14-rule library bundled into the binary
+/// at compile time via `include_str!`. Operators can extend or override
+/// by dropping additional YAML files in `~/.aether/rules.d/`; that loader
+/// merges with this baseline.
 fn default_rules() -> Vec<Rule> {
-    Vec::new()
+    match aether_selfcheck::bundled_rules() {
+        Ok(rules) => rules,
+        Err(e) => {
+            eprintln!("[warn] failed to load bundled D7 rules: {e}");
+            Vec::new()
+        }
+    }
 }
 
 #[cfg(test)]
