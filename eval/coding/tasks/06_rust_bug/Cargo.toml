@@ -1,0 +1,15 @@
+[workspace]
+# Empty workspace table — keeps this fixture out of the outer aether-blueprint
+# workspace so cargo treats it as a standalone crate.
+
+[package]
+name = "rust_bug_fixture"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "rust_bug_fixture_run_tests"
+path = "src/main.rs"

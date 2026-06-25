@@ -1,17 +1,17 @@
-name: aether-coding-eval-v1
-# Real coding-task benchmark. Each task has:
-#   - dir:    relative directory containing starting code + verify.sh
-#   - prompt: the exact prompt aether sees (single user message)
-#   - timeout_secs: kill the agent loop after N seconds (default 300)
-#   - max_tokens_per_turn: cap per-turn token budget (default 4096)
+name: aether-coding-eval-v2
+# Real coding-task benchmark. v2 doubles the suite from 5 → 10 tasks
+# and adds Rust + JavaScript + SQL + multi-file + perf dimensions.
 #
-# Pass criteria: the verify.sh script in the task dir exits 0 against
-# the post-aether working tree. verify.sh has no access to the prompt;
-# it tests OBSERVABLE behavior of the produced code.
+# Each task has:
+#   - dir:            relative directory containing starting code + verify.sh
+#   - prompt:         the exact prompt aether sees (single user message)
+#   - timeout_secs:   kill the agent loop after N seconds
 #
-# All tasks are bounded, executable, and verifiable WITHOUT model
-# judgment — pure exit-code semantics.
+# Pass: verify.sh exits 0 against the post-aether working tree.
+# verify.sh has no access to the prompt; it tests OBSERVABLE behavior
+# of the produced code only.
 tasks:
+  # ─── v1 baseline (Python) ──────────────────────────────────────────
   - dir: tasks/01_bug_fix
     prompt: "There's a bug in count_words. Read the file, find it, fix it. Don't add unnecessary changes."
     timeout_secs: 180
@@ -31,3 +31,24 @@ tasks:
   - dir: tasks/05_doc_fix
     prompt: "The docstring in fetch_user is wrong — it claims behavior that the code does not implement. Fix the docstring to match what the code actually does. Don't change the code."
     timeout_secs: 120
+
+  # ─── v2 expansion (Rust / JS / SQL / multi-file / perf) ────────────
+  - dir: tasks/06_rust_bug
+    prompt: "The binary_search function in src/lib.rs has off-by-one bugs that make the cargo tests fail. Read src/lib.rs, fix the bugs, run `cargo test` to confirm all tests pass. Don't change the tests."
+    timeout_secs: 360
+
+  - dir: tasks/07_js_xss
+    prompt: "render.js builds an HTML string by interpolating user input directly into a template — that's an XSS hole. Fix renderComment so that <, >, &, \", and ' in user input are HTML-escaped before being inserted into the template. Don't change the function signature or break the happy path."
+    timeout_secs: 240
+
+  - dir: tasks/08_sql_injection
+    prompt: "db.py concatenates the username into a SQL query — that's SQL injection. Rewrite find_user to use a parameterized query so the literal username string can never inject SQL, including names containing apostrophes. Keep the function signature unchanged."
+    timeout_secs: 240
+
+  - dir: tasks/09_multifile_refactor
+    prompt: "order.py and invoice.py both define TAX_RATE = 0.08 and have an identical subtotal+tax calculation. Extract the duplicated logic AND the TAX_RATE constant into a new shared module that both files import. Tests must still pass after the change."
+    timeout_secs: 300
+
+  - dir: tasks/10_perf_opt
+    prompt: "dedup in dedup.py is O(n²) — it scans the output list for each input element. Rewrite it as O(n) average using a set for membership lookup while still preserving the first-seen order of elements. Don't change the function signature."
+    timeout_secs: 180
