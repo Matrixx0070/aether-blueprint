@@ -162,7 +162,7 @@ async fn main() -> Result<()> {
                     })).unwrap_or_else(|_| "(encode error)".into()));
                 }
                 ConfigCmd::Set { key, value } => {
-                    eprintln!("config set {key}={value} — edit ~/.aether/settings.json directly for v0.2");
+                    config_set(&key, &value)?;
                 }
             }
             return Ok(());
@@ -1041,6 +1041,73 @@ struct Settings {
     always_allow_tools: Vec<String>,
     /// Extra env vars set at process start (does not override existing vars).
     env: std::collections::HashMap<String, String>,
+}
+
+fn settings_path() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join(SETTINGS_PATH)
+}
+
+/// Update a single top-level field in settings.json atomically.
+/// Recognised keys: default_model, permission_mode, always_allow_tools
+/// (comma-separated list), env.KEY=VALUE.
+fn config_set(key: &str, value: &str) -> Result<()> {
+    let path = settings_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    // Load existing as serde_json::Value so we don't drop unknown keys.
+    let mut current: serde_json::Value = match std::fs::read_to_string(&path) {
+        Ok(s) if !s.trim().is_empty() => serde_json::from_str(&s)
+            .unwrap_or_else(|_| serde_json::json!({})),
+        _ => serde_json::json!({}),
+    };
+    if !current.is_object() {
+        current = serde_json::json!({});
+    }
+    let obj = current.as_object_mut().expect("object");
+
+    match key {
+        "default_model" | "permission_mode" => {
+            obj.insert(key.to_string(), serde_json::Value::String(value.to_string()));
+        }
+        "always_allow_tools" => {
+            let list: Vec<serde_json::Value> = value
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| serde_json::Value::String(s.to_string()))
+                .collect();
+            obj.insert("always_allow_tools".into(), serde_json::Value::Array(list));
+        }
+        k if k.starts_with("env.") => {
+            let env_key = &k[4..];
+            let env_obj = obj
+                .entry("env")
+                .or_insert_with(|| serde_json::json!({}));
+            if let Some(e) = env_obj.as_object_mut() {
+                e.insert(env_key.to_string(), serde_json::Value::String(value.to_string()));
+            }
+        }
+        other => anyhow::bail!(
+            "unknown settings key '{other}'. Recognised: default_model, permission_mode, always_allow_tools, env.KEY"
+        ),
+    }
+
+    // Atomic write: tmp + rename
+    let tmp = path.with_extension("json.tmp");
+    let body = serde_json::to_vec_pretty(&current)?;
+    std::fs::write(&tmp, &body)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+    }
+    std::fs::rename(&tmp, &path)?;
+    eprintln!("[set] {key} = {value}  ({} bytes)", body.len());
+    Ok(())
 }
 
 fn load_settings() -> Settings {
