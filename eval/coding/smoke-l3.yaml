@@ -1,0 +1,11 @@
+name: smoke-l3-multi-turn
+tasks:
+  - dir: tasks/16_ambiguous_rounding
+    prompt: "round_to in rounding.py is unimplemented. Implement it. The choice of half-rounding strategy (banker's, half-up, etc.) is yours — pick one, implement it, and document your choice in the docstring."
+    timeout_secs: 180
+  - dir: tasks/17_sort_choice
+    prompt: "sort_records in sorter.py is unimplemented. Implement it. Choose your sort key (name or score), direction, and stability; document what you chose so callers know the contract."
+    timeout_secs: 180
+  - dir: tasks/18_cache_strategy
+    prompt: "get_value in slow.py calls a 50ms-per-call lookup with no caching. Add caching so 100 calls with the same key complete in under 500ms total. Pick a caching strategy (LRU, FIFO, TTL, unbounded memo, etc.) and document your choice in the docstring."
+    timeout_secs: 180

@@ -1,4 +1,4 @@
-name: aether-coding-eval-v3
+name: aether-coding-eval-v4
 # Real coding-task benchmark. v2 doubles the suite from 5 → 10 tasks
 # and adds Rust + JavaScript + SQL + multi-file + perf dimensions.
 #
@@ -73,3 +73,20 @@ tasks:
   - dir: tasks/15_java_npe
     prompt: "Inventory.java throws NullPointerException whenever a SKU is queried or restocked for the first time. Fix restock, available, and canFulfill so that querying a missing SKU returns 0 and restocking a new SKU starts at the given quantity. Don't change InventoryTest.java; just make the existing tests pass."
     timeout_secs: 240
+
+  # ─── v4: design-decision tasks (ambiguous prompts) ─────────────────
+  # Each task has multiple valid implementations; the agent must commit
+  # to a choice AND document the assumption (since the eval is
+  # automated and "asking for clarification" = no edits = fail). This
+  # tests whether the agent will surface design decisions in the code.
+  - dir: tasks/16_ambiguous_rounding
+    prompt: "round_to in rounding.py is unimplemented. Implement it. The choice of half-rounding strategy (banker's, half-up, etc.) is yours — pick one, implement it, and document your choice in the docstring."
+    timeout_secs: 180
+
+  - dir: tasks/17_sort_choice
+    prompt: "sort_records in sorter.py is unimplemented. Implement it. Choose your sort key (name or score), direction, and stability; document what you chose so callers know the contract."
+    timeout_secs: 180
+
+  - dir: tasks/18_cache_strategy
+    prompt: "get_value in slow.py calls a 50ms-per-call lookup with no caching. Add caching so 100 calls with the same key complete in under 500ms total. Pick a caching strategy (LRU, FIFO, TTL, unbounded memo, etc.) and document your choice in the docstring."
+    timeout_secs: 180
