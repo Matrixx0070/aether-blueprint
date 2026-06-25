@@ -11,3 +11,6 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 async-trait.workspace = true
+reqwest.workspace = true
+futures-util.workspace = true
+url = "2"

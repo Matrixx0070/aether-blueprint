@@ -2538,7 +2538,7 @@ async fn mcp_cmd(sub: McpCmd) -> Result<()> {
                 anyhow!("no MCP server named '{name}' in ~/.aether/mcp.json")
             })?;
             eprintln!("[probing] {name}");
-            let client = aether_mcp::StdioClient::spawn(&entry.config)
+            let client = aether_mcp::spawn_client(&entry.config)
                 .await
                 .map_err(|e| anyhow!("spawn: {e}"))?;
             let init = client
@@ -2650,13 +2650,14 @@ fn load_mcp_config() -> McpConfigFile {
 
 /// Adapter that exposes an MCP tool as an aether `Tool`. The tool name in
 /// the registry is `mcp__<server>__<tool>` so name collisions across
-/// servers are impossible.
+/// servers are impossible. The transport (stdio or SSE) is hidden behind
+/// the `aether_mcp::Client` trait.
 struct McpToolAdapter {
     namespaced_name: String,
     remote_name: String,
     description: String,
     input_schema: Value,
-    client: Arc<aether_mcp::StdioClient>,
+    client: Arc<dyn aether_mcp::Client>,
 }
 
 #[async_trait]
@@ -2705,17 +2706,17 @@ impl Tool for McpToolAdapter {
 async fn install_mcp_servers(
     tools: &mut ToolRegistry,
     config: &McpConfigFile,
-) -> Vec<Arc<aether_mcp::StdioClient>> {
-    let mut clients = Vec::new();
+) -> Vec<Arc<dyn aether_mcp::Client>> {
+    let mut clients: Vec<Arc<dyn aether_mcp::Client>> = Vec::new();
     for (server_name, entry) in &config.servers {
-        let client = match aether_mcp::StdioClient::spawn(&entry.config).await {
+        let client = match aether_mcp::spawn_client(&entry.config).await {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("[mcp:{server_name}] spawn failed: {e}");
                 continue;
             }
         };
-        let client = Arc::new(client);
+        let client: Arc<dyn aether_mcp::Client> = Arc::from(client);
         if let Err(e) = client.initialize().await {
             eprintln!("[mcp:{server_name}] initialize failed: {e}");
             continue;

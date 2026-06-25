@@ -17,6 +17,7 @@
 //! reader task on the server's stdout parses each line into a response and
 //! routes it to the per-request oneshot waiter keyed on the JSON-RPC id.
 
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -440,6 +441,339 @@ pub fn build_tools_call(id: u64, name: &str, args: serde_json::Value) -> JsonRpc
         id: serde_json::Value::Number(id.into()),
         method: "tools/call".into(),
         params: serde_json::json!({ "name": name, "arguments": args }),
+    }
+}
+
+// ── trait abstraction ─────────────────────────────────────────────────────
+
+/// Transport-agnostic MCP client surface. The CLI adapter only needs
+/// these methods; new transports can land without touching callers.
+#[async_trait]
+pub trait Client: Send + Sync {
+    async fn initialize(&self) -> Result<InitializeResult, McpError>;
+    async fn list_tools(&self) -> Result<Vec<ToolDef>, McpError>;
+    async fn call_tool(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<ToolCallResult, McpError>;
+    async fn shutdown(&self) -> Result<(), McpError>;
+}
+
+#[async_trait]
+impl Client for StdioClient {
+    async fn initialize(&self) -> Result<InitializeResult, McpError> {
+        StdioClient::initialize(self).await
+    }
+    async fn list_tools(&self) -> Result<Vec<ToolDef>, McpError> {
+        StdioClient::list_tools(self).await
+    }
+    async fn call_tool(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<ToolCallResult, McpError> {
+        StdioClient::call_tool(self, name, arguments).await
+    }
+    async fn shutdown(&self) -> Result<(), McpError> {
+        StdioClient::shutdown(self).await
+    }
+}
+
+// ── SSE client ────────────────────────────────────────────────────────────
+//
+// MCP SSE protocol (the older "GET /sse + POST /messages" flavour):
+//   1. GET <base>/sse keeps an SSE stream open.
+//   2. First event from server: `event: endpoint`, `data: <url>` — the
+//      URL clients must POST requests to.
+//   3. Client POSTs JSON-RPC requests there. Server delivers responses
+//      via SSE on the same stream, keyed by id.
+
+pub struct SseClient {
+    post_url: Arc<Mutex<Option<String>>>,
+    http: reqwest::Client,
+    next_id: AtomicU64,
+    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<JsonRpcResponse, McpError>>>>>,
+    reader_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    base_url: String,
+}
+
+impl SseClient {
+    pub async fn spawn(config: &ServerConfig) -> Result<Self, McpError> {
+        let url = match config {
+            ServerConfig::Sse { url } => url.clone(),
+            _ => return Err(McpError::Transport("not an SSE config".into())),
+        };
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| McpError::Transport(format!("http client: {e}")))?;
+
+        let post_url = Arc::new(Mutex::new(None));
+        let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<JsonRpcResponse, McpError>>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+
+        // GET /sse (caller passes the full base; we expect <base>/sse)
+        let sse_url = if url.ends_with("/sse") {
+            url.clone()
+        } else {
+            format!("{}/sse", url.trim_end_matches('/'))
+        };
+        let resp = http
+            .get(&sse_url)
+            .header("Accept", "text/event-stream")
+            .send()
+            .await
+            .map_err(|e| McpError::Transport(format!("GET {sse_url}: {e}")))?;
+        if !resp.status().is_success() {
+            return Err(McpError::Transport(format!(
+                "SSE handshake failed: {}",
+                resp.status()
+            )));
+        }
+
+        let post_url_for_reader = Arc::clone(&post_url);
+        let pending_for_reader = Arc::clone(&pending);
+        let base_url_for_reader = url.clone();
+
+        let reader_handle = tokio::spawn(async move {
+            use futures_util::StreamExt;
+            let mut stream = resp.bytes_stream();
+            let mut buf: Vec<u8> = Vec::with_capacity(4096);
+            while let Some(chunk) = stream.next().await {
+                let chunk = match chunk {
+                    Ok(b) => b,
+                    Err(_) => break,
+                };
+                buf.extend_from_slice(&chunk);
+                // SSE events separated by blank line
+                while let Some(pos) = find_double_newline_bytes(&buf) {
+                    let event_bytes = buf.drain(..pos + 2).collect::<Vec<u8>>();
+                    let event_str = std::str::from_utf8(&event_bytes).unwrap_or("");
+                    let mut event_name: Option<&str> = None;
+                    let mut data_lines: Vec<&str> = Vec::new();
+                    for line in event_str.lines() {
+                        if let Some(rest) = line.strip_prefix("event: ") {
+                            event_name = Some(rest);
+                        } else if let Some(rest) = line.strip_prefix("data: ") {
+                            data_lines.push(rest);
+                        }
+                    }
+                    let data = data_lines.join("\n");
+                    match event_name {
+                        Some("endpoint") => {
+                            // Resolve relative URL against the base.
+                            let resolved = if data.starts_with("http://")
+                                || data.starts_with("https://")
+                            {
+                                data.clone()
+                            } else {
+                                // Join base + path
+                                let base = base_url_for_reader.trim_end_matches('/');
+                                if data.starts_with('/') {
+                                    // join against scheme://host
+                                    match url::Url::parse(base) {
+                                        Ok(u) => {
+                                            let host = format!(
+                                                "{}://{}",
+                                                u.scheme(),
+                                                u.host_str().unwrap_or("")
+                                            );
+                                            let port = u
+                                                .port()
+                                                .map(|p| format!(":{p}"))
+                                                .unwrap_or_default();
+                                            format!("{host}{port}{data}")
+                                        }
+                                        Err(_) => format!("{base}{data}"),
+                                    }
+                                } else {
+                                    format!("{base}/{data}")
+                                }
+                            };
+                            *post_url_for_reader.lock().await = Some(resolved);
+                        }
+                        Some("message") | None => {
+                            // Try to parse as JsonRpcResponse and route by id.
+                            if let Ok(resp) =
+                                serde_json::from_str::<JsonRpcResponse>(&data)
+                            {
+                                if let serde_json::Value::Number(n) = &resp.id {
+                                    if let Some(id) = n.as_u64() {
+                                        let mut g = pending_for_reader.lock().await;
+                                        if let Some(tx) = g.remove(&id) {
+                                            let _ = tx.send(Ok(resp));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            // EOF — drain pending with err
+            let mut g = pending_for_reader.lock().await;
+            let mut p = std::mem::take(&mut *g);
+            for (_, tx) in p.drain() {
+                let _ = tx.send(Err(McpError::Transport("SSE stream closed".into())));
+            }
+        });
+
+        // Wait up to 5s for the endpoint event.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if post_url.lock().await.is_some() {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(McpError::Transport(
+                    "SSE handshake did not deliver endpoint within 5s".into(),
+                ));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        Ok(Self {
+            post_url,
+            http,
+            next_id: AtomicU64::new(1),
+            pending,
+            reader_handle: Mutex::new(Some(reader_handle)),
+            base_url: url,
+        })
+    }
+
+    pub async fn request(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, McpError> {
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: serde_json::Value::Number(id.into()),
+            method: method.to_string(),
+            params,
+        };
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().await.insert(id, tx);
+        let url = self
+            .post_url
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| McpError::Transport("no SSE endpoint discovered".into()))?;
+        self.http
+            .post(&url)
+            .json(&req)
+            .send()
+            .await
+            .map_err(|e| McpError::Transport(format!("POST {url}: {e}")))?;
+        let resp = match tokio::time::timeout(DEFAULT_TIMEOUT, rx).await {
+            Ok(Ok(r)) => r?,
+            Ok(Err(_)) => return Err(McpError::Transport("waiter closed".into())),
+            Err(_) => {
+                self.pending.lock().await.remove(&id);
+                return Err(McpError::Timeout(DEFAULT_TIMEOUT));
+            }
+        };
+        if let Some(err) = resp.error {
+            return Err(McpError::Server {
+                code: err.code,
+                message: err.message,
+            });
+        }
+        Ok(resp.result.unwrap_or(serde_json::Value::Null))
+    }
+
+    pub async fn notify(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<(), McpError> {
+        let n = JsonRpcNotification {
+            jsonrpc: "2.0".into(),
+            method: method.to_string(),
+            params,
+        };
+        let url = self
+            .post_url
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| McpError::Transport("no SSE endpoint discovered".into()))?;
+        self.http
+            .post(&url)
+            .json(&n)
+            .send()
+            .await
+            .map_err(|e| McpError::Transport(format!("POST {url}: {e}")))?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Client for SseClient {
+    async fn initialize(&self) -> Result<InitializeResult, McpError> {
+        let raw = self
+            .request(
+                "initialize",
+                serde_json::json!({
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "clientInfo": { "name": CLIENT_NAME, "version": CLIENT_VERSION },
+                    "capabilities": {}
+                }),
+            )
+            .await?;
+        let parsed: InitializeResult = serde_json::from_value(raw)
+            .map_err(|e| McpError::Protocol(format!("initialize result: {e}")))?;
+        self.notify("notifications/initialized", serde_json::json!({}))
+            .await?;
+        Ok(parsed)
+    }
+    async fn list_tools(&self) -> Result<Vec<ToolDef>, McpError> {
+        let raw = self.request("tools/list", serde_json::json!({})).await?;
+        let tools = raw
+            .get("tools")
+            .cloned()
+            .unwrap_or(serde_json::Value::Array(vec![]));
+        serde_json::from_value(tools)
+            .map_err(|e| McpError::Protocol(format!("tools/list: {e}")))
+    }
+    async fn call_tool(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<ToolCallResult, McpError> {
+        let raw = self
+            .request(
+                "tools/call",
+                serde_json::json!({ "name": name, "arguments": arguments }),
+            )
+            .await?;
+        serde_json::from_value(raw)
+            .map_err(|e| McpError::Protocol(format!("tools/call: {e}")))
+    }
+    async fn shutdown(&self) -> Result<(), McpError> {
+        if let Some(h) = self.reader_handle.lock().await.take() {
+            h.abort();
+        }
+        let _ = self.base_url; // suppress unused-field lint
+        Ok(())
+    }
+}
+
+fn find_double_newline_bytes(buf: &[u8]) -> Option<usize> {
+    buf.windows(2).position(|w| w == b"\n\n")
+}
+
+/// Factory that picks the right transport from the config variant.
+pub async fn spawn_client(config: &ServerConfig) -> Result<Box<dyn Client>, McpError> {
+    match config {
+        ServerConfig::Stdio { .. } => Ok(Box::new(StdioClient::spawn(config).await?)),
+        ServerConfig::Sse { .. } => Ok(Box::new(SseClient::spawn(config).await?)),
+        ServerConfig::Ws { .. } => Err(McpError::Transport("ws transport not implemented".into())),
     }
 }
 
