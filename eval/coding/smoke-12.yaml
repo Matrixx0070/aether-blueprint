@@ -1,0 +1,5 @@
+name: smoke-12-ts-debug
+tasks:
+  - dir: tasks/12_ts_type_bug
+    prompt: "parser.ts uses `as Config` to silence the type system about a function that returns an object with possibly-undefined fields. Make the return type honest — either change Config to allow optional fields with proper Partial<>, return Config | null, or throw on missing input. Don't keep the `as Config` cast. Run `tsc` to confirm clean."
+    timeout_secs: 240
