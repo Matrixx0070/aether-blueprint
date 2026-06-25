@@ -158,8 +158,8 @@ impl LlmError {
                      ANTHROPIC_API_KEY directly.".into()
                 } else if msg.contains("send:") || msg.contains("io error") {
                     format!("Network error talking to api.anthropic.com: {msg}.\n  \
-                             Check connectivity and rerun. Aether retries 5x with backoff \
-                             before surfacing this.")
+                             Check connectivity and rerun. Aether's RetryingProvider \
+                             retried 3x with exponential backoff before surfacing this.")
                 } else {
                     format!("Transport error: {msg}")
                 }
@@ -200,11 +200,13 @@ impl LlmError {
                 ),
                 529 => format!(
                     "Overloaded (529): {body}.\n  \
-                     Anthropic is currently overloaded; aether already retried 5x with backoff."
+                     Anthropic is currently overloaded; the RetryingProvider already \
+                     retried 3x with exponential backoff."
                 ),
                 500..=599 => format!(
                     "Server error ({status}): {body}.\n  \
-                     Transient; aether retried 5x. If it persists, check status.anthropic.com."
+                     Transient; the RetryingProvider already retried 3x. \
+                     If it persists, check status.anthropic.com."
                 ),
                 _ => format!("Upstream {status}: {body}"),
             },

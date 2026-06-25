@@ -22,12 +22,15 @@
 //!   * network / parse  → `LlmError::Transport(msg)`
 //!
 //! v1 limitations:
-//!   * Non-streaming only (`stream` is forced to `false` on the wire even
-//!     if the caller's `MessagesRequest` sets it).
 //!   * No prompt-cache or extended-thinking knobs surfaced yet.
-//!   * No automatic retry — backoff is the caller's responsibility (the
-//!     agent loop's verifier-driven re-plan handles this naturally for
-//!     blocks; rate-limit retry belongs in a separate slice).
+//!
+//! Retry: this module makes exactly ONE HTTP attempt per call. Retry
+//! semantics live in `aether_llm::retry::RetryingProvider`, which wraps
+//! the provider at construction time in `build_provider`. The v0.7-era
+//! internal `send_with_retries` (5 attempts + exponential backoff +
+//! jitter) was removed in v0.11 to avoid double-retry stacking when
+//! both layers fired (RetryingProvider × 3 × this layer × 5 = 15 worst-
+//! case attempts).
 
 use crate::{ContentBlock, LlmError, LlmProvider, MessagesRequest, MessagesResponse, StopReason, TextDeltaSink, Usage};
 use async_trait::async_trait;
@@ -370,20 +373,6 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Cheap deterministic-ish jitter without pulling in `rand`. Uses the
-/// process-local nanos counter and xor-mixes with the slot. Good enough
-/// for backoff de-synchronization (no cryptographic requirement).
-fn pseudo_random_jitter(cap_ms: u64) -> u64 {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos() as u64)
-        .unwrap_or(0);
-    if cap_ms == 0 {
-        return 0;
-    }
-    nanos % cap_ms
-}
-
 fn read_credentials_file(path: &std::path::Path) -> Result<CredentialsFile, LlmError> {
     let bytes = std::fs::read(path)
         .map_err(|e| LlmError::Transport(format!("{}: {e}", path.display())))?;
@@ -460,60 +449,14 @@ impl AnthropicProvider {
                 .map_err(|e| LlmError::Schema(format!("encode request: {e}")))?
         };
 
-        let resp = self.send_with_retries(&body).await?;
+        let resp = self.send_once(&body).await?;
         let status = resp.status();
         if status.as_u16() == 401 && self.credentials_path.is_some() {
             self.refresh_force().await?;
-            let resp2 = self.send_with_retries(&body).await?;
+            let resp2 = self.send_once(&body).await?;
             return self.parse_or_stream(resp2, on_delta).await;
         }
         self.parse_or_stream(resp, on_delta).await
-    }
-
-    /// Retry wrapper around `send_once`. Retryable conditions:
-    ///   - Transport error (DNS, connect, timeout, broken connection)
-    ///   - HTTP 5xx (server errors, incl. 529 overloaded)
-    ///
-    /// NOT retried: 4xx (auth, bad request, rate-limit / OAuth gate),
-    /// successful 2xx (parsed by caller).
-    ///
-    /// Exponential backoff with full jitter. Base 500 ms, doubling per
-    /// attempt, capped at 30 s. Max 5 attempts total.
-    async fn send_with_retries(
-        &self,
-        body: &serde_json::Value,
-    ) -> Result<reqwest::Response, LlmError> {
-        const MAX_ATTEMPTS: u32 = 5;
-        const BASE_MS: u64 = 500;
-        const CAP_MS: u64 = 30_000;
-        let mut last_err: Option<LlmError> = None;
-        for attempt in 0..MAX_ATTEMPTS {
-            match self.send_once(body).await {
-                Ok(resp) => {
-                    let status = resp.status().as_u16();
-                    // Retry on 5xx (incl. 529). Other statuses (success or
-                    // 4xx) return immediately for the caller to handle.
-                    if (500..600).contains(&status) {
-                        last_err = Some(LlmError::Upstream {
-                            status,
-                            body: "(server error, will retry)".into(),
-                        });
-                    } else {
-                        return Ok(resp);
-                    }
-                }
-                Err(e) => {
-                    last_err = Some(e);
-                }
-            }
-            if attempt + 1 < MAX_ATTEMPTS {
-                let delay_ms = (BASE_MS << attempt).min(CAP_MS);
-                // Full-jitter: random in [0, delay_ms]
-                let jitter = pseudo_random_jitter(delay_ms);
-                tokio::time::sleep(Duration::from_millis(jitter)).await;
-            }
-        }
-        Err(last_err.unwrap_or_else(|| LlmError::Transport("retries exhausted".into())))
     }
 
     async fn send_once(&self, body: &serde_json::Value) -> Result<reqwest::Response, LlmError> {
