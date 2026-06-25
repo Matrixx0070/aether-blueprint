@@ -2,6 +2,19 @@
 
 Three paths, ranked by ease.
 
+> **Note on private repo:** while this repo is private, the install
+> tarballs at `releases/download/...` and the `/releases/latest` API are
+> NOT publicly reachable. Anonymous `curl` will return 404. To install
+> against a private repo, authenticate first — either run the steps
+> manually via `gh release download` (path 2 below), or set a
+> `GITHUB_TOKEN` env var on the curl-piped script:
+>
+> ```sh
+> GITHUB_TOKEN=ghp_... curl -fsSL ... | bash   # (custom auth wrapper TBD)
+> ```
+>
+> Once the repo flips public, anonymous `curl` works as documented.
+
 ## 1. One-liner (recommended)
 
 ```sh
