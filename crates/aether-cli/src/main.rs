@@ -4601,4 +4601,74 @@ mod tests {
         assert!(text.contains("01_test.py"), "fixture line missing: {text}");
         assert!(text.contains("✓"), "pass symbol missing: {text}");
     }
+
+    // ── D2: cost-estimator tests ─────────────────────────────────────────
+
+    fn usage(input: u64, output: u64, cache_w: u64, cache_r: u64) -> aether_llm::Usage {
+        aether_llm::Usage {
+            input_tokens: input,
+            output_tokens: output,
+            cache_creation_input_tokens: cache_w,
+            cache_read_input_tokens: cache_r,
+        }
+    }
+
+    #[test]
+    fn estimate_cost_sonnet_input_output_only() {
+        // Sonnet rates: $3/M input, $15/M output.
+        // 1M input + 1M output = $3 + $15 = $18.
+        let u = usage(1_000_000, 1_000_000, 0, 0);
+        let cost = estimate_cost_usd("claude-sonnet-4-6", &u);
+        assert!(
+            (cost - 18.0).abs() < 0.0001,
+            "expected ~$18 for sonnet 1M/1M, got ${cost}"
+        );
+    }
+
+    #[test]
+    fn estimate_cost_opus_more_expensive_than_sonnet() {
+        // Opus = $15/M in, $75/M out. Strictly higher than Sonnet on same usage.
+        let u = usage(100_000, 100_000, 0, 0);
+        let opus = estimate_cost_usd("claude-opus-4-7", &u);
+        let sonnet = estimate_cost_usd("claude-sonnet-4-6", &u);
+        assert!(opus > sonnet, "opus ({opus}) should cost more than sonnet ({sonnet})");
+    }
+
+    #[test]
+    fn estimate_cost_cache_read_is_cheaper_than_fresh_input() {
+        // Cache reads bill at 10% of input rate. Same token count via cache
+        // must cost less than via fresh input.
+        let fresh = estimate_cost_usd("claude-sonnet-4-6", &usage(1_000_000, 0, 0, 0));
+        let cached = estimate_cost_usd("claude-sonnet-4-6", &usage(0, 0, 0, 1_000_000));
+        assert!(
+            cached < fresh,
+            "cached read ({cached}) should be cheaper than fresh input ({fresh})"
+        );
+        // Specifically: cached at 10% rate. 1M tokens * $3/M * 0.10 = $0.30.
+        assert!((cached - 0.30).abs() < 0.0001, "expected $0.30 cached, got ${cached}");
+    }
+
+    #[test]
+    fn estimate_cost_cache_write_is_more_expensive_than_fresh_input() {
+        // Cache writes bill at 1.25× input rate (Anthropic premium for the
+        // server-side cache materialization).
+        let fresh = estimate_cost_usd("claude-sonnet-4-6", &usage(1_000_000, 0, 0, 0));
+        let written = estimate_cost_usd("claude-sonnet-4-6", &usage(0, 0, 1_000_000, 0));
+        assert!(
+            written > fresh,
+            "cache write ({written}) should be pricier than fresh input ({fresh})"
+        );
+        // 1M tokens * $3/M * 1.25 = $3.75.
+        assert!((written - 3.75).abs() < 0.0001, "expected $3.75 written, got ${written}");
+    }
+
+    #[test]
+    fn estimate_cost_unknown_model_defaults_to_sonnet_rates() {
+        // Unknown identifier should not return 0 or panic — it falls back to
+        // a sensible default (Sonnet rates).
+        let u = usage(1_000_000, 0, 0, 0);
+        let unknown = estimate_cost_usd("bespoke-frontier-model", &u);
+        let sonnet = estimate_cost_usd("claude-sonnet-4-6", &u);
+        assert!((unknown - sonnet).abs() < 0.0001, "unknown model should default to sonnet rate");
+    }
 }
