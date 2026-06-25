@@ -111,12 +111,29 @@ pub enum ToolStatus {
     Err(String),
 }
 
+#[derive(Debug, Clone)]
+pub struct FleetEntry {
+    pub id: u64,
+    pub description: String,
+    pub status: FleetStatus,
+    pub preview: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum FleetStatus {
+    Running,
+    Done,
+    Cancelled,
+    Error,
+}
+
 pub struct UiState {
     pub model: String,
     pub session_id: String,
     pub perm_mode: String,
     pub chat_lines: Vec<ChatLine>,
     pub tool_log: Vec<ToolEntry>,
+    pub fleet: Vec<FleetEntry>,
     pub input_buffer: String,
     pub status_running: bool,
     pub tokens_in: u64,
@@ -135,6 +152,7 @@ impl UiState {
             perm_mode,
             chat_lines: Vec::new(),
             tool_log: Vec::new(),
+            fleet: Vec::new(),
             input_buffer: String::new(),
             status_running: false,
             tokens_in: 0,
@@ -276,6 +294,9 @@ pub fn draw_frame(
             ])
             .split(f.area());
 
+        // Right side splits between tools (top) and fleet (bottom) when
+        // any sub-agents have been launched; otherwise tools takes the
+        // whole right side.
         let main_split = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
@@ -299,6 +320,16 @@ pub fn draw_frame(
             .scroll((state.chat_scroll, 0));
         f.render_widget(chat_widget, main_split[0]);
 
+        let (tools_area, fleet_area) = if !state.fleet.is_empty() {
+            let split = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+                .split(main_split[1]);
+            (split[0], Some(split[1]))
+        } else {
+            (main_split[1], None)
+        };
+
         let tool_lines: Vec<Line> = state.tool_log.iter().map(tool_entry_to_line).collect();
         let tools_widget = Paragraph::new(tool_lines)
             .block(
@@ -310,7 +341,23 @@ pub fn draw_frame(
                     )),
             )
             .wrap(Wrap { trim: false });
-        f.render_widget(tools_widget, main_split[1]);
+        f.render_widget(tools_widget, tools_area);
+
+        if let Some(area) = fleet_area {
+            let fleet_lines: Vec<Line> =
+                state.fleet.iter().map(fleet_entry_to_line).collect();
+            let fleet_widget = Paragraph::new(fleet_lines)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(Span::styled(
+                            " fleet ",
+                            Style::default().add_modifier(Modifier::BOLD),
+                        )),
+                )
+                .wrap(Wrap { trim: false });
+            f.render_widget(fleet_widget, area);
+        }
 
         let status_text = format!(
             " {} | session {} | perm {} | tok in={} out={} total={} ~${:.4}{} ",
@@ -491,6 +538,24 @@ fn inline_markdown_spans(line: &str) -> Vec<Span<'static>> {
         out.push(Span::raw(String::new()));
     }
     out
+}
+
+fn fleet_entry_to_line(e: &FleetEntry) -> Line<'static> {
+    let (sym, color) = match &e.status {
+        FleetStatus::Running => ("◌", Color::Yellow),
+        FleetStatus::Done => ("✓", Color::Green),
+        FleetStatus::Cancelled => ("⊘", Color::Magenta),
+        FleetStatus::Error => ("✗", Color::Red),
+    };
+    let mut label = format!("[{:>2}] {}", e.id, truncate_str(&e.description, 32));
+    if let Some(p) = &e.preview {
+        label.push_str(" — ");
+        label.push_str(&truncate_str(p, 32));
+    }
+    Line::from(vec![
+        Span::styled(format!("{sym} "), Style::default().fg(color)),
+        Span::raw(label),
+    ])
 }
 
 fn tool_entry_to_line(t: &ToolEntry) -> Line<'static> {

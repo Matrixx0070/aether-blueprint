@@ -519,6 +519,7 @@ async fn run_repl(
         "/tools",
         "/memory",
         "/usage",
+        "/fleet",
         "/commands",
         "/quit",
         "/exit",
@@ -735,6 +736,7 @@ fn handle_slash(
             eprintln!("  /tools              list registered tools");
             eprintln!("  /memory             list ~/.aether/memory/ entries");
             eprintln!("  /usage              show token totals for this session");
+            eprintln!("  /fleet [cancel ID]  list sub-agents (or signal cancel)");
             eprintln!("  /commands           list custom commands from ~/.aether/commands/");
             eprintln!("  /quit | /exit       quit");
             if !custom.is_empty() {
@@ -809,6 +811,46 @@ fn handle_slash(
                 total,
                 cost,
             );
+            SlashAction::Continue
+        }
+        "fleet" => {
+            let mut parts = args.split_whitespace();
+            match parts.next() {
+                Some("cancel") => {
+                    let id: u64 = match parts.next().and_then(|s| s.parse().ok()) {
+                        Some(n) => n,
+                        None => {
+                            eprintln!("[usage] /fleet cancel <id>");
+                            return SlashAction::Continue;
+                        }
+                    };
+                    if FLEET.cancel(id) {
+                        eprintln!("[fleet] cancel signal sent to #{id}");
+                    } else {
+                        eprintln!("[fleet] no running sub-agent with id {id}");
+                    }
+                }
+                _ => {
+                    let list = FLEET.list();
+                    if list.is_empty() {
+                        eprintln!("[fleet] no sub-agents launched yet");
+                    } else {
+                        for t in list {
+                            let sym = match t.status {
+                                SubAgentStatus::Running => "◌",
+                                SubAgentStatus::Done => "✓",
+                                SubAgentStatus::Cancelled => "⊘",
+                                SubAgentStatus::Error => "✗",
+                            };
+                            let preview = t
+                                .final_text_preview
+                                .as_deref()
+                                .unwrap_or("");
+                            eprintln!("  {sym} [{:>3}] {} — {}", t.id, t.description, preview);
+                        }
+                    }
+                }
+            }
             SlashAction::Continue
         }
         "quit" | "exit" | "q" => SlashAction::Quit,
@@ -1551,6 +1593,22 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
         while let Ok(ev) = erx.try_recv() {
             ui.apply(ev);
         }
+        // Snapshot the fleet registry every frame. Cheap (Mutex lock + clone).
+        ui.fleet = FLEET
+            .list()
+            .into_iter()
+            .map(|t| aether_render::FleetEntry {
+                id: t.id,
+                description: t.description,
+                status: match t.status {
+                    SubAgentStatus::Running => aether_render::FleetStatus::Running,
+                    SubAgentStatus::Done => aether_render::FleetStatus::Done,
+                    SubAgentStatus::Cancelled => aether_render::FleetStatus::Cancelled,
+                    SubAgentStatus::Error => aether_render::FleetStatus::Error,
+                },
+                preview: t.final_text_preview,
+            })
+            .collect();
         draw_frame(guard.terminal(), &ui).ok();
         // Poll for input with a short timeout so the UI tick refreshes.
         if event::poll(std::time::Duration::from_millis(80))? {
@@ -2377,6 +2435,84 @@ async fn install_mcp_servers(
     clients
 }
 
+// ── Sub-agent task registry (FleetView) ───────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubAgentStatus {
+    Running,
+    Done,
+    Cancelled,
+    Error,
+}
+
+#[derive(Debug, Clone)]
+pub struct SubAgentTask {
+    pub id: u64,
+    pub description: String,
+    pub started_at: std::time::SystemTime,
+    pub status: SubAgentStatus,
+    pub final_text_preview: Option<String>,
+    pub cancel_flag: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[derive(Default)]
+pub struct FleetRegistry {
+    next_id: std::sync::atomic::AtomicU64,
+    tasks: std::sync::Mutex<Vec<SubAgentTask>>,
+}
+
+impl FleetRegistry {
+    pub fn register(
+        &self,
+        description: String,
+        cancel_flag: Arc<std::sync::atomic::AtomicBool>,
+    ) -> u64 {
+        let id = self.next_id.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let task = SubAgentTask {
+            id,
+            description,
+            started_at: std::time::SystemTime::now(),
+            status: SubAgentStatus::Running,
+            final_text_preview: None,
+            cancel_flag,
+        };
+        self.tasks.lock().expect("fleet mutex").push(task);
+        id
+    }
+    pub fn finish(&self, id: u64, preview: Option<String>, error: bool) {
+        let mut g = self.tasks.lock().expect("fleet mutex");
+        for t in g.iter_mut() {
+            if t.id == id {
+                t.status = if error {
+                    SubAgentStatus::Error
+                } else {
+                    SubAgentStatus::Done
+                };
+                t.final_text_preview = preview;
+                return;
+            }
+        }
+    }
+    pub fn cancel(&self, id: u64) -> bool {
+        let g = self.tasks.lock().expect("fleet mutex");
+        for t in g.iter() {
+            if t.id == id && matches!(t.status, SubAgentStatus::Running) {
+                t.cancel_flag
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                return true;
+            }
+        }
+        false
+    }
+    pub fn list(&self) -> Vec<SubAgentTask> {
+        self.tasks.lock().expect("fleet mutex").clone()
+    }
+}
+
+/// Process-global registry. One per CLI process.
+static FLEET: once_cell::sync::Lazy<FleetRegistry> =
+    once_cell::sync::Lazy::new(FleetRegistry::default);
+
 // ── Agent tool (sub-loop) ─────────────────────────────────────────────────
 
 const SUB_AGENT_MAX_TURNS: usize = 20;
@@ -2443,6 +2579,14 @@ impl Tool for AgentTool {
     async fn run(&self, input: Value) -> Result<String, ToolError> {
         let inp: AgentInput = serde_json::from_value(input)
             .map_err(|e| ToolError::Schema(e.to_string()))?;
+        let description = inp
+            .description
+            .clone()
+            .unwrap_or_else(|| inp.prompt.lines().next().unwrap_or("sub-agent").chars().take(64).collect());
+        // Per-sub-agent cancel flag; registered into the FleetView registry.
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let task_id = FLEET.register(description, Arc::clone(&cancel));
+
         let config = SessionConfig {
             model: self.model.clone(),
             permission_mode: self.permission_mode,
@@ -2459,9 +2603,17 @@ impl Tool for AgentTool {
         let mut next_input: Option<String> = Some(inp.prompt);
         let mut last_text: Option<String> = None;
         for _ in 0..SUB_AGENT_MAX_TURNS {
-            let outcome = agent_turn(&mut session, next_input.take())
-                .await
-                .map_err(|e| ToolError::Io(format!("sub-agent: {e}")))?;
+            if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                FLEET.finish(task_id, Some("(cancelled)".into()), true);
+                return Ok("(sub-agent cancelled by user)".into());
+            }
+            let outcome = match agent_turn(&mut session, next_input.take()).await {
+                Ok(o) => o,
+                Err(e) => {
+                    FLEET.finish(task_id, Some(format!("error: {e}")), true);
+                    return Err(ToolError::Io(format!("sub-agent: {e}")));
+                }
+            };
             if let Some(ConversationItem::Assistant { text, .. }) = session.history.last() {
                 if let Some(t) = text {
                     last_text = Some(t.clone());
@@ -2476,7 +2628,12 @@ impl Tool for AgentTool {
                 }
             }
         }
-        Ok(last_text.unwrap_or_else(|| "(sub-agent exhausted turn budget without final reply)".to_string()))
+        let final_text = last_text
+            .clone()
+            .unwrap_or_else(|| "(sub-agent exhausted turn budget without final reply)".to_string());
+        let preview: String = final_text.lines().next().unwrap_or("").chars().take(80).collect();
+        FLEET.finish(task_id, Some(preview), false);
+        Ok(final_text)
     }
 }
 

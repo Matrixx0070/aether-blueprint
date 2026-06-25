@@ -22,6 +22,7 @@ dependencies = [
  "axum",
  "clap",
  "crossterm",
+ "once_cell",
  "rustyline",
  "serde",
  "serde_json",
