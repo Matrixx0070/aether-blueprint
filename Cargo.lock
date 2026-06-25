@@ -191,6 +191,7 @@ dependencies = [
 name = "aether-tools"
 version = "0.6.0"
 dependencies = [
+ "aether-sec",
  "async-trait",
  "glob",
  "once_cell",

@@ -6,6 +6,7 @@
 //! `builtin::register_builtins(&mut registry)` to install them all.
 
 pub mod builtin;
+pub mod pentest;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

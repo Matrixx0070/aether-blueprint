@@ -391,6 +391,13 @@ async fn run_print_agent(
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("self-check gate: {e}"))?;
     let mut tools = ToolRegistry::new();
     register_builtins(&mut tools);
+    // Scope-gated pentest tools auto-register iff a valid scope file is
+    // present. No scope file → no NetworkScan/WebProbe/DnsLookup in the
+    // registry. Keeps the surface honest: if you didn't authorize them,
+    // they aren't even there.
+    if aether_sec::load_scope().is_ok() {
+        aether_tools::pentest::register_pentest(&mut tools);
+    }
     let provider_arc: Arc<dyn aether_llm::LlmProvider> = build_provider()?;
     tools.register(Box::new(AgentTool::new(
         Arc::clone(&provider_arc),
@@ -565,6 +572,13 @@ async fn run_repl(
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("self-check gate: {e}"))?;
     let mut tools = ToolRegistry::new();
     register_builtins(&mut tools);
+    // Scope-gated pentest tools auto-register iff a valid scope file is
+    // present. No scope file → no NetworkScan/WebProbe/DnsLookup in the
+    // registry. Keeps the surface honest: if you didn't authorize them,
+    // they aren't even there.
+    if aether_sec::load_scope().is_ok() {
+        aether_tools::pentest::register_pentest(&mut tools);
+    }
     let provider_arc: Arc<dyn aether_llm::LlmProvider> = build_provider()?;
     tools.register(Box::new(AgentTool::new(
         Arc::clone(&provider_arc),
@@ -1509,6 +1523,13 @@ async fn serve_one_turn(
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
     let mut tools = ToolRegistry::new();
     register_builtins(&mut tools);
+    // Scope-gated pentest tools auto-register iff a valid scope file is
+    // present. No scope file → no NetworkScan/WebProbe/DnsLookup in the
+    // registry. Keeps the surface honest: if you didn't authorize them,
+    // they aren't even there.
+    if aether_sec::load_scope().is_ok() {
+        aether_tools::pentest::register_pentest(&mut tools);
+    }
     let provider_arc: Arc<dyn aether_llm::LlmProvider> = build_provider()?;
     tools.register(Box::new(AgentTool::new(
         Arc::clone(&provider_arc),
@@ -1562,6 +1583,13 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("self-check gate: {e}"))?;
     let mut tools = ToolRegistry::new();
     register_builtins(&mut tools);
+    // Scope-gated pentest tools auto-register iff a valid scope file is
+    // present. No scope file → no NetworkScan/WebProbe/DnsLookup in the
+    // registry. Keeps the surface honest: if you didn't authorize them,
+    // they aren't even there.
+    if aether_sec::load_scope().is_ok() {
+        aether_tools::pentest::register_pentest(&mut tools);
+    }
     let provider_arc: Arc<dyn aether_llm::LlmProvider> = build_provider()?;
     tools.register(Box::new(AgentTool::new(
         Arc::clone(&provider_arc),
