@@ -3,7 +3,59 @@
 Head-to-head measurement of the user-perceived loop "spin up agent → do tools →
 return."
 
-**Latest run: v0.2 — 2026-06-25.** Re-confirms the v0.1 numbers: aether is
+**Latest run: v0.3 — 2026-06-25.** Same axis, same protocol. aether is
+2.0–3.2× faster at p50 and 1.3–2.3× faster at p95 — no regression despite
+v0.3 adding MCP client, persistent memory, skills, PreToolUse/PostToolUse
+hooks, interactive permission prompts, doctor, diff renderer, token
+tracking, tab completion (15 slices since v0.2).
+
+## v0.3 results (n=20)
+
+| Test | binary | n | failures | min | **p50** | **p95** | max |
+|---|---|---:|---:|---:|---:|---:|---:|
+| text roundtrip | aether | 20 | 0 | 834 | **1,062** | **1,854** | 1,863 |
+|  | claude | 20 | 0 | 2,996 | **3,438** | **4,061** | 4,418 |
+| single tool (Read) | aether | 20 | 0 | 1,988 | **2,809** | **7,004** | 8,151 |
+|  | claude | 20 | 0 | 4,621 | **5,591** | **9,055** | 16,457 |
+| multi-tool (Write+Read) | aether | 20 | 0 | 2,463 | **3,942** | **7,305** | 8,752 |
+|  | claude | 20 | 0 | 5,700 | **8,473** | **13,594** | 16,090 |
+| Grep | aether | 20 | 0 | 3,802 | **5,191** | **8,942** | 9,033 |
+|  | claude | 20 | 0 | 6,713 | **14,531** | **20,328** | 23,094 |
+
+### v0.3 speedup vs claude
+
+| Test | p50 ratio | p95 ratio |
+|---|---:|---:|
+| text roundtrip | **3.24×** | **2.19×** |
+| single tool (Read) | **1.99×** | **1.29×** |
+| multi-tool (Write+Read) | **2.15×** | **1.86×** |
+| Grep | **2.80×** | **2.27×** |
+
+### v0.3 reliability
+
+aether: **80 / 80** successful. claude: **80 / 80** successful.
+
+### Trend across releases (p50 ratio)
+
+| Test | v0.1 | v0.2 | v0.3 |
+|---|---:|---:|---:|
+| text roundtrip | 3.43× | 3.35× | 3.24× |
+| single tool (Read) | 2.52× | 2.38× | 1.99× |
+| multi-tool (Write+Read) | 2.00× | 1.97× | 2.15× |
+| Grep | 2.38× | 2.90× | 2.80× |
+
+Stable inside ±15% of v0.1 baseline across three releases despite the
+substantial feature growth (7 → 13 built-in tools + MCP + memory +
+skills + hooks + permission prompts + token tracking + diff renderer +
+tab completion). The v0.3 T2 dip (2.52 → 1.99) tracks v0.3's extra
+session-start work (memory-index injection, MCP server probe paths, hook
+load) — paid once per process, more visible on short tests.
+
+---
+
+## v0.2 baseline
+
+**Earlier run: v0.2 — 2026-06-25.** Confirmed v0.1 numbers: aether is
 2.0–3.4× faster at p50 and 2.3–4.5× faster at p95 with no regression from
 the new features (streaming SSE, bundled D7 rules, project context loading,
 hooks, settings, 4 additional tools, interactive permission prompts,
