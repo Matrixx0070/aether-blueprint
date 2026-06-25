@@ -89,6 +89,12 @@ enum Cmd {
     Init,
     /// Health check: token expiry, settings, hooks, MCP, disk usage.
     Doctor,
+    /// Run an eval suite (YAML) — see ROADMAP for schema.
+    Eval {
+        suite: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     /// Launch the ratatui TUI (chat pane + tool log + status bar + input).
     Tui,
     /// Run an HTTP API server. Loopback-only by default; pass --bind to override.
@@ -176,6 +182,9 @@ async fn main() -> Result<()> {
         Some(Cmd::List { limit }) => return run_list(limit),
         Some(Cmd::Init) => return run_init(),
         Some(Cmd::Doctor) => return run_doctor().await,
+        Some(Cmd::Eval { suite, json }) => {
+            return run_eval(&suite, &model, permission_mode, json).await
+        }
         Some(Cmd::Tui) => return run_tui(&model, permission_mode).await,
         Some(Cmd::Serve { bind }) => return run_serve(&bind, &model, permission_mode).await,
         Some(Cmd::Mcp { sub }) => {
@@ -1694,6 +1703,227 @@ fn tool_name_for_result(session: &Session, tool_use_id: &str) -> Option<String> 
         }
     }
     None
+}
+
+// ── eval harness ──────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize)]
+struct EvalSuite {
+    #[serde(default)]
+    name: Option<String>,
+    cases: Vec<EvalCase>,
+}
+
+#[derive(Debug, serde::Deserialize, Clone)]
+struct EvalCase {
+    name: String,
+    prompt: String,
+    #[serde(default)]
+    expected_contains: Vec<String>,
+    #[serde(default)]
+    forbidden_strings: Vec<String>,
+    #[serde(default)]
+    expected_tool_used: Vec<String>,
+    #[serde(default)]
+    max_turns: Option<usize>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct EvalCriterionResult {
+    kind: String,
+    detail: String,
+    passed: bool,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct EvalCaseResult {
+    name: String,
+    passed: bool,
+    turn_count: usize,
+    final_text: String,
+    tools_used: Vec<String>,
+    criteria: Vec<EvalCriterionResult>,
+    elapsed_ms: u128,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct EvalReport {
+    suite: String,
+    total: usize,
+    passed: usize,
+    failed: usize,
+    cases: Vec<EvalCaseResult>,
+}
+
+async fn run_eval(
+    suite_path: &std::path::Path,
+    model: &str,
+    permission_mode: aether_perm::PermissionMode,
+    json_out: bool,
+) -> Result<()> {
+    let text = std::fs::read_to_string(suite_path)
+        .with_context(|| format!("read {}", suite_path.display()))?;
+    let suite: EvalSuite = serde_yaml::from_str(&text)
+        .with_context(|| format!("parse YAML in {}", suite_path.display()))?;
+    let suite_name = suite
+        .name
+        .clone()
+        .unwrap_or_else(|| suite_path.display().to_string());
+
+    let mut cases_out: Vec<EvalCaseResult> = Vec::new();
+    let mut passed = 0;
+    let mut failed = 0;
+
+    for case in &suite.cases {
+        let started = std::time::Instant::now();
+        let result = run_eval_case(model, permission_mode, case).await;
+        let elapsed_ms = started.elapsed().as_millis();
+        let (final_text, turn_count, tools_used) = match result {
+            Ok(t) => t,
+            Err(e) => (format!("[run error] {e}"), 0, Vec::new()),
+        };
+        let mut criteria = Vec::new();
+        let mut all_pass = true;
+        for needle in &case.expected_contains {
+            let ok = final_text.contains(needle);
+            if !ok {
+                all_pass = false;
+            }
+            criteria.push(EvalCriterionResult {
+                kind: "expected_contains".into(),
+                detail: needle.clone(),
+                passed: ok,
+            });
+        }
+        for needle in &case.forbidden_strings {
+            let ok = !final_text.contains(needle);
+            if !ok {
+                all_pass = false;
+            }
+            criteria.push(EvalCriterionResult {
+                kind: "forbidden_strings".into(),
+                detail: needle.clone(),
+                passed: ok,
+            });
+        }
+        for tool in &case.expected_tool_used {
+            let ok = tools_used.iter().any(|n| n == tool);
+            if !ok {
+                all_pass = false;
+            }
+            criteria.push(EvalCriterionResult {
+                kind: "expected_tool_used".into(),
+                detail: tool.clone(),
+                passed: ok,
+            });
+        }
+        if let Some(cap) = case.max_turns {
+            let ok = turn_count <= cap;
+            if !ok {
+                all_pass = false;
+            }
+            criteria.push(EvalCriterionResult {
+                kind: "max_turns".into(),
+                detail: format!("actual={turn_count} cap={cap}"),
+                passed: ok,
+            });
+        }
+        if all_pass {
+            passed += 1;
+        } else {
+            failed += 1;
+        }
+        cases_out.push(EvalCaseResult {
+            name: case.name.clone(),
+            passed: all_pass,
+            turn_count,
+            final_text: final_text.chars().take(800).collect(),
+            tools_used,
+            criteria,
+            elapsed_ms,
+        });
+    }
+
+    let report = EvalReport {
+        suite: suite_name,
+        total: cases_out.len(),
+        passed,
+        failed,
+        cases: cases_out,
+    };
+
+    if json_out {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "\n=== EVAL: {} === {}/{} passed",
+            report.suite, report.passed, report.total
+        );
+        for c in &report.cases {
+            let sym = if c.passed { "✓" } else { "✗" };
+            println!("  {sym} {} ({} turns, {} ms)", c.name, c.turn_count, c.elapsed_ms);
+            for cr in &c.criteria {
+                if !cr.passed {
+                    println!("      ✗ {}: {}", cr.kind, cr.detail);
+                }
+            }
+        }
+        println!();
+    }
+    if failed > 0 {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+async fn run_eval_case(
+    model: &str,
+    permission_mode: aether_perm::PermissionMode,
+    case: &EvalCase,
+) -> Result<(String, usize, Vec<String>)> {
+    let provider = AnthropicProvider::from_env_or_credentials()?;
+    let config = SessionConfig {
+        model: model.to_string(),
+        permission_mode,
+        max_tokens_per_turn: PRINT_MODE_MAX_TOKENS,
+    };
+    let overlay = Fable5Overlay::new(OverlayConfig::default());
+    let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
+    let mut tools = ToolRegistry::new();
+    register_builtins(&mut tools);
+    let provider_arc: Arc<dyn aether_llm::LlmProvider> = Arc::new(provider);
+    let mut session = Session::new(config, overlay, provider_arc, gate, tools);
+
+    let mut next_input: Option<String> = Some(case.prompt.clone());
+    let mut last_text: Option<String> = None;
+    let mut turn_count = 0usize;
+    let mut tools_used: Vec<String> = Vec::new();
+    let cap = case.max_turns.unwrap_or(20);
+    for _ in 0..cap {
+        let outcome = agent_turn(&mut session, next_input.take()).await?;
+        turn_count += 1;
+        if let Some(ConversationItem::Assistant { text, tool_uses }) = session.history.last() {
+            if let Some(t) = text {
+                last_text = Some(t.clone());
+            }
+            for tu in tool_uses {
+                tools_used.push(tu.name.clone());
+            }
+        }
+        match outcome {
+            TurnOutcome::AwaitUser | TurnOutcome::Exit => break,
+            TurnOutcome::ContinueImmediately => continue,
+            TurnOutcome::Sleep { seconds } => {
+                tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
+                continue;
+            }
+        }
+    }
+    Ok((
+        last_text.unwrap_or_else(|| "(no final assistant text)".into()),
+        turn_count,
+        tools_used,
+    ))
 }
 
 // ── doctor ───────────────────────────────────────────────────────────────

@@ -1,0 +1,12 @@
+name: aether-smoke
+cases:
+  - name: simple-echo
+    prompt: "Reply with exactly the word: pong"
+    expected_contains: ["pong"]
+    forbidden_strings: ["UNVERIFIED", "should work"]
+    max_turns: 1
+
+  - name: math
+    prompt: "What is 7 times 8? Reply with just the number."
+    expected_contains: ["56"]
+    max_turns: 1
