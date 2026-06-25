@@ -72,6 +72,7 @@ name = "aether-llm"
 version = "0.7.3"
 dependencies = [
  "async-trait",
+ "base64",
  "bytes",
  "chrono",
  "futures-util",

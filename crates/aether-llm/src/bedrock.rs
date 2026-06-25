@@ -1,27 +1,22 @@
 //! AWS Bedrock provider for Anthropic models.
 //!
-//! Hits `POST https://bedrock-runtime.{region}.amazonaws.com/model/{model_id}/invoke`
-//! with the same Messages API body shape as the Anthropic API, plus the
-//! `anthropic_version: "bedrock-2023-05-31"` discriminator the Bedrock-
-//! hosted model expects.
+//! Non-streaming: POST `.../model/{id}/invoke` — standard Messages API body shape
+//! with `anthropic_version: "bedrock-2023-05-31"` discriminator.
 //!
-//! Auth: AWS SigV4. Credentials come from (in order):
-//!   1. `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` env (+ optional
-//!      `AWS_SESSION_TOKEN`)
-//!   2. (TODO v0.6.1) shared credentials file via `AWS_PROFILE`
+//! Streaming: POST `.../model/{id}/invoke-with-response-stream` — same body,
+//! response is AWS event-stream framing. Each "chunk" event carries a base64-
+//! encoded streaming delta (same shape as Anthropic SSE deltas).
 //!
-//! Region from `AWS_REGION` (default `us-east-1`).
-//!
-//! Model-id translation (`map_model_id`) takes the canonical
-//! `claude-haiku-4-5-20251001` and returns Bedrock's
-//! `anthropic.claude-haiku-4-5-20251001-v1:0`. The mapping is best-effort;
-//! when an exact Bedrock id is given we pass it through unchanged.
+//! Auth: AWS SigV4. Credentials: `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`
+//! (+ optional `AWS_SESSION_TOKEN`). Region: `AWS_REGION` (default `us-east-1`).
 
 use crate::{
     ContentBlock, LlmError, LlmProvider, MessagesRequest, MessagesResponse, StopReason,
     TextDeltaSink, Usage,
 };
 use async_trait::async_trait;
+use base64::{engine::general_purpose, Engine};
+use futures_util::StreamExt;
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
@@ -83,20 +78,21 @@ impl BedrockProvider {
             self.region, bedrock_model
         )
     }
+
+    fn streaming_endpoint(&self, bedrock_model: &str) -> String {
+        format!(
+            "https://bedrock-runtime.{}.amazonaws.com/model/{}/invoke-with-response-stream",
+            self.region, bedrock_model
+        )
+    }
 }
 
 /// Map a canonical Anthropic model id (`claude-haiku-4-5-20251001`) to the
 /// Bedrock catalog id (`anthropic.claude-haiku-4-5-20251001-v1:0`).
-///
-/// Pass-through when the input already looks like a Bedrock id (contains
-/// `anthropic.` prefix). Conservative: unknown forms get the dot-prefix
-/// applied so the model is still rejected cleanly by Bedrock with a
-/// 400-class error rather than 404-on-host.
 pub fn map_model_id(canonical: &str) -> String {
     if canonical.contains("anthropic.") {
         return canonical.to_string();
     }
-    // Append `-v1:0` only when missing.
     if canonical.ends_with(":0") {
         return format!("anthropic.{canonical}");
     }
@@ -106,28 +102,14 @@ pub fn map_model_id(canonical: &str) -> String {
 #[async_trait]
 impl LlmProvider for BedrockProvider {
     async fn complete(&self, mut req: MessagesRequest) -> Result<MessagesResponse, LlmError> {
-        // Bedrock requires this discriminator, NOT the `anthropic-version` header.
         req.stream = false;
         let bedrock_model = map_model_id(&req.model);
         let url = self.endpoint(&bedrock_model);
 
-        let mut body = serde_json::to_value(&req)
-            .map_err(|e| LlmError::Schema(format!("encode request: {e}")))?;
-        // Strip `model` and `stream` from the body (model is in the URL path).
-        if let Some(obj) = body.as_object_mut() {
-            obj.remove("model");
-            obj.remove("stream");
-            obj.insert(
-                "anthropic_version".to_string(),
-                serde_json::Value::String(BEDROCK_ANTHROPIC_VERSION.to_string()),
-            );
-        }
-
-        let body_bytes = serde_json::to_vec(&body)
-            .map_err(|e| LlmError::Schema(format!("encode body: {e}")))?;
+        let body_bytes = bedrock_body(&req)?;
 
         let resp = self
-            .send_signed(&url, &body_bytes)
+            .send_signed_inner(&url, &body_bytes, false)
             .await
             .map_err(|e| LlmError::Transport(format!("send: {e}")))?;
         let status = resp.status();
@@ -147,7 +129,6 @@ impl LlmProvider for BedrockProvider {
             .map_err(|e| LlmError::Transport(format!("read body: {e}")))?;
         let mut parsed: serde_json::Value = serde_json::from_slice(&bytes)
             .map_err(|e| LlmError::Schema(format!("decode response: {e}")))?;
-        // Bedrock returns the same content/stop_reason shape; usage too.
         let content: Vec<ContentBlock> = parsed
             .get_mut("content")
             .map(|v| std::mem::take(v))
@@ -169,22 +150,117 @@ impl LlmProvider for BedrockProvider {
         })
     }
 
-    /// Bedrock streaming uses a different wire shape (`invoke-with-response-stream`
-    /// + AWS event-stream framing). v0.6 ships non-streaming only; the
-    /// default-impl fallback emits one chunk via `complete()`. Streaming
-    /// support is on the v0.6.1 list.
+    /// Streaming via `invoke-with-response-stream` + AWS event-stream framing.
+    ///
+    /// Each event-stream "chunk" event carries `{"bytes":"<b64>"}` where the
+    /// base64 decodes to a Anthropic streaming delta (content_block_delta /
+    /// message_start / message_delta shape). We parse it and forward text
+    /// deltas to `on_delta`.
+    ///
+    /// UNVERIFIED: live Bedrock streaming requires real AWS credentials with
+    /// `bedrock:InvokeModelWithResponseStream` permission.
     async fn complete_streamed(
         &self,
-        req: MessagesRequest,
+        mut req: MessagesRequest,
         mut on_delta: TextDeltaSink,
     ) -> Result<MessagesResponse, LlmError> {
-        let resp = self.complete(req).await?;
-        for block in &resp.content {
-            if let ContentBlock::Text { text } = block {
-                on_delta(text);
+        req.stream = true;
+        let bedrock_model = map_model_id(&req.model);
+        let url = self.streaming_endpoint(&bedrock_model);
+
+        let body_bytes = bedrock_body(&req)?;
+
+        let resp = self
+            .send_signed_inner(&url, &body_bytes, true)
+            .await
+            .map_err(|e| LlmError::Transport(format!("send: {e}")))?;
+
+        let status = resp.status();
+        if status.as_u16() == 429 {
+            return Err(LlmError::RateLimited);
+        }
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(LlmError::Upstream {
+                status: status.as_u16(),
+                body: text,
+            });
+        }
+
+        let mut stream = resp.bytes_stream();
+        let mut buf: Vec<u8> = Vec::new();
+        let mut text_acc = String::new();
+        let mut stop_reason = StopReason::EndTurn;
+        let mut input_tokens: u64 = 0;
+        let mut output_tokens: u64 = 0;
+
+        while let Some(chunk) = stream.next().await {
+            let chunk =
+                chunk.map_err(|e| LlmError::Transport(format!("stream read: {e}")))?;
+            buf.extend_from_slice(&chunk);
+
+            loop {
+                match parse_event_stream_message(&buf) {
+                    Some((consumed, event_type, payload)) => {
+                        buf.drain(..consumed);
+                        if event_type != "chunk" {
+                            continue;
+                        }
+                        // payload = {"bytes":"<base64>"}
+                        let Ok(wrapper) =
+                            serde_json::from_slice::<serde_json::Value>(&payload)
+                        else {
+                            continue;
+                        };
+                        let Some(b64) = wrapper["bytes"].as_str() else {
+                            continue;
+                        };
+                        let Ok(decoded) = general_purpose::STANDARD.decode(b64) else {
+                            continue;
+                        };
+                        let Ok(ev) = serde_json::from_slice::<serde_json::Value>(&decoded)
+                        else {
+                            continue;
+                        };
+                        match ev["type"].as_str() {
+                            Some("content_block_delta") => {
+                                if ev["delta"]["type"].as_str() == Some("text_delta") {
+                                    if let Some(text) = ev["delta"]["text"].as_str() {
+                                        on_delta(text);
+                                        text_acc.push_str(text);
+                                    }
+                                }
+                            }
+                            Some("message_start") => {
+                                input_tokens = ev["message"]["usage"]["input_tokens"]
+                                    .as_u64()
+                                    .unwrap_or(0);
+                            }
+                            Some("message_delta") => {
+                                output_tokens =
+                                    ev["usage"]["output_tokens"].as_u64().unwrap_or(0);
+                                if let Some(sr) = ev["delta"]["stop_reason"].as_str() {
+                                    stop_reason = parse_stop_reason(sr);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    None => break,
+                }
             }
         }
-        Ok(resp)
+
+        Ok(MessagesResponse {
+            content: vec![ContentBlock::Text { text: text_acc }],
+            stop_reason,
+            usage: Some(Usage {
+                input_tokens,
+                output_tokens,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+            }),
+        })
     }
 
     fn name(&self) -> &str {
@@ -192,11 +268,42 @@ impl LlmProvider for BedrockProvider {
     }
 }
 
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+/// Serialize a MessagesRequest into the Bedrock wire body (strips `model` +
+/// `stream`, injects `anthropic_version`).
+fn bedrock_body(req: &MessagesRequest) -> Result<Vec<u8>, LlmError> {
+    let mut body = serde_json::to_value(req)
+        .map_err(|e| LlmError::Schema(format!("encode request: {e}")))?;
+    if let Some(obj) = body.as_object_mut() {
+        obj.remove("model");
+        obj.remove("stream");
+        obj.insert(
+            "anthropic_version".to_string(),
+            serde_json::Value::String(BEDROCK_ANTHROPIC_VERSION.to_string()),
+        );
+    }
+    serde_json::to_vec(&body).map_err(|e| LlmError::Schema(format!("encode body: {e}")))
+}
+
+fn parse_stop_reason(s: &str) -> StopReason {
+    match s {
+        "max_tokens" => StopReason::MaxTokens,
+        "tool_use" => StopReason::ToolUse,
+        "stop_sequence" => StopReason::StopSequence,
+        _ => StopReason::EndTurn,
+    }
+}
+
 impl BedrockProvider {
-    async fn send_signed(
+    /// Sign and send a POST request. When `accept_event_stream` is true the
+    /// `Accept: application/vnd.amazon.eventstream` header is added (required
+    /// for the streaming endpoint).
+    async fn send_signed_inner(
         &self,
         url: &str,
         body: &[u8],
+        accept_event_stream: bool,
     ) -> Result<reqwest::Response, reqwest::Error> {
         let now = chrono::Utc::now();
         let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
@@ -207,7 +314,6 @@ impl BedrockProvider {
 
         let payload_hash = hex::encode(Sha256::digest(body));
 
-        // Canonical headers (sorted, lowercased)
         let mut headers: Vec<(String, String)> = vec![
             ("content-type".into(), "application/json".into()),
             ("host".into(), host.clone()),
@@ -249,16 +355,119 @@ impl BedrockProvider {
 
         let mut builder = self.client.post(url).body(body.to_vec());
         for (k, v) in &headers {
-            // Skip 'host' — reqwest sets it automatically and rejects manual set.
             if k == "host" {
                 continue;
             }
             builder = builder.header(k.as_str(), v.as_str());
         }
         builder = builder.header("Authorization", authorization);
+        if accept_event_stream {
+            builder =
+                builder.header("Accept", "application/vnd.amazon.eventstream");
+        }
         builder.send().await
     }
 }
+
+// ── AWS event-stream parser ───────────────────────────────────────────────────
+//
+// Wire format (all integers big-endian):
+//   4B  total_length   — byte count including prelude, headers, payload, trailing CRC
+//   4B  headers_length — byte count of the headers section only
+//   4B  prelude CRC32  — skipped (TLS provides transport integrity)
+//   NB  headers
+//   PB  payload        — P = total_length - 12 - headers_length - 4
+//   4B  message CRC32  — skipped
+//
+// Header wire element:
+//   1B  name_length
+//   NB  name (UTF-8)
+//   1B  value_type  (7 = string)
+//   for string: 2B value_length, then value_length bytes UTF-8
+//   other types are skipped (see value_type_skip_bytes)
+
+/// Parse one AWS event-stream framed message from the front of `buf`.
+///
+/// Returns `None` when `buf` doesn't yet contain a full message.
+/// Returns `Some((bytes_consumed, event_type, payload_bytes))` on success.
+/// `event_type` is the `:event-type` header value, empty string if absent.
+pub fn parse_event_stream_message(buf: &[u8]) -> Option<(usize, String, Vec<u8>)> {
+    if buf.len() < 12 {
+        return None; // prelude not yet available
+    }
+    let total_len = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+    if buf.len() < total_len {
+        return None; // wait for full message
+    }
+    let headers_len = u32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]) as usize;
+    // prelude = 12 bytes, then headers, then payload, then 4B trailing CRC
+    let payload_start = 12 + headers_len;
+    let payload_end = total_len.saturating_sub(4);
+    if payload_end < payload_start || payload_start > total_len {
+        // Malformed lengths — consume and skip
+        return Some((total_len, String::new(), Vec::new()));
+    }
+    let header_bytes = &buf[12..12 + headers_len];
+    let event_type = extract_string_header(header_bytes, ":event-type").unwrap_or_default();
+    let payload = buf[payload_start..payload_end].to_vec();
+    Some((total_len, event_type, payload))
+}
+
+/// Scan `header_bytes` for a string-typed header named `target` and return its value.
+fn extract_string_header(header_bytes: &[u8], target: &str) -> Option<String> {
+    let mut pos = 0;
+    while pos < header_bytes.len() {
+        let name_len = *header_bytes.get(pos)? as usize;
+        pos += 1;
+        if pos + name_len > header_bytes.len() {
+            break;
+        }
+        let name = std::str::from_utf8(&header_bytes[pos..pos + name_len]).ok()?;
+        pos += name_len;
+        let value_type = *header_bytes.get(pos)?;
+        pos += 1;
+        match value_type {
+            0 | 1 => { /* bool_true / bool_false — no value bytes */ }
+            2 => {
+                pos += 1; // byte
+            }
+            3 => {
+                pos += 2; // short
+            }
+            4 => {
+                pos += 4; // int
+            }
+            5 | 8 => {
+                pos += 8; // long / timestamp
+            }
+            6 | 7 => {
+                // bytes (6) or string (7): 2B length prefix
+                if pos + 2 > header_bytes.len() {
+                    break;
+                }
+                let val_len =
+                    u16::from_be_bytes([header_bytes[pos], header_bytes[pos + 1]]) as usize;
+                pos += 2;
+                if pos + val_len > header_bytes.len() {
+                    break;
+                }
+                if value_type == 7 && name == target {
+                    return std::str::from_utf8(&header_bytes[pos..pos + val_len])
+                        .ok()
+                        .map(str::to_string);
+                }
+                pos += val_len;
+            }
+            9 => {
+                pos += 16; // uuid
+            }
+            _ => break,
+        }
+    }
+    None
+}
+
+// ── SigV4 ─────────────────────────────────────────────────────────────────────
 
 fn derive_signing_key(secret: &str, date: &str, region: &str, service: &str) -> Vec<u8> {
     let k_secret = format!("AWS4{secret}");
@@ -275,9 +484,13 @@ fn hmac_sha256(key: &[u8], msg: &[u8]) -> Vec<u8> {
     mac.finalize().into_bytes().to_vec()
 }
 
+// ── tests ─────────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── model id mapping ──────────────────────────────────────────────────────
 
     #[test]
     fn map_model_canonical_to_bedrock_id() {
@@ -299,7 +512,6 @@ mod tests {
 
     #[test]
     fn map_model_handles_versioned_ids() {
-        // already has :0 suffix → only prefix added
         let s = "claude-foo:0";
         assert_eq!(map_model_id(s), "anthropic.claude-foo:0");
     }
@@ -320,6 +532,21 @@ mod tests {
     }
 
     #[test]
+    fn streaming_endpoint_path_format() {
+        let p = BedrockProvider::with_credentials(
+            "a".into(),
+            "b".into(),
+            None,
+            "us-east-1".into(),
+        );
+        let u = p.streaming_endpoint("anthropic.claude-sonnet-4-6-v1:0");
+        assert_eq!(
+            u,
+            "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-sonnet-4-6-v1:0/invoke-with-response-stream"
+        );
+    }
+
+    #[test]
     fn body_drops_model_and_stream_adds_anthropic_version() {
         let req = MessagesRequest {
             model: "claude-haiku-4-5-20251001".into(),
@@ -329,35 +556,91 @@ mod tests {
             tools: vec![],
             stream: false,
         };
-        // We can't call send_signed without HTTP, but we can replicate the
-        // body transformation inline to verify the shape.
-        let mut body = serde_json::to_value(&req).unwrap();
-        if let Some(o) = body.as_object_mut() {
-            o.remove("model");
-            o.remove("stream");
-            o.insert(
-                "anthropic_version".into(),
-                serde_json::Value::String(BEDROCK_ANTHROPIC_VERSION.into()),
-            );
-        }
+        let bytes = bedrock_body(&req).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert!(body.get("model").is_none());
         assert!(body.get("stream").is_none());
         assert_eq!(body["anthropic_version"], "bedrock-2023-05-31");
         assert_eq!(body["max_tokens"], 32);
     }
 
-    /// SigV4 canonical-request sanity check using the AWS published example.
-    /// Reference: docs.aws.amazon.com/general/latest/gr/sigv4_signing.html
     #[test]
     fn sigv4_derive_signing_key_matches_aws_example() {
-        // From the AWS docs Python example
         let secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
         let key = derive_signing_key(secret, "20120215", "us-east-1", "iam");
-        // Expected from AWS docs (hex)
         let hex = hex::encode(key);
         assert_eq!(
             hex,
             "f4780e2d9f65fa895f9c67b32ce1baf0b0d8a43505a000a1a9e090d414db404d"
         );
+    }
+
+    // ── event-stream parser ───────────────────────────────────────────────────
+
+    /// Build a minimal valid event-stream message with one string header.
+    fn make_event_stream_msg(event_type: &str, payload: &[u8]) -> Vec<u8> {
+        let name = b":event-type";
+        let val = event_type.as_bytes();
+        let mut headers = Vec::new();
+        headers.push(name.len() as u8);
+        headers.extend_from_slice(name);
+        headers.push(7u8); // string value type
+        headers.extend_from_slice(&(val.len() as u16).to_be_bytes());
+        headers.extend_from_slice(val);
+
+        let headers_len = headers.len() as u32;
+        let total_len = 12u32 + headers_len + payload.len() as u32 + 4;
+
+        let mut msg = Vec::new();
+        msg.extend_from_slice(&total_len.to_be_bytes());
+        msg.extend_from_slice(&headers_len.to_be_bytes());
+        msg.extend_from_slice(&[0u8; 4]); // prelude CRC (skipped in parser)
+        msg.extend_from_slice(&headers);
+        msg.extend_from_slice(payload);
+        msg.extend_from_slice(&[0u8; 4]); // message CRC (skipped in parser)
+        msg
+    }
+
+    #[test]
+    fn parse_event_stream_returns_none_on_short_prelude() {
+        // 11 bytes — not enough for the 12-byte prelude
+        assert!(parse_event_stream_message(&[0u8; 11]).is_none());
+    }
+
+    #[test]
+    fn parse_event_stream_returns_none_when_partial_message() {
+        // total_length = 100, but buf only has 20 bytes
+        let mut buf = vec![0u8; 20];
+        buf[0..4].copy_from_slice(&100u32.to_be_bytes());
+        buf[4..8].copy_from_slice(&0u32.to_be_bytes());
+        assert!(parse_event_stream_message(&buf).is_none());
+    }
+
+    #[test]
+    fn parse_event_stream_extracts_chunk_event_type_and_payload() {
+        let payload = br#"{"bytes":"SGVsbG8="}"#;
+        let msg = make_event_stream_msg("chunk", payload);
+        let (consumed, event_type, got_payload) = parse_event_stream_message(&msg).unwrap();
+        assert_eq!(consumed, msg.len());
+        assert_eq!(event_type, "chunk");
+        assert_eq!(got_payload, payload as &[u8]);
+    }
+
+    #[test]
+    fn parse_event_stream_handles_consecutive_messages() {
+        let payload1 = b"first-payload";
+        let payload2 = b"second-payload";
+        let mut buf = make_event_stream_msg("chunk", payload1);
+        let second_msg = make_event_stream_msg("messageStop", payload2);
+        buf.extend_from_slice(&second_msg);
+
+        let (consumed1, et1, p1) = parse_event_stream_message(&buf).unwrap();
+        assert_eq!(et1, "chunk");
+        assert_eq!(p1, payload1 as &[u8]);
+
+        let (consumed2, et2, p2) = parse_event_stream_message(&buf[consumed1..]).unwrap();
+        assert_eq!(et2, "messageStop");
+        assert_eq!(p2, payload2 as &[u8]);
+        let _ = consumed2;
     }
 }
