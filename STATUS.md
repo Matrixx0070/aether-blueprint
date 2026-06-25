@@ -58,4 +58,10 @@ format: `[slice] [status] [commit] [verifier] [live-check] note`
 | H1 | DONE | 26c184a | n/a | YAML valid · LICENSE files added | GitHub Actions release workflow (4 platforms) |
 | H2 | DONE | 639105f | n/a | bash -n OK · platform-detect OK | install.sh (one-liner with checksum verify) |
 | H3 | DONE | 9fee0e8 | n/a | README + INSTALL.md authored | Install docs (one-liner + manual + source-build) |
+| H4 | DONE | f477508,743632a | n/a | release v0.12.0 LIVE · 4 platforms · single Apache LICENSE | Apache-only ship + private-repo install caveat |
+| H5 | DONE | n/a | n/a | end-to-end verified · `./aether --version` prints `aether 0.12.0` | binary install + sha256 + ./aether --version |
+| I1 | DONE | df4b34d | n/a | 5/5 verify.sh scripts fail on starting state | 5 coding-task fixtures + suite.yaml |
+| I2 | DONE | 6fdbbd3 | n/a | `aether coding-eval --help` lists options | coding-eval command + verify harness |
+| I3 | DONE | 7083bea | n/a | **5/5 PASS · 184s · $0.58 on Sonnet 4.6** | live benchmark run |
+| I4 | DONE | 7083bea | n/a | RESULTS.md + COMPARISON.md authored | honest comparison vs Claude Code |
 

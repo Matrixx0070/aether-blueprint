@@ -23,7 +23,21 @@ Each tarball ships with a SHA256 the script verifies before extraction. See
 `INSTALL.md` for the manual download + verify path and the source-build
 fallback.
 
-## Status: v0.12.0
+## Status: v0.13.0
+
+**Coding benchmark**: `aether coding-eval` produces 5/5 PASS on 5 real
+coding tasks (bug fix, feature add, test write, refactor, doc fix) for
+~$0.58 USD on Sonnet 4.6, 184s total agent wall. Full per-task table
+and honest comparison vs Claude Code at
+[`eval/coding/RESULTS.md`](eval/coding/RESULTS.md) and
+[`eval/coding/COMPARISON.md`](eval/coding/COMPARISON.md).
+
+The benchmark is reproducible: `cargo build --release -p aether-cli`,
+then `./target/release/aether coding-eval eval/coding/suite.yaml`.
+Each verify.sh tests observable behavior via exit code — no model
+judgment in the verification loop.
+
+v0.12.0 patch:
 
 Ship-ready release infrastructure:
 - **GitHub Actions release workflow** (H1) — tag a `v*` to autobuild release

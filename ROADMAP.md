@@ -192,7 +192,28 @@ A self-contained surface for authorized security work, end-to-end:
   documented (one-liner, manual + verify, source-build) plus uninstall
   guidance.
 
-## v0.13 — plugins + IDE surfaces (next)
+## v0.13 — coding benchmark + comparison — shipped 2026-06-25
+
+- **`aether coding-eval`** (I1+I2): new `eval/coding/` directory with
+  5 bounded, verifiable tasks (bug fix, feature add, test write,
+  refactor, doc fix). Each task has a starting state + a `verify.sh`
+  that tests OBSERVABLE behavior via exit code — no model judgment in
+  the verification loop. New `coding-eval` subcommand resets each
+  task dir from git, spawns `aether -p` as a subprocess against the
+  task dir, parses `[aether-usage ...]` stderr line for per-task
+  tokens + cost, runs verify.sh, records pass/fail.
+- **Live benchmark result** (I3): 5/5 PASS on Sonnet 4.6, ~$0.58 USD,
+  184s total agent wall. Per-task table at `eval/coding/RESULTS.md`.
+- **Honest comparison vs Claude Code** (I4) at
+  `eval/coding/COMPARISON.md`. Three-part: (1) numbers aether produced
+  live; (2) feature-by-feature inventory — features aether ships that
+  CC does NOT (security-eval, threat-model, scope, audit chain, ctf,
+  coding-eval itself, cross-provider sweep, doctor --probe --json),
+  parity items, gaps aether has (VS Code ext, JetBrains, Windows
+  binary); (3) UNVERIFIED items I cannot compare head-to-head because
+  Claude Code isn't runnable in the test env.
+
+## v0.14 — plugins + IDE surfaces (next)
 
 - Plugin system via WASM modules registered as tools
 - BYOC: Mantle
