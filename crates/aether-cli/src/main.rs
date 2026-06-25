@@ -96,6 +96,17 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Scope file admin — declares which hosts/ranges/repos this aether
+    /// process is authorized to act against.
+    Scope {
+        #[command(subcommand)]
+        sub: ScopeCmd,
+    },
+    /// Audit log admin — shows the tamper-evident security-tool log.
+    Audit {
+        #[command(subcommand)]
+        sub: AuditCmd,
+    },
     /// Session admin (export to markdown, branch off at a turn).
     Session {
         #[command(subcommand)]
@@ -142,6 +153,39 @@ enum McpCmd {
 enum ConfigCmd {
     Show,
     Set { key: String, value: String },
+}
+
+#[derive(Subcommand, Debug)]
+enum ScopeCmd {
+    /// Show the active scope file (or report missing).
+    Show,
+    /// Initialise an empty scope file (requires authorized_by + ticket_id).
+    Init {
+        #[arg(long)]
+        authorized_by: String,
+        #[arg(long)]
+        ticket_id: String,
+        /// Days until expiry (default 14).
+        #[arg(long, default_value_t = 14)]
+        days: i64,
+    },
+    /// Add a host to the scope (exact match).
+    AddHost { host: String },
+    /// Remove a host from the scope.
+    RemoveHost { host: String },
+    /// Add a CIDR range (rejected if larger than /16).
+    AddRange { cidr: String },
+}
+
+#[derive(Subcommand, Debug)]
+enum AuditCmd {
+    /// Print recent audit entries (newest first).
+    Show {
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// Verify the tamper-evident hash chain across the entire audit log.
+    Verify,
 }
 
 #[derive(Subcommand, Debug)]
@@ -205,6 +249,8 @@ async fn main() -> Result<()> {
             return run_eval(&suite, &model, permission_mode, json).await
         }
         Some(Cmd::Session { sub }) => return session_cmd(sub),
+        Some(Cmd::Scope { sub }) => return scope_cmd(sub),
+        Some(Cmd::Audit { sub }) => return audit_cmd(sub),
         Some(Cmd::Tui) => return run_tui(&model, permission_mode).await,
         Some(Cmd::Serve { bind }) => return run_serve(&bind, &model, permission_mode).await,
         Some(Cmd::Mcp { sub }) => {
@@ -1753,6 +1799,115 @@ fn tool_name_for_result(session: &Session, tool_use_id: &str) -> Option<String> 
         }
     }
     None
+}
+
+// ── scope + audit ────────────────────────────────────────────────────────
+
+fn scope_cmd(sub: ScopeCmd) -> Result<()> {
+    match sub {
+        ScopeCmd::Show => {
+            match aether_sec::load_scope() {
+                Ok(s) => {
+                    println!("scope file: {}", aether_sec::scope_path().display());
+                    println!("  authorized_by: {}", s.authorized_by);
+                    println!("  ticket_id:     {}", s.ticket_id);
+                    println!("  expires_at:    {}", s.expires_at);
+                    println!("  hosts ({}):", s.hosts.len());
+                    for h in &s.hosts {
+                        println!("    - {h}");
+                    }
+                    println!("  ip_ranges ({}):", s.ip_ranges.len());
+                    for r in &s.ip_ranges {
+                        println!("    - {r}");
+                    }
+                    println!("  fingerprint: {}", aether_sec::scope_fingerprint(&s));
+                }
+                Err(e) => {
+                    eprintln!("[scope] {e}");
+                    std::process::exit(1);
+                }
+            }
+            Ok(())
+        }
+        ScopeCmd::Init {
+            authorized_by,
+            ticket_id,
+            days,
+        } => {
+            let scope = aether_sec::Scope {
+                authorized_by,
+                ticket_id,
+                expires_at: chrono::Utc::now() + chrono::Duration::days(days),
+                hosts: vec![],
+                ip_ranges: vec![],
+                repos: vec![],
+            };
+            aether_sec::save_scope(&scope).map_err(|e| anyhow!("{e}"))?;
+            eprintln!(
+                "[scope] initialised at {} (expires in {days}d)",
+                aether_sec::scope_path().display()
+            );
+            Ok(())
+        }
+        ScopeCmd::AddHost { host } => {
+            let mut s = aether_sec::load_scope().map_err(|e| anyhow!("{e}"))?;
+            aether_sec::add_host(&mut s, &host).map_err(|e| anyhow!("{e}"))?;
+            aether_sec::save_scope(&s).map_err(|e| anyhow!("{e}"))?;
+            eprintln!("[scope] added host: {host}");
+            Ok(())
+        }
+        ScopeCmd::RemoveHost { host } => {
+            let mut s = aether_sec::load_scope().map_err(|e| anyhow!("{e}"))?;
+            aether_sec::remove_host(&mut s, &host);
+            aether_sec::save_scope(&s).map_err(|e| anyhow!("{e}"))?;
+            eprintln!("[scope] removed host: {host}");
+            Ok(())
+        }
+        ScopeCmd::AddRange { cidr } => {
+            let mut s = aether_sec::load_scope().map_err(|e| anyhow!("{e}"))?;
+            aether_sec::add_ip_range(&mut s, &cidr).map_err(|e| anyhow!("{e}"))?;
+            aether_sec::save_scope(&s).map_err(|e| anyhow!("{e}"))?;
+            eprintln!("[scope] added ip_range: {cidr}");
+            Ok(())
+        }
+    }
+}
+
+fn audit_cmd(sub: AuditCmd) -> Result<()> {
+    match sub {
+        AuditCmd::Show { limit } => {
+            let entries = aether_sec::load_audit().map_err(|e| anyhow!("{e}"))?;
+            if entries.is_empty() {
+                eprintln!("[audit] no entries at {}", aether_sec::audit_path().display());
+                return Ok(());
+            }
+            let take = entries.len().saturating_sub(limit);
+            for e in &entries[take..] {
+                println!(
+                    "{}  {:>14}  {:<24}  {}{}",
+                    e.ts.format("%Y-%m-%d %H:%M:%SZ"),
+                    e.tool,
+                    e.target,
+                    e.status,
+                    e.note
+                        .as_deref()
+                        .map(|n| format!("  // {n}"))
+                        .unwrap_or_default()
+                );
+            }
+            Ok(())
+        }
+        AuditCmd::Verify => match aether_sec::verify_audit_chain() {
+            Ok((n, _)) => {
+                println!("✓ audit chain verified — {n} entries");
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!("✗ {e}");
+                std::process::exit(1);
+            }
+        },
+    }
 }
 
 // ── session admin ────────────────────────────────────────────────────────

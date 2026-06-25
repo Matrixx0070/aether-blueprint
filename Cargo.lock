@@ -13,6 +13,7 @@ dependencies = [
  "aether-overlay",
  "aether-perm",
  "aether-render",
+ "aether-sec",
  "aether-selfcheck",
  "aether-skill",
  "aether-store",
@@ -20,6 +21,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "chrono",
  "clap",
  "crossterm",
  "once_cell",
@@ -137,6 +139,19 @@ dependencies = [
  "serde",
  "thiserror",
  "tokio",
+]
+
+[[package]]
+name = "aether-sec"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
 ]
 
 [[package]]
@@ -421,6 +436,7 @@ checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
  "num-traits",
+ "serde",
  "windows-link",
 ]
 

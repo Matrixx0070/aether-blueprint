@@ -29,7 +29,7 @@ bytes = "1"
 hex = "0.4"
 sha2 = "0.10"
 hmac = "0.12"
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
@@ -48,6 +48,7 @@ aether-skill     = { path = "crates/aether-skill",     version = "0.6.0" }
 aether-store     = { path = "crates/aether-store",     version = "0.6.0" }
 aether-render    = { path = "crates/aether-render",    version = "0.6.0" }
 aether-core      = { path = "crates/aether-core",      version = "0.6.0" }
+aether-sec       = { path = "crates/aether-sec",       version = "0.6.0" }
 
 [profile.release]
 lto = "thin"
