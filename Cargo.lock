@@ -146,7 +146,9 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "glob",
+ "once_cell",
  "regex",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror",

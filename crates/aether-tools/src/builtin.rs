@@ -610,6 +610,120 @@ impl Tool for LsTool {
     }
 }
 
+// ── WebFetch ──────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct WebFetchInput {
+    url: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    prompt: Option<String>,
+}
+
+pub struct WebFetchTool;
+
+#[async_trait]
+impl Tool for WebFetchTool {
+    fn name(&self) -> &str {
+        "WebFetch"
+    }
+    fn description(&self) -> &str {
+        "Fetch a URL and return its text content (HTML stripped to plain text). \
+         For pages with code samples, the structure is preserved as best-effort. \
+         Network timeout is 30s, max payload 5 MB."
+    }
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "url":    { "type": "string", "description": "URL to fetch (http(s)://...)" },
+                "prompt": { "type": "string", "description": "Optional hint about what to extract — currently advisory only" }
+            },
+            "required": ["url"]
+        })
+    }
+    async fn run(&self, input: Value) -> Result<String, ToolError> {
+        let inp: WebFetchInput = parse_input(input)?;
+        if !inp.url.starts_with("http://") && !inp.url.starts_with("https://") {
+            return Err(ToolError::Schema(format!(
+                "url must start with http(s)://: {}",
+                inp.url
+            )));
+        }
+        let client = reqwest::Client::builder()
+            .user_agent("aether-cli/0.2 (+https://aether.dev)")
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|e| ToolError::Io(format!("client: {e}")))?;
+        let resp = client
+            .get(&inp.url)
+            .send()
+            .await
+            .map_err(|e| ToolError::Io(format!("fetch: {e}")))?;
+        let status = resp.status();
+        let ct = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| ToolError::Io(format!("read body: {e}")))?;
+        if bytes.len() > 5 * 1024 * 1024 {
+            return Err(ToolError::Io(format!(
+                "payload too large: {} bytes (max 5 MiB)",
+                bytes.len()
+            )));
+        }
+        let text = String::from_utf8_lossy(&bytes);
+        let stripped = if ct.contains("text/html") || text.trim_start().starts_with('<') {
+            html_to_text(&text)
+        } else {
+            text.to_string()
+        };
+        let header = format!(
+            "[HTTP {status}, content-type: {}, {} bytes]\n",
+            if ct.is_empty() { "?" } else { &ct },
+            bytes.len()
+        );
+        Ok(truncate(&format!("{header}{stripped}"), MAX_TOOL_OUTPUT))
+    }
+}
+
+/// Very lightweight HTML → text: drop script/style blocks, then strip
+/// all remaining tags, decode a small set of entities, collapse runs of
+/// whitespace. Not a full parser — fast enough for inline use.
+fn html_to_text(html: &str) -> String {
+    use once_cell::sync::Lazy;
+    use regex::Regex;
+    static SCRIPT: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?si)<script\b[^>]*>.*?</script>").unwrap());
+    static STYLE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?si)<style\b[^>]*>.*?</style>").unwrap());
+    static NOSCRIPT: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?si)<noscript\b[^>]*>.*?</noscript>").unwrap());
+    static TAGS: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[^>]+>").unwrap());
+    static WS: Lazy<Regex> = Lazy::new(|| Regex::new(r"[ \t]+").unwrap());
+    static NL: Lazy<Regex> = Lazy::new(|| Regex::new(r"\n{3,}").unwrap());
+    let s = SCRIPT.replace_all(html, "");
+    let s = STYLE.replace_all(&s, "");
+    let s = NOSCRIPT.replace_all(&s, "");
+    let s = TAGS.replace_all(&s, " ");
+    let s = s
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'");
+    let s = WS.replace_all(&s, " ");
+    let s = NL.replace_all(&s, "\n\n");
+    s.trim().to_string()
+}
+
 // ── registry helper ───────────────────────────────────────────────────────
 
 pub fn register_builtins(registry: &mut crate::ToolRegistry) {
@@ -620,6 +734,7 @@ pub fn register_builtins(registry: &mut crate::ToolRegistry) {
     registry.register(Box::new(GrepTool));
     registry.register(Box::new(GlobTool));
     registry.register(Box::new(LsTool));
+    registry.register(Box::new(WebFetchTool));
 }
 
 #[cfg(test)]
@@ -703,12 +818,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn register_builtins_loads_all_seven() {
+    async fn register_builtins_loads_all() {
         let mut r = ToolRegistry::new();
         register_builtins(&mut r);
         let names = r.names();
-        for expected in ["Bash", "Read", "Write", "Edit", "Grep", "Glob", "LS"] {
+        for expected in ["Bash", "Read", "Write", "Edit", "Grep", "Glob", "LS", "WebFetch"] {
             assert!(names.contains(&expected.to_string()), "missing: {expected}");
         }
+    }
+
+    #[test]
+    fn html_to_text_strips_tags_and_scripts() {
+        let html = "<html><head><script>var x=1;</script><style>.x{}</style></head>\
+                    <body><h1>Title</h1><p>Hello <b>world</b>!</p></body></html>";
+        let out = html_to_text(html);
+        assert!(out.contains("Title"));
+        assert!(out.contains("Hello"));
+        assert!(out.contains("world"));
+        assert!(!out.contains("<"), "tags should be stripped: {out}");
+        assert!(!out.contains("var x=1"), "script body should be dropped: {out}");
     }
 }
