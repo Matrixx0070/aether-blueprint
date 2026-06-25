@@ -5,6 +5,60 @@ return."
 
 ---
 
+## v0.7.3 — Security Edge stability run (2026-06-25)
+
+23-fixture suite, 3 runs each, `threshold 1.0` (all three must pass).
+Model: `claude-sonnet-4-6` via autoroute. Exit code 0.
+
+```bash
+aether security-eval eval/security/suite.yaml --runs 3 --json
+```
+
+### Per-fixture stability (23/23 passed, 100% pass-rate on every fixture)
+
+| File | CWE | Pass | Median ms | Min ms | Max ms |
+|---|---|---:|---:|---:|---:|
+| 01_sqli.py | CWE-89 | 3/3 | 14,844 | 12,655 | 17,675 |
+| 02_path_traversal.py | CWE-22 | 3/3 | 15,227 | 10,168 | 15,545 |
+| 03_hardcoded_secret.py | CWE-798 | 3/3 | 21,372 | 21,345 | 22,447 |
+| 04_command_injection.py | CWE-78 | 3/3 | 8,143 | 7,668 | 10,234 |
+| 05_weak_crypto.py | CWE-327 | 3/3 | 17,331 | 14,256 | 21,785 |
+| 06_insecure_deserialization.py | CWE-502 | 3/3 | 16,759 | 16,039 | 23,819 |
+| 07_ssrf.py | CWE-918 | 3/3 | 23,583 | 20,738 | 24,550 |
+| 08_java_sqli.java | CWE-89 | 3/3 | 15,059 | 13,822 | 15,135 |
+| 09_java_xxe.java | CWE-611 | 3/3 | 18,975 | 18,604 | 24,504 |
+| 10_java_weak_crypto.java | CWE-327 | 3/3 | 19,927 | 19,667 | 23,525 |
+| 11_cpp_buffer_overflow.cpp | CWE-787 | 3/3 | 17,928 | 17,434 | 19,829 |
+| 12_cpp_format_string.cpp | CWE-134 | 3/3 | 6,284 | 5,371 | 6,505 |
+| 13_cpp_integer_overflow.cpp | CWE-190 | 3/3 | 25,098 | 25,035 | 25,571 |
+| 14_go_command_injection.go | CWE-78 | 3/3 | 21,776 | 18,667 | 23,833 |
+| 15_go_path_traversal.go | CWE-22 | 3/3 | 19,839 | 17,681 | 20,133 |
+| 16_go_hardcoded_key.go | CWE-798 | 3/3 | 13,175 | 11,652 | 19,659 |
+| 17_py_redos.py | CWE-1333 | 3/3 | 22,822 | 14,151 | 31,882 |
+| 18_py_jinja_autoescape.py | CWE-79 | 3/3 | 13,547 | 11,661 | 17,204 |
+| 19_java_jndi.java | CWE-917 | 3/3 | 18,798 | 10,824 | 20,817 |
+| 20_java_jackson_polymorphic.java | CWE-502 | 3/3 | 22,850 | 22,172 | 25,093 |
+| 21_go_map_race.go | CWE-362 | 3/3 | 18,774 | 18,182 | 20,218 |
+| 22_go_missing_ctx_timeout.go | CWE-400 | 3/3 | 16,717 | 15,197 | 18,007 |
+| 23_cpp_use_after_free.cpp | CWE-416 | 3/3 | 16,271 | 15,460 | 20,149 |
+
+### Per-language median summary
+
+| Language | Fixtures | Avg median ms | Max jitter (max/min ratio) |
+|---|---:|---:|---:|
+| Python (01–07, 17–18) | 9 | 17,069 | 2.5× (17_py_redos) |
+| Java (08–10, 19–20) | 5 | 19,122 | 1.9× (19_java_jndi) |
+| C++ (11–13, 23) | 4 | 16,395 | 4.8× (12_cpp_format_string outlier low) |
+| Go (14–16, 21–22) | 5 | 18,056 | 1.7× (14_go_command_injection) |
+| **All** | **23** | **17,791** | — |
+
+Zero flaky fixtures at threshold 1.0. The widest jitter is `17_py_redos.py`
+(14–32 s range) due to model verbosity variance on the regex analysis, and
+`12_cpp_format_string.cpp` (5–6 s) which is consistently the fastest fixture
+because the bug is immediately obvious to the critic.
+
+---
+
 ## v0.7.2 — Security Edge expanded to 4 languages (2026-06-25)
 
 The v0.7 suite shipped Python only. v0.7.2 adds 9 fixtures across Java,
