@@ -1,54 +1,67 @@
 # Roadmap
 
-## v0.2 — shipped 2026-06-25 (this release)
+## v0.3 — shipped 2026-06-25 (this release)
 
-- Streaming SSE (text deltas progressive in REPL)
-- Bundled D7 self-check rule library (14 rules, was empty in v0.1)
-- AETHER.md / CLAUDE.md auto-load (cwd ancestry + `~/.aether/CLAUDE.md`)
-- WebFetch, NotebookEdit, TodoWrite, Agent tools (11 total)
-- Tool output safety (binary detection via NUL-byte heuristic)
-- Interactive permission prompts (`y/n/a` per mutating call in default mode)
-- Hooks system: SessionStart + UserPromptSubmit
-- Settings file `~/.aether/settings.json`
-- Custom slash commands from `~/.aether/commands/*.md`
-- rustyline REPL: history, arrow keys, multi-line, Ctrl-C handling
-- `aether list` recent sessions
+Phase 1 — v0.2.1 patches:
+- D7 rule 06 (`lyrics_and_poems`) tuning: skips markdown structural lines
+  (bullets, ordered lists, headings, block quotes, tables, code fences)
+- PreToolUse / PostToolUse hooks (Executor gains ToolHookCallback +
+  drain_pending_reminders)
+- `aether config set` writes atomically to settings.json (recognised:
+  default_model, permission_mode, always_allow_tools, env.KEY)
+- `aether resume` with no id shows interactive picker
 
-## v0.2.1 — patch (next)
+Phase 2 — MCP client:
+- Real `aether-mcp` crate: stdio transport, JSON-RPC 2.0 codec, multiplexed
+  reader task, initialize handshake at protocolVersion 2024-11-05
+- tools/list, tools/call, resources/list, read_resource, prompts/list
+- `McpToolAdapter` mounts MCP tools as `mcp__<server>__<tool>`
+- `aether mcp add/list/remove` subcommands → `~/.aether/mcp.json`
 
-- D7 rule 06 (`lyrics_and_poems`) over-aggressive on short bullets — tune
-  thresholds or add an `applies_when` predicate that suppresses on
-  non-creative-writing contexts.
-- PreToolUse / PostToolUse hooks (needs Executor changes to thread the
-  hook list).
-- `config set` actually writes settings.json (currently requires manual edit).
-- Interactive resume picker (`aether resume` with no id shows a fuzzy
-  picker over `aether list` output).
+Phase 3 — Skills + memory:
+- `Skill` tool loads `~/.aether/skills/*.md` with YAML frontmatter
+- `MemoryRead` + `MemoryWrite` tools backed by `~/.aether/memory/*.md`
+- `<memory-index>` reminder auto-injected at session start (compounding
+  context across sessions without inlining every file)
+- `/memory` slash command lists entries
 
-## v0.3 — feature parity push
+Phase 4 — Polish:
+- `aether doctor` health check (auth, settings, hooks, mcp, disk)
+- Inline diff preview (red/green) when Edit runs
+- Token tracking: MessagesResponse gains `usage`; SSE parses
+  message_start + message_delta; Session accumulates totals; `/usage`
+  slash command
+- Tab completion in REPL for slash commands (built-in + custom)
 
-- MCP client (real protocol: tools + resources + prompts; OAuth flow per server)
-- Sub-agent FleetView (TUI for visualising parallel sub-agents)
-- Ink-style TUI: split panes, inline diff viewer for Edit/Write, live tool
-  status panel
-- Plugin system: external Rust dylibs or WASM modules registered as tools
-- BYOC providers: Bedrock, Vertex, Foundry, Mantle
-- Aether-specific memory store with semantic recall (the `aether-mem` placeholder
-  crate becomes real)
-- Skill loader (the `aether-skill` placeholder becomes real — markdown skills
-  that compile into available capabilities at session start)
+## v0.3.1 — patch (next)
 
-## v0.4 — surfaces
+- D7 rule 06: add `applies_when: creative_writing_context` predicate using
+  user-input introspection (rather than the current structural-only fix)
+- Persistent always-allow tools list from settings (already wired at startup,
+  but `a` answer at prompt currently only updates in-memory; persist back)
+- `aether mcp test NAME` to probe a server without entering a session
+- Per-model cost estimation in `/usage` (Haiku / Sonnet / Opus pricing table)
 
-- IDE integrations: VS Code extension, JetBrains plugin
+## v0.4 — TUI + surfaces
+
+- Ink-style TUI: split panes (chat / tool log / diff viewer / status bar)
+- FleetView for parallel sub-agents
+- Plugin system via WASM modules registered as tools
+- BYOC providers: Bedrock, Vertex, Foundry, Mantle (each ~3h slice)
 - HTTP API server mode (`aether serve`) for remote consumption
-- Enterprise gateway: SAML / OIDC federation, audit log forwarding
+- VS Code extension, JetBrains plugin
+- MCP SSE + websocket transports
+
+## v0.5 — enterprise
+
+- SAML / OIDC federation
+- Audit log forwarding to standard SIEM
+- Per-org policy enforcement (tool blocklists, model restrictions)
+- Trusted-device enrollment
 
 ## Explicit non-goals
 
 - A drop-in `claude` binary replacement that spoofs Claude Code identity.
-  aether's OAuth gate uses the SDK-agent identity prefix (`"You are a Claude
-  agent, built on Anthropic's Claude Agent SDK."`), which is the documented
-  third-party path. We do not impersonate.
+  aether's OAuth uses the SDK-agent identity prefix; we do not impersonate.
 - Telemetry to a vendor endpoint. Hooks let operators export what they need.
-- Auto-update (the binary is small enough to rebuild from source).
+- Auto-update.

@@ -5,12 +5,13 @@ Anthropic Messages API. It runs an explicit perceive → plan → tool-select �
 execute → observe → verify loop with a built-in self-check gate and reminder
 tamper-test — pipeline scaffolding most agents don't ship.
 
-## Status: v0.2
+## Status: v0.3
 
-11 built-in tools, REPL with rustyline (history + arrow keys + multi-line),
-streaming SSE, OAuth token auto-refresh, sub-agent delegation, custom slash
-commands, project context auto-loading, settings file, hooks system, session
-list. End-to-end verified against Opus 4.7 / Opus 4.8 / Sonnet 4.6 / Haiku 4.5.
+End-to-end working: MCP client, sub-agent delegation, persistent memory,
+markdown skills, hooks (4 events), interactive permission prompts, token
+tracking, streaming SSE, rustyline REPL with tab completion, `aether doctor`.
+13 built-in tools + every MCP server's tools auto-mounted. Verified live
+against Opus 4.7 / 4.8 / Sonnet 4.6 / Haiku 4.5.
 
 ## Install
 
@@ -18,40 +19,49 @@ list. End-to-end verified against Opus 4.7 / Opus 4.8 / Sonnet 4.6 / Haiku 4.5.
 cd aether-blueprint
 ./bin/install.sh                  # builds + installs to ~/.local/bin/aether
 aether --version
+aether doctor                     # health check
 ```
 
 ## Auth
 
 `aether` auto-detects credentials in this order:
 
-1. `ANTHROPIC_API_KEY` env var (Console API key path, billed against Console)
+1. `ANTHROPIC_API_KEY` env var
 2. `CLAUDE_CODE_OAUTH_TOKEN` env var (raw Bearer)
-3. `~/.claude/.credentials.json` (Claude Code OAuth, billed against Max)
+3. `~/.claude/.credentials.json` (Claude Code OAuth, Max subscription)
 
-OAuth tokens are auto-refreshed within 10 minutes of expiry. A 401 triggers a
-forced refresh + retry. The refreshed token is atomically written back
-(`.tmp` + rename, mode 0600).
+OAuth tokens auto-refresh within 10 min of expiry. 401 → forced refresh +
+retry. Atomic write back (`.tmp` + rename, mode 0600).
 
 ## Usage
 
 ```bash
-# Interactive REPL with streaming
+# Interactive REPL (rustyline: history, arrow keys, Ctrl-R, multi-line, tab)
 aether
 aether --model claude-opus-4-8
-aether --permission-mode bypassPermissions       # skip per-tool confirmation
-aether --cwd ~/my/project                        # set working directory
+aether --permission-mode bypassPermissions
 
-# One-shot agent call (uses tools)
-aether --print "Write a hello world in Rust at /tmp/hello.rs and run it"
+# One-shot
+aether --print "Write hello world in Rust to /tmp/hello.rs and run it"
 
-# Resume sessions
-aether --continue                                # latest session
-aether resume <session-id>                       # specific session
-aether list --limit 20                           # show recent sessions
+# Sessions
+aether --continue                          # latest session
+aether resume                              # interactive picker (recent 20)
+aether resume <id>                         # specific session
+aether list --limit 20                     # show recent sessions
 
-# Scaffold + config
-aether init                                       # creates AETHER.md
-aether config show                                # show resolved settings
+# Setup + introspection
+aether init                                # creates AETHER.md scaffold
+aether doctor                              # health check
+aether config show                         # print resolved settings
+aether config set default_model claude-opus-4-8
+aether config set always_allow_tools "Bash,Edit,Write"
+aether config set env.AETHER_DEBUG 1
+
+# MCP servers
+aether mcp add fs -- npx -y @modelcontextprotocol/server-filesystem /tmp
+aether mcp list
+aether mcp remove fs
 ```
 
 ### Slash commands (in REPL)
@@ -62,47 +72,111 @@ aether config show                                # show resolved settings
 | `/clear` | Wipe in-memory history |
 | `/model NAME` | Switch active model |
 | `/tools` | List registered tools |
+| `/memory` | List `~/.aether/memory/` entries |
+| `/usage` | Show token totals for the session |
 | `/commands` | List custom commands |
 | `/<custom>` | Run a `~/.aether/commands/<custom>.md` template |
-| `/quit` | Exit (also Ctrl-D, or double Ctrl-C) |
+| `/quit` | Exit |
 
-REPL input supports arrow keys, Ctrl-R history search, trailing-backslash
-multi-line continuation, persistent history at `~/.aether/history`.
+Tab cycles candidates. Trailing backslash continues input on next line.
+First Ctrl-C clears, second exits.
 
-### Built-in tools (11)
+### Built-in tools (13)
 
 | Tool | Purpose |
 |---|---|
-| `Bash` | Run shell command via `/bin/bash -c` (120s default timeout, max 600s) |
-| `Read` | Read file; refuses binaries (NUL-byte heuristic); supports offset/limit |
-| `Write` | Create / overwrite a file (absolute paths only) |
+| `Bash` | Run shell command (`/bin/bash -c`, 120s default, 600s max) |
+| `Read` | Read file with line numbers; refuses binaries (NUL detection) |
+| `Write` | Create/overwrite (absolute paths only) |
 | `Edit` | Exact string-replace with uniqueness check |
-| `Grep` | ripgrep wrapper; content / files_with_matches / count modes |
-| `Glob` | Pattern matching; sorted by mtime, newest first |
-| `LS` | List directory one level deep |
-| `WebFetch` | HTTP GET; strips HTML to text; 30s timeout; 5 MiB max |
-| `NotebookEdit` | `.ipynb` cell-level edit (replace / insert / delete) |
-| `TodoWrite` | In-process task tracker the model uses to break work down |
-| `Agent` | Spawn a fresh sub-session for a self-contained delegated task |
+| `Grep` | ripgrep wrapper |
+| `Glob` | Path matching, sorted by mtime |
+| `LS` | Directory listing |
+| `WebFetch` | HTTP GET, HTML stripped to text |
+| `NotebookEdit` | `.ipynb` cell-level edit |
+| `TodoWrite` | In-process task tracker |
+| `Agent` | Spawn sub-session for delegated work |
+| `MemoryRead` | Read `~/.aether/memory/<name>.md` |
+| `MemoryWrite` | Save `~/.aether/memory/<name>.md` |
+| `Skill` | Invoke `~/.aether/skills/<name>.md` (only when any skills are present) |
+
+Plus every connected MCP server's tools, namespaced `mcp__<server>__<tool>`.
 
 ### Permission modes
 
 | Mode | Behavior |
 |---|---|
-| `default` | Read-only allowed; mutating tools prompt for `y/n/a` (Allow/Deny/Always-for-tool) |
-| `acceptEdits` | Read-only and file mutators allowed; Bash/network refused |
-| `plan` | Read-only only; all mutators refused |
-| `bypassPermissions` | Everything allowed (operator opt-in) |
+| `default` | Read-only allowed; mutating tools prompt `y/n/a` |
+| `acceptEdits` | Read-only + file mutators allowed; Bash/network refused |
+| `plan` | Read-only only |
+| `bypassPermissions` | Everything allowed |
 
-In `default` mode the REPL surfaces an interactive prompt per mutating tool.
-Answering `a` adds that tool to the session's always-allow set.
+Answering `a` adds the tool to the session's always-allow set. Persistent
+allowlist via `aether config set always_allow_tools ...`.
+
+### MCP (Model Context Protocol)
+
+JSON-RPC 2.0 over stdio. Add a server, its tools become `mcp__<name>__<tool>`
+in the registry; the model calls them like any built-in:
+
+```bash
+aether mcp add fs -- npx -y @modelcontextprotocol/server-filesystem /tmp
+# Then in aether:
+#   "Use the mcp__fs__read_file tool to read /tmp/notes.md"
+```
+
+Configuration persisted at `~/.aether/mcp.json`. Spawned + initialized at
+session start; killed on session end.
+
+### Hooks (`~/.aether/hooks.json`)
+
+```json
+{
+  "SessionStart":     [{"command": "echo 'Repo:' $(basename $(pwd))"}],
+  "UserPromptSubmit": [{"command": "./bin/safety-check.sh"}],
+  "PreToolUse":       [{"command": "echo 'about to run' $(jq -r .tool)", "tool_matcher": "Bash"}],
+  "PostToolUse":      [{"command": "logger -t aether 'tool done'"}]
+}
+```
+
+Each hook is `/bin/bash -c <command>` with the event payload as JSON on
+stdin. Stdout (≤ 64 KiB, 30s timeout) becomes a kernel reminder. PreToolUse
+and PostToolUse can filter by `tool_matcher` substring.
+
+### Memory (`~/.aether/memory/*.md`)
+
+Cross-session compounding. At session start, aether injects a `<memory-index>`
+reminder listing every memory file's name + first line. The model calls
+`MemoryRead` on demand and `MemoryWrite` to save new facts.
+
+```bash
+# Model can: MemoryWrite{name:"project-codename", content:"Lighthouse"}
+# Next session: model sees memory-index, can MemoryRead it back.
+```
+
+### Skills (`~/.aether/skills/*.md`)
+
+Each `.md` file becomes a callable skill via the `Skill` tool. YAML
+frontmatter declares name + description; body is the skill prompt.
+
+```markdown
+---
+name: code-review
+description: Audit staged git diff and produce a punch list
+---
+Review the staged diff. Produce BLOCKER/HIGH/MEDIUM/LOW sections...
+```
+
+### Custom slash commands (`~/.aether/commands/*.md`)
+
+Each `.md` becomes a `/name` command. `$ARGS`, `$1`, `$2`, … substitute
+the rest of the line.
 
 ### Project context auto-load
 
-At session start, aether walks the cwd up to root and reads any `AETHER.md`
-or `CLAUDE.md` found, plus `~/.aether/CLAUDE.md` as a global baseline. The
-combined content is injected as a kernel-source reminder so the model has
-project context without a hand-curated system prompt.
+At session start aether walks cwd up to root and reads any `AETHER.md` or
+`CLAUDE.md`, plus `~/.aether/CLAUDE.md` as a global baseline. The combined
+content is injected as a kernel-source reminder.
 
 ### Settings (`~/.aether/settings.json`)
 
@@ -111,55 +185,27 @@ project context without a hand-curated system prompt.
   "default_model": "claude-opus-4-8",
   "permission_mode": "default",
   "always_allow_tools": ["Bash", "Write", "Edit"],
-  "env": {
-    "AETHER_LOG_LEVEL": "info"
-  }
+  "env": { "AETHER_LOG_LEVEL": "info" }
 }
 ```
 
-Resolution: CLI flag > env var > settings > built-in default.
-
-### Hooks (`~/.aether/hooks.json`)
-
-```json
-{
-  "SessionStart": [
-    {"command": "echo 'Repo:' $(basename $(pwd))"}
-  ],
-  "UserPromptSubmit": [
-    {"command": "./bin/safety-check.sh"}
-  ]
-}
-```
-
-Each hook is `/bin/bash -c <command>`. The event payload arrives on stdin as
-JSON. Stdout (≤ 64 KiB, 30s timeout) becomes a kernel reminder for the next
-LLM call. `PreToolUse` / `PostToolUse` planned for v0.2.1.
-
-### Custom slash commands (`~/.aether/commands/*.md`)
-
-Files in this directory become `/<filename>` commands at the REPL. `$ARGS`,
-`$1`, `$2`, … are substituted from whatever follows the command.
-
-```markdown
-# ~/.aether/commands/calc.md
-Compute the following and reply with just the numeric answer:
-$ARGS
-```
-
-`/calc 12*7+3` → sends the substituted prompt to the model.
+CLI flag > env var > settings > built-in default. Edit via `aether config set`.
 
 ### Session persistence
 
-Each session writes to `~/.aether/sessions/<id>.jsonl`, one entry per turn.
-`~/.aether/sessions/latest` holds the most-recent id for `--continue`. List
-recent sessions with `aether list`.
+`~/.aether/sessions/<id>.jsonl` per session, one entry per turn.
+`~/.aether/sessions/latest` points to the most-recent id for `--continue`.
 
 ### Streaming
 
-Assistant text streams progressively to stdout as Anthropic delivers SSE
-deltas. Tool calls remain fully buffered (the agent loop needs the complete
-`input` JSON before it can run the tool).
+Assistant text streams via SSE. Tool calls are accumulated before dispatch
+(the agent loop needs the complete `input` JSON before it can run a tool).
+
+### Token tracking
+
+Each response's `usage` field is added to a session-wide counter. `/usage`
+prints `in / out / cache_create / cache_read / total`. Works for both
+streaming (parsed from `message_delta`) and non-streaming paths.
 
 ## Architecture
 
@@ -167,91 +213,60 @@ deltas. Tool calls remain fully buffered (the agent loop needs the complete
 crates/
 ├── aether-cli          Binary; REPL + agent-print + session lifecycle
 ├── aether-core         Agent loop (Session, agent_turn, ContextAssembler, Verifier)
-├── aether-llm          LlmProvider trait + Anthropic Messages + OAuth + SSE
-├── aether-tools        Tool trait + 11 built-ins
+├── aether-llm          LlmProvider trait + Anthropic Messages + OAuth + SSE + Usage
+├── aether-tools        Tool trait + 11 standard built-ins (memory/skill/agent live in aether-cli)
+├── aether-mcp          MCP 2024-11-05 client (stdio transport)
 ├── aether-hook         D1 reminder tamper-test (34-signal classifier)
-├── aether-selfcheck    D7 pre-emission self-check gate (14-rule YAML library)
+├── aether-selfcheck    D7 pre-emission self-check gate (14-rule YAML library, structural-line aware)
 ├── aether-overlay      D1–D7 activation predicates
 ├── aether-perm         Permission mode enum
-├── aether-mcp          MCP client (placeholder for v0.3)
-├── aether-mem          Memory store (placeholder for v0.3)
-├── aether-store        Settings store (placeholder for v0.3)
-├── aether-skill        Skill loader (placeholder for v0.3)
-└── aether-render       TUI rendering (placeholder for v0.3)
+├── aether-mem          Reserved (memory store currently in aether-cli)
+├── aether-store        Reserved (settings store currently in aether-cli)
+├── aether-skill        Reserved (skill loader currently in aether-cli)
+└── aether-render       Reserved for v0.4 Ink-style TUI
 ```
-
-Agent loop phases:
-
-1. **perceive** — assemble system prompt + messages (D1 reminder filter, D6
-   long-conversation injection, AETHER.md inclusion)
-2. **plan** — refresh active plan if dirty (L1 plan critic)
-3. **tool-select** — single LLM call (streamed); returned tool_uses drive execute
-4. **execute** — per tool_use: permission decide (with optional interactive
-   prompt) → run → capture
-5. **observe** — append assistant turn + tool results
-6. **verify** — D7 self-check on assistant text; rewrite or block
 
 ## aether vs claude-code
 
-| Capability | Claude Code | aether (v0.2) |
+| Capability | Claude Code | aether (v0.3) |
 |---|:---:|:---:|
 | Single-binary CLI | ✅ | ✅ |
-| OAuth + Max-subscription auth | ✅ | ✅ |
-| Token auto-refresh + 401 retry | ✅ | ✅ |
+| OAuth + Max-subscription auth + auto-refresh | ✅ | ✅ |
 | Streaming SSE | ✅ | ✅ |
-| Read / Write / Edit / Bash / Grep / Glob / LS | ✅ | ✅ |
-| WebFetch | ✅ | ✅ |
-| NotebookEdit | ✅ | ✅ |
-| TodoWrite | ✅ | ✅ |
-| Agent (sub-loop) | ✅ | ✅ |
-| Interactive REPL with history + arrow keys + Ctrl-R | ✅ | ✅ |
-| Multi-line input | ✅ | ✅ (trailing backslash) |
-| Ctrl-C handling | ✅ | ✅ (first clears, second exits) |
-| Session persistence + resume | ✅ | ✅ |
-| `--list` recent sessions | ✅ | ✅ |
-| Slash commands | ✅ | ✅ |
+| Bash / Read / Write / Edit / Grep / Glob / LS | ✅ | ✅ |
+| WebFetch / NotebookEdit / TodoWrite | ✅ | ✅ |
+| Sub-agent (Agent tool) | ✅ | ✅ |
+| Memory (cross-session) | ✅ | ✅ |
+| Skills | ✅ | ✅ |
+| MCP client | ✅ | ✅ |
+| Hooks (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse) | ✅ | ✅ |
+| Interactive permission prompts | ✅ | ✅ |
+| Settings file + `config set` | ✅ | ✅ |
 | Custom slash commands | ✅ | ✅ |
-| Project context auto-load (CLAUDE.md / AETHER.md) | ✅ | ✅ |
-| Settings file | ✅ | ✅ |
-| Hooks (SessionStart, UserPromptSubmit) | ✅ | ✅ |
-| Interactive permission prompts | ✅ | ✅ (y/n/a) |
-| PreToolUse / PostToolUse hooks | ✅ | ⬜ (v0.2.1) |
-| Ink-style TUI (split panes, diff viewer) | ✅ | ⬜ (v0.3) |
-| MCP client | ✅ | ⬜ (v0.3) |
-| FleetView (sub-agent UI) | ✅ | ⬜ (v0.3) |
+| Project context auto-load | ✅ | ✅ |
+| Token / cost tracking | ✅ | ✅ |
+| REPL: history, arrow keys, multi-line, Ctrl-C, tab completion | ✅ | ✅ |
+| Session list + resume picker | ✅ | ✅ |
+| `aether doctor` health check | ✅ | ✅ |
+| Ink-style TUI (split panes, live diff view) | ✅ | ⬜ (v0.4) |
+| FleetView (sub-agent UI) | ✅ | ⬜ (v0.4) |
+| Plugin system (dylib / WASM) | ✅ | ⬜ (v0.4) |
+| BYOC providers (Bedrock / Vertex / Foundry) | ✅ | ⬜ (v0.4) |
 | IDE integrations | ✅ | ⬜ |
-| BYOC providers (Bedrock / Vertex / Foundry) | ✅ | ⬜ |
 | **D1 reminder tamper-test (34-signal classifier)** | ⬜ | ✅ |
-| **D7 self-check gate (14-rule library)** | ⬜ | ✅ |
-| **Deterministic first-match tool routing (D3)** | ⬜ | ✅ |
+| **D7 self-check gate (14 rules, structural-line aware)** | ⬜ | ✅ |
+| **Deterministic first-match routing (D3)** | ⬜ | ✅ |
 
-aether ships the three Fable-5 deltas the public Claude Code build doesn't:
-D1 (reminder filtering against prompt-injection), D7 (pre-emission self-check
-with rewrite/block), and D3 (deterministic first-match routing). Everything
-else is explicit roadmap.
+aether ships the three Fable-5 deltas Claude Code doesn't (D1 prompt-injection
+filter, D7 pre-emission gate, D3 deterministic routing). For everything else,
+v0.3 is at functional parity on the core agent loop; v0.4 picks up TUI +
+plugin surfaces.
 
 ## Performance
 
-See [`BENCHMARK.md`](BENCHMARK.md). n=20 head-to-head on Haiku 4.5: aether is
-roughly **2–3× faster at p50** and tighter at p95 than `claude` for the
-"spin up agent → do tools → return" loop.
-
-## Verifying the install
-
-```bash
-# Should print: pong
-aether --model claude-haiku-4-5-20251001 --print "Reply with the single word: pong"
-
-# Should create the file, then read it back
-aether --permission-mode bypassPermissions --print \
-  "Use Write to put 'aether works' in /tmp/aether-check.txt, then Read it back"
-cat /tmp/aether-check.txt
-```
-
-## Known issues
-
-- D7 rule 06 (`lyrics_and_poems`) is over-aggressive on short-bulleted output;
-  the verifier may block harmless lists. Logged for a v0.2.1 rule tuning pass.
+See [`BENCHMARK.md`](BENCHMARK.md). aether is consistently 2–3× faster at p50
+and 2–4× faster at p95 than `claude` for the agent-loop+IO axis, across v0.1
+through v0.3.
 
 ## License
 
