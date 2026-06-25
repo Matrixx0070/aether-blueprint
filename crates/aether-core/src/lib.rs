@@ -193,8 +193,15 @@ async fn agent_turn_inner(
 
     // ── compact — run BEFORE assembly so the next LLM call sees the
     // shortened history. Fires only when cumulative usage > 80% of the
-    // model's context window AND history has at least 4 items. ────────
-    let _ = compaction::maybe_compact(session).await?;
+    // model's context window AND history has at least 4 items.
+    //
+    // Fail-soft: a transient provider error during the summary call
+    // shouldn't kill the user's turn. Skip compaction silently and
+    // let the regular call attempt proceed — if context is genuinely
+    // full, the model will return its own 400 and the user sees that. ─
+    if let Err(e) = compaction::maybe_compact(session).await {
+        eprintln!("[compaction] skipped this turn: {e}");
+    }
 
     // ── plan ─────────────────────────────────────────────────────────
     // Always call refresh so the sliding-window prune runs even on clean

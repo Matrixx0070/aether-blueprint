@@ -443,6 +443,9 @@ mod tests {
         // True parallel dispatch interleaves start markers before any
         // finish marker. Strict sequential would produce
         // "Read:start, Read:finish, Glob:start, Glob:finish, ...".
+        // Hold ENV_TEST_LOCK so the kill-switch test cannot race
+        // AETHER_NO_PARALLEL_TOOLS=1 into our environment.
+        let _guard = crate::mock::ENV_TEST_LOCK.lock().expect("env lock");
         let log = Arc::new(tokio::sync::Mutex::new(Vec::<String>::new()));
         let mut reg = ToolRegistry::new();
         reg.register(Box::new(InterleaveTool {
@@ -487,6 +490,8 @@ mod tests {
 
     #[tokio::test]
     async fn mutating_tools_break_parallel_batch_and_preserve_order() {
+        // Hold the lock so AETHER_NO_PARALLEL_TOOLS cannot flip mid-test.
+        let _guard = crate::mock::ENV_TEST_LOCK.lock().expect("env lock");
         let mut reg = ToolRegistry::new();
         reg.register(Box::new(SleepyTool {
             name: "Read",
@@ -545,6 +550,8 @@ mod tests {
 
     #[tokio::test]
     async fn all_tools_actually_dispatch_in_parallel_batch() {
+        // Hold the lock so AETHER_NO_PARALLEL_TOOLS cannot flip mid-test.
+        let _guard = crate::mock::ENV_TEST_LOCK.lock().expect("env lock");
         // Counts must hit each tool exactly once even when batched.
         let counter = Arc::new(AtomicU64::new(0));
         let mut reg = ToolRegistry::new();
