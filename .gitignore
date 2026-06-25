@@ -2,3 +2,6 @@
 **/*.rs.bk
 *.swp
 .DS_Store
+# Python bytecode from eval/coding fixtures
+**/__pycache__/
+*.pyc
