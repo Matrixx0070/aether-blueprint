@@ -31,9 +31,12 @@ checks.push([r.includes('alice') && r.includes('hello'), 'happy-path-renders']);
 r = renderComment({author: '<script>alert(1)</script>', body: 'ok'});
 checks.push([!r.includes('<script>'), 'script-tag-escaped']);
 
-// Attribute-boundary injection
+// Attribute-boundary injection — the < must be escaped so the
+// browser sees literal text, not an img tag. (The substring
+// "onerror=" appearing as escaped body text is HARMLESS — it's the
+// raw < and > that make it executable.)
 r = renderComment({author: 'bob', body: '<img src=x onerror=alert(1)>'});
-checks.push([!r.includes('onerror=alert'), 'attr-injection-escaped']);
+checks.push([!r.includes('<img src=x'), 'attr-injection-escaped']);
 
 // Ampersand corner case
 r = renderComment({author: 'dan & co', body: 'a & b'});

@@ -1,0 +1,5 @@
+name: smoke-task-07-only
+tasks:
+  - dir: tasks/07_js_xss
+    prompt: "render.js builds an HTML string by interpolating user input directly into a template — that's an XSS hole. Fix renderComment so that <, >, &, \", and ' in user input are HTML-escaped before being inserted into the template. Don't change the function signature or break the happy path."
+    timeout_secs: 240

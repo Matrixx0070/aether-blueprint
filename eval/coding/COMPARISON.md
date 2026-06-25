@@ -29,14 +29,22 @@ Run command:
 
 Result (see [RESULTS.md](RESULTS.md) for the per-task table):
 
-| Metric | Value |
-|--------|-------|
-| Tasks attempted | 5 |
-| Tasks passed | **5/5 (100%)** |
-| Total agent wall-clock | 184s |
-| Total input tokens | 162,624 |
-| Total output tokens | 6,209 |
-| Total cost | ~$0.58 USD |
+| Metric | v1 (5 tasks, Python) | v2 (10 tasks, multi-lang) |
+|--------|----------------------|---------------------------|
+| Tasks attempted | 5 | 10 |
+| Tasks passed | **5/5 (100%)** | **10/10 (100%)\*** |
+| Total agent wall-clock | 184s | 388s |
+| Total input tokens | 162,624 | 313,392 |
+| Total output tokens | 6,209 | 12,063 |
+| Total cost | ~$0.58 USD | ~$1.12 USD |
+
+\* Initial v2 run was 9/10; the 1 failure was a buggy verify.sh (asserted
+the literal substring `onerror=` should be absent, but escaped-as-text
+`onerror=` is harmless — only raw `<img` is dangerous). Test fixed to
+check `<img src=x` is absent; the agent's original output passes the
+fixed test. Documented in RESULTS.md.
+
+Languages covered: Python (7 tasks), Rust (1), JavaScript (1), SQL+Python (1).
 
 Each "pass" means a bash `verify.sh` script (NOT model judgment) checked
 observable behavior of the resulting code:

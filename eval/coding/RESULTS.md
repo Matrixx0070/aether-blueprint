@@ -1,67 +1,73 @@
-# Coding-Eval Results: aether-coding-eval-v1
+# Coding-Eval Results: aether-coding-eval-v2
 
-Model: `claude-sonnet-4-6`  ·  Tasks: 5  ·  **Stability across 2 independent runs: 10/10 task completions, 0 failures**.
+Model: `claude-sonnet-4-6`  ·  Tasks: 10  ·  **Pass rate after test-bug fix: 10/10 (100%)**.
 
-## Run 1 (183s wall, ~$0.5810)
+## v2 extended suite — 10 tasks across 4 languages
 
-| # | Task | Pass | Agent wall | In tok | Out tok | Cost USD | Note |
-|---|------|------|------------|--------|---------|----------|------|
-| 1 | `tasks/01_bug_fix` | ✓ | 29s | 37,181 | 981 | $0.1263 | OK: all checks pass |
-| 2 | `tasks/02_feature_add` | ✓ | 55s | 70,539 | 2,243 | $0.2453 | 5 passed in 0.11s / OK: all checks pass |
-| 3 | `tasks/03_write_test` | ✓ | 30s | 27,373 | 2,008 | $0.1122 | 32 passed in 0.02s / OK: tests + edge cases |
-| 4 | `tasks/04_refactor` | ✓ | 47s | 0\* | 0\* | $0.0000\* | 3 helpers extracted / OK: behavior preserved |
-| 5 | `tasks/05_doc_fix` | ✓ | 20s | 27,531 | 977 | $0.0972 | OK: docstring fixed, code unchanged |
-| | **TOTAL** | **5/5** | **183s** | **162,624** | **6,209** | **$0.5810** | |
+| # | Task | Lang | Pass | Agent wall | In tok | Out tok | Cost USD | Verify result |
+|---|------|------|------|------------|--------|---------|----------|---------------|
+| 1 | `tasks/01_bug_fix` | Python | ✓ | 10s | 14,615 | 399 | $0.0498 | OK: all checks pass |
+| 2 | `tasks/02_feature_add` | Python | ✓ | 38s | 56,046 | 2,088 | $0.1995 | 5 passed in 0.36s / OK: all checks pass |
+| 3 | `tasks/03_write_test` | Python | ✓ | 39s | 44,957 | 2,294 | $0.1693 | 33 passed in 0.04s / OK: tests + edge cases |
+| 4 | `tasks/04_refactor` | Python | ✓ | 60s | 51,737 | 2,102 | $0.1867 | 4 helpers extracted / 11 behavior tests pass |
+| 5 | `tasks/05_doc_fix` | Python | ✓ | 19s | 27,562 | 948 | $0.0969 | OK: docstring fixed, code unchanged |
+| 6 | `tasks/06_rust_bug` | **Rust** | ✓ | 33s | 0\* | 0\* | $0.0000\* | OK: cargo test + stress test pass |
+| 7 | `tasks/07_js_xss` | **JS** | ✓\*\* | 63s | 0\* | 0\* | $0.0000\* | OK: all XSS checks pass (after verify.sh fix) |
+| 8 | `tasks/08_sql_injection` | **SQL/Py** | ✓ | 26s | 24,818 | 1,300 | $0.0940 | OK: SQL injection patched, escaping works |
+| 9 | `tasks/09_multifile_refactor` | Python | ✓ | 55s | 93,657 | 2,932 | $0.3250 | OK: pricing module extracted, tests pass |
+| 10 | `tasks/10_perf_opt` | Python | ✓ | 45s | 0\* | 0\* | $0.0000\* | dedup of 50k items: **2ms** (was ~1.6s) — O(n²)→O(n) |
+| | **TOTAL** | | **10/10** | **388s** | **313,392** | **12,063** | **~$1.12** | |
 
-## Run 2 (158s wall, ~$0.4851)
+\* Tasks 6, 7, 10 reported in/out tokens as 0 — confirmed measurement
+gap in the subprocess `[aether-usage ...]` parser for these specific
+task paths (a v0.13 LOW finding, not zero work — verify.sh passes in
+all three). True cost likely $0.05–$0.15 per zero-reported task based
+on Run 1/Run 2 patterns from the v1 suite.
 
-| # | Task | Pass | Agent wall | In tok | Out tok | Cost USD | Note |
-|---|------|------|------------|--------|---------|----------|------|
-| 1 | `tasks/01_bug_fix` | ✓ | 12s | 14,600 | 396 | $0.0497 | OK: all checks pass |
-| 2 | `tasks/02_feature_add` | ✓ | 49s | 64,846 | 2,348 | $0.2298 | 6 passed in 0.14s / OK: all checks pass |
-| 3 | `tasks/03_write_test` | ✓ | 27s | 27,023 | 1,797 | $0.1080 | 31 passed in 0.01s / OK: tests + edge cases |
-| 4 | `tasks/04_refactor` | ✓ | 46s | 0\* | 0\* | $0.0000\* | 4 helpers extracted / OK: behavior preserved |
-| 5 | `tasks/05_doc_fix` | ✓ | 22s | 27,563 | 995 | $0.0976 | OK: docstring fixed, code unchanged |
-| | **TOTAL** | **5/5** | **158s** | **134,032** | **5,536** | **$0.4851** | |
+\*\* Task 7 (JS XSS) initially failed the first run because of a buggy
+verify.sh check — the test asserted that the literal substring
+`onerror=` should not appear in the output, but HTML-escaped body text
+legitimately contains it as inert text (`&lt;img src=x onerror=alert(1)&gt;`
+renders as plain visible characters in the browser, not as an img tag).
+The agent's escape was correct; the test was wrong. Test fixed to assert
+`<img src=x` (raw) does not appear; the agent's original output passes
+the fixed test. Documented in
+[`commit J2-fix`](https://github.com/Matrixx0070/aether-blueprint/commits/main).
 
-## Stability summary
+## What the verify scripts actually check
 
-| Metric | Run 1 | Run 2 | Notes |
-|--------|-------|-------|-------|
-| Pass rate | 5/5 | 5/5 | **Cumulative 10/10 task completions** |
-| Total wall | 183s | 158s | Run 2 ~14% faster (cache warmup) |
-| Total cost | $0.5810 | $0.4851 | Run 2 ~17% cheaper |
-| Task 04 helpers | 3 | 4 | Different valid refactors (both pass behavior tests) |
-| Task 03 tests written | 32 | 31 | Both pass + cover ZeroDivisionError + ValueError |
+These are NOT "did the model think it fixed it" tests. Every verify is a
+deterministic shell script that exits 0 only when:
 
-\* Task 04 reported usage as 0/0 in BOTH runs — confirmed measurement
-gap in our subprocess `[aether-usage ...]` parser for that specific
-task shape, NOT zero actual work (verify.sh passes both runs; helpers
-were genuinely extracted). Documented as a v0.13 LOW finding in
-[`COMPARISON.md`](COMPARISON.md). Real cost for task 04 estimated at
-$0.05–$0.10 per run based on Run 1 vs Run 2 totals.
+| Task | Verified by |
+|------|-------------|
+| 06_rust_bug | `cargo test` exits 0 with 4 unit tests + stress test on 1000 pre-sorted i32 inputs comparing against `Vec::position` |
+| 07_js_xss | Node script runs `renderComment` 4 times: happy path + script-tag probe + img/onerror probe + ampersand corner case |
+| 08_sql_injection | sqlite3 in-memory DB: happy path + injection probe (`' OR '1'='1`) returns None + name with literal apostrophe round-trips |
+| 09_multifile_refactor | pytest (3 tests) + AST inspection: new module exists, holds `TAX_RATE`, neither original file defines it, fn bodies ≤8 LOC |
+| 10_perf_opt | Correctness on 5 inputs + 50,000-element dedup completes in ≤200ms wall (proves the O(n²) → O(n) algorithmic change via timing, not source inspection) |
+
+## Cross-language proof
+
+| Language | Tasks | Result |
+|----------|-------|--------|
+| Python | 7 (01–05, 09–10) | 7/7 PASS |
+| Rust | 1 (06) | 1/1 PASS |
+| JavaScript | 1 (07) | 1/1 PASS (after verify-bug fix) |
+| SQL/Python | 1 (08) | 1/1 PASS |
 
 ## Reproducing
 
 ```sh
 git clone https://github.com/Matrixx0070/aether-blueprint
 cd aether-blueprint
-git checkout v0.13.0  # or download the prebuilt binary from the GitHub release
+git checkout v0.14.0  # contains the suite + the verify-bug fix
 cargo build --release -p aether-cli
 ./target/release/aether coding-eval eval/coding/suite.yaml \
     --results /tmp/RESULTS.md
 cat /tmp/RESULTS.md
 ```
 
-Requires:
-- Valid Anthropic credentials (`ANTHROPIC_API_KEY`, OAuth token, or
-  Claude Code credentials file — `aether doctor` confirms availability).
-- python3 + pytest (auto-installed by `verify.sh` if missing on a system
-  with `pip` reachable; offline-hermetic environments need pytest
-  preinstalled).
-- git working tree must be clean for the per-task `git checkout HEAD --`
-  reset to behave as expected.
-
-Re-running against a clean working tree produces 5/5 PASS in
+Re-running against a clean working tree produces 10/10 PASS in
 approximately the same time/cost band. Per-task token counts vary with
 model nondeterminism in tool-call sequences.
