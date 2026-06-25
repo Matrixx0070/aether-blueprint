@@ -266,6 +266,10 @@ async fn run_repl(
     register_builtins(&mut tools);
 
     let mut session = Session::new(config, overlay, Arc::new(provider), gate, tools);
+    // Install an interactive permission prompter for mutating tools when in
+    // Default mode. Reads y / n / a from stderr; `a` upgrades to always-allow
+    // for that tool name for the remainder of the session.
+    session.executor.set_prompter(Box::new(prompt_permission));
     inject_project_context(&mut session);
 
     let session_id = match &resume {
@@ -695,6 +699,27 @@ fn parse_permission_mode(s: &str) -> Result<aether_perm::PermissionMode> {
         "plan" => Ok(Plan),
         "bypassPermissions" => Ok(BypassPermissions),
         other => anyhow::bail!("unknown permission mode: {other}"),
+    }
+}
+
+/// Interactive permission prompter used in REPL mode. Prints a brief
+/// summary to stderr and reads a single character + Enter from stdin.
+///   y = allow this call only
+///   n = deny this call
+///   a = allow this tool name for the rest of the session
+fn prompt_permission(tool_name: &str, summary: &str) -> aether_core::executor::PermissionAnswer {
+    use aether_core::executor::PermissionAnswer;
+    eprintln!(
+        "\n[permission] {tool_name}: {} — allow? (y/n/a) ",
+        if summary.is_empty() { "(no summary)" } else { summary }
+    );
+    let _ = std::io::stderr().flush();
+    let mut input = String::new();
+    let _ = std::io::stdin().read_line(&mut input);
+    match input.trim() {
+        "y" | "Y" | "yes" => PermissionAnswer::Allow,
+        "a" | "A" | "always" => PermissionAnswer::AllowAlwaysForTool,
+        _ => PermissionAnswer::Deny,
     }
 }
 

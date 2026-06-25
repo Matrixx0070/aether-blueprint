@@ -55,13 +55,75 @@ pub fn decide(mode: PermissionMode, tool_name: &str) -> PermissionOutcome {
     }
 }
 
+/// Answer to an interactive permission prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionAnswer {
+    Allow,
+    Deny,
+    AllowAlwaysForTool,
+}
+
+/// Prompter signature: given the tool name + a short summary of the call,
+/// return an answer. Called inside `Executor::execute` only when the
+/// permission mode is `Default` and the tool is mutating. Synchronous so
+/// callers can read from stdin without spawning a task.
+pub type PermissionPrompter = Box<dyn Fn(&str, &str) -> PermissionAnswer + Send + Sync>;
+
 pub struct Executor {
     pub mode: PermissionMode,
+    prompter: Option<PermissionPrompter>,
+    always_allowed: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 impl Executor {
     pub fn new(mode: PermissionMode) -> Self {
-        Self { mode }
+        Self {
+            mode,
+            prompter: None,
+            always_allowed: std::sync::Mutex::new(std::collections::HashSet::new()),
+        }
+    }
+
+    /// Install a prompter that's consulted when running in `Default` mode
+    /// before invoking a mutating tool. Without a prompter, mutating tools
+    /// are refused in `Default` mode (current behavior).
+    pub fn set_prompter(&mut self, p: PermissionPrompter) {
+        self.prompter = Some(p);
+    }
+
+    /// Pre-populate the in-session "always allow" set (e.g. from settings.json).
+    pub fn allow_tools(&mut self, names: impl IntoIterator<Item = String>) {
+        let mut g = self.always_allowed.lock().expect("always-allow mutex");
+        for n in names {
+            g.insert(n);
+        }
+    }
+
+    fn is_always_allowed(&self, name: &str) -> bool {
+        self.always_allowed
+            .lock()
+            .expect("always-allow mutex")
+            .contains(name)
+    }
+
+    fn mark_always_allowed(&self, name: &str) {
+        self.always_allowed
+            .lock()
+            .expect("always-allow mutex")
+            .insert(name.to_string());
+    }
+
+    fn summarize(input: &serde_json::Value) -> String {
+        if let Some(s) = input.get("command").and_then(|v| v.as_str()) {
+            return s.lines().next().unwrap_or("").chars().take(120).collect();
+        }
+        if let Some(s) = input.get("file_path").and_then(|v| v.as_str()) {
+            return s.to_string();
+        }
+        if let Some(s) = input.get("url").and_then(|v| v.as_str()) {
+            return s.to_string();
+        }
+        String::new()
     }
 
     pub async fn execute(
@@ -71,7 +133,33 @@ impl Executor {
     ) -> Vec<RecordedToolResult> {
         let mut out = Vec::with_capacity(uses.len());
         for tu in uses {
-            let (content, is_error) = match decide(self.mode, &tu.name) {
+            // Static policy
+            let mut decision = decide(self.mode, &tu.name);
+            // Interactive escalation: in Default mode, a refusal can be
+            // upgraded to Allowed if the user explicitly says yes.
+            if matches!(decision, PermissionOutcome::Refused(_))
+                && matches!(self.mode, PermissionMode::Default)
+                && is_mutating(&tu.name)
+            {
+                if self.is_always_allowed(&tu.name) {
+                    decision = PermissionOutcome::Allowed;
+                } else if let Some(p) = &self.prompter {
+                    let summary = Self::summarize(&tu.input);
+                    match p(&tu.name, &summary) {
+                        PermissionAnswer::Allow => decision = PermissionOutcome::Allowed,
+                        PermissionAnswer::AllowAlwaysForTool => {
+                            self.mark_always_allowed(&tu.name);
+                            decision = PermissionOutcome::Allowed;
+                        }
+                        PermissionAnswer::Deny => {
+                            decision =
+                                PermissionOutcome::Refused("user denied at prompt".into());
+                        }
+                    }
+                }
+            }
+
+            let (content, is_error) = match decision {
                 PermissionOutcome::Allowed => match registry.get(&tu.name) {
                     Some(tool) => match tool.run(tu.input.clone()).await {
                         Ok(s) => (s, false),
