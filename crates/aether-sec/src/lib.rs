@@ -15,7 +15,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const SCOPE_REL_PATH: &str = ".aether/scope.json";
 const AUDIT_REL_PATH: &str = ".aether/audit.jsonl";

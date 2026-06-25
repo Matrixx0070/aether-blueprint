@@ -3251,7 +3251,10 @@ async fn run_ctf(
     let mut next_input = Some(user_prompt);
     let started = std::time::Instant::now();
     let mut final_text = String::new();
-    for turn in 0..max_turns {
+    // The for-loop bounds at max_turns naturally; every match arm here
+    // either breaks or continues, so a redundant `turn + 1 >= max_turns`
+    // check after the match was unreachable and triggered a warning.
+    for _turn in 0..max_turns {
         let outcome = agent_turn(&mut session, next_input.take()).await?;
         if let Some(ConversationItem::Assistant { text, .. }) = session.history.last() {
             if let Some(t) = text {
@@ -3268,9 +3271,6 @@ async fn run_ctf(
                 tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
                 continue;
             }
-        }
-        if turn + 1 >= max_turns {
-            break;
         }
     }
     let elapsed = started.elapsed();
