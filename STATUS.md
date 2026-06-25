@@ -53,4 +53,9 @@ format: `[slice] [status] [commit] [verifier] [live-check] note`
 | G1 | DONE | c14455b | n/a | -43 LoC in anthropic.rs · workspace green | Stripped anthropic-internal retry (F2 follow-up) |
 | G2 | DONE | 2b5ec01 | n/a | 8/8 aether-mcp (+4) · workspace green | MCP WebSocket transport (UNVERIFIED for live ws://) |
 | G3 | DONE | 878b034 | n/a | --json + text output verified · workspace green | aether doctor --json for CI consumers |
+| G4 | DONE | c2e4583 | n/a | exit 0 · pushed · tag v0.11.0 live | Bump 0.11.0, docs, tag, push |
+| G5 | DONE | n/a | n/a | self-audit · 0 BLOCKER/HIGH/MED · 4 LOW noted | Self-audit on G1-G3 |
+| H1 | DONE | 26c184a | n/a | YAML valid · LICENSE files added | GitHub Actions release workflow (4 platforms) |
+| H2 | DONE | 639105f | n/a | bash -n OK · platform-detect OK | install.sh (one-liner with checksum verify) |
+| H3 | DONE | 9fee0e8 | n/a | README + INSTALL.md authored | Install docs (one-liner + manual + source-build) |
 

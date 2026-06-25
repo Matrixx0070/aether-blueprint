@@ -23,7 +23,21 @@ Each tarball ships with a SHA256 the script verifies before extraction. See
 `INSTALL.md` for the manual download + verify path and the source-build
 fallback.
 
-## Status: v0.11.0
+## Status: v0.12.0
+
+Ship-ready release infrastructure:
+- **GitHub Actions release workflow** (H1) — tag a `v*` to autobuild release
+  binaries for 4 platforms (linux-x86_64, linux-aarch64, macos-x86_64,
+  macos-aarch64). Tarballs + SHA256SUMS attached to the matching GitHub
+  Release automatically.
+- **One-liner install** (H2) — `install.sh` detects platform, downloads
+  from latest release, verifies SHA256, installs to `~/.local/bin/aether`
+  (or `$AETHER_PREFIX/bin`). See `INSTALL.md` for the manual + source-build
+  paths.
+- **LICENSE files** — workspace already declared "MIT OR Apache-2.0" but
+  the actual files were missing; now bundled in every release tarball.
+
+v0.11.0 patch:
 
 Cleanup + new transport + CI surface:
 - **Stripped anthropic-internal retry** (G1) — the v0.7-era 5-attempt

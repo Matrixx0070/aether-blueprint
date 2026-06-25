@@ -167,7 +167,30 @@ A self-contained surface for authorized security work, end-to-end:
   shape. Composes with `--probe`. Exit-code semantics preserved
   (0 on success, 1 on any failure).
 
-## v0.12 — plugins + IDE surfaces (next)
+## v0.12 — ship infrastructure — shipped 2026-06-25
+
+- **GitHub Actions release workflow** (H1): new `.github/workflows/release.yml`
+  triggers on `v*` tag push, builds release binaries for 4 platforms
+  (linux-x86_64, linux-aarch64 via cross-rs, macos-x86_64, macos-aarch64)
+  in parallel matrix, strips, tarballs with README + LICENSE files,
+  generates per-tarball SHA256, concatenates into a single SHA256SUMS
+  at the release root, and publishes a GitHub Release with all assets
+  attached via softprops/action-gh-release@v2.
+- **install.sh** (H2): one-liner install script. Detects OS (Linux/macOS)
+  + arch (x86_64/aarch64) via uname, resolves "latest" via GitHub API,
+  downloads tarball + SHA256SUMS, verifies hash, extracts to
+  `$AETHER_PREFIX/bin` (default `~/.local/bin`). Refuses unsupported
+  OS/arch with explicit source-build pointer. Uses curl or wget;
+  sha256sum or shasum -a 256. Safe defaults: `set -euo pipefail`,
+  tempdir cleanup trap, hash-mismatch abort.
+- **LICENSE-MIT + LICENSE-APACHE**: workspace declared dual-license but
+  the actual files were missing — now present, full canonical text,
+  bundled into every release tarball.
+- **README install section + INSTALL.md** (H3): three install paths
+  documented (one-liner, manual + verify, source-build) plus uninstall
+  guidance.
+
+## v0.13 — plugins + IDE surfaces (next)
 
 - Plugin system via WASM modules registered as tools
 - BYOC: Mantle
