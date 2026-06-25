@@ -49,6 +49,7 @@ dependencies = [
  "aether-store",
  "aether-tools",
  "async-trait",
+ "futures-util",
  "once_cell",
  "regex",
  "serde",

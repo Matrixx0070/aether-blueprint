@@ -229,13 +229,16 @@ mod tests {
 
     #[tokio::test]
     async fn maybe_compact_below_threshold_does_nothing() {
-        use crate::mock::MockLlmProvider;
+        use crate::mock::{MockLlmProvider, ENV_TEST_LOCK};
         use crate::{Session, SessionConfig};
         use aether_overlay::{Fable5Overlay, OverlayConfig};
         use aether_selfcheck::Gate;
         use aether_tools::ToolRegistry;
         use std::sync::Arc;
 
+        // Hold the lock so the kill-switch test cannot race AETHER_NO_COMPACT=1
+        // into our environment while we're below threshold.
+        let _guard = ENV_TEST_LOCK.lock().expect("env lock");
         let llm = Arc::new(MockLlmProvider::new());
         let session_config = SessionConfig {
             model: "claude-sonnet-4-6".into(),
@@ -256,7 +259,7 @@ mod tests {
     #[tokio::test]
     async fn maybe_compact_above_threshold_summarizes_and_resets() {
         use crate::context::{ConversationItem, RecordedToolResult, RecordedToolUse};
-        use crate::mock::MockLlmProvider;
+        use crate::mock::{MockLlmProvider, ENV_TEST_LOCK};
         use crate::{Session, SessionConfig};
         use aether_llm::{ContentBlock, MessagesResponse, StopReason};
         use aether_overlay::{Fable5Overlay, OverlayConfig};
@@ -264,6 +267,9 @@ mod tests {
         use aether_tools::ToolRegistry;
         use std::sync::Arc;
 
+        // Hold the lock so the kill-switch test cannot race AETHER_NO_COMPACT=1
+        // into our environment while we expect the LLM call to fire.
+        let _guard = ENV_TEST_LOCK.lock().expect("env lock");
         let llm = Arc::new(MockLlmProvider::new());
         llm.push(MessagesResponse {
             content: vec![ContentBlock::Text {
@@ -344,15 +350,15 @@ mod tests {
 
     #[tokio::test]
     async fn maybe_compact_kill_switch_blocks_compaction() {
-        use crate::mock::MockLlmProvider;
+        use crate::mock::{MockLlmProvider, ENV_TEST_LOCK};
         use crate::{Session, SessionConfig};
         use aether_overlay::{Fable5Overlay, OverlayConfig};
         use aether_selfcheck::Gate;
         use aether_tools::ToolRegistry;
         use std::sync::Arc;
 
-        // Set kill-switch BEFORE constructing session. Restore after, in
-        // case other tests in the same binary check it.
+        // Serialize env-var writes across all tests in this binary.
+        let _guard = ENV_TEST_LOCK.lock().expect("env lock");
         std::env::set_var("AETHER_NO_COMPACT", "1");
         let llm = Arc::new(MockLlmProvider::new());
         let session_config = SessionConfig {
