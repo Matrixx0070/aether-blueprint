@@ -135,6 +135,79 @@ pub enum LlmError {
     Upstream { status: u16, body: String },
 }
 
+impl LlmError {
+    /// User-readable explanation + suggested fix. Returned alongside the
+    /// terse Debug/Display form. Centralises the "what does the user do
+    /// when they see this" knowledge.
+    pub fn actionable(&self) -> String {
+        match self {
+            LlmError::Transport(msg) => {
+                if msg.contains("ANTHROPIC_API_KEY not set") {
+                    "No auth source found. Either:\n  \
+                     - Set ANTHROPIC_API_KEY (console API key), OR\n  \
+                     - Run `claude` once to populate ~/.claude/.credentials.json".into()
+                } else if msg.contains("token expired") {
+                    "Your OAuth token has expired. Run `claude` once to refresh, \
+                     or `aether doctor` to check expiry.".into()
+                } else if msg.contains("HOME not set") {
+                    "$HOME is not set in this environment. Set it or use \
+                     ANTHROPIC_API_KEY directly.".into()
+                } else if msg.contains("send:") || msg.contains("io error") {
+                    format!("Network error talking to api.anthropic.com: {msg}.\n  \
+                             Check connectivity and rerun. Aether retries 5x with backoff \
+                             before surfacing this.")
+                } else {
+                    format!("Transport error: {msg}")
+                }
+            }
+            LlmError::Schema(msg) => {
+                format!("Response from server did not match expected shape: {msg}.\n  \
+                         This usually means the API changed; check for an aether update.")
+            }
+            LlmError::RateLimited => {
+                "Rate limited. For OAuth (Max-subscription) accounts, premium models \
+                 (Opus / Sonnet) share a per-account bucket; Haiku has separate, larger \
+                 quota. Try:\n  \
+                 - `aether --model claude-haiku-4-5-20251001 --print ...`\n  \
+                 - wait for the 5h window to reset (check anthropic-ratelimit-unified-5h-reset)\n  \
+                 - switch to ANTHROPIC_API_KEY (Console billing, separate bucket)".into()
+            }
+            LlmError::Upstream { status, body } => match *status {
+                401 => format!(
+                    "Auth rejected (401): {body}.\n  \
+                     Token may be expired. Run `claude` to refresh, or `aether doctor`."
+                ),
+                403 => format!(
+                    "Forbidden (403): {body}.\n  \
+                     Your account doesn't have access to this model or feature."
+                ),
+                404 => format!(
+                    "Not found (404): {body}.\n  \
+                     The model id may be wrong. List available models with `curl ... /v1/models`."
+                ),
+                413 => format!(
+                    "Payload too large (413): {body}.\n  \
+                     Shrink the prompt or split the work into multiple turns."
+                ),
+                429 => format!(
+                    "Rate limited (429): {body}.\n  \
+                     For OAuth Max accounts, premium models share one bucket; \
+                     try Haiku or wait for the window to reset."
+                ),
+                529 => format!(
+                    "Overloaded (529): {body}.\n  \
+                     Anthropic is currently overloaded; aether already retried 5x with backoff."
+                ),
+                500..=599 => format!(
+                    "Server error ({status}): {body}.\n  \
+                     Transient; aether retried 5x. If it persists, check status.anthropic.com."
+                ),
+                _ => format!("Upstream {status}: {body}"),
+            },
+        }
+    }
+}
+
 /// Callback invoked for each text delta as a streamed response arrives.
 /// Receives the new chunk of assistant text only; tool-use deltas are not
 /// surfaced here (they're accumulated and present in the final response).

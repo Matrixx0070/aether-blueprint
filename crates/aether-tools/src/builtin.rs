@@ -46,6 +46,25 @@ const MAX_TOOL_OUTPUT: usize = 200_000;
 const DEFAULT_BASH_TIMEOUT_MS: u64 = 120_000;
 const MAX_BASH_TIMEOUT_MS: u64 = 600_000;
 
+/// Shared cancellation flag for in-flight long-running tools (currently
+/// just Bash). The CLI's signal handler flips it on Ctrl-C while a turn
+/// is executing; tools poll it and shut down their subprocess.
+pub static CANCEL_FLAG: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Convenience: clear the flag at the start of each user turn.
+pub fn reset_cancel() {
+    CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub fn cancelled() -> bool {
+    CANCEL_FLAG.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+pub fn request_cancel() {
+    CANCEL_FLAG.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// Heuristic: any NUL byte in the first 8 KiB is a strong signal that the
 /// file is binary. This mirrors `file(1)`'s classic strategy. Text files
 /// (including UTF-8 with high bytes) virtually never contain NUL.
@@ -117,10 +136,26 @@ impl Tool for BashTool {
             )
         };
 
-        let result = tokio::time::timeout(Duration::from_millis(timeout_ms), combined).await;
+        // Race the combined io+wait against (a) the configured timeout and
+        // (b) a periodic check of the global cancellation flag.
+        let result = tokio::select! {
+            r = tokio::time::timeout(Duration::from_millis(timeout_ms), combined) => match r {
+                Ok(inner) => Some(inner),
+                Err(_) => None, // timeout
+            },
+            _ = async {
+                loop {
+                    if cancelled() { break; }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            } => {
+                // cancellation path
+                None
+            }
+        };
 
         match result {
-            Ok(Ok((_, _, status))) => {
+            Some(Ok((_, _, status))) => {
                 let mut combined = String::new();
                 if !out_buf.is_empty() {
                     combined.push_str(&String::from_utf8_lossy(&out_buf));
@@ -142,12 +177,16 @@ impl Tool for BashTool {
                     Ok(combined)
                 }
             }
-            Ok(Err(e)) => Err(ToolError::Io(format!("io: {e}"))),
-            Err(_) => {
+            Some(Err(e)) => Err(ToolError::Io(format!("io: {e}"))),
+            None => {
                 let _ = child.start_kill();
-                Err(ToolError::Io(format!(
-                    "command timed out after {timeout_ms}ms"
-                )))
+                if cancelled() {
+                    Err(ToolError::Io("cancelled by user (Ctrl-C)".into()))
+                } else {
+                    Err(ToolError::Io(format!(
+                        "command timed out after {timeout_ms}ms"
+                    )))
+                }
             }
         }
     }

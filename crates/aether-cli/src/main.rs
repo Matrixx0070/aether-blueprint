@@ -139,6 +139,20 @@ async fn main() -> Result<()> {
     let settings = load_settings();
     apply_settings_env(&settings);
 
+    // Background SIGINT handler: flip aether_tools::CANCEL_FLAG so
+    // long-running tools (Bash today) can shut down their subprocess.
+    // The REPL's rustyline editor handles its own SIGINT for input
+    // editing; this only kicks in when a tool is actively running.
+    tokio::spawn(async {
+        loop {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                aether_tools::builtin::request_cancel();
+            } else {
+                break;
+            }
+        }
+    });
+
     let cli = Cli::parse();
     // Resolve permission mode: CLI flag wins, else settings.permission_mode,
     // else built-in "default".
@@ -625,7 +639,7 @@ async fn run_repl(
             let outcome = match agent_turn_streamed(&mut session, next_input.take(), sink).await {
                 Ok(o) => o,
                 Err(e) => {
-                    eprintln!("\n[error] {e}");
+                    eprintln!("\n[error] {}", explain_agent_error(&e));
                     break;
                 }
             };
@@ -1586,6 +1600,14 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
     drop(guard); // cooks the terminal
     let _ = driver_handle.await;
     Ok(())
+}
+
+/// Unwrap an AgentError down to an LlmError if possible, and use the
+/// new actionable() explanation; otherwise stringify normally.
+fn explain_agent_error(e: &aether_core::AgentError) -> String {
+    match e {
+        aether_core::AgentError::Llm(inner) => inner.actionable(),
+    }
 }
 
 fn brief_tool_summary(tu: &aether_core::context::RecordedToolUse) -> String {
