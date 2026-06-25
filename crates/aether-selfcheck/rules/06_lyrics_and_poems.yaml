@@ -5,7 +5,7 @@ description: |
   four or more non-empty lines each ≤ 12 words.
 severity: critical
 action: block
-applies_when: always
+applies_when: not_creative_writing_context
 detector:
   kind: builtin
   name: short_line_stanza

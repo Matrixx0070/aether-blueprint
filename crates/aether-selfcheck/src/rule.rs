@@ -33,6 +33,11 @@ pub enum AppliesWhen {
     NoRecentExternalLookup,
     DistressFlagged,
     UserDidNotCurse,
+    /// True when the most recent user turn did NOT ask for creative
+    /// writing (poetry, song lyrics, haiku). Rules guarding against
+    /// copyright over-quote use this to skip themselves when the user
+    /// explicitly requested a poem.
+    NotCreativeWritingContext,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -150,6 +150,20 @@ pub async fn agent_turn(
     agent_turn_inner(session, user_input, None).await
 }
 
+/// Conservative substring detector. Triggers when the user message contains
+/// one of a small set of creative-writing terms. False positives are okay
+/// here — the worst case is that rule 06 stops gating one turn that didn't
+/// actually need gating; that's an acceptable trade.
+fn looks_like_creative_writing_request(s: &str) -> bool {
+    let lower = s.to_ascii_lowercase();
+    const TRIGGERS: &[&str] = &[
+        "poem", "poetry", "haiku", "sonnet", "limerick", "verse", "ballad",
+        "song lyric", "lyrics for", "write a song", "write me a song",
+        "rap lyrics", "rhyme", "couplet",
+    ];
+    TRIGGERS.iter().any(|t| lower.contains(t))
+}
+
 /// Streaming variant — text deltas are emitted via the callback as the
 /// model produces them. The full assistant response is still recorded into
 /// session history after the stream completes. Pass the same callback you
@@ -169,6 +183,10 @@ async fn agent_turn_inner(
 ) -> Result<TurnOutcome, AgentError> {
     // ── perceive (input) ──────────────────────────────────────────────
     if let Some(s) = user_input {
+        // Update selfcheck context flags from the latest user turn so
+        // rules with applies_when predicates see fresh state.
+        session.selfcheck_ctx.user_asked_for_creative_writing =
+            looks_like_creative_writing_request(&s);
         session.history.push(ConversationItem::User(s));
     }
 

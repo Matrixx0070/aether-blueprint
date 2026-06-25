@@ -22,6 +22,10 @@ pub struct SessionContext {
     /// URLs known to come from tool results or the user's own messages.
     /// Used by the `url_provenance` builtin detector.
     pub known_urls: Vec<String>,
+    /// True when the user's most recent turn explicitly asks for creative
+    /// writing (poem, song, haiku, verse, ballad…). Inverts to flip
+    /// AppliesWhen::NotCreativeWritingContext from true to false.
+    pub user_asked_for_creative_writing: bool,
 }
 
 impl SessionContext {
@@ -35,6 +39,7 @@ impl SessionContext {
             AppliesWhen::NoRecentExternalLookup => !self.recent_external_lookup,
             AppliesWhen::DistressFlagged => self.distress_flagged,
             AppliesWhen::UserDidNotCurse => !self.user_cursed,
+            AppliesWhen::NotCreativeWritingContext => !self.user_asked_for_creative_writing,
         }
     }
 }
