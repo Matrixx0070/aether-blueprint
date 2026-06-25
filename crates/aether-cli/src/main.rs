@@ -144,6 +144,10 @@ enum Cmd {
         /// and report latency. Opt-in because it costs real tokens.
         #[arg(long)]
         probe: bool,
+        /// Emit the report as JSON instead of human-readable text.
+        /// CI-friendly; the structured shape is stable.
+        #[arg(long)]
+        json: bool,
     },
     /// Run an eval suite (YAML) — see ROADMAP for schema.
     Eval {
@@ -328,7 +332,7 @@ async fn main() -> Result<()> {
     match cli.cmd {
         Some(Cmd::List { limit }) => return run_list(limit),
         Some(Cmd::Init) => return run_init(),
-        Some(Cmd::Doctor { probe }) => return run_doctor(probe).await,
+        Some(Cmd::Doctor { probe, json }) => return run_doctor(probe, json).await,
         Some(Cmd::Eval { suite, json }) => {
             return run_eval(&suite, &model, permission_mode, json).await
         }
@@ -3305,39 +3309,57 @@ async fn run_eval_case(
 
 // ── doctor ───────────────────────────────────────────────────────────────
 
-async fn run_doctor(probe: bool) -> Result<()> {
+async fn run_doctor(probe: bool, json_out: bool) -> Result<()> {
     let mut ok = true;
     let mut report = String::new();
+    // Structured JSON doc populated alongside the text report.
+    let mut doc = serde_json::json!({});
 
     // 1) Provider + auth
     let provider_name = active_provider_name();
     report.push_str(&format!("provider:\n  • active: {provider_name}\n"));
+    doc["provider"] = serde_json::json!({ "active": provider_name });
     report.push_str("auth:\n");
-    match provider_name.as_str() {
+    let auth_status = match provider_name.as_str() {
         "bedrock" => match aether_llm::bedrock::resolve_aws_credentials().await {
             Ok((_ak, _sk, _tok, src)) => {
-                report.push_str(&format!("  ✓ AWS credentials ({src})\n"))
+                let src_str = format!("{src}");
+                report.push_str(&format!("  ✓ AWS credentials ({src_str})\n"));
+                serde_json::json!({ "ok": true, "source": src_str })
             }
             Err(e) => {
                 ok = false;
-                report.push_str(&format!("  ✗ bedrock auth: {e}\n"));
+                let msg = e.to_string();
+                report.push_str(&format!("  ✗ bedrock auth: {msg}\n"));
+                serde_json::json!({ "ok": false, "error": msg })
             }
         },
         "vertex" => match VertexProvider::from_env() {
-            Ok(_) => report.push_str("  ✓ Vertex access token + project in env\n"),
+            Ok(_) => {
+                report.push_str("  ✓ Vertex access token + project in env\n");
+                serde_json::json!({ "ok": true, "source": "env" })
+            }
             Err(e) => {
                 ok = false;
-                report.push_str(&format!("  ✗ vertex auth: {e}\n"));
+                let msg = e.to_string();
+                report.push_str(&format!("  ✗ vertex auth: {msg}\n"));
+                serde_json::json!({ "ok": false, "error": msg })
             }
         },
         _ => match AnthropicProvider::from_env_or_credentials() {
-            Ok(_) => report.push_str("  ✓ credentials reachable\n"),
+            Ok(_) => {
+                report.push_str("  ✓ credentials reachable\n");
+                serde_json::json!({ "ok": true, "source": "env-or-credentials-file" })
+            }
             Err(e) => {
                 ok = false;
-                report.push_str(&format!("  ✗ no auth source: {e}\n"));
+                let msg = e.to_string();
+                report.push_str(&format!("  ✗ no auth source: {msg}\n"));
+                serde_json::json!({ "ok": false, "error": msg })
             }
         },
-    }
+    };
+    doc["auth"] = auth_status;
     let creds_path = std::env::var_os("HOME")
         .map(|h| PathBuf::from(h).join(".claude/.credentials.json"));
     if let Some(p) = &creds_path {
@@ -3427,6 +3449,10 @@ async fn run_doctor(probe: bool) -> Result<()> {
             bytes,
             bytes as f64 / 1024.0 / 1024.0
         ));
+        doc["storage"] = serde_json::json!({
+            "aether_dir_bytes": bytes,
+            "aether_dir_mib": bytes as f64 / 1024.0 / 1024.0,
+        });
     }
 
     // 6) Provider probe (opt-in via --probe; costs real tokens)
@@ -3457,29 +3483,54 @@ async fn run_doctor(probe: bool) -> Result<()> {
                             elapsed_ms,
                             toks
                         ));
+                        doc["probe"] = serde_json::json!({
+                            "ok": true,
+                            "provider": p.name(),
+                            "elapsed_ms": elapsed_ms,
+                            "usage": resp.usage,
+                        });
                     }
                     Err(e) => {
                         ok = false;
                         let elapsed_ms = started.elapsed().as_millis();
+                        let msg = e.to_string();
                         report.push_str(&format!(
                             "  ✗ {} probe failed after {}ms: {}\n",
                             p.name(),
                             elapsed_ms,
-                            e
+                            msg
                         ));
+                        doc["probe"] = serde_json::json!({
+                            "ok": false,
+                            "provider": p.name(),
+                            "elapsed_ms": elapsed_ms,
+                            "error": msg,
+                        });
                     }
                 }
             }
             Err(e) => {
                 ok = false;
-                report.push_str(&format!("  ✗ could not construct provider: {e}\n"));
+                let msg = e.to_string();
+                report.push_str(&format!("  ✗ could not construct provider: {msg}\n"));
+                doc["probe"] = serde_json::json!({
+                    "ok": false,
+                    "error": format!("could not construct provider: {msg}"),
+                });
             }
         }
     } else {
         report.push_str("probe: skipped (pass --probe to make a 1-token round-trip)\n");
+        doc["probe"] = serde_json::json!({ "skipped": true });
     }
 
-    print!("{report}");
+    doc["ok"] = serde_json::json!(ok);
+
+    if json_out {
+        println!("{}", serde_json::to_string_pretty(&doc)?);
+    } else {
+        print!("{report}");
+    }
     if !ok {
         std::process::exit(1);
     }
