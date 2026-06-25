@@ -6,6 +6,7 @@
 //! drop into the same trait.
 
 pub mod anthropic;
+pub mod azure;
 pub mod bedrock;
 pub mod vertex;
 

@@ -2535,7 +2535,8 @@ async fn run_security_eval(
     Ok(())
 }
 
-/// Build a named provider by string slug. Accepts "anthropic", "bedrock", "vertex".
+/// Build a named provider by string slug. Accepts "anthropic", "bedrock",
+/// "vertex", "azure".
 async fn build_named_provider(name: &str) -> Result<Arc<dyn aether_llm::LlmProvider>> {
     match name.to_lowercase().as_str() {
         "bedrock" => {
@@ -2549,12 +2550,19 @@ async fn build_named_provider(name: &str) -> Result<Arc<dyn aether_llm::LlmProvi
                 .map_err(|e| anyhow!("vertex provider: {e}"))?;
             Ok(Arc::new(p))
         }
+        "azure" | "azure-foundry" | "foundry" => {
+            let p = aether_llm::azure::AzureProvider::from_env()
+                .map_err(|e| anyhow!("azure provider: {e}"))?;
+            Ok(Arc::new(p))
+        }
         "anthropic" => {
             let p = aether_llm::anthropic::AnthropicProvider::from_env_or_credentials()
                 .context("no auth source for anthropic provider")?;
             Ok(Arc::new(p))
         }
-        other => anyhow::bail!("unknown provider '{other}' — valid: anthropic, bedrock, vertex"),
+        other => anyhow::bail!(
+            "unknown provider '{other}' — valid: anthropic, bedrock, vertex, azure"
+        ),
     }
 }
 
