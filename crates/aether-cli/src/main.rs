@@ -340,6 +340,48 @@ async fn run_print(
     Ok(text)
 }
 
+// ── REPL slash completer ──────────────────────────────────────────────────
+
+struct SlashCompleter {
+    slashes: Vec<String>,
+}
+
+impl rustyline::completion::Completer for SlashCompleter {
+    type Candidate = String;
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _ctx: &rustyline::Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<String>)> {
+        // Only auto-complete when the input starts with '/' and the cursor
+        // is inside the slash command word.
+        let before = &line[..pos];
+        if !before.starts_with('/') {
+            return Ok((0, vec![]));
+        }
+        // Only complete if there's no whitespace before the cursor (i.e.,
+        // we're in the command name, not in arguments).
+        if before.chars().any(|c| c.is_whitespace()) {
+            return Ok((0, vec![]));
+        }
+        let matches: Vec<String> = self
+            .slashes
+            .iter()
+            .filter(|s| s.starts_with(before))
+            .cloned()
+            .collect();
+        Ok((0, matches))
+    }
+}
+
+impl rustyline::hint::Hinter for SlashCompleter {
+    type Hint = String;
+}
+impl rustyline::highlight::Highlighter for SlashCompleter {}
+impl rustyline::validate::Validator for SlashCompleter {}
+impl rustyline::Helper for SlashCompleter {}
+
 // ── REPL ──────────────────────────────────────────────────────────────────
 
 enum ResumeMode {
@@ -444,8 +486,26 @@ async fn run_repl(
     // rustyline editor: history, arrow-key edit, Ctrl-R search.
     let history_path = std::env::var_os("HOME")
         .map(|h| PathBuf::from(h).join(".aether/history"));
-    let mut editor: rustyline::Editor<(), rustyline::history::DefaultHistory> =
-        rustyline::Editor::new().context("init rustyline editor")?;
+    let builtin_slash = vec![
+        "/help",
+        "/clear",
+        "/model",
+        "/tools",
+        "/memory",
+        "/usage",
+        "/commands",
+        "/quit",
+        "/exit",
+    ];
+    let mut all_slash: Vec<String> = builtin_slash.iter().map(|s| s.to_string()).collect();
+    for name in custom_commands.keys() {
+        all_slash.push(format!("/{name}"));
+    }
+    let helper = SlashCompleter { slashes: all_slash };
+    let mut editor: rustyline::Editor<SlashCompleter, rustyline::history::DefaultHistory> =
+        rustyline::Editor::with_config(rustyline::Config::builder().build())
+            .context("init rustyline editor")?;
+    editor.set_helper(Some(helper));
     if let Some(p) = history_path.as_ref() {
         let _ = editor.load_history(p);
     }
