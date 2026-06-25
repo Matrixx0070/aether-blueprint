@@ -107,6 +107,16 @@ enum Cmd {
         #[command(subcommand)]
         sub: AuditCmd,
     },
+    /// Specialized review modes (security, perf, arch).
+    Review {
+        #[arg(long, default_value = "security")]
+        kind: String,
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Structured threat-model walkthrough (STRIDE).
+    ThreatModel { spec: PathBuf },
     /// Session admin (export to markdown, branch off at a turn).
     Session {
         #[command(subcommand)]
@@ -251,6 +261,12 @@ async fn main() -> Result<()> {
         Some(Cmd::Session { sub }) => return session_cmd(sub),
         Some(Cmd::Scope { sub }) => return scope_cmd(sub),
         Some(Cmd::Audit { sub }) => return audit_cmd(sub),
+        Some(Cmd::Review { kind, path, json }) => {
+            return run_review(&kind, &path, &model, permission_mode, json).await
+        }
+        Some(Cmd::ThreatModel { spec }) => {
+            return run_threat_model(&spec, &model, permission_mode).await
+        }
         Some(Cmd::Tui) => return run_tui(&model, permission_mode).await,
         Some(Cmd::Serve { bind }) => return run_serve(&bind, &model, permission_mode).await,
         Some(Cmd::Mcp { sub }) => {
@@ -1799,6 +1815,324 @@ fn tool_name_for_result(session: &Session, tool_use_id: &str) -> Option<String> 
         }
     }
     None
+}
+
+// ── security review mode ─────────────────────────────────────────────────
+
+/// Detect language from file extension. Falls back to `text`.
+fn detect_language(p: &std::path::Path) -> &'static str {
+    match p.extension().and_then(|e| e.to_str()) {
+        Some("rs") => "rust",
+        Some("ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs") => "javascript",
+        Some("py") => "python",
+        Some("go") => "go",
+        Some("java") => "java",
+        Some("c" | "h") => "c",
+        Some("cpp" | "cc" | "cxx" | "hpp") => "cpp",
+        Some("rb") => "ruby",
+        Some("php") => "php",
+        Some("sql") => "sql",
+        _ => "text",
+    }
+}
+
+/// Language-specific gotcha lists fed to the critic. Kept terse; the model
+/// already knows the categories — we just bias attention.
+fn language_security_focus(lang: &str) -> &'static str {
+    match lang {
+        "rust" => "unsafe blocks, panic-in-FFI, integer overflow in arithmetic, \
+                   Send/Sync bounds violations, lifetime laundering, \
+                   path traversal in Path::join, command injection in Command::new",
+        "javascript" => "XSS via innerHTML / dangerouslySetInnerHTML, prototype \
+                         pollution (Object.assign with attacker input), prototype-chain \
+                         lookup gotchas, regex catastrophic backtracking (ReDoS), \
+                         eval()/Function(), insecure JWT verification, SSRF in fetch()",
+        "python" => "deserialization (pickle/yaml.load), command injection in \
+                     subprocess(shell=True), SQL injection via string-format queries, \
+                     path traversal in os.path.join, SSRF in requests, weak crypto \
+                     (hashlib.md5 for auth), Jinja autoescape disabled",
+        "go" => "race conditions in goroutines (TOCTOU on shared maps), nil pointer \
+                 dereference, command injection in exec.Command, path traversal in \
+                 filepath.Join, integer overflow in arithmetic, HTTP smuggling in \
+                 net/http, hardcoded crypto keys, missing context timeouts",
+        "java" => "deserialization (Java native + Jackson polymorphic), XXE in \
+                   DocumentBuilder, SSRF in URL.openConnection, SQL injection in \
+                   Statement, weak crypto (DES / ECB), insecure random (java.util.Random), \
+                   reflection bypass, JNDI lookup injection",
+        "c" | "cpp" => "buffer overflow (memcpy/strcpy), use-after-free, double-free, \
+                         integer overflow → small allocation → heap overflow, format \
+                         string vulns, TOCTOU on file ops, missing bounds check, \
+                         unchecked errno",
+        "sql" => "injection via string concatenation, missing parameterised queries, \
+                  privilege escalation via GRANT, second-order injection",
+        _ => "general OWASP categories: injection, broken access control, crypto failures, \
+              insecure deserialization, missing logging, sensitive data exposure, \
+              security misconfiguration, vulnerable dependencies, SSRF, IDOR",
+    }
+}
+
+const REVIEW_SECURITY_PROMPT: &str = "\
+You are doing a SECURITY review. Be adversarial. Assume bugs exist.
+
+For each issue you find, output EXACTLY this structure (one block per issue, \
+separated by blank lines):
+
+```
+SEVERITY: <BLOCKER|HIGH|MEDIUM|LOW|INFO>
+CWE: <CWE-XXX or none>
+LOCATION: <file:line or file:line-line>
+SUMMARY: <one sentence>
+WHY:
+<2-4 lines explaining the threat>
+FIX:
+<concrete code suggestion or specific change>
+```
+
+After all blocks, emit:
+
+```
+TOTAL: <count> issues — <count blockers>B <high>H <medium>M <low>L <info>I
+```
+
+If you find NO issues, say so explicitly with the exact line: \
+`NO ISSUES FOUND (this is rare — re-check edge cases, error paths, untrusted input)`.
+
+Do not pad with praise. Do not say 'overall the code is good'. Focus on bugs.
+";
+
+async fn run_review(
+    kind: &str,
+    path: &std::path::Path,
+    model: &str,
+    permission_mode: aether_perm::PermissionMode,
+    json_out: bool,
+) -> Result<()> {
+    if kind != "security" {
+        anyhow::bail!("only --kind security is implemented in v0.7 (perf and arch planned)");
+    }
+    let body = std::fs::read_to_string(path)
+        .with_context(|| format!("read {}", path.display()))?;
+    let lang = detect_language(path);
+    let focus = language_security_focus(lang);
+    let user_prompt = format!(
+        "{REVIEW_SECURITY_PROMPT}\n\n\
+         Language: {lang}\n\
+         Focus areas for {lang}: {focus}\n\n\
+         File: {}\n\n\
+         ```{lang}\n{body}\n```\n",
+        path.display()
+    );
+
+    // Spin up a single-turn agent. No tools available — pure review.
+    let config = SessionConfig {
+        model: model.to_string(),
+        permission_mode,
+        max_tokens_per_turn: 8192,
+    };
+    let overlay = Fable5Overlay::new(OverlayConfig::default());
+    // Review mode produces a STRUCTURED report (lots of short keyword
+    // lines) that would false-positive the D7 stanza detector. Empty
+    // ruleset is intentional here — the model isn't generating code or
+    // user-facing prose, it's emitting an analysis report.
+    let gate = Gate::new(Vec::new()).map_err(|e| anyhow!("gate: {e}"))?;
+    let tools = ToolRegistry::new();
+    // No tools — review-only mode. Faster + deterministic.
+    let provider_arc = build_provider()?;
+    let mut session = Session::new(config, overlay, provider_arc, gate, tools);
+
+    let outcome = agent_turn(&mut session, Some(user_prompt)).await?;
+    let _ = outcome;
+    let final_text = session
+        .history
+        .iter()
+        .rev()
+        .find_map(|it| match it {
+            ConversationItem::Assistant { text, .. } => text.clone(),
+            _ => None,
+        })
+        .unwrap_or_default();
+
+    if json_out {
+        let parsed = parse_review_blocks(&final_text);
+        let report = serde_json::json!({
+            "kind": kind,
+            "file": path.display().to_string(),
+            "language": lang,
+            "issues": parsed,
+            "raw": final_text,
+        });
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("{final_text}");
+    }
+    Ok(())
+}
+
+#[derive(Debug, serde::Serialize)]
+struct ReviewIssue {
+    severity: String,
+    cwe: String,
+    location: String,
+    summary: String,
+    why: String,
+    fix: String,
+}
+
+/// Parse the structured review blocks the model produces. Tolerant: the
+/// model occasionally omits fields. Missing fields become empty strings.
+fn parse_review_blocks(s: &str) -> Vec<ReviewIssue> {
+    let mut out = Vec::new();
+    let mut current: Option<ReviewIssue> = None;
+    let mut multiline_field: Option<&str> = None;
+    let mut buf = String::new();
+    let flush_field =
+        |issue: &mut ReviewIssue, field: Option<&str>, buf: &mut String| {
+            if let Some(f) = field {
+                let v = std::mem::take(buf).trim().to_string();
+                match f {
+                    "WHY" => issue.why = v,
+                    "FIX" => issue.fix = v,
+                    _ => {}
+                }
+            } else {
+                buf.clear();
+            }
+        };
+    for raw_line in s.lines() {
+        let line = raw_line.trim_end();
+        if let Some(rest) = line.strip_prefix("SEVERITY:") {
+            if let Some(mut prev) = current.take() {
+                flush_field(&mut prev, multiline_field, &mut buf);
+                out.push(prev);
+            }
+            multiline_field = None;
+            current = Some(ReviewIssue {
+                severity: rest.trim().to_string(),
+                cwe: String::new(),
+                location: String::new(),
+                summary: String::new(),
+                why: String::new(),
+                fix: String::new(),
+            });
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("CWE:") {
+            if let Some(c) = current.as_mut() {
+                c.cwe = rest.trim().to_string();
+            }
+            multiline_field = None;
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("LOCATION:") {
+            if let Some(c) = current.as_mut() {
+                c.location = rest.trim().to_string();
+            }
+            multiline_field = None;
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("SUMMARY:") {
+            if let Some(c) = current.as_mut() {
+                c.summary = rest.trim().to_string();
+            }
+            multiline_field = None;
+            continue;
+        }
+        if line.starts_with("WHY:") {
+            if let Some(c) = current.as_mut() {
+                flush_field(c, multiline_field, &mut buf);
+            }
+            multiline_field = Some("WHY");
+            buf.clear();
+            continue;
+        }
+        if line.starts_with("FIX:") {
+            if let Some(c) = current.as_mut() {
+                flush_field(c, multiline_field, &mut buf);
+            }
+            multiline_field = Some("FIX");
+            buf.clear();
+            continue;
+        }
+        if multiline_field.is_some() {
+            buf.push_str(raw_line);
+            buf.push('\n');
+        }
+    }
+    if let Some(mut last) = current.take() {
+        flush_field(&mut last, multiline_field, &mut buf);
+        out.push(last);
+    }
+    out
+}
+
+// ── threat modelling ─────────────────────────────────────────────────────
+
+const THREAT_MODEL_PROMPT: &str = "\
+You are running a STRIDE threat-modelling session.
+
+INPUT: an architecture description (may be a paragraph or markdown spec).
+
+Your task: produce a STRUCTURED threat model. Follow this template exactly:
+
+# Threat Model: <one-line system name>
+
+## Trust boundaries
+- list each boundary, what crosses it, who controls each side
+
+## Data classifications
+- public / internal / confidential / regulated — what data falls where
+
+## Assumptions
+- list any assumptions you're making (e.g. 'TLS terminates at the load balancer')
+
+## STRIDE walkthrough
+For each STRIDE category (Spoofing, Tampering, Repudiation, Information \
+disclosure, Denial of service, Elevation of privilege), list specific threats \
+relevant to this system. For each threat:
+  - **Threat**: one-line description
+  - **Mitigations**: 1-3 concrete controls
+  - **Residual risk**: what's still possible after mitigations
+
+## Open questions
+- list things you'd need to ask the architect to fully model
+
+Be specific. Generic statements like 'use HTTPS' are not enough — name the \
+endpoint, name the data, name the actor.
+";
+
+async fn run_threat_model(
+    spec_path: &std::path::Path,
+    model: &str,
+    permission_mode: aether_perm::PermissionMode,
+) -> Result<()> {
+    let spec = std::fs::read_to_string(spec_path)
+        .with_context(|| format!("read {}", spec_path.display()))?;
+    let user_prompt = format!("{THREAT_MODEL_PROMPT}\n\nArchitecture spec:\n\n{spec}");
+
+    let config = SessionConfig {
+        model: model.to_string(),
+        permission_mode,
+        max_tokens_per_turn: 8192,
+    };
+    let overlay = Fable5Overlay::new(OverlayConfig::default());
+    // Empty ruleset — same reasoning as run_review (structured analysis output).
+    let gate = Gate::new(Vec::new()).map_err(|e| anyhow!("gate: {e}"))?;
+    let tools = ToolRegistry::new();
+    let provider_arc = build_provider()?;
+    let mut session = Session::new(config, overlay, provider_arc, gate, tools);
+
+    let _ = agent_turn(&mut session, Some(user_prompt)).await?;
+    let final_text = session
+        .history
+        .iter()
+        .rev()
+        .find_map(|it| match it {
+            ConversationItem::Assistant { text, .. } => text.clone(),
+            _ => None,
+        })
+        .unwrap_or_default();
+    println!("{final_text}");
+    Ok(())
 }
 
 // ── scope + audit ────────────────────────────────────────────────────────
