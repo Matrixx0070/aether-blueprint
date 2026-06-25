@@ -9,3 +9,4 @@ description = "AetherCode persistence layer — sessions, transcripts, checkpoin
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+anyhow.workspace = true
