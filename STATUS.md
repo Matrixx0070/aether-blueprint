@@ -31,5 +31,12 @@ format: `[slice] [status] [commit] [verifier] [live-check] note`
 | A1 | DONE | dc4db46 | n/a | exit 0 · 23/23 passed | 7 gap-fill fixtures; autoroute fired once; Sonnet 4.6 |
 | A2 | DONE | 18408a2 | n/a | 15/15 tests passing | `--runs N --threshold P`; 4 new unit tests |
 | A3 | DONE | a04e340 | n/a | exit 0 · 23/23 @ threshold 1.0 × 3 runs | 0 flaky fixtures; per-fixture median/min/max in BENCHMARK.md |
-| A4 | DONE | (pending) | n/a | — | Bump 0.7.3, docs, tag, push |
+| A4 | DONE | 535ab5b | n/a | exit 0 · pushed origin/main · tag v0.7.3 live | Bump 0.7.3, docs, tag, push |
+| B1 | DONE/UNVERIFIED | (bedrock.rs rewrite) | n/a | build exit 0 · no AWS creds in env | Bedrock streaming: event-stream binary parser, SigV4 signing |
+| B2 | DONE/UNVERIFIED | (vertex.rs rewrite) | n/a | build exit 0 · no GCP creds in env | Vertex streaming: SSE `:streamRawPredict` parser |
+| B3 | DONE/UNVERIFIED | (bedrock.rs cred chain) | n/a | build exit 0 · no IMDS in env | AWS cred provider chain: env→credentials file→IMDSv2→ECS |
+| B4 | DONE/UNVERIFIED | (vertex.rs JWT refresh) | n/a | build exit 0 · no GCP SA JSON in env | GCP SA JSON → RS256 JWT → Bearer, auto-refresh 5min buffer |
+| B5 | DONE | 825ae5a | SHIP | 18/18 tests · `--provider` in --help | Cross-provider sweep; `build_named_provider`; 3 new tests |
+| B6 | DONE | f89605e | n/a | exit 0 · pushed origin/main · tag v0.8.0 live | Bump 0.8.0, docs, tag, push |
+| C1 | DONE | n/a | n/a | release build exit 0 · `--provider` in --help | Regression: binary at v0.8.0 compiles clean, help correct |
 

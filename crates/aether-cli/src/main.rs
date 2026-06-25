@@ -2429,10 +2429,11 @@ async fn run_security_eval_inner(
     })
 }
 
-/// Print a `SecurityReport` to stdout (JSON or human-readable) and exit 1 on failures.
-fn print_and_exit_security_report(report: &SecurityReport, json_out: bool) {
+/// Render a `SecurityReport` to a string (JSON or human-readable).
+/// Returns `Err` if JSON serialization fails — callers should propagate with `?`.
+fn format_security_report(report: &SecurityReport, json_out: bool) -> Result<String> {
     if json_out {
-        println!("{}", serde_json::to_string_pretty(report).unwrap_or_default());
+        Ok(serde_json::to_string_pretty(report)?)
     } else {
         let hdr = if report.runs > 1 {
             format!(
@@ -2445,7 +2446,8 @@ fn print_and_exit_security_report(report: &SecurityReport, json_out: bool) {
                 report.suite, report.passed, report.total
             )
         };
-        println!("{hdr}");
+        let mut out = hdr;
+        out.push('\n');
         for f in &report.fixtures {
             let sym = if f.passed { "✓" } else { "✗" };
             if report.runs > 1 {
@@ -2453,22 +2455,30 @@ fn print_and_exit_security_report(report: &SecurityReport, json_out: bool) {
                 let med = f.median_ms.unwrap_or(0);
                 let mn = f.min_ms.unwrap_or(0);
                 let mx = f.max_ms.unwrap_or(0);
-                println!(
-                    "  {sym} {}  (pass {:.0}%, med {}ms [{mn}–{mx}ms]) — {}",
+                out.push_str(&format!(
+                    "  {sym} {}  (pass {:.0}%, med {}ms [{mn}–{mx}ms]) — {}\n",
                     f.file, rate_pct, med, f.detail
-                );
+                ));
             } else {
-                println!(
-                    "  {sym} {}  ({} findings, {} ms) — {}",
+                out.push_str(&format!(
+                    "  {sym} {}  ({} findings, {} ms) — {}\n",
                     f.file, f.issues_found, f.elapsed_ms, f.detail
-                );
+                ));
             }
         }
-        println!();
+        out.push('\n');
+        Ok(out)
     }
+}
+
+/// Print a `SecurityReport` to stdout (JSON or human-readable) and exit 1 on failures.
+fn print_and_exit_security_report(report: &SecurityReport, json_out: bool) -> Result<()> {
+    let text = format_security_report(report, json_out)?;
+    print!("{text}");
     if report.failed > 0 {
         std::process::exit(1);
     }
+    Ok(())
 }
 
 /// Outer wrapper: single-provider eval. Builds the default provider, runs
@@ -2485,7 +2495,7 @@ async fn run_security_eval(
     let report =
         run_security_eval_inner(suite_path, model, permission_mode, runs, threshold, provider_arc)
             .await?;
-    print_and_exit_security_report(&report, json_out);
+    print_and_exit_security_report(&report, json_out)?;
     Ok(())
 }
 
@@ -2524,6 +2534,7 @@ async fn run_security_eval_sweep(
     providers: &[String],
 ) -> Result<()> {
     let mut reports: Vec<(String, SecurityReport)> = Vec::new();
+    let mut skipped: Vec<(String, String)> = Vec::new(); // (name, reason)
     let mut any_failed = false;
 
     for pname in providers {
@@ -2531,6 +2542,8 @@ async fn run_security_eval_sweep(
             Ok(p) => p,
             Err(e) => {
                 eprintln!("[sweep] skipping {pname}: {e}");
+                skipped.push((pname.clone(), e.to_string()));
+                any_failed = true; // skip counts as failure for CI exit code
                 continue;
             }
         };
@@ -2558,13 +2571,14 @@ async fn run_security_eval_sweep(
     }
 
     if json_out {
-        let out: Vec<serde_json::Value> = reports
+        let mut out: Vec<serde_json::Value> = reports
             .iter()
-            .map(|(name, r)| {
-                serde_json::json!({ "provider": name, "report": r })
-            })
+            .map(|(name, r)| serde_json::json!({ "provider": name, "report": r }))
             .collect();
-        println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+        for (name, reason) in &skipped {
+            out.push(serde_json::json!({ "provider": name, "status": "SKIP", "reason": reason }));
+        }
+        println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
         println!("\n=== CROSS-PROVIDER SWEEP: {} ===", suite_path.display());
         println!(
@@ -2578,6 +2592,9 @@ async fn run_security_eval_sweep(
                 "  {:<12} {:>6} {:>6} {:>6}{}",
                 name, r.passed, r.failed, r.total, marker
             );
+        }
+        for (name, _reason) in &skipped {
+            println!("  {:<12}   SKIP                  ✗", name);
         }
         println!();
     }
@@ -4485,9 +4502,28 @@ mod tests {
     }
 
     #[test]
-    fn print_and_exit_security_report_json_contains_suite() {
-        // Capture stdout for JSON mode — we can't actually call process::exit,
-        // so test the report serialises correctly instead.
+    fn sweep_provider_name_normalisation() {
+        // build_named_provider normalises via .to_lowercase(): "Anthropic"
+        // must NOT be rejected as "unknown provider" — it must reach the
+        // anthropic branch. Whether it then succeeds (credentials present) or
+        // fails with an auth error is environment-dependent and both are fine.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = rt.block_on(build_named_provider("Anthropic"));
+        if let Err(e) = &result {
+            let msg = format!("{e}");
+            assert!(
+                !msg.contains("unknown provider"),
+                "'Anthropic' should normalise to anthropic branch: {msg}"
+            );
+        }
+        // Ok(_) also acceptable: credentials were present in the environment.
+    }
+
+    #[test]
+    fn format_security_report_json_round_trips() {
         let report = SecurityReport {
             suite: "test-suite".into(),
             total: 2,
@@ -4497,25 +4533,36 @@ mod tests {
             threshold: 1.0,
             fixtures: vec![],
         };
-        // Just verify the report round-trips through serde cleanly.
-        let json = serde_json::to_string_pretty(&report).unwrap();
+        let json = format_security_report(&report, true).unwrap();
         assert!(json.contains("test-suite"));
         assert!(json.contains("\"passed\": 2"));
     }
 
     #[test]
-    fn sweep_provider_name_normalisation() {
-        // build_named_provider normalises via .to_lowercase(), so "Anthropic"
-        // should reach the same branch as "anthropic". We can only test the
-        // error branch synchronously; the happy path requires credentials.
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let err = rt
-            .block_on(build_named_provider("BOGUS_UPPER"))
-            .err()
-            .expect("expected an error for unknown provider name");
-        assert!(format!("{err}").contains("unknown provider"), "got: {err}");
+    fn format_security_report_human_contains_header() {
+        let report = SecurityReport {
+            suite: "my-suite".into(),
+            total: 1,
+            passed: 1,
+            failed: 0,
+            runs: 1,
+            threshold: 1.0,
+            fixtures: vec![SecurityFixtureResult {
+                file: "01_test.py".into(),
+                passed: true,
+                detail: "matched CWE-89 @ HIGH".into(),
+                issues_found: 1,
+                elapsed_ms: 42,
+                pass_count: None,
+                pass_rate: None,
+                median_ms: None,
+                min_ms: None,
+                max_ms: None,
+            }],
+        };
+        let text = format_security_report(&report, false).unwrap();
+        assert!(text.contains("my-suite"), "header missing suite name: {text}");
+        assert!(text.contains("01_test.py"), "fixture line missing: {text}");
+        assert!(text.contains("✓"), "pass symbol missing: {text}");
     }
 }
