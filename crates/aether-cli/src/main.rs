@@ -377,6 +377,7 @@ async fn run_repl(
     let stdin = std::io::stdin();
     let mut input_buf = String::new();
     let mut pending_user: Option<String> = initial_prompt;
+    let custom_commands = load_custom_commands();
 
     loop {
         let user_msg = match pending_user.take() {
@@ -403,12 +404,15 @@ async fn run_repl(
             continue;
         }
 
-        if let Some(stripped) = user_msg.strip_prefix('/') {
-            match handle_slash(stripped, &mut session) {
+        let user_msg = if let Some(stripped) = user_msg.strip_prefix('/') {
+            match handle_slash(stripped, &mut session, &custom_commands) {
                 SlashAction::Quit => break,
                 SlashAction::Continue => continue,
+                SlashAction::SendAsUser(s) => s,
             }
-        }
+        } else {
+            user_msg
+        };
 
         append_session_line(&session_path, &SessionLine::user(&user_msg)).ok();
 
@@ -506,11 +510,18 @@ fn print_banner(session_id: &str, model: &str, resume: &ResumeMode) {
 enum SlashAction {
     Continue,
     Quit,
+    /// Send this string as the next user message (used by custom commands).
+    SendAsUser(String),
 }
 
-fn handle_slash(cmd: &str, session: &mut Session) -> SlashAction {
-    let mut parts = cmd.split_whitespace();
+fn handle_slash(
+    cmd: &str,
+    session: &mut Session,
+    custom: &std::collections::HashMap<String, String>,
+) -> SlashAction {
+    let mut parts = cmd.splitn(2, char::is_whitespace);
     let head = parts.next().unwrap_or("");
+    let args = parts.next().unwrap_or("").trim();
     match head {
         "help" | "h" | "?" => {
             eprintln!("\nslash commands:");
@@ -518,7 +529,31 @@ fn handle_slash(cmd: &str, session: &mut Session) -> SlashAction {
             eprintln!("  /clear              wipe in-memory conversation");
             eprintln!("  /model [NAME]       show or change the active model");
             eprintln!("  /tools              list registered tools");
+            eprintln!("  /commands           list custom commands from ~/.aether/commands/");
             eprintln!("  /quit | /exit       quit");
+            if !custom.is_empty() {
+                let mut names: Vec<_> = custom.keys().cloned().collect();
+                names.sort();
+                eprintln!("\ncustom commands: {}", names.join(", "));
+            }
+            SlashAction::Continue
+        }
+        "commands" => {
+            if custom.is_empty() {
+                eprintln!("[no custom commands — drop *.md files in ~/.aether/commands/]");
+            } else {
+                let mut names: Vec<_> = custom.keys().cloned().collect();
+                names.sort();
+                for n in &names {
+                    let first_line = custom
+                        .get(n)
+                        .and_then(|s| s.lines().next())
+                        .unwrap_or("")
+                        .trim_start_matches('#')
+                        .trim();
+                    eprintln!("  /{n} — {first_line}");
+                }
+            }
             SlashAction::Continue
         }
         "clear" => {
@@ -545,6 +580,10 @@ fn handle_slash(cmd: &str, session: &mut Session) -> SlashAction {
         }
         "quit" | "exit" | "q" => SlashAction::Quit,
         other => {
+            if let Some(template) = custom.get(other) {
+                let body = substitute_args(template, args);
+                return SlashAction::SendAsUser(body);
+            }
             eprintln!("[unknown slash command: /{other} — try /help]");
             SlashAction::Continue
         }
@@ -791,6 +830,48 @@ fn parse_permission_mode(s: &str) -> Result<aether_perm::PermissionMode> {
         "bypassPermissions" => Ok(BypassPermissions),
         other => anyhow::bail!("unknown permission mode: {other}"),
     }
+}
+
+// ── Custom slash commands (~/.aether/commands/*.md) ───────────────────────
+
+const COMMANDS_DIR: &str = ".aether/commands";
+
+/// Returns map of name → markdown body for every `~/.aether/commands/*.md`.
+/// The filename stem (without extension) becomes the slash command name.
+fn load_custom_commands() -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    let dir = match std::env::var_os("HOME").map(|h| PathBuf::from(h).join(COMMANDS_DIR)) {
+        Some(d) => d,
+        None => return out,
+    };
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return out,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        let name = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        if let Ok(body) = std::fs::read_to_string(&path) {
+            out.insert(name, body);
+        }
+    }
+    out
+}
+
+/// Substitute `$ARGS` (and `$1`, `$2`, …) in a command template.
+fn substitute_args(template: &str, args: &str) -> String {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    let mut out = template.replace("$ARGS", args);
+    for (i, p) in parts.iter().enumerate() {
+        out = out.replace(&format!("${}", i + 1), p);
+    }
+    out
 }
 
 // ── Settings (~/.aether/settings.json) ────────────────────────────────────
