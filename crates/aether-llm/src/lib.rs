@@ -110,9 +110,32 @@ pub enum LlmError {
     Upstream { status: u16, body: String },
 }
 
+/// Callback invoked for each text delta as a streamed response arrives.
+/// Receives the new chunk of assistant text only; tool-use deltas are not
+/// surfaced here (they're accumulated and present in the final response).
+pub type TextDeltaSink = Box<dyn FnMut(&str) + Send>;
+
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
     async fn complete(&self, req: MessagesRequest) -> Result<MessagesResponse, LlmError>;
+
+    /// Complete with text-delta streaming. Default implementation calls
+    /// `complete()` and emits the entire text as one chunk — providers
+    /// override to implement real SSE streaming.
+    async fn complete_streamed(
+        &self,
+        req: MessagesRequest,
+        mut on_delta: TextDeltaSink,
+    ) -> Result<MessagesResponse, LlmError> {
+        let resp = self.complete(req).await?;
+        for block in &resp.content {
+            if let ContentBlock::Text { text } = block {
+                on_delta(text);
+            }
+        }
+        Ok(resp)
+    }
+
     fn name(&self) -> &str;
 }
 

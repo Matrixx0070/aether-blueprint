@@ -29,7 +29,7 @@
 //!     agent loop's verifier-driven re-plan handles this naturally for
 //!     blocks; rate-limit retry belongs in a separate slice).
 
-use crate::{LlmError, LlmProvider, MessagesRequest, MessagesResponse};
+use crate::{ContentBlock, LlmError, LlmProvider, MessagesRequest, MessagesResponse, StopReason, TextDeltaSink};
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -397,23 +397,40 @@ fn write_credentials_file(path: &std::path::Path, file: &CredentialsFile) -> Res
 
 #[async_trait]
 impl LlmProvider for AnthropicProvider {
-    async fn complete(&self, mut req: MessagesRequest) -> Result<MessagesResponse, LlmError> {
-        // Force non-streaming on the wire. The trait carries `stream` for
-        // future use but this v1 impl doesn't consume SSE.
-        req.stream = false;
+    async fn complete(&self, req: MessagesRequest) -> Result<MessagesResponse, LlmError> {
+        self.complete_inner(req, None).await
+    }
 
-        // Proactive refresh: if loaded from a credentials file and the
-        // access token is within REFRESH_BUFFER_MS of expiry, refresh
-        // before sending. Failure is non-fatal; the request still goes
-        // out with the stale token and falls into 401 recovery below.
+    async fn complete_streamed(
+        &self,
+        req: MessagesRequest,
+        on_delta: TextDeltaSink,
+    ) -> Result<MessagesResponse, LlmError> {
+        self.complete_inner(req, Some(on_delta)).await
+    }
+
+    fn name(&self) -> &str {
+        "anthropic"
+    }
+}
+
+impl AnthropicProvider {
+    /// Unified send path. When `on_delta` is `Some`, sets `stream: true` on
+    /// the wire and parses SSE events, emitting text deltas; otherwise does
+    /// a normal non-streaming POST.
+    async fn complete_inner(
+        &self,
+        mut req: MessagesRequest,
+        on_delta: Option<TextDeltaSink>,
+    ) -> Result<MessagesResponse, LlmError> {
+        let streaming = on_delta.is_some();
+        req.stream = streaming;
+
         if self.credentials_path.is_some() {
             let _ = self.refresh_if_needed().await;
         }
 
         let body = if self.is_oauth() {
-            // OAuth-only policy gate: block 0 of `system` must exactly equal
-            // an approved identity string. Send as an array so additional
-            // caller content can ride along as subsequent blocks.
             let caller_system = req.system.take();
             let mut v = serde_json::to_value(&req)
                 .map_err(|e| LlmError::Schema(format!("encode request: {e}")))?;
@@ -429,24 +446,16 @@ impl LlmProvider for AnthropicProvider {
                 .map_err(|e| LlmError::Schema(format!("encode request: {e}")))?
         };
 
-        // First attempt
         let resp = self.send_once(&body).await?;
         let status = resp.status();
         if status.as_u16() == 401 && self.credentials_path.is_some() {
-            // 401 recovery: force refresh + retry once
             self.refresh_force().await?;
             let resp2 = self.send_once(&body).await?;
-            return self.parse_response(resp2).await;
+            return self.parse_or_stream(resp2, on_delta).await;
         }
-        self.parse_response(resp).await
+        self.parse_or_stream(resp, on_delta).await
     }
 
-    fn name(&self) -> &str {
-        "anthropic"
-    }
-}
-
-impl AnthropicProvider {
     async fn send_once(&self, body: &serde_json::Value) -> Result<reqwest::Response, LlmError> {
         let mut builder = self
             .client
@@ -463,9 +472,10 @@ impl AnthropicProvider {
             .map_err(|e| LlmError::Transport(format!("send: {e}")))
     }
 
-    async fn parse_response(
+    async fn parse_or_stream(
         &self,
         resp: reqwest::Response,
+        on_delta: Option<TextDeltaSink>,
     ) -> Result<MessagesResponse, LlmError> {
         let status = resp.status();
         if status.as_u16() == 429 {
@@ -478,6 +488,13 @@ impl AnthropicProvider {
                 body,
             });
         }
+        match on_delta {
+            None => self.parse_full(resp).await,
+            Some(cb) => self.parse_sse(resp, cb).await,
+        }
+    }
+
+    async fn parse_full(&self, resp: reqwest::Response) -> Result<MessagesResponse, LlmError> {
         let bytes = resp
             .bytes()
             .await
@@ -485,6 +502,181 @@ impl AnthropicProvider {
         serde_json::from_slice::<MessagesResponse>(&bytes)
             .map_err(|e| LlmError::Schema(format!("decode response: {e}")))
     }
+
+    /// Parse Anthropic SSE event stream. Event types handled:
+    ///   - `content_block_start` with `text` or `tool_use` block → start a
+    ///     pending block at the given index.
+    ///   - `content_block_delta` text_delta → emit via callback + append.
+    ///   - `content_block_delta` input_json_delta → accumulate tool args.
+    ///   - `content_block_stop` → finalize the pending block.
+    ///   - `message_delta` → capture stop_reason.
+    ///   - `message_stop` → end.
+    /// Returns a fully-reconstructed `MessagesResponse`.
+    async fn parse_sse(
+        &self,
+        resp: reqwest::Response,
+        mut on_delta: TextDeltaSink,
+    ) -> Result<MessagesResponse, LlmError> {
+        use futures_util::StreamExt;
+
+        let mut byte_stream = resp.bytes_stream();
+        let mut buf: Vec<u8> = Vec::with_capacity(4096);
+        let mut blocks: std::collections::BTreeMap<u64, PendingBlock> =
+            std::collections::BTreeMap::new();
+        let mut stop_reason: Option<StopReason> = None;
+
+        while let Some(chunk) = byte_stream.next().await {
+            let chunk = chunk
+                .map_err(|e| LlmError::Transport(format!("sse chunk: {e}")))?;
+            buf.extend_from_slice(&chunk);
+            // SSE events are separated by blank lines (\n\n).
+            while let Some(pos) = find_double_newline(&buf) {
+                let event_bytes = buf.drain(..pos + 2).collect::<Vec<u8>>();
+                let event_str = std::str::from_utf8(&event_bytes).unwrap_or("");
+                let mut data_line: Option<&str> = None;
+                for line in event_str.lines() {
+                    if let Some(rest) = line.strip_prefix("data: ") {
+                        data_line = Some(rest);
+                    }
+                }
+                let Some(data) = data_line else { continue };
+                let Ok(ev) = serde_json::from_str::<serde_json::Value>(data) else {
+                    continue;
+                };
+                let ev_type = ev.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                match ev_type {
+                    "content_block_start" => {
+                        let idx = ev.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let block = ev.get("content_block");
+                        let kind = block
+                            .and_then(|b| b.get("type"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let pending = match kind {
+                            "text" => PendingBlock::Text { text: String::new() },
+                            "tool_use" => PendingBlock::ToolUse {
+                                id: block
+                                    .and_then(|b| b.get("id"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                name: block
+                                    .and_then(|b| b.get("name"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                input_json: String::new(),
+                            },
+                            _ => continue,
+                        };
+                        blocks.insert(idx, pending);
+                    }
+                    "content_block_delta" => {
+                        let idx = ev.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let delta = ev.get("delta");
+                        let dtype = delta
+                            .and_then(|d| d.get("type"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if let Some(b) = blocks.get_mut(&idx) {
+                            match (b, dtype) {
+                                (PendingBlock::Text { text }, "text_delta") => {
+                                    if let Some(t) = delta
+                                        .and_then(|d| d.get("text"))
+                                        .and_then(|v| v.as_str())
+                                    {
+                                        on_delta(t);
+                                        text.push_str(t);
+                                    }
+                                }
+                                (
+                                    PendingBlock::ToolUse { input_json, .. },
+                                    "input_json_delta",
+                                ) => {
+                                    if let Some(s) = delta
+                                        .and_then(|d| d.get("partial_json"))
+                                        .and_then(|v| v.as_str())
+                                    {
+                                        input_json.push_str(s);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    "content_block_stop" => {}
+                    "message_delta" => {
+                        if let Some(stop_str) = ev
+                            .get("delta")
+                            .and_then(|d| d.get("stop_reason"))
+                            .and_then(|v| v.as_str())
+                        {
+                            if let Ok(parsed) =
+                                serde_json::from_value::<StopReason>(serde_json::json!(stop_str))
+                            {
+                                stop_reason = Some(parsed);
+                            }
+                        }
+                    }
+                    "message_stop" => {}
+                    "ping" => {}
+                    "error" => {
+                        let msg = ev
+                            .get("error")
+                            .and_then(|e| e.get("message"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("(unknown)")
+                            .to_string();
+                        return Err(LlmError::Upstream {
+                            status: 200,
+                            body: format!("sse error: {msg}"),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let content: Vec<ContentBlock> = blocks
+            .into_values()
+            .map(|p| match p {
+                PendingBlock::Text { text } => ContentBlock::Text { text },
+                PendingBlock::ToolUse {
+                    id,
+                    name,
+                    input_json,
+                } => {
+                    let input = if input_json.is_empty() {
+                        serde_json::json!({})
+                    } else {
+                        serde_json::from_str(&input_json)
+                            .unwrap_or_else(|_| serde_json::json!({"raw": input_json}))
+                    };
+                    ContentBlock::ToolUse { id, name, input }
+                }
+            })
+            .collect();
+
+        Ok(MessagesResponse {
+            content,
+            stop_reason: stop_reason.unwrap_or(StopReason::EndTurn),
+        })
+    }
+}
+
+enum PendingBlock {
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input_json: String,
+    },
+}
+
+fn find_double_newline(buf: &[u8]) -> Option<usize> {
+    buf.windows(2).position(|w| w == b"\n\n")
 }
 
 #[cfg(test)]

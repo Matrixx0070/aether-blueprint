@@ -14,7 +14,7 @@
 //! holds the most-recent session id for `--continue`.
 
 use aether_core::context::ConversationItem;
-use aether_core::{agent_turn, Session, SessionConfig, TurnOutcome};
+use aether_core::{agent_turn, agent_turn_streamed, Session, SessionConfig, TurnOutcome};
 use aether_llm::{
     anthropic::AnthropicProvider, ContentBlock, LlmProvider, Message, MessagesRequest,
 };
@@ -326,20 +326,33 @@ async fn run_repl(
 
         let mut next_input: Option<String> = Some(user_msg);
         loop {
-            let outcome = match agent_turn(&mut session, next_input.take()).await {
+            // Stream text deltas to stdout as they arrive. The leading
+            // "aether › " is printed up-front so the cursor is in the
+            // right place before any tokens land.
+            let mut started = false;
+            let sink: aether_llm::TextDeltaSink = Box::new(move |delta: &str| {
+                if !started {
+                    print!("\naether › ");
+                    started = true;
+                }
+                print!("{delta}");
+                let _ = std::io::stdout().flush();
+            });
+            let outcome = match agent_turn_streamed(&mut session, next_input.take(), sink).await {
                 Ok(o) => o,
                 Err(e) => {
                     eprintln!("\n[error] {e}");
                     break;
                 }
             };
+            // Newline after the streamed assistant text.
+            println!();
 
             // Persist + display whatever was just appended (last 1-2 items).
             if let Some(item) = session.history.last() {
                 match item {
                     ConversationItem::Assistant { text, tool_uses } => {
                         if let Some(t) = text {
-                            println!("\naether › {t}");
                             append_session_line(&session_path, &SessionLine::assistant(t)).ok();
                         }
                         for tu in tool_uses {

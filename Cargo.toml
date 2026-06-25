@@ -23,7 +23,9 @@ async-trait = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "process", "time", "sync", "signal"] }
 
 # HTTP
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "charset"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "charset", "stream"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+bytes = "1"
 
 # CLI
 clap = { version = "4", features = ["derive", "env"] }

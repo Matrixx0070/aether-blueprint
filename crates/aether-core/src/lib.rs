@@ -142,6 +142,26 @@ pub async fn agent_turn(
     session: &mut Session,
     user_input: Option<String>,
 ) -> Result<TurnOutcome, AgentError> {
+    agent_turn_inner(session, user_input, None).await
+}
+
+/// Streaming variant — text deltas are emitted via the callback as the
+/// model produces them. The full assistant response is still recorded into
+/// session history after the stream completes. Pass the same callback you
+/// would for printing tokens to stdout in a REPL.
+pub async fn agent_turn_streamed(
+    session: &mut Session,
+    user_input: Option<String>,
+    on_delta: aether_llm::TextDeltaSink,
+) -> Result<TurnOutcome, AgentError> {
+    agent_turn_inner(session, user_input, Some(on_delta)).await
+}
+
+async fn agent_turn_inner(
+    session: &mut Session,
+    user_input: Option<String>,
+    on_delta: Option<aether_llm::TextDeltaSink>,
+) -> Result<TurnOutcome, AgentError> {
     // ── perceive (input) ──────────────────────────────────────────────
     if let Some(s) = user_input {
         session.history.push(ConversationItem::User(s));
@@ -186,7 +206,10 @@ pub async fn agent_turn(
     session.last_assembly_telemetry = Some(telemetry);
 
     // ── tool-sel (LLM call) ──────────────────────────────────────────
-    let resp = session.llm.complete(req).await?;
+    let resp = match on_delta {
+        None => session.llm.complete(req).await?,
+        Some(cb) => session.llm.complete_streamed(req, cb).await?,
+    };
 
     let mut text_parts: Vec<String> = Vec::new();
     let mut tool_uses: Vec<RecordedToolUse> = Vec::new();
