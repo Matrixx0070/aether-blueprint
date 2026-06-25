@@ -588,15 +588,29 @@ async fn run_print_agent(
     let mut next_input: Option<String> = Some(prompt.to_string());
     let mut last_text: Option<String> = None;
     let stream_disabled = std::env::var("AETHER_NO_STREAM").ok().as_deref() == Some("1");
+    // Capture any agent error so we can still emit the usage line at the
+    // end. Without this, a mid-loop error from agent_turn propagates via
+    // `?` and the usage print at function exit is skipped — that was the
+    // root cause of the v0.13/v0.14 "in=0 out=0" reports on tasks where
+    // the agent finished its edits but raised an error on the next turn
+    // (e.g., a verifier-gate block or a transient provider blip).
+    let mut deferred_error: Option<anyhow::Error> = None;
     loop {
-        let outcome = if stream_disabled {
-            agent_turn(&mut session, next_input.take()).await?
+        let outcome_result = if stream_disabled {
+            agent_turn(&mut session, next_input.take()).await
         } else {
             let sink: aether_llm::TextDeltaSink = Box::new(move |delta: &str| {
                 print!("{delta}");
                 let _ = std::io::stdout().flush();
             });
-            agent_turn_streamed(&mut session, next_input.take(), sink).await?
+            agent_turn_streamed(&mut session, next_input.take(), sink).await
+        };
+        let outcome = match outcome_result {
+            Ok(o) => o,
+            Err(e) => {
+                deferred_error = Some(e.into());
+                break;
+            }
         };
         if let Some(ConversationItem::Assistant { text, tool_uses }) = session.history.last() {
             if let Some(t) = text {
@@ -646,6 +660,11 @@ async fn run_print_agent(
             u.cache_read_input_tokens,
             cost,
         );
+    }
+    // Now that usage has been emitted, replay any error caught during the
+    // agent loop so the subprocess exit code still reflects failure.
+    if let Some(e) = deferred_error {
+        return Err(e);
     }
     Ok(())
 }

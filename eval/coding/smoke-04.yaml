@@ -1,0 +1,5 @@
+name: smoke-04-measurement-fix
+tasks:
+  - dir: tasks/04_refactor
+    prompt: "The function process_request in handler.py is too long. Extract pure helpers and shrink the main function. Behavior must not change. Run the existing tests to confirm."
+    timeout_secs: 240
