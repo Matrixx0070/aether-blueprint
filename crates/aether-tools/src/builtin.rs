@@ -1363,6 +1363,146 @@ impl Tool for OsvScannerTool {
     }
 }
 
+// ── Sandbox (bwrap) ──────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct SandboxInput {
+    /// Shell command to execute (passed to /bin/sh -c inside the sandbox).
+    cmd: String,
+    /// Working directory inside the sandbox (default `/work`).
+    #[serde(default)]
+    workdir: Option<String>,
+    /// Allow network egress (default false).
+    #[serde(default)]
+    network: bool,
+    /// Wallclock cap in seconds (default 60, max 300).
+    #[serde(default)]
+    time_limit_s: Option<u64>,
+    /// Optional path on the host to mount read-only as `/work`. When omitted
+    /// the sandbox gets an empty `/work` tmpfs.
+    #[serde(default)]
+    mount_ro: Option<String>,
+}
+
+pub struct SandboxTool;
+
+#[async_trait]
+impl Tool for SandboxTool {
+    fn name(&self) -> &str {
+        "Sandbox"
+    }
+    fn description(&self) -> &str {
+        "Run a shell command in a bubblewrap sandbox. No network by default. \
+         Read-only filesystem outside /work. Optional mount_ro maps a host \
+         directory to /work read-only. Time-limited (default 60s, max 300s). \
+         Returns combined stdout+stderr + exit code. Useful for safely \
+         executing untrusted code (CTF challenges, model-suggested patches \
+         before applying, etc). Requires `bwrap` (bubblewrap) on PATH."
+    }
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "cmd":          { "type": "string", "description": "Shell command (sh -c)" },
+                "workdir":      { "type": "string", "description": "cwd inside sandbox (default /work)" },
+                "network":      { "type": "boolean", "description": "Allow network (default false)" },
+                "time_limit_s": { "type": "number", "description": "Wall-clock cap, max 300" },
+                "mount_ro":     { "type": "string", "description": "Host path mounted at /work read-only" }
+            },
+            "required": ["cmd"]
+        })
+    }
+    async fn run(&self, input: Value) -> Result<String, ToolError> {
+        let inp: SandboxInput = parse_input(input)?;
+        if !binary_available("bwrap") {
+            return Err(ToolError::Io(
+                "bwrap (bubblewrap) not on PATH. Install: apt install bubblewrap.".into(),
+            ));
+        }
+        let time_limit = inp.time_limit_s.unwrap_or(60).min(300);
+        let workdir = inp.workdir.clone().unwrap_or_else(|| "/work".to_string());
+
+        let mut args: Vec<String> = vec![
+            "--die-with-parent".into(),
+            "--unshare-pid".into(),
+            "--unshare-ipc".into(),
+            "--unshare-uts".into(),
+            "--ro-bind".into(),
+            "/usr".into(),
+            "/usr".into(),
+            "--ro-bind".into(),
+            "/bin".into(),
+            "/bin".into(),
+            "--ro-bind".into(),
+            "/lib".into(),
+            "/lib".into(),
+            "--ro-bind-try".into(),
+            "/lib64".into(),
+            "/lib64".into(),
+            "--ro-bind-try".into(),
+            "/etc/alternatives".into(),
+            "/etc/alternatives".into(),
+            "--ro-bind-try".into(),
+            "/etc/ld.so.cache".into(),
+            "/etc/ld.so.cache".into(),
+            "--proc".into(),
+            "/proc".into(),
+            "--dev".into(),
+            "/dev".into(),
+            "--tmpfs".into(),
+            "/tmp".into(),
+        ];
+        if !inp.network {
+            args.push("--unshare-net".into());
+        } else {
+            // Network needs DNS — give a minimal /etc/resolv.conf.
+            args.push("--ro-bind-try".into());
+            args.push("/etc/resolv.conf".into());
+            args.push("/etc/resolv.conf".into());
+        }
+        if let Some(host_path) = &inp.mount_ro {
+            args.push("--ro-bind".into());
+            args.push(host_path.clone());
+            args.push("/work".into());
+        } else {
+            args.push("--tmpfs".into());
+            args.push("/work".into());
+        }
+        args.push("--chdir".into());
+        args.push(workdir);
+        args.push("/bin/sh".into());
+        args.push("-c".into());
+        args.push(inp.cmd.clone());
+
+        let str_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let combined = run_capture("bwrap", &str_args, None);
+        let result = tokio::time::timeout(Duration::from_secs(time_limit), combined).await;
+        match result {
+            Ok(Ok((code, stdout, stderr))) => {
+                let mut body = String::new();
+                if !stdout.is_empty() {
+                    body.push_str(&stdout);
+                }
+                if !stderr.is_empty() {
+                    if !body.is_empty() && !body.ends_with('\n') {
+                        body.push('\n');
+                    }
+                    body.push_str(&stderr);
+                }
+                body = truncate(&body, MAX_TOOL_OUTPUT);
+                if code != 0 {
+                    body.push_str(&format!("\n[sandbox exit code: {code}]"));
+                }
+                Ok(body)
+            }
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(ToolError::Io(format!(
+                "sandbox command exceeded {time_limit}s time limit"
+            ))),
+        }
+    }
+}
+
 // ── registry helper ───────────────────────────────────────────────────────
 
 pub fn register_builtins(registry: &mut crate::ToolRegistry) {
@@ -1384,6 +1524,7 @@ pub fn register_builtins(registry: &mut crate::ToolRegistry) {
     registry.register(Box::new(NpmAuditTool));
     registry.register(Box::new(PipAuditTool));
     registry.register(Box::new(OsvScannerTool));
+    registry.register(Box::new(SandboxTool));
 }
 
 #[cfg(test)]
