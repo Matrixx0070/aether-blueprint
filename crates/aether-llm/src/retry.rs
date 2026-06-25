@@ -127,6 +127,14 @@ mod tests {
     use crate::{ContentBlock, MessagesResponse, Role, StopReason};
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Mutex as StdMutex;
+
+    /// Process-wide lock for any test in this module that touches
+    /// AETHER_NO_RETRY. Without it, the kill-switch test races every other
+    /// retry test under cargo-test's parallel runner — the parallel test
+    /// can read AETHER_NO_RETRY=1 mid-flight and skip retries, breaking
+    /// its count assertions.
+    static ENV_LOCK: StdMutex<()> = StdMutex::new(());
 
     #[test]
     fn is_retryable_classification() {
@@ -249,6 +257,7 @@ mod tests {
 
     #[tokio::test]
     async fn retries_on_5xx_and_returns_eventual_success() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
         let inner = Arc::new(ScriptedProvider::new(vec![
             Err(LlmError::Upstream {
                 status: 503,
@@ -270,6 +279,7 @@ mod tests {
 
     #[tokio::test]
     async fn does_not_retry_4xx() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
         let inner = Arc::new(ScriptedProvider::new(vec![Err(LlmError::Upstream {
             status: 400,
             body: "bad request".into(),
@@ -288,6 +298,7 @@ mod tests {
 
     #[tokio::test]
     async fn max_attempts_exceeded_returns_last_error() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
         let inner = Arc::new(ScriptedProvider::new(vec![
             Err(LlmError::RateLimited),
             Err(LlmError::RateLimited),
@@ -307,11 +318,8 @@ mod tests {
 
     #[tokio::test]
     async fn kill_switch_disables_retry() {
-        // Serialize env-var manipulation across tests in this binary.
-        use std::sync::Mutex as StdMutex;
-        static LOCK: StdMutex<()> = StdMutex::new(());
-        let _guard = LOCK.lock().expect("env lock");
-
+        // Shared module-level lock — see ENV_LOCK declaration above.
+        let _guard = ENV_LOCK.lock().expect("env lock");
         std::env::set_var("AETHER_NO_RETRY", "1");
         let inner = Arc::new(ScriptedProvider::new(vec![Err(LlmError::Upstream {
             status: 503,

@@ -139,7 +139,12 @@ enum Cmd {
     /// Scaffold an AETHER.md context file in the working directory.
     Init,
     /// Health check: token expiry, settings, hooks, MCP, disk usage.
-    Doctor,
+    Doctor {
+        /// Probe the active provider with a minimal request (1 token max)
+        /// and report latency. Opt-in because it costs real tokens.
+        #[arg(long)]
+        probe: bool,
+    },
     /// Run an eval suite (YAML) — see ROADMAP for schema.
     Eval {
         suite: PathBuf,
@@ -323,7 +328,7 @@ async fn main() -> Result<()> {
     match cli.cmd {
         Some(Cmd::List { limit }) => return run_list(limit),
         Some(Cmd::Init) => return run_init(),
-        Some(Cmd::Doctor) => return run_doctor().await,
+        Some(Cmd::Doctor { probe }) => return run_doctor(probe).await,
         Some(Cmd::Eval { suite, json }) => {
             return run_eval(&suite, &model, permission_mode, json).await
         }
@@ -3300,7 +3305,7 @@ async fn run_eval_case(
 
 // ── doctor ───────────────────────────────────────────────────────────────
 
-async fn run_doctor() -> Result<()> {
+async fn run_doctor(probe: bool) -> Result<()> {
     let mut ok = true;
     let mut report = String::new();
 
@@ -3424,11 +3429,69 @@ async fn run_doctor() -> Result<()> {
         ));
     }
 
+    // 6) Provider probe (opt-in via --probe; costs real tokens)
+    if probe {
+        report.push_str("probe:\n");
+        match build_provider().await {
+            Ok(p) => {
+                let started = std::time::Instant::now();
+                let req = aether_llm::MessagesRequest {
+                    model: settings_or_default_model(),
+                    system: None,
+                    messages: vec![aether_llm::Message::user_text("hi")],
+                    max_tokens: 4,
+                    tools: vec![],
+                    stream: false,
+                };
+                match p.complete(req).await {
+                    Ok(resp) => {
+                        let elapsed_ms = started.elapsed().as_millis();
+                        let toks = resp
+                            .usage
+                            .as_ref()
+                            .map(|u| format!("in={} out={}", u.input_tokens, u.output_tokens))
+                            .unwrap_or_else(|| "no usage reported".into());
+                        report.push_str(&format!(
+                            "  ✓ {} responded in {}ms ({})\n",
+                            p.name(),
+                            elapsed_ms,
+                            toks
+                        ));
+                    }
+                    Err(e) => {
+                        ok = false;
+                        let elapsed_ms = started.elapsed().as_millis();
+                        report.push_str(&format!(
+                            "  ✗ {} probe failed after {}ms: {}\n",
+                            p.name(),
+                            elapsed_ms,
+                            e
+                        ));
+                    }
+                }
+            }
+            Err(e) => {
+                ok = false;
+                report.push_str(&format!("  ✗ could not construct provider: {e}\n"));
+            }
+        }
+    } else {
+        report.push_str("probe: skipped (pass --probe to make a 1-token round-trip)\n");
+    }
+
     print!("{report}");
     if !ok {
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// Read the model name from settings.json, or fall back to DEFAULT_MODEL.
+/// Used by the probe so we hit the same model the user normally uses.
+fn settings_or_default_model() -> String {
+    load_settings()
+        .default_model
+        .unwrap_or_else(|| DEFAULT_MODEL.to_string())
 }
 
 fn dir_size_bytes(p: &std::path::Path) -> std::io::Result<u64> {
