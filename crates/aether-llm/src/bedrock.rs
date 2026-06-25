@@ -85,6 +85,27 @@ impl BedrockProvider {
             self.region, bedrock_model
         )
     }
+
+    /// Resolve credentials via the full provider chain and return both the
+    /// provider and the `CredentialSource` that resolved them (useful for
+    /// `aether doctor` reporting).
+    pub async fn from_credential_chain(
+    ) -> Result<(Self, CredentialSource), LlmError> {
+        let (access_key, secret_key, session_token, source) =
+            resolve_aws_credentials().await?;
+        let region = std::env::var("AWS_REGION").unwrap_or_else(|_| DEFAULT_REGION.to_string());
+        let provider = Self {
+            access_key,
+            secret_key,
+            session_token,
+            region,
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+                .build()
+                .expect("reqwest"),
+        };
+        Ok((provider, source))
+    }
 }
 
 /// Map a canonical Anthropic model id (`claude-haiku-4-5-20251001`) to the
@@ -369,6 +390,209 @@ impl BedrockProvider {
     }
 }
 
+// ── AWS credential provider chain ────────────────────────────────────────────
+
+/// Identifies which credential source resolved the AWS credentials.
+#[derive(Debug, Clone)]
+pub enum CredentialSource {
+    EnvVars,
+    SharedCredentialsFile {
+        path: std::path::PathBuf,
+        profile: String,
+    },
+    Imdsv2,
+    EcsTaskRole,
+}
+
+impl std::fmt::Display for CredentialSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EnvVars => write!(f, "environment variables"),
+            Self::SharedCredentialsFile { path, profile } => {
+                write!(f, "shared credentials file {} [profile: {profile}]", path.display())
+            }
+            Self::Imdsv2 => write!(f, "EC2 IMDSv2"),
+            Self::EcsTaskRole => write!(f, "ECS task role"),
+        }
+    }
+}
+
+/// Parse an AWS shared credentials file (INI format). Returns
+/// `(access_key_id, secret_access_key, optional_session_token)` for the
+/// requested profile, or `None` if the profile or keys are missing.
+pub fn parse_credentials_file(
+    text: &str,
+    profile: &str,
+) -> Option<(String, String, Option<String>)> {
+    let target_section = format!("[{profile}]");
+    let mut in_section = false;
+    let mut access_key: Option<String> = None;
+    let mut secret_key: Option<String> = None;
+    let mut session_token: Option<String> = None;
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_section = trimmed == target_section;
+            continue;
+        }
+        if !in_section || trimmed.starts_with('#') || trimmed.starts_with(';') {
+            continue;
+        }
+        if let Some((k, v)) = trimmed.split_once('=') {
+            match k.trim() {
+                "aws_access_key_id" => access_key = Some(v.trim().to_string()),
+                "aws_secret_access_key" => secret_key = Some(v.trim().to_string()),
+                "aws_session_token" => session_token = Some(v.trim().to_string()),
+                _ => {}
+            }
+        }
+    }
+
+    match (access_key, secret_key) {
+        (Some(ak), Some(sk)) => Some((ak, sk, session_token)),
+        _ => None,
+    }
+}
+
+/// Try EC2 IMDSv2 (1-second timeout). Returns credentials on success.
+async fn probe_imdsv2(
+    probe: &reqwest::Client,
+) -> Option<(String, String, Option<String>)> {
+    // Step 1: acquire IMDSv2 session token.
+    let token = probe
+        .put("http://169.254.169.254/latest/api/token")
+        .header("X-aws-ec2-metadata-token-ttl-seconds", "21600")
+        .send()
+        .await
+        .ok()?
+        .text()
+        .await
+        .ok()?;
+    let token = token.trim();
+
+    // Step 2: get the IAM role name.
+    let role_list = probe
+        .get("http://169.254.169.254/latest/meta-data/iam/security-credentials/")
+        .header("X-aws-ec2-metadata-token", token)
+        .send()
+        .await
+        .ok()?
+        .text()
+        .await
+        .ok()?;
+    let role_name = role_list.trim().lines().next()?.trim().to_string();
+    if role_name.is_empty() {
+        return None;
+    }
+
+    // Step 3: get temporary credentials for the role.
+    let creds_url = format!(
+        "http://169.254.169.254/latest/meta-data/iam/security-credentials/{}",
+        role_name
+    );
+    let creds: serde_json::Value = probe
+        .get(&creds_url)
+        .header("X-aws-ec2-metadata-token", token)
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+
+    let ak = creds["AccessKeyId"].as_str()?.to_string();
+    let sk = creds["SecretAccessKey"].as_str()?.to_string();
+    let st = creds["Token"].as_str().map(str::to_string);
+    Some((ak, sk, st))
+}
+
+/// Try ECS task-role endpoint (1-second timeout). Returns credentials on success.
+async fn probe_ecs_task_role(
+    probe: &reqwest::Client,
+) -> Option<(String, String, Option<String>)> {
+    let uri = std::env::var("AWS_CONTAINER_CREDENTIALS_FULL_URI")
+        .ok()
+        .or_else(|| {
+            let rel = std::env::var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI").ok()?;
+            Some(format!("http://169.254.170.2{rel}"))
+        })?;
+
+    let mut builder = probe.get(&uri);
+    if let Ok(auth) = std::env::var("AWS_CONTAINER_AUTHORIZATION_TOKEN") {
+        builder = builder.header("Authorization", auth);
+    }
+
+    let creds: serde_json::Value = builder.send().await.ok()?.json().await.ok()?;
+    let ak = creds["AccessKeyId"].as_str()?.to_string();
+    let sk = creds["SecretAccessKey"].as_str()?.to_string();
+    let st = creds["Token"].as_str().map(str::to_string);
+    Some((ak, sk, st))
+}
+
+/// Resolve AWS credentials through the standard provider chain:
+/// 1. Environment variables (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`)
+/// 2. Shared credentials file (`~/.aws/credentials`, profile from `AWS_PROFILE`)
+/// 3. EC2 Instance Metadata Service v2 (IMDSv2)
+/// 4. ECS task role (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`)
+///
+/// Returns the credentials plus the `CredentialSource` that resolved them.
+pub async fn resolve_aws_credentials(
+) -> Result<(String, String, Option<String>, CredentialSource), LlmError> {
+    // 1. Environment variables
+    if let (Ok(ak), Ok(sk)) = (
+        std::env::var("AWS_ACCESS_KEY_ID"),
+        std::env::var("AWS_SECRET_ACCESS_KEY"),
+    ) {
+        let token = std::env::var("AWS_SESSION_TOKEN").ok();
+        return Ok((ak, sk, token, CredentialSource::EnvVars));
+    }
+
+    // 2. Shared credentials file
+    let creds_path = std::env::var("AWS_SHARED_CREDENTIALS_FILE")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| std::path::PathBuf::from(h).join(".aws/credentials"))
+        });
+    let profile =
+        std::env::var("AWS_PROFILE").unwrap_or_else(|_| "default".to_string());
+    if let Some(path) = creds_path {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            if let Some((ak, sk, token)) = parse_credentials_file(&text, &profile) {
+                return Ok((
+                    ak,
+                    sk,
+                    token,
+                    CredentialSource::SharedCredentialsFile { path, profile },
+                ));
+            }
+        }
+    }
+
+    // 3. IMDSv2 / 4. ECS — use a short-timeout probe client so we don't block
+    //    on non-EC2/ECS hosts.
+    let probe = reqwest::Client::builder()
+        .timeout(Duration::from_secs(1))
+        .build()
+        .expect("reqwest");
+
+    if let Some((ak, sk, token)) = probe_imdsv2(&probe).await {
+        return Ok((ak, sk, token, CredentialSource::Imdsv2));
+    }
+
+    if let Some((ak, sk, token)) = probe_ecs_task_role(&probe).await {
+        return Ok((ak, sk, token, CredentialSource::EcsTaskRole));
+    }
+
+    Err(LlmError::Transport(
+        "no AWS credentials found (tried: env vars, ~/.aws/credentials, IMDSv2, ECS task role)"
+            .into(),
+    ))
+}
+
 // ── AWS event-stream parser ───────────────────────────────────────────────────
 //
 // Wire format (all integers big-endian):
@@ -573,6 +797,47 @@ mod tests {
             hex,
             "f4780e2d9f65fa895f9c67b32ce1baf0b0d8a43505a000a1a9e090d414db404d"
         );
+    }
+
+    // ── credential chain ─────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_credentials_file_default_profile() {
+        let content = "[default]\naws_access_key_id = AKIAEX\naws_secret_access_key = SECRET\n";
+        let (ak, sk, token) = parse_credentials_file(content, "default").unwrap();
+        assert_eq!(ak, "AKIAEX");
+        assert_eq!(sk, "SECRET");
+        assert!(token.is_none());
+    }
+
+    #[test]
+    fn parse_credentials_file_named_profile_with_token() {
+        let content = "[default]\naws_access_key_id = A\naws_secret_access_key = B\n\n\
+                       [staging]\naws_access_key_id = C\naws_secret_access_key = D\naws_session_token = TOK\n";
+        let (ak, sk, token) = parse_credentials_file(content, "staging").unwrap();
+        assert_eq!(ak, "C");
+        assert_eq!(sk, "D");
+        assert_eq!(token.as_deref(), Some("TOK"));
+    }
+
+    #[test]
+    fn parse_credentials_file_missing_profile_returns_none() {
+        let content = "[default]\naws_access_key_id = A\naws_secret_access_key = B\n";
+        assert!(parse_credentials_file(content, "prod").is_none());
+    }
+
+    #[test]
+    fn credential_source_display_variants() {
+        assert_eq!(CredentialSource::EnvVars.to_string(), "environment variables");
+        assert_eq!(CredentialSource::Imdsv2.to_string(), "EC2 IMDSv2");
+        assert_eq!(CredentialSource::EcsTaskRole.to_string(), "ECS task role");
+        let shared = CredentialSource::SharedCredentialsFile {
+            path: std::path::PathBuf::from("/home/user/.aws/credentials"),
+            profile: "dev".to_string(),
+        };
+        let s = shared.to_string();
+        assert!(s.contains("credentials"));
+        assert!(s.contains("dev"));
     }
 
     // ── event-stream parser ───────────────────────────────────────────────────

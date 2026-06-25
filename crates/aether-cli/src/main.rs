@@ -433,10 +433,11 @@ fn active_provider_name() -> String {
 
 /// Construct the active provider as a trait object. All callers should
 /// route through this rather than direct AnthropicProvider construction.
-fn build_provider() -> Result<Arc<dyn aether_llm::LlmProvider>> {
+async fn build_provider() -> Result<Arc<dyn aether_llm::LlmProvider>> {
     match active_provider_name().as_str() {
         "bedrock" => {
-            let p = BedrockProvider::from_env()
+            let (p, _src) = BedrockProvider::from_credential_chain()
+                .await
                 .map_err(|e| anyhow!("bedrock provider: {e}"))?;
             Ok(Arc::new(p))
         }
@@ -481,7 +482,7 @@ async fn run_print_agent(
     if aether_sec::load_scope().is_ok() {
         aether_tools::pentest::register_pentest(&mut tools);
     }
-    let provider_arc: Arc<dyn aether_llm::LlmProvider> = build_provider()?;
+    let provider_arc: Arc<dyn aether_llm::LlmProvider> = build_provider().await?;
     tools.register(Box::new(AgentTool::new(
         Arc::clone(&provider_arc),
         model.to_string(),
@@ -662,7 +663,7 @@ async fn run_repl(
     if aether_sec::load_scope().is_ok() {
         aether_tools::pentest::register_pentest(&mut tools);
     }
-    let provider_arc: Arc<dyn aether_llm::LlmProvider> = build_provider()?;
+    let provider_arc: Arc<dyn aether_llm::LlmProvider> = build_provider().await?;
     tools.register(Box::new(AgentTool::new(
         Arc::clone(&provider_arc),
         model.to_string(),
@@ -1613,7 +1614,7 @@ async fn serve_one_turn(
     if aether_sec::load_scope().is_ok() {
         aether_tools::pentest::register_pentest(&mut tools);
     }
-    let provider_arc: Arc<dyn aether_llm::LlmProvider> = build_provider()?;
+    let provider_arc: Arc<dyn aether_llm::LlmProvider> = build_provider().await?;
     tools.register(Box::new(AgentTool::new(
         Arc::clone(&provider_arc),
         model.to_string(),
@@ -1673,7 +1674,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
     if aether_sec::load_scope().is_ok() {
         aether_tools::pentest::register_pentest(&mut tools);
     }
-    let provider_arc: Arc<dyn aether_llm::LlmProvider> = build_provider()?;
+    let provider_arc: Arc<dyn aether_llm::LlmProvider> = build_provider().await?;
     tools.register(Box::new(AgentTool::new(
         Arc::clone(&provider_arc),
         model.to_string(),
@@ -2047,7 +2048,7 @@ async fn review_security_file(
     // user-facing prose, it's emitting an analysis report.
     let gate = Gate::new(Vec::new()).map_err(|e| anyhow!("gate: {e}"))?;
     let tools = ToolRegistry::new();
-    let provider_arc = build_provider()?;
+    let provider_arc = build_provider().await?;
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
 
     let _ = agent_turn(&mut session, Some(user_prompt)).await?;
@@ -2509,7 +2510,7 @@ async fn run_threat_model(
     // Empty ruleset — same reasoning as run_review (structured analysis output).
     let gate = Gate::new(Vec::new()).map_err(|e| anyhow!("gate: {e}"))?;
     let tools = ToolRegistry::new();
-    let provider_arc = build_provider()?;
+    let provider_arc = build_provider().await?;
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
 
     let _ = agent_turn(&mut session, Some(user_prompt)).await?;
@@ -2609,7 +2610,7 @@ async fn run_ctf(
     let gate = Gate::new(Vec::new()).map_err(|e| anyhow!("gate: {e}"))?;
     let mut tools = ToolRegistry::new();
     aether_tools::builtin::register_builtins(&mut tools);
-    let provider_arc = build_provider()?;
+    let provider_arc = build_provider().await?;
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
 
     let mut next_input = Some(user_prompt);
@@ -3057,7 +3058,7 @@ async fn run_eval_case(
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
     let mut tools = ToolRegistry::new();
     register_builtins(&mut tools);
-    let provider_arc: Arc<dyn aether_llm::LlmProvider> = build_provider()?;
+    let provider_arc: Arc<dyn aether_llm::LlmProvider> = build_provider().await?;
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
 
     let mut next_input: Option<String> = Some(case.prompt.clone());
@@ -3103,8 +3104,10 @@ async fn run_doctor() -> Result<()> {
     report.push_str(&format!("provider:\n  • active: {provider_name}\n"));
     report.push_str("auth:\n");
     match provider_name.as_str() {
-        "bedrock" => match BedrockProvider::from_env() {
-            Ok(_) => report.push_str("  ✓ AWS credentials in env\n"),
+        "bedrock" => match aether_llm::bedrock::resolve_aws_credentials().await {
+            Ok((_ak, _sk, _tok, src)) => {
+                report.push_str(&format!("  ✓ AWS credentials ({src})\n"))
+            }
             Err(e) => {
                 ok = false;
                 report.push_str(&format!("  ✗ bedrock auth: {e}\n"));
