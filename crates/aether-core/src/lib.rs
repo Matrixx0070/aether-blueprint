@@ -12,6 +12,7 @@
 //!                 (possibly rewritten) text is emitted. On Blocked, the
 //!                 turn returns ContinueImmediately with `plan.dirty = true`.
 
+pub mod compaction;
 pub mod context;
 pub mod executor;
 pub mod mock;
@@ -189,6 +190,11 @@ async fn agent_turn_inner(
             looks_like_creative_writing_request(&s);
         session.history.push(ConversationItem::User(s));
     }
+
+    // ── compact — run BEFORE assembly so the next LLM call sees the
+    // shortened history. Fires only when cumulative usage > 80% of the
+    // model's context window AND history has at least 4 items. ────────
+    let _ = compaction::maybe_compact(session).await?;
 
     // ── plan ─────────────────────────────────────────────────────────
     // Always call refresh so the sliding-window prune runs even on clean
