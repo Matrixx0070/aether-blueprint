@@ -25,6 +25,7 @@ aether-selfcheck.workspace = true
 aether-mcp.workspace = true
 aether-render.workspace = true
 aether-store.workspace = true
+aether-skill.workspace = true
 rustyline = "13"
 walkdir = "2"
 crossterm = "0.28"

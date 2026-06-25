@@ -9,3 +9,6 @@ description = "AetherCode skill loader — discovers and loads SKILL.md packages
 serde.workspace = true
 serde_yaml.workspace = true
 thiserror.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+aether-tools.workspace = true

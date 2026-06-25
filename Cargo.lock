@@ -13,6 +13,7 @@ dependencies = [
  "aether-perm",
  "aether-render",
  "aether-selfcheck",
+ "aether-skill",
  "aether-store",
  "aether-tools",
  "anyhow",
@@ -142,7 +143,10 @@ dependencies = [
 name = "aether-skill"
 version = "0.4.0"
 dependencies = [
+ "aether-tools",
+ "async-trait",
  "serde",
+ "serde_json",
  "serde_yaml",
  "thiserror",
 ]
