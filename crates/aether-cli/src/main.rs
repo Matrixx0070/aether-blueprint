@@ -195,6 +195,23 @@ enum Cmd {
         #[arg(long, value_delimiter = ',')]
         provider: Vec<String>,
     },
+    /// Real-coding-task benchmark: agent loops against each task's
+    /// starting code, then runs verify.sh to assert observable behavior.
+    CodingEval {
+        suite: PathBuf,
+        #[arg(long)]
+        json: bool,
+        /// Override the model used for every task.
+        #[arg(long, default_value = "claude-sonnet-4-6")]
+        model: String,
+        /// Optional per-task timeout in seconds (default: from suite.yaml).
+        #[arg(long)]
+        timeout: Option<u64>,
+        /// Path to a markdown results file. When set, writes a per-task
+        /// row table and a totals line. Used by `eval/coding/RESULTS.md`.
+        #[arg(long)]
+        results: Option<PathBuf>,
+    },
     /// Session admin (export to markdown, branch off at a turn).
     Session {
         #[command(subcommand)]
@@ -374,6 +391,9 @@ async fn main() -> Result<()> {
                 )
                 .await;
             }
+        }
+        Some(Cmd::CodingEval { suite, json, model: m, timeout, results }) => {
+            return run_coding_eval(&suite, json, &m, timeout, results.as_deref()).await;
         }
         Some(Cmd::Tui) => return run_tui(&model, permission_mode).await,
         Some(Cmd::Serve { bind }) => return run_serve(&bind, &model, permission_mode).await,
@@ -611,6 +631,21 @@ async fn run_print_agent(
                 println!();
             }
         }
+    }
+    // Opt-in usage line on stderr — opt-in so default `-p` output stays
+    // clean for shell pipelines. Used by `aether coding-eval` to capture
+    // per-task token spend.
+    if std::env::var("AETHER_PRINT_USAGE").ok().as_deref() == Some("1") {
+        let u = &session.usage_total;
+        let cost = estimate_cost_usd(&session.config.model, u);
+        eprintln!(
+            "[aether-usage in={} out={} cache_w={} cache_r={} cost_usd={:.6}]",
+            u.input_tokens,
+            u.output_tokens,
+            u.cache_creation_input_tokens,
+            u.cache_read_input_tokens,
+            cost,
+        );
     }
     Ok(())
 }
@@ -2668,6 +2703,373 @@ async fn run_security_eval_sweep(
     if any_failed {
         std::process::exit(1);
     }
+    Ok(())
+}
+
+// ── coding-eval ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct CodingSuite {
+    #[serde(default)]
+    name: Option<String>,
+    tasks: Vec<CodingTask>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodingTask {
+    dir: String,
+    prompt: String,
+    #[serde(default = "default_task_timeout")]
+    timeout_secs: u64,
+}
+
+fn default_task_timeout() -> u64 {
+    300
+}
+
+#[derive(Debug, serde::Serialize)]
+struct CodingTaskResult {
+    dir: String,
+    passed: bool,
+    elapsed_ms: u128,
+    /// Wall-clock time of the agent loop, NOT counting verify.sh.
+    agent_ms: u128,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_read_tokens: u64,
+    cost_usd: f64,
+    verify_stdout_tail: String,
+    error: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct CodingReport {
+    suite: String,
+    model: String,
+    total: usize,
+    passed: usize,
+    failed: usize,
+    tasks: Vec<CodingTaskResult>,
+}
+
+/// Parse the `[aether-usage in=X out=Y ...]` line emitted on stderr by
+/// `aether -p` when AETHER_PRINT_USAGE=1 is set. Returns (input, output,
+/// cache_read, cost). Robust: missing/malformed line → zeros.
+fn parse_usage_line(stderr: &str) -> (u64, u64, u64, f64) {
+    let mut input = 0u64;
+    let mut output = 0u64;
+    let mut cache_r = 0u64;
+    let mut cost = 0.0f64;
+    for line in stderr.lines().rev() {
+        if let Some(rest) = line.strip_prefix("[aether-usage ") {
+            let rest = rest.trim_end_matches(']');
+            for kv in rest.split_whitespace() {
+                if let Some((k, v)) = kv.split_once('=') {
+                    match k {
+                        "in" => input = v.parse().unwrap_or(0),
+                        "out" => output = v.parse().unwrap_or(0),
+                        "cache_r" => cache_r = v.parse().unwrap_or(0),
+                        "cost_usd" => cost = v.parse().unwrap_or(0.0),
+                        _ => {}
+                    }
+                }
+            }
+            break;
+        }
+    }
+    (input, output, cache_r, cost)
+}
+
+/// Reset a task directory to its committed state via `git checkout` so
+/// the agent always starts from the same baseline. Falls back gracefully
+/// when the dir isn't in a git repo.
+fn reset_task_dir(repo_root: &std::path::Path, rel: &str) {
+    let _ = std::process::Command::new("git")
+        .args(["checkout", "HEAD", "--", rel])
+        .current_dir(repo_root)
+        .output();
+    // Also clean untracked files so a previous run's `test_main.py`
+    // (if the agent created one and the verify checks for it) doesn't
+    // bleed across runs.
+    let _ = std::process::Command::new("git")
+        .args(["clean", "-fd", rel])
+        .current_dir(repo_root)
+        .output();
+}
+
+async fn run_one_coding_task(
+    self_exe: &std::path::Path,
+    suite_dir: &std::path::Path,
+    task: &CodingTask,
+    model: &str,
+    timeout_secs: u64,
+) -> CodingTaskResult {
+    use tokio::process::Command as TokioCmd;
+
+    let task_dir = suite_dir.join(&task.dir);
+    let repo_root = find_repo_root(suite_dir);
+
+    // Step 1: reset the task dir from git so we always start clean.
+    if let Some(root) = &repo_root {
+        let rel = task_dir
+            .strip_prefix(root)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| task.dir.clone());
+        reset_task_dir(root, &rel);
+    }
+
+    // Step 2: spawn `aether -p` against the task dir.
+    let agent_started = std::time::Instant::now();
+    let mut cmd = TokioCmd::new(self_exe);
+    cmd.arg("-p")
+        .arg(&task.prompt)
+        .arg("--cwd")
+        .arg(&task_dir)
+        .arg("--permission-mode")
+        .arg("bypassPermissions")
+        .arg("--model")
+        .arg(model)
+        .env("AETHER_PRINT_USAGE", "1")
+        // Streaming to stdout would pollute the parent's stdout; disable.
+        .env("AETHER_NO_STREAM", "1");
+
+    let child_result = tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs),
+        cmd.output(),
+    )
+    .await;
+
+    let (output, agent_ms, agent_error) = match child_result {
+        Ok(Ok(out)) => (Some(out), agent_started.elapsed().as_millis(), None),
+        Ok(Err(e)) => (
+            None,
+            agent_started.elapsed().as_millis(),
+            Some(format!("spawn error: {e}")),
+        ),
+        Err(_) => (
+            None,
+            (timeout_secs * 1000) as u128,
+            Some(format!("agent timed out after {timeout_secs}s")),
+        ),
+    };
+
+    let stderr_text = output
+        .as_ref()
+        .map(|o| String::from_utf8_lossy(&o.stderr).to_string())
+        .unwrap_or_default();
+    let (input_tokens, output_tokens, cache_read_tokens, cost_usd) =
+        parse_usage_line(&stderr_text);
+
+    // Step 3: run verify.sh in the task dir.
+    let verify_path = task_dir.join("verify.sh");
+    let verify_started = std::time::Instant::now();
+    let (passed, verify_stdout_tail, verify_error) = if !verify_path.exists() {
+        (
+            false,
+            String::new(),
+            Some(format!("verify.sh missing at {}", verify_path.display())),
+        )
+    } else {
+        let out = std::process::Command::new("bash")
+            .arg(&verify_path)
+            .output();
+        match out {
+            Ok(o) => {
+                let combined =
+                    format!("{}\n{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+                let tail: String = combined
+                    .lines()
+                    .rev()
+                    .take(3)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join(" / ");
+                (o.status.success(), tail, None)
+            }
+            Err(e) => (false, String::new(), Some(format!("verify spawn: {e}"))),
+        }
+    };
+    let _verify_ms = verify_started.elapsed().as_millis();
+
+    CodingTaskResult {
+        dir: task.dir.clone(),
+        passed,
+        elapsed_ms: agent_ms + _verify_ms,
+        agent_ms,
+        input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        cost_usd,
+        verify_stdout_tail,
+        error: agent_error.or(verify_error),
+    }
+}
+
+fn find_repo_root(start: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut p = start.canonicalize().ok()?;
+    loop {
+        if p.join(".git").exists() {
+            return Some(p);
+        }
+        p = p.parent()?.to_path_buf();
+    }
+}
+
+async fn run_coding_eval(
+    suite_path: &std::path::Path,
+    json_out: bool,
+    model: &str,
+    timeout_override: Option<u64>,
+    results_md: Option<&std::path::Path>,
+) -> Result<()> {
+    let text = std::fs::read_to_string(suite_path)
+        .with_context(|| format!("read {}", suite_path.display()))?;
+    let suite: CodingSuite = serde_yaml::from_str(&text)
+        .with_context(|| format!("parse {}", suite_path.display()))?;
+    let suite_dir = suite_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let suite_name = suite
+        .name
+        .clone()
+        .unwrap_or_else(|| suite_path.display().to_string());
+
+    let self_exe = std::env::current_exe()
+        .context("locating current aether binary")?;
+    eprintln!(
+        "[coding-eval] suite={} model={} tasks={}",
+        suite_name,
+        model,
+        suite.tasks.len()
+    );
+
+    let mut results: Vec<CodingTaskResult> = Vec::with_capacity(suite.tasks.len());
+    let mut passed_count = 0usize;
+    let mut failed_count = 0usize;
+
+    for task in &suite.tasks {
+        let timeout = timeout_override.unwrap_or(task.timeout_secs);
+        eprintln!(
+            "[coding-eval] running {} (timeout={}s)…",
+            task.dir, timeout
+        );
+        let r = run_one_coding_task(&self_exe, &suite_dir, task, model, timeout).await;
+        let sym = if r.passed { "✓" } else { "✗" };
+        eprintln!(
+            "[coding-eval] {sym} {} — {}s, in={} out={} cost~${:.4} — {}",
+            r.dir,
+            r.elapsed_ms / 1000,
+            r.input_tokens,
+            r.output_tokens,
+            r.cost_usd,
+            if let Some(e) = &r.error {
+                e.as_str()
+            } else {
+                r.verify_stdout_tail.as_str()
+            }
+        );
+        if r.passed {
+            passed_count += 1;
+        } else {
+            failed_count += 1;
+        }
+        results.push(r);
+    }
+
+    let total_input: u64 = results.iter().map(|r| r.input_tokens).sum();
+    let total_output: u64 = results.iter().map(|r| r.output_tokens).sum();
+    let total_cost: f64 = results.iter().map(|r| r.cost_usd).sum();
+    let total_ms: u128 = results.iter().map(|r| r.elapsed_ms).sum();
+
+    let report = CodingReport {
+        suite: suite_name,
+        model: model.to_string(),
+        total: results.len(),
+        passed: passed_count,
+        failed: failed_count,
+        tasks: results,
+    };
+
+    if json_out {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "\n=== CODING EVAL: {} === {}/{} passed ({}s wall, in={}, out={}, ~${:.4})",
+            report.suite,
+            report.passed,
+            report.total,
+            total_ms / 1000,
+            total_input,
+            total_output,
+            total_cost,
+        );
+        for t in &report.tasks {
+            let sym = if t.passed { "✓" } else { "✗" };
+            println!(
+                "  {sym} {} ({}s, ${:.4}) — {}",
+                t.dir,
+                t.agent_ms / 1000,
+                t.cost_usd,
+                if let Some(e) = &t.error { e } else { &t.verify_stdout_tail },
+            );
+        }
+        println!();
+    }
+
+    if let Some(path) = results_md {
+        write_coding_results_md(path, &report)?;
+        eprintln!("[coding-eval] wrote results to {}", path.display());
+    }
+
+    if failed_count > 0 {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn write_coding_results_md(path: &std::path::Path, report: &CodingReport) -> Result<()> {
+    let mut s = String::new();
+    s.push_str(&format!("# Coding-Eval Results: {}\n\n", report.suite));
+    s.push_str(&format!(
+        "Model: `{}`  ·  Tasks: {}  ·  Passed: {}  ·  Failed: {}\n\n",
+        report.model, report.total, report.passed, report.failed
+    ));
+    s.push_str("| # | Task | Pass | Agent wall | In tok | Out tok | Cost USD | Note |\n");
+    s.push_str("|---|------|------|------------|--------|---------|----------|------|\n");
+    for (i, t) in report.tasks.iter().enumerate() {
+        let mark = if t.passed { "✓" } else { "✗" };
+        let note = t
+            .error
+            .clone()
+            .unwrap_or_else(|| t.verify_stdout_tail.replace('\n', " / "));
+        s.push_str(&format!(
+            "| {} | `{}` | {} | {}s | {} | {} | ${:.4} | {} |\n",
+            i + 1,
+            t.dir,
+            mark,
+            t.agent_ms / 1000,
+            t.input_tokens,
+            t.output_tokens,
+            t.cost_usd,
+            note
+        ));
+    }
+    let total_in: u64 = report.tasks.iter().map(|t| t.input_tokens).sum();
+    let total_out: u64 = report.tasks.iter().map(|t| t.output_tokens).sum();
+    let total_cost: f64 = report.tasks.iter().map(|t| t.cost_usd).sum();
+    let total_ms: u128 = report.tasks.iter().map(|t| t.agent_ms).sum();
+    s.push_str(&format!(
+        "\n**Totals**: {}s agent wall · in={} · out={} · ~${:.4}\n",
+        total_ms / 1000,
+        total_in,
+        total_out,
+        total_cost
+    ));
+    std::fs::write(path, s)
+        .with_context(|| format!("write {}", path.display()))?;
     Ok(())
 }
 
