@@ -5,17 +5,26 @@ Anthropic Messages API. It runs an explicit perceive → plan → tool-select �
 execute → observe → verify loop with a built-in self-check gate and reminder
 tamper-test — pipeline scaffolding most agents don't ship.
 
-## Status: v0.7.1
+## Status: v0.7.2
 
-Patch over v0.7 Security Edge: `aether review --kind security` and `aether
-security-eval` now auto-route Opus-class models (`claude-opus-*`) to Sonnet 4.6
-when `--model` was not passed explicitly. A one-line stderr notice tells the
-user what changed and how to opt out (`--model claude-opus-4-7` overrides;
+Patch over v0.7.1: **security eval suite expanded from 7 Python fixtures to
+16 across 4 languages** — adds Java (SQLi via Statement, XXE in
+DocumentBuilder, DES/ECB crypto), C++ (`strcpy` buffer overflow, format
+string in `printf`, integer overflow in `malloc`), and Go (`exec.Command`
+injection, `filepath.Join` traversal, HMAC signing key in source). Single
+autoroute run (Sonnet 4.6) detects **16/16 at BLOCKER severity**, 5m21s
+total wall-clock; see `BENCHMARK.md`. No tooling changes — only fixtures +
+suite YAML + README/BENCHMARK docs.
+
+v0.7.1: `aether review --kind security` and `aether security-eval` auto-route
+Opus-class models (`claude-opus-*`) to Sonnet 4.6 when `--model` was not
+passed explicitly. A one-line stderr notice tells the user what changed and
+how to opt out (`--model claude-opus-4-7` overrides;
 `AETHER_SECURITY_NO_AUTOROUTE=1` disables globally). Reason: the Anthropic
 cyber-safeguards classifier truncates Opus mid-stream on the
 adversarial-framing + structured-finding + classic-injection-pattern shape; on
-Sonnet 4.6 the same prompt ships 7/7. 6 new unit tests pin the pure-function
-router. v0.7 Security Edge surface (below) is unchanged.
+Sonnet 4.6 the same prompt ships clean. 6 new unit tests pin the pure-function
+router.
 
 v0.7: **Security Edge** — scope-gated network tools (NetworkScan / WebProbe /
 DnsLookup) for authorized engagements, tamper-evident audit log

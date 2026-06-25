@@ -38,6 +38,14 @@ A self-contained surface for authorized security work, end-to-end:
   in aether; the same prompt clears on Sonnet 4.6. v0.7 docs
   recommend `AETHER_MODEL=claude-sonnet-4-6` for security review.
 
+## v0.7.2 — shipped 2026-06-25 (patch)
+
+- **Security eval suite expanded to 4 languages**: 9 new fixtures (Java
+  ×3, C++ ×3, Go ×3) added to the 7 Python fixtures. Suite YAML and per-
+  language README tables updated. Single autoroute run on Sonnet 4.6
+  detects **16/16 at BLOCKER severity**, 5m21s wall-clock. No tooling
+  changes — only fixtures + docs.
+
 ## v0.7.1 — shipped 2026-06-25 (patch)
 
 - **Security auto-route**: `aether review --kind security` and `aether

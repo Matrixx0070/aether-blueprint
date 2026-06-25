@@ -5,6 +5,53 @@ return."
 
 ---
 
+## v0.7.2 — Security Edge expanded to 4 languages (2026-06-25)
+
+The v0.7 suite shipped Python only. v0.7.2 adds 9 fixtures across Java,
+C++, and Go to cover language-specific bug classes the Python set could
+not exercise (XXE, format-string, integer-overflow → malloc, DES/ECB,
+HMAC-key-in-source, `filepath.Join` traversal, `exec.Command` injection).
+
+Run via the v0.7.1 autoroute (no explicit `--model` ⇒ Sonnet 4.6):
+
+```
+aether security-eval eval/security/suite.yaml --json
+```
+
+### Per-language detection rate (n=1 per fixture, single-turn)
+
+| Language | Fixtures | Passed | Mean per-fixture wall-clock | Mean findings on pass |
+|---|---:|---:|---:|---:|
+| Python | 7 | **7 / 7** | 18.5 s | 3.3 |
+| Java   | 3 | **3 / 3** | 20.4 s | 3.7 |
+| C++    | 3 | **3 / 3** | 21.7 s | 3.3 |
+| Go     | 3 | **3 / 3** | 21.9 s | 4.3 |
+| **All** | **16** | **16 / 16 (100%)** | 20.1 s | 3.6 |
+
+Total wall-clock: 5 m 21 s. Single autoroute notice fired once at command
+start (Opus → Sonnet 4.6). Exit code 0.
+
+### Fixtures added in v0.7.2
+
+| File | Bug | CWE | Severity flagged |
+|---|---|---|---|
+| 08_java_sqli.java | `Statement.executeQuery` with `+`-concat input | CWE-89 | BLOCKER |
+| 09_java_xxe.java | `DocumentBuilder` with default features | CWE-611 | BLOCKER |
+| 10_java_weak_crypto.java | DES / ECB cipher | CWE-327 | BLOCKER |
+| 11_cpp_buffer_overflow.cpp | `strcpy` into 16-byte stack buffer | CWE-787 | BLOCKER |
+| 12_cpp_format_string.cpp | `printf(user_input)` with no format string | CWE-134 | BLOCKER |
+| 13_cpp_integer_overflow.cpp | `uint16_t × sizeof(struct)` in malloc | CWE-190 | BLOCKER |
+| 14_go_command_injection.go | `exec.Command("sh","-c",…)` with query param | CWE-78 | BLOCKER |
+| 15_go_path_traversal.go | `filepath.Join(uploadDir, name)` + `os.Open` | CWE-22 | BLOCKER |
+| 16_go_hardcoded_key.go | HMAC signing key in source | CWE-798 | BLOCKER |
+
+All nine flagged at BLOCKER severity on the first attempt — no fixture
+required retry or framing tweaks. The per-language `language_security_focus`
+hints in `aether-cli` (already shipped in v0.7) appear to bias the critic
+toward the right CWE categories without further work.
+
+---
+
 ## v0.7 — Security Edge benchmark (2026-06-25)
 
 A new axis for v0.7: how well does `aether review --kind security` (a single-

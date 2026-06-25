@@ -22,6 +22,8 @@ Exit code is 1 if any fixture fails.
 
 ## Fixtures
 
+### Python (v0.7)
+
 | File | Bug | CWE | Min severity |
 |------|-----|-----|--------------|
 | 01_sqli.py | SQL injection via string concat | CWE-89 | HIGH |
@@ -31,3 +33,27 @@ Exit code is 1 if any fixture fails.
 | 05_weak_crypto.py | MD5 unsalted password hash | CWE-327 / CWE-916 | MEDIUM |
 | 06_insecure_deserialization.py | `pickle.loads` on request data | CWE-502 | HIGH |
 | 07_ssrf.py | Unvalidated outbound `requests.get` | CWE-918 | HIGH |
+
+### Java (v0.7.2)
+
+| File | Bug | CWE | Min severity |
+|------|-----|-----|--------------|
+| 08_java_sqli.java | `Statement.executeQuery` with concat | CWE-89 | HIGH |
+| 09_java_xxe.java | `DocumentBuilder` with defaults (XXE) | CWE-611 / CWE-827 | HIGH |
+| 10_java_weak_crypto.java | DES in ECB mode | CWE-327 / CWE-326 | MEDIUM |
+
+### C++ (v0.7.2)
+
+| File | Bug | CWE | Min severity |
+|------|-----|-----|--------------|
+| 11_cpp_buffer_overflow.cpp | `strcpy` into stack buffer | CWE-120 / CWE-121 / CWE-787 | HIGH |
+| 12_cpp_format_string.cpp | `printf(user_input)` | CWE-134 | HIGH |
+| 13_cpp_integer_overflow.cpp | uint16 × struct size in `malloc` | CWE-190 / CWE-680 / CWE-131 | HIGH |
+
+### Go (v0.7.2)
+
+| File | Bug | CWE | Min severity |
+|------|-----|-----|--------------|
+| 14_go_command_injection.go | `exec.Command("sh","-c",…)` with user input | CWE-78 | HIGH |
+| 15_go_path_traversal.go | `filepath.Join(uploadDir, name)` + `os.Open` | CWE-22 | HIGH |
+| 16_go_hardcoded_key.go | HMAC signing key in source | CWE-798 | HIGH |

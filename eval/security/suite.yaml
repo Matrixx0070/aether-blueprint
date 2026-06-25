@@ -4,6 +4,7 @@ name: aether-security-edge
 # every parsed review block. severity_min is the lowest severity that still
 # counts as "found" (model often calls the same bug HIGH, sometimes MEDIUM).
 fixtures:
+  # Python (01–07) — v0.7 baseline
   - file: fixtures/01_sqli.py
     expected_cwe: ["CWE-89"]
     severity_min: HIGH
@@ -24,4 +25,34 @@ fixtures:
     severity_min: HIGH
   - file: fixtures/07_ssrf.py
     expected_cwe: ["CWE-918"]
+    severity_min: HIGH
+  # Java (08–10) — v0.7.2 expansion
+  - file: fixtures/08_java_sqli.java
+    expected_cwe: ["CWE-89"]
+    severity_min: HIGH
+  - file: fixtures/09_java_xxe.java
+    expected_cwe: ["CWE-611", "CWE-827"]
+    severity_min: HIGH
+  - file: fixtures/10_java_weak_crypto.java
+    expected_cwe: ["CWE-327", "CWE-326"]
+    severity_min: MEDIUM
+  # C++ (11–13) — v0.7.2 expansion
+  - file: fixtures/11_cpp_buffer_overflow.cpp
+    expected_cwe: ["CWE-120", "CWE-121", "CWE-787"]
+    severity_min: HIGH
+  - file: fixtures/12_cpp_format_string.cpp
+    expected_cwe: ["CWE-134"]
+    severity_min: HIGH
+  - file: fixtures/13_cpp_integer_overflow.cpp
+    expected_cwe: ["CWE-190", "CWE-680", "CWE-131"]
+    severity_min: HIGH
+  # Go (14–16) — v0.7.2 expansion
+  - file: fixtures/14_go_command_injection.go
+    expected_cwe: ["CWE-78"]
+    severity_min: HIGH
+  - file: fixtures/15_go_path_traversal.go
+    expected_cwe: ["CWE-22"]
+    severity_min: HIGH
+  - file: fixtures/16_go_hardcoded_key.go
+    expected_cwe: ["CWE-798"]
     severity_min: HIGH
