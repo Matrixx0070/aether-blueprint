@@ -15,6 +15,7 @@
 
 use aether_core::context::ConversationItem;
 use aether_core::{agent_turn, agent_turn_streamed, Session, SessionConfig, TurnOutcome};
+use aether_overlay::aether_hook::{Reminder, ReminderKind, Source};
 use aether_llm::{
     anthropic::AnthropicProvider, ContentBlock, LlmProvider, Message, MessagesRequest,
 };
@@ -173,6 +174,7 @@ async fn run_print_agent(
     let mut tools = ToolRegistry::new();
     register_builtins(&mut tools);
     let mut session = Session::new(config, overlay, Arc::new(provider), gate, tools);
+    inject_project_context(&mut session);
 
     let mut next_input: Option<String> = Some(prompt.to_string());
     let mut last_text: Option<String> = None;
@@ -264,6 +266,7 @@ async fn run_repl(
     register_builtins(&mut tools);
 
     let mut session = Session::new(config, overlay, Arc::new(provider), gate, tools);
+    inject_project_context(&mut session);
 
     let session_id = match &resume {
         ResumeMode::None => new_session_id(),
@@ -693,6 +696,70 @@ fn parse_permission_mode(s: &str) -> Result<aether_perm::PermissionMode> {
         "bypassPermissions" => Ok(BypassPermissions),
         other => anyhow::bail!("unknown permission mode: {other}"),
     }
+}
+
+/// Push the resolved project context into the session as a kernel
+/// reminder. Kernel source guarantees the D1 pipeline always admits it.
+fn inject_project_context(session: &mut Session) {
+    if let Some(ctx) = load_project_context() {
+        session.push_reminder(Reminder::new(
+            ReminderKind::SystemWarning,
+            Source::Kernel,
+            ctx,
+        ));
+    }
+}
+
+/// Build a single string of project + user context by walking the
+/// directory tree from cwd up to root, picking up `AETHER.md` or
+/// `CLAUDE.md` at each level, plus `~/.aether/CLAUDE.md` as the global
+/// baseline. Sections are concatenated with provenance markers so the
+/// model can tell where each block came from.
+fn load_project_context() -> Option<String> {
+    let mut sections: Vec<(String, String)> = Vec::new();
+
+    // Global user file
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        for name in &[".aether/CLAUDE.md", ".aether/AETHER.md"] {
+            let p = home.join(name);
+            if let Ok(s) = std::fs::read_to_string(&p) {
+                if !s.trim().is_empty() {
+                    sections.push((format!("~/{name}"), s));
+                    break;
+                }
+            }
+        }
+    }
+
+    // Walk cwd upwards; collect AETHER.md / CLAUDE.md at each level.
+    if let Ok(start) = std::env::current_dir() {
+        let mut ancestors: Vec<PathBuf> = start.ancestors().map(|p| p.to_path_buf()).collect();
+        ancestors.reverse(); // root-most first
+        for dir in &ancestors {
+            for name in &["AETHER.md", "CLAUDE.md"] {
+                let p = dir.join(name);
+                if let Ok(s) = std::fs::read_to_string(&p) {
+                    if !s.trim().is_empty() {
+                        sections.push((p.display().to_string(), s));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if sections.is_empty() {
+        return None;
+    }
+    let mut out = String::from("<project-context>\n");
+    for (origin, body) in sections {
+        out.push_str(&format!("\n<source path=\"{origin}\">\n"));
+        out.push_str(body.trim());
+        out.push_str("\n</source>\n");
+    }
+    out.push_str("\n</project-context>");
+    Some(out)
 }
 
 /// Default rule set for D7 — the 14-rule library bundled into the binary
