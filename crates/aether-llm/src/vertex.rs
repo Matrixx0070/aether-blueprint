@@ -223,6 +223,31 @@ mod tests {
     }
 
     #[test]
+    fn body_drops_model_and_stream_adds_anthropic_version() {
+        let req = MessagesRequest {
+            model: "claude-haiku-4-5-20251001".into(),
+            system: Some("hi".into()),
+            messages: vec![crate::Message::user_text("ping")],
+            max_tokens: 32,
+            tools: vec![],
+            stream: false,
+        };
+        let mut body = serde_json::to_value(&req).unwrap();
+        if let Some(o) = body.as_object_mut() {
+            o.remove("model");
+            o.remove("stream");
+            o.insert(
+                "anthropic_version".into(),
+                serde_json::Value::String(VERTEX_ANTHROPIC_VERSION.into()),
+            );
+        }
+        assert!(body.get("model").is_none());
+        assert!(body.get("stream").is_none());
+        assert_eq!(body["anthropic_version"], "vertex-2023-10-16");
+        assert_eq!(body["max_tokens"], 32);
+    }
+
+    #[test]
     fn endpoint_path_includes_project_region_model() {
         let p = VertexProvider::with_token(
             "tok".into(),

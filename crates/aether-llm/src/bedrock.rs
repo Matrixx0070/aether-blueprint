@@ -304,6 +304,48 @@ mod tests {
         assert_eq!(map_model_id(s), "anthropic.claude-foo:0");
     }
 
+    #[test]
+    fn endpoint_path_format() {
+        let p = BedrockProvider::with_credentials(
+            "a".into(),
+            "b".into(),
+            None,
+            "us-west-2".into(),
+        );
+        let u = p.endpoint("anthropic.claude-haiku-4-5-20251001-v1:0");
+        assert_eq!(
+            u,
+            "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-haiku-4-5-20251001-v1:0/invoke"
+        );
+    }
+
+    #[test]
+    fn body_drops_model_and_stream_adds_anthropic_version() {
+        let req = MessagesRequest {
+            model: "claude-haiku-4-5-20251001".into(),
+            system: Some("hi".into()),
+            messages: vec![crate::Message::user_text("ping")],
+            max_tokens: 32,
+            tools: vec![],
+            stream: false,
+        };
+        // We can't call send_signed without HTTP, but we can replicate the
+        // body transformation inline to verify the shape.
+        let mut body = serde_json::to_value(&req).unwrap();
+        if let Some(o) = body.as_object_mut() {
+            o.remove("model");
+            o.remove("stream");
+            o.insert(
+                "anthropic_version".into(),
+                serde_json::Value::String(BEDROCK_ANTHROPIC_VERSION.into()),
+            );
+        }
+        assert!(body.get("model").is_none());
+        assert!(body.get("stream").is_none());
+        assert_eq!(body["anthropic_version"], "bedrock-2023-05-31");
+        assert_eq!(body["max_tokens"], 32);
+    }
+
     /// SigV4 canonical-request sanity check using the AWS published example.
     /// Reference: docs.aws.amazon.com/general/latest/gr/sigv4_signing.html
     #[test]

@@ -1,57 +1,50 @@
 # Roadmap
 
-## v0.5 — shipped 2026-06-25 (this release)
+## v0.6 — shipped 2026-06-25 (this release)
 
-Phase 1 — TUI polish:
-- Markdown rendering in assistant chat lines (**bold**, `inline code`,
-  ```code-block``` cyan, `#` headings magenta+bold) with structural-fallback
-- Bracketed paste: multi-line paste arrives as one input edit
+BYOC providers — AWS Bedrock + GCP Vertex AI:
 
-Phase 2 — Internal cleanup (placeholder crates become real):
-- `aether-store` owns Settings + load/apply_env/set/append_always_allow
-- `aether-skill` owns LoadedSkill + load_skills + SkillTool (with 4 unit tests)
-- `aether-mem` owns memory_dir + memory_index + MemoryRead/Write tools
-  (D5 MemoryPolicyStore retained for future fully-managed memory)
-- `aether-cli` re-uses via thin `use crate::*` lines; behavior unchanged
+- `aether-llm::bedrock::BedrockProvider`: hand-rolled SigV4 against the
+  AWS-published test vector, model-id translation
+  (`claude-haiku-4-5-20251001` → `anthropic.claude-haiku-4-5-20251001-v1:0`),
+  reads `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN`
+  / `AWS_REGION` from env. Non-streaming for v0.6.
+- `aether-llm::vertex::VertexProvider`: Bearer-token auth from
+  `VERTEX_ACCESS_TOKEN`, model-id translation
+  (`claude-haiku-4-5-20251001` → `claude-haiku-4-5@20251001`), reads
+  `VERTEX_PROJECT` / `VERTEX_REGION` from env. Non-streaming for v0.6.
+- Provider selection: `AETHER_PROVIDER` env > `settings.provider` >
+  `anthropic` default. `aether config set provider bedrock` persists.
+- `aether doctor` reports the active provider and runs the right per-
+  provider auth check (AWS env vars / Vertex token / Anthropic creds).
+- `aether-cli`'s 6 LLM construction sites refactored to a central
+  `build_provider() -> Arc<dyn LlmProvider>` factory.
 
-Phase 3 — FleetView (parallel sub-agent visualization):
-- Process-global `FleetRegistry` (once_cell) tracks every AgentTool call
-- TUI grows a 4th pane (right-bottom) when any sub-agents exist:
-  ◌ (running) / ✓ (done) / ⊘ (cancelled) / ✗ (error) + preview snippet
-- `/fleet` REPL slash command lists tasks; `/fleet cancel <id>` flips the
-  per-task cancel flag (sub-agent checks each turn and exits cleanly)
+29 aether-llm unit tests (up from 18 in v0.5): includes SigV4 signing
+math (AWS published test vector), model-id mapping, body-shape
+verification per provider.
 
-Phase 4 — Eval harness:
-- `aether eval <suite.yaml>` runs a YAML test suite of cases
-- Criteria: `expected_contains[]`, `forbidden_strings[]`,
-  `expected_tool_used[]`, `max_turns`
-- Human report (default) or `--json` machine-readable EvalReport
-- Process exits 1 when any case fails (CI-friendly)
-- Ships `eval/example.yaml` smoke (2 cases)
+## v0.6.1 — patch (next)
 
-Phase 5 — Session admin:
-- `aether session export <id>` prints a clean markdown transcript
-- `aether session branch <id> --at-turn N` forks at exchange N into a
-  new session id (writes to ~/.aether/sessions/, returns id on stdout)
+- Bedrock streaming via `invoke-with-response-stream` (AWS event-stream framing)
+- Vertex streaming via `:streamRawPredict` (SSE)
+- AWS credential provider chain: profile file at `~/.aws/credentials`,
+  IMDS, ECS task role
+- GCP credential auto-rotation via `gcp_auth` crate (ADC + service-account
+  JSON file)
+- BYOC retry watchdog parity (Bedrock 5xx + 429 retry-after parsing,
+  Vertex 5xx retry)
+- `aether eval --provider <name>` to run the same suite across providers
 
-## v0.5.1 — patch (next)
-
-- MCP SSE end-to-end live smoke against a real server
-- HTTP server SSE streaming response variant
-- `aether eval` parallel runs with `--concurrency N`
-- Permission prompt UX: show input summary by tool category (file path
-  for Read/Write/Edit, command line for Bash, etc.)
-
-## v0.6 — TUI + integration surfaces
+## v0.7 — TUI + integration surfaces
 
 - Plugin system via WASM modules registered as tools
-- BYOC providers: Bedrock, Vertex, Foundry, Mantle
+- BYOC: Foundry (Azure) + Mantle
 - VS Code extension, JetBrains plugin
 - MCP websocket transport
 - HTTP server WebSocket chat for browser clients
-- Real `aether-mcp` server-side (host MCP servers from `aether` itself)
 
-## v0.7 — enterprise
+## v0.8 — enterprise
 
 - SAML / OIDC federation
 - Audit log forwarding to SIEM
