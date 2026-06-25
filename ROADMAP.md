@@ -183,9 +183,11 @@ A self-contained surface for authorized security work, end-to-end:
   OS/arch with explicit source-build pointer. Uses curl or wget;
   sha256sum or shasum -a 256. Safe defaults: `set -euo pipefail`,
   tempdir cleanup trap, hash-mismatch abort.
-- **LICENSE-MIT + LICENSE-APACHE**: workspace declared dual-license but
-  the actual files were missing — now present, full canonical text,
-  bundled into every release tarball.
+- **LICENSE (Apache-2.0)**: workspace previously declared dual-license
+  ("MIT OR Apache-2.0") but no LICENSE files were present. The user
+  scoped this release to Apache-only — `Cargo.toml` license field
+  updated, single `LICENSE` file at repo root with the full canonical
+  Apache-2.0 text, bundled into every release tarball.
 - **README install section + INSTALL.md** (H3): three install paths
   documented (one-liner, manual + verify, source-build) plus uninstall
   guidance.

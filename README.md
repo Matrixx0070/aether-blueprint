@@ -34,8 +34,9 @@ Ship-ready release infrastructure:
   from latest release, verifies SHA256, installs to `~/.local/bin/aether`
   (or `$AETHER_PREFIX/bin`). See `INSTALL.md` for the manual + source-build
   paths.
-- **LICENSE files** — workspace already declared "MIT OR Apache-2.0" but
-  the actual files were missing; now bundled in every release tarball.
+- **LICENSE (Apache-2.0)** — single canonical `LICENSE` at repo root,
+  bundled into every release tarball. (Earlier dual-license declaration
+  in `Cargo.toml` was narrowed to `Apache-2.0` only for shipping.)
 
 v0.11.0 patch:
 

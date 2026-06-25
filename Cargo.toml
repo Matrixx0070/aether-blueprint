@@ -5,7 +5,7 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.12.0"
 edition = "2021"
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 description = "AetherCode — a 10x Claude Code clone (workspace)"
 
 [workspace.dependencies]

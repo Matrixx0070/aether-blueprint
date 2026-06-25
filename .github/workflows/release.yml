@@ -109,8 +109,9 @@ jobs:
           ARCHIVE_NAME="aether-${VERSION}-${{ matrix.archive_suffix }}.tar.gz"
           STAGE=$(mktemp -d)
           cp "target/${{ matrix.target }}/release/aether" "$STAGE/aether"
-          # Bundle docs + licenses; tolerate missing files.
-          for f in README.md LICENSE-MIT LICENSE-APACHE; do
+          # Bundle README + the single Apache-2.0 LICENSE; tolerate missing
+          # files so the workflow doesn't break if either is reorganised.
+          for f in README.md LICENSE; do
             [ -f "$f" ] && cp "$f" "$STAGE/"
           done
           ( cd "$STAGE" && tar -czf "$GITHUB_WORKSPACE/$ARCHIVE_NAME" . )
