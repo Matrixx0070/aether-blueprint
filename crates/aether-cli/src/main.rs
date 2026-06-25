@@ -101,8 +101,17 @@ enum Cmd {
 
 #[derive(Subcommand, Debug)]
 enum McpCmd {
+    /// List configured MCP servers from ~/.aether/mcp.json
     List,
-    Add { name: String, url: String },
+    /// Register a stdio MCP server: `aether mcp add NAME -- CMD ARG...`
+    Add {
+        name: String,
+        /// The server command + args, passed through after `--`.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        cmd: Vec<String>,
+    },
+    /// Remove an MCP server by name.
+    Remove { name: String },
 }
 
 #[derive(Subcommand, Debug)]
@@ -141,11 +150,7 @@ async fn main() -> Result<()> {
         Some(Cmd::List { limit }) => return run_list(limit),
         Some(Cmd::Init) => return run_init(),
         Some(Cmd::Mcp { sub }) => {
-            match sub {
-                McpCmd::List => eprintln!("mcp list — not yet implemented"),
-                McpCmd::Add { name, url } => eprintln!("mcp add {name} {url} — not yet implemented"),
-            }
-            return Ok(());
+            return mcp_cmd(sub);
         }
         Some(Cmd::Config { sub }) => {
             match sub {
@@ -229,6 +234,11 @@ async fn run_print_agent(
         model.to_string(),
         permission_mode,
     )));
+    // Connect to each configured MCP server and register its tools under
+    // `mcp__<server>__<tool>`. The returned clients must outlive the
+    // session — held in `_mcp_clients` below.
+    let mcp_config = load_mcp_config();
+    let _mcp_clients = install_mcp_servers(&mut tools, &mcp_config).await;
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
     inject_project_context(&mut session);
 
@@ -348,6 +358,8 @@ async fn run_repl(
         model.to_string(),
         permission_mode,
     )));
+    let mcp_config = load_mcp_config();
+    let _mcp_clients = install_mcp_servers(&mut tools, &mcp_config).await;
 
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
     // Install an interactive permission prompter for mutating tools when in
@@ -1450,6 +1462,234 @@ fn push_hook_reminders(session: &mut Session, outputs: Vec<String>, event: &str)
             wrapped,
         ));
     }
+}
+
+// ── MCP integration ───────────────────────────────────────────────────────
+
+const MCP_CONFIG_PATH: &str = ".aether/mcp.json";
+
+#[derive(Debug, Deserialize, Clone)]
+struct McpServerEntry {
+    #[serde(flatten)]
+    config: aether_mcp::ServerConfig,
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
+struct McpConfigFile {
+    #[serde(default)]
+    servers: std::collections::HashMap<String, McpServerEntry>,
+}
+
+fn mcp_config_path() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join(MCP_CONFIG_PATH)
+}
+
+fn write_mcp_config(file: &serde_json::Value) -> Result<()> {
+    let path = mcp_config_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let body = serde_json::to_vec_pretty(file)?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, &body)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+    }
+    std::fs::rename(&tmp, &path)?;
+    Ok(())
+}
+
+fn read_mcp_config_value() -> serde_json::Value {
+    std::fs::read_to_string(mcp_config_path())
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({"servers": {}}))
+}
+
+fn mcp_cmd(sub: McpCmd) -> Result<()> {
+    match sub {
+        McpCmd::List => {
+            let file = read_mcp_config_value();
+            let servers = file
+                .get("servers")
+                .and_then(|v| v.as_object())
+                .cloned()
+                .unwrap_or_default();
+            if servers.is_empty() {
+                eprintln!("[no MCP servers configured — try `aether mcp add NAME -- CMD ARG...`]");
+                return Ok(());
+            }
+            for (name, cfg) in &servers {
+                let kind = cfg.get("transport").and_then(|v| v.as_str()).unwrap_or("?");
+                let cmd = cfg.get("command").and_then(|v| v.as_str()).unwrap_or("");
+                println!("  {name:24}  [{kind}] {cmd}");
+            }
+            Ok(())
+        }
+        McpCmd::Add { name, cmd } => {
+            if cmd.is_empty() {
+                anyhow::bail!(
+                    "missing command. Example: aether mcp add fs -- npx -y @modelcontextprotocol/server-filesystem /tmp"
+                );
+            }
+            let command = cmd[0].clone();
+            let args: Vec<String> = cmd[1..].to_vec();
+            let mut file = read_mcp_config_value();
+            let servers = file
+                .get_mut("servers")
+                .and_then(|v| v.as_object_mut())
+                .map(|o| o.clone());
+            let mut servers = servers.unwrap_or_default();
+            servers.insert(
+                name.clone(),
+                serde_json::json!({
+                    "transport": "stdio",
+                    "command": command,
+                    "args": args
+                }),
+            );
+            if let Some(obj) = file.as_object_mut() {
+                obj.insert(
+                    "servers".into(),
+                    serde_json::Value::Object(servers.clone()),
+                );
+            }
+            write_mcp_config(&file)?;
+            eprintln!("[added] {name} → {} {}", cmd[0], cmd[1..].join(" "));
+            Ok(())
+        }
+        McpCmd::Remove { name } => {
+            let mut file = read_mcp_config_value();
+            let removed = file
+                .get_mut("servers")
+                .and_then(|v| v.as_object_mut())
+                .and_then(|o| o.remove(&name))
+                .is_some();
+            if removed {
+                write_mcp_config(&file)?;
+                eprintln!("[removed] {name}");
+            } else {
+                eprintln!("[not found] {name}");
+            }
+            Ok(())
+        }
+    }
+}
+
+fn load_mcp_config() -> McpConfigFile {
+    if let Some(home) = std::env::var_os("HOME") {
+        let p = PathBuf::from(home).join(MCP_CONFIG_PATH);
+        if let Ok(s) = std::fs::read_to_string(&p) {
+            match serde_json::from_str::<McpConfigFile>(&s) {
+                Ok(v) => return v,
+                Err(e) => eprintln!("[warn] {}: {e}", p.display()),
+            }
+        }
+    }
+    McpConfigFile::default()
+}
+
+/// Adapter that exposes an MCP tool as an aether `Tool`. The tool name in
+/// the registry is `mcp__<server>__<tool>` so name collisions across
+/// servers are impossible.
+struct McpToolAdapter {
+    namespaced_name: String,
+    remote_name: String,
+    description: String,
+    input_schema: Value,
+    client: Arc<aether_mcp::StdioClient>,
+}
+
+#[async_trait]
+impl Tool for McpToolAdapter {
+    fn name(&self) -> &str {
+        &self.namespaced_name
+    }
+    fn description(&self) -> &str {
+        &self.description
+    }
+    fn input_schema(&self) -> Value {
+        self.input_schema.clone()
+    }
+    async fn run(&self, input: Value) -> Result<String, ToolError> {
+        let res = self
+            .client
+            .call_tool(&self.remote_name, input)
+            .await
+            .map_err(|e| ToolError::Io(format!("mcp call: {e}")))?;
+        let mut combined = String::new();
+        for block in &res.content {
+            match block {
+                aether_mcp::ContentBlock::Text { text } => combined.push_str(text),
+                aether_mcp::ContentBlock::Image { mime_type, data } => {
+                    combined.push_str(&format!("[image {} bytes (mime {mime_type})]", data.len()));
+                }
+                aether_mcp::ContentBlock::Resource { resource } => {
+                    combined.push_str(&format!("[resource: {}]", resource));
+                }
+            }
+        }
+        if combined.is_empty() {
+            combined = "(empty response)".into();
+        }
+        if res.is_error {
+            Err(ToolError::Io(combined))
+        } else {
+            Ok(combined)
+        }
+    }
+}
+
+/// Spawn every MCP server in mcp.json, call initialize + tools/list, and
+/// register each remote tool into the registry under `mcp__<server>__<name>`.
+/// Returns the alive clients so the caller keeps them alive for the session.
+async fn install_mcp_servers(
+    tools: &mut ToolRegistry,
+    config: &McpConfigFile,
+) -> Vec<Arc<aether_mcp::StdioClient>> {
+    let mut clients = Vec::new();
+    for (server_name, entry) in &config.servers {
+        let client = match aether_mcp::StdioClient::spawn(&entry.config).await {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[mcp:{server_name}] spawn failed: {e}");
+                continue;
+            }
+        };
+        let client = Arc::new(client);
+        if let Err(e) = client.initialize().await {
+            eprintln!("[mcp:{server_name}] initialize failed: {e}");
+            continue;
+        }
+        let remote_tools = match client.list_tools().await {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("[mcp:{server_name}] list_tools failed: {e}");
+                continue;
+            }
+        };
+        eprintln!(
+            "[mcp:{server_name}] connected, {} tools",
+            remote_tools.len()
+        );
+        for t in remote_tools {
+            let namespaced = format!("mcp__{server_name}__{}", t.name);
+            tools.register(Box::new(McpToolAdapter {
+                namespaced_name: namespaced,
+                remote_name: t.name,
+                description: t.description.unwrap_or_default(),
+                input_schema: t.input_schema,
+                client: Arc::clone(&client),
+            }));
+        }
+        clients.push(client);
+    }
+    clients
 }
 
 // ── Agent tool (sub-loop) ─────────────────────────────────────────────────

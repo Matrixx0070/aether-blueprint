@@ -22,6 +22,7 @@ aether-overlay.workspace = true
 aether-perm.workspace = true
 aether-tools.workspace = true
 aether-selfcheck.workspace = true
+aether-mcp.workspace = true
 rustyline = "13"
 
 [dev-dependencies]
