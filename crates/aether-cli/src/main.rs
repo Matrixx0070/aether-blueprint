@@ -78,6 +78,12 @@ enum Cmd {
         /// Optional initial prompt to add to the resumed session.
         prompt: Option<String>,
     },
+    /// List recent sessions.
+    List {
+        /// How many sessions to show (newest first).
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
     /// Scaffold an AETHER.md context file in the working directory.
     Init,
     /// MCP server administration (stub).
@@ -131,6 +137,7 @@ async fn main() -> Result<()> {
     }
 
     match cli.cmd {
+        Some(Cmd::List { limit }) => return run_list(limit),
         Some(Cmd::Init) => return run_init(),
         Some(Cmd::Mcp { sub }) => {
             match sub {
@@ -845,6 +852,95 @@ fn load_session_history(id: &str, session: &mut Session) -> Result<()> {
         }
     }
     Ok(())
+}
+
+// ── list ─────────────────────────────────────────────────────────────────
+
+fn run_list(limit: usize) -> Result<()> {
+    let dir = sessions_dir();
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => {
+            eprintln!("[no sessions: {}]", dir.display());
+            return Ok(());
+        }
+    };
+    let mut sessions: Vec<(String, std::time::SystemTime, PathBuf)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            let stem = p.file_stem()?.to_str()?.to_string();
+            if p.extension()?.to_str() != Some("jsonl") {
+                return None;
+            }
+            let mtime = p.metadata().ok()?.modified().ok()?;
+            Some((stem, mtime, p))
+        })
+        .collect();
+    sessions.sort_by(|a, b| b.1.cmp(&a.1));
+    if sessions.is_empty() {
+        eprintln!("[no sessions in {}]", dir.display());
+        return Ok(());
+    }
+    let latest = read_latest_session_id().ok();
+    for (id, mtime, path) in sessions.into_iter().take(limit) {
+        let preview = first_user_message(&path).unwrap_or_else(|| "(no preview)".into());
+        let ts = mtime
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let marker = if Some(id.as_str()) == latest.as_deref() {
+            "* "
+        } else {
+            "  "
+        };
+        println!(
+            "{marker}{id}  [{}]  {}",
+            unix_ts_to_compact(ts),
+            preview
+        );
+    }
+    Ok(())
+}
+
+fn first_user_message(path: &std::path::Path) -> Option<String> {
+    let s = std::fs::read_to_string(path).ok()?;
+    for line in s.lines() {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+            if v.get("kind").and_then(|k| k.as_str()) == Some("user") {
+                if let Some(t) = v.get("text").and_then(|t| t.as_str()) {
+                    let one_line: String = t.replace('\n', " ").chars().take(80).collect();
+                    return Some(one_line);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn unix_ts_to_compact(ts: u64) -> String {
+    // YYYY-MM-DD HH:MM:SS in UTC, computed without chrono to stay light.
+    let days = (ts / 86_400) as i64;
+    let secs_of_day = ts % 86_400;
+    let (h, m, s) = (secs_of_day / 3600, (secs_of_day / 60) % 60, secs_of_day % 60);
+    // 1970-01-01 was Thursday day_index = 0.
+    let (y, mo, d) = julian_to_ymd(days + 2440588); // 2440588 = JDN of 1970-01-01
+    format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC", y, mo, d, h, m, s)
+}
+
+fn julian_to_ymd(jdn: i64) -> (i32, u32, u32) {
+    // Fliegel & Van Flandern.
+    let l = jdn + 68569;
+    let n = (4 * l) / 146097;
+    let l = l - (146097 * n + 3) / 4;
+    let i = (4000 * (l + 1)) / 1461001;
+    let l = l - (1461 * i) / 4 + 31;
+    let j = (80 * l) / 2447;
+    let d = l - (2447 * j) / 80;
+    let l = j / 11;
+    let mo = j + 2 - 12 * l;
+    let y = 100 * (n - 49) + i + l;
+    (y as i32, mo as u32, d as u32)
 }
 
 // ── init ─────────────────────────────────────────────────────────────────
