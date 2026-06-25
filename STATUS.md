@@ -39,4 +39,8 @@ format: `[slice] [status] [commit] [verifier] [live-check] note`
 | B5 | DONE | 825ae5a | SHIP | 18/18 tests · `--provider` in --help | Cross-provider sweep; `build_named_provider`; 3 new tests |
 | B6 | DONE | f89605e | n/a | exit 0 · pushed origin/main · tag v0.8.0 live | Bump 0.8.0, docs, tag, push |
 | C1 | DONE | n/a | n/a | release build exit 0 · `--provider` in --help | Regression: binary at v0.8.0 compiles clean, help correct |
+| D1 | DONE | d5d010c | n/a | exit 0 · workspace tests green | Print mode streaming + AETHER_NO_STREAM kill-switch |
+| D2 | DONE | 651b302 | n/a | exit 0 · 24/24 aether-cli (+5) | 5 cost-estimator tests (cost calc + /usage cmd existed already) |
+| D3 | DONE | 76c125e | n/a | exit 0 · 28/28 aether-core (+8) | Context compaction at 80% window + AETHER_NO_COMPACT + 8 tests |
+| D4 | DONE | fe36c89,1fb51cd | n/a | exit 0 · 33/33 aether-core (+5) | Parallel safe-tool execution + AETHER_NO_PARALLEL_TOOLS + 5 tests |
 

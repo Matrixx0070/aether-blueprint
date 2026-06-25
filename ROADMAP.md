@@ -91,7 +91,34 @@ A self-contained surface for authorized security work, end-to-end:
   `build_named_provider(name)` rejects unknown slugs with a clear error.
   3 new unit tests; 18/18 aether-cli tests green.
 
-## v0.9 — plugins + IDE surfaces
+## v0.9 — REPL UX + session economics — shipped 2026-06-25
+
+- **Print mode streaming** (D1): `run_print_agent` now calls `agent_turn_streamed`
+  with an on_delta sink that writes deltas to stdout. REPL streaming (already
+  in v0.7.x) gains `AETHER_NO_STREAM=1` kill-switch for buffered fallback.
+- **Cost-estimator unit tests** (D2): 5 new tests pin per-model rates
+  ($3/$15 Sonnet, $15/$75 Opus, $0.80/$4 Haiku) and cache multipliers
+  (reads at 10%, writes at 125%); ordering invariants and unknown-model
+  default-to-sonnet behaviour.
+- **Automatic context compaction** (D3): new aether-core::compaction module
+  + wire-in at the top of agent_turn_inner. Triggers when cumulative
+  `usage_total.input_tokens + output_tokens` exceeds 80% of the model's
+  context window. Keeps the final 1/3 of history verbatim; summarises the
+  head into one synthetic User+Assistant pair. Per-compaction usage reset
+  acts as hysteresis to prevent boundary oscillation. Kill-switch
+  `AETHER_NO_COMPACT=1`. 8 unit tests.
+- **Parallel safe-tool execution** (D4): partitions the per-turn tool_uses
+  slice into runs of safe (read-only: Read/Glob/Grep/MemoryRead) and unsafe
+  (mutating/unknown). Safe runs dispatch concurrently via
+  `futures_util::future::join_all`; mutating tools keep sequential slots so
+  file writes never race and interactive prompts can't double-fire. Result
+  ordering matches model emission. Kill-switch `AETHER_NO_PARALLEL_TOOLS=1`.
+  5 unit tests (interleave probe avoids fragile wall-clock assertions).
+- **ENV_TEST_LOCK**: process-wide test mutex in aether-core::mock so kill-
+  switch tests across compaction + executor don't race under cargo-test's
+  parallel runner.
+
+## v0.10 — plugins + IDE surfaces (next)
 
 - Plugin system via WASM modules registered as tools
 - BYOC: Foundry (Azure) + Mantle

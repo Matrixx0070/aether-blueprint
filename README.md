@@ -5,13 +5,28 @@ Anthropic Messages API. It runs an explicit perceive → plan → tool-select �
 execute → observe → verify loop with a built-in self-check gate and reminder
 tamper-test — pipeline scaffolding most agents don't ship.
 
-## Status: v0.8.0
+## Status: v0.9.0
 
-Adds **Bedrock streaming** (AWS event-stream binary parser), **Vertex streaming**
-(SSE via `:streamRawPredict`), **AWS credential provider chain** (env → shared
-credentials file → IMDSv2 → ECS task role), **GCP service-account JWT auto-refresh**,
-and **cross-provider security-eval sweep** (`--provider anthropic,bedrock,vertex`
-comparison table).
+Closes the biggest user-visible UX gaps vs Claude Code:
+- **Print mode streaming** — `aether -p` writes tokens to stdout as the model
+  produces them (the REPL already streamed in v0.7.x; print mode joins it).
+  `AETHER_NO_STREAM=1` falls back to buffered output for CI logs.
+- **Automatic context compaction** at 80% of model window. Long sessions
+  summarise the oldest history into one synthetic exchange so the next
+  request fits; per-compaction usage reset acts as hysteresis. Kill-switch
+  `AETHER_NO_COMPACT=1`.
+- **Parallel safe-tool execution** — `Read` + `Glob` + `Grep` + `MemoryRead`
+  emitted in the same turn dispatch concurrently via `join_all`. Mutating
+  tools keep their original sequential slot for safety. Kill-switch
+  `AETHER_NO_PARALLEL_TOOLS=1`.
+- **5 new cost-estimator tests** pin `/usage` arithmetic that already
+  shipped (cache reads at 10%, cache writes at 125%, per-family rates).
+
+v0.8.0 patch: **Bedrock streaming** (AWS event-stream binary parser),
+**Vertex streaming** (SSE via `:streamRawPredict`), **AWS credential provider
+chain** (env → shared credentials file → IMDSv2 → ECS task role), **GCP
+service-account JWT auto-refresh**, and **cross-provider security-eval sweep**
+(`--provider anthropic,bedrock,vertex` comparison table).
 
 v0.7.3 patch: **7 new gap-filling fixtures (→23 total), stability
 harness (`--runs N --threshold P`), and benchmark verification.**
