@@ -46,19 +46,12 @@ const MAX_TOOL_OUTPUT: usize = 200_000;
 const DEFAULT_BASH_TIMEOUT_MS: u64 = 120_000;
 const MAX_BASH_TIMEOUT_MS: u64 = 600_000;
 
-/// Heuristic: if the first 8 KiB contain a NUL byte and the proportion of
-/// non-printable bytes exceeds 30%, treat the file as binary and refuse
-/// to inline it into a tool result.
+/// Heuristic: any NUL byte in the first 8 KiB is a strong signal that the
+/// file is binary. This mirrors `file(1)`'s classic strategy. Text files
+/// (including UTF-8 with high bytes) virtually never contain NUL.
 fn looks_binary(bytes: &[u8]) -> bool {
     let head = &bytes[..bytes.len().min(8192)];
-    if !head.contains(&0u8) {
-        return false;
-    }
-    let nonprint = head
-        .iter()
-        .filter(|&&b| b != b'\n' && b != b'\r' && b != b'\t' && (b < 0x20 || b == 0x7F))
-        .count();
-    head.len() > 0 && (nonprint * 100 / head.len()) > 30
+    head.contains(&0u8)
 }
 
 // ── Bash ──────────────────────────────────────────────────────────────────
