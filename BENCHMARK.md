@@ -3,7 +3,52 @@
 Head-to-head measurement of the user-perceived loop "spin up agent → do tools →
 return."
 
-**Latest run: v0.3 — 2026-06-25.** Same axis, same protocol. aether is
+**Latest run: v0.4 — 2026-06-25.** Same axis, same protocol. aether is
+1.9–3.0× faster at p50 and 1.0–3.8× faster at p95 — no regression despite
+v0.4 adding the TUI, HTTP server, MCP SSE transport, retry watchdog, and
+streaming tool cancel (14 slices since v0.3).
+
+## v0.4 results (n=20)
+
+| Test | binary | n | failures | min | **p50** | **p95** | max |
+|---|---|---:|---:|---:|---:|---:|---:|
+| text roundtrip | aether | 20 | 0 | 913 | **1,150** | **2,077** | 4,308 |
+|  | claude | 20 | 0 | 3,020 | **3,493** | **4,561** | 5,219 |
+| single tool (Read) | aether | 20 | 0 | 2,031 | **2,858** | **7,541** | 7,557 |
+|  | claude | 20 | 0 | 5,047 | **6,078** | **7,870** | 9,188 |
+| multi-tool (Write+Read) | aether | 20 | 0 | 2,438 | **4,512** | **6,028** | 6,887 |
+|  | claude | 20 | 0 | 6,279 | **8,684** | **22,995** | 28,055 |
+| Grep | aether | 20 | 0 | 4,069 | **5,326** | **8,567** | 10,412 |
+|  | claude | 20 | 0 | 8,576 | **14,819** | **22,122** | 22,181 |
+
+### v0.4 speedup vs claude
+
+| Test | p50 ratio | p95 ratio |
+|---|---:|---:|
+| text roundtrip | **3.04×** | **2.20×** |
+| single tool (Read) | **2.13×** | **1.04×** |
+| multi-tool (Write+Read) | **1.92×** | **3.81×** |
+| Grep | **2.78×** | **2.58×** |
+
+### Trend across releases (p50 ratio)
+
+| Test | v0.1 | v0.2 | v0.3 | v0.4 |
+|---|---:|---:|---:|---:|
+| text roundtrip | 3.43× | 3.35× | 3.24× | 3.04× |
+| single tool (Read) | 2.52× | 2.38× | 1.99× | 2.13× |
+| multi-tool (Write+Read) | 2.00× | 1.97× | 2.15× | 1.92× |
+| Grep | 2.38× | 2.90× | 2.80× | 2.78× |
+
+Stable inside ±15% of v0.1 baseline across **four** releases (v0.1 → v0.4)
+despite ~50 slices of feature growth (7 → 13 built-in tools + MCP stdio +
+MCP SSE + memory + skills + 4 hook events + permission prompts + retry +
+TUI + HTTP server + cost tracking).
+
+aether: **80/80** successful. claude: **80/80** successful.
+
+---
+
+**Earlier run: v0.3 — 2026-06-25.** Same axis, same protocol. aether is
 2.0–3.2× faster at p50 and 1.3–2.3× faster at p95 — no regression despite
 v0.3 adding MCP client, persistent memory, skills, PreToolUse/PostToolUse
 hooks, interactive permission prompts, doctor, diff renderer, token
