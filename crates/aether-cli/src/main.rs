@@ -91,6 +91,11 @@ enum Cmd {
     Doctor,
     /// Launch the ratatui TUI (chat pane + tool log + status bar + input).
     Tui,
+    /// Run an HTTP API server. Loopback-only by default; pass --bind to override.
+    Serve {
+        #[arg(long, default_value = "127.0.0.1:7777")]
+        bind: String,
+    },
     /// MCP server administration (stub).
     Mcp {
         #[command(subcommand)]
@@ -158,6 +163,7 @@ async fn main() -> Result<()> {
         Some(Cmd::Init) => return run_init(),
         Some(Cmd::Doctor) => return run_doctor().await,
         Some(Cmd::Tui) => return run_tui(&model, permission_mode).await,
+        Some(Cmd::Serve { bind }) => return run_serve(&bind, &model, permission_mode).await,
         Some(Cmd::Mcp { sub }) => {
             return mcp_cmd(sub).await;
         }
@@ -1235,6 +1241,124 @@ fn julian_to_ymd(jdn: i64) -> (i32, u32, u32) {
     let mo = j + 2 - 12 * l;
     let y = 100 * (n - 49) + i + l;
     (y as i32, mo as u32, d as u32)
+}
+
+// ── HTTP server ───────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize)]
+struct ServeRequest {
+    prompt: String,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct ServeResponse {
+    text: String,
+    tokens_in: u64,
+    tokens_out: u64,
+    cost_usd: f64,
+    error: Option<String>,
+}
+
+#[derive(Clone)]
+struct ServeState {
+    default_model: String,
+    permission_mode: aether_perm::PermissionMode,
+}
+
+async fn run_serve(
+    bind: &str,
+    model: &str,
+    permission_mode: aether_perm::PermissionMode,
+) -> Result<()> {
+    use axum::{routing::post, Json, Router};
+    let state = ServeState {
+        default_model: model.to_string(),
+        permission_mode,
+    };
+    let app = Router::new()
+        .route(
+            "/v1/messages",
+            post(|axum::extract::State(state): axum::extract::State<ServeState>,
+                  Json(req): Json<ServeRequest>| async move {
+                let model = req.model.unwrap_or(state.default_model);
+                let res = serve_one_turn(&model, state.permission_mode, &req.prompt).await;
+                match res {
+                    Ok(r) => Json(r),
+                    Err(e) => Json(ServeResponse {
+                        text: String::new(),
+                        tokens_in: 0,
+                        tokens_out: 0,
+                        cost_usd: 0.0,
+                        error: Some(e.to_string()),
+                    }),
+                }
+            }),
+        )
+        .route("/healthz", axum::routing::get(|| async { "ok" }))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind(bind)
+        .await
+        .with_context(|| format!("bind {bind}"))?;
+    eprintln!("[aether serve] listening on http://{bind}");
+    eprintln!("  POST /v1/messages  {{\"prompt\": \"...\", \"model\": \"...\"}}  (default model: {model})");
+    eprintln!("  GET  /healthz");
+    axum::serve(listener, app).await.context("axum serve")?;
+    Ok(())
+}
+
+/// Run one agent turn for the HTTP server. Spins up a fresh session per
+/// request — no cross-request state. Suitable for one-shot HTTP usage.
+async fn serve_one_turn(
+    model: &str,
+    permission_mode: aether_perm::PermissionMode,
+    prompt: &str,
+) -> Result<ServeResponse> {
+    let provider = AnthropicProvider::from_env_or_credentials()?;
+    let config = SessionConfig {
+        model: model.to_string(),
+        permission_mode,
+        max_tokens_per_turn: PRINT_MODE_MAX_TOKENS,
+    };
+    let overlay = Fable5Overlay::new(OverlayConfig::default());
+    let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
+    let mut tools = ToolRegistry::new();
+    register_builtins(&mut tools);
+    let provider_arc: Arc<dyn aether_llm::LlmProvider> = Arc::new(provider);
+    tools.register(Box::new(AgentTool::new(
+        Arc::clone(&provider_arc),
+        model.to_string(),
+        permission_mode,
+    )));
+    let mut session = Session::new(config, overlay, provider_arc, gate, tools);
+
+    let mut next_input: Option<String> = Some(prompt.to_string());
+    let mut last_text: Option<String> = None;
+    loop {
+        let outcome = agent_turn(&mut session, next_input.take()).await?;
+        if let Some(ConversationItem::Assistant { text, .. }) = session.history.last() {
+            if let Some(t) = text {
+                last_text = Some(t.clone());
+            }
+        }
+        match outcome {
+            TurnOutcome::AwaitUser | TurnOutcome::Exit => break,
+            TurnOutcome::ContinueImmediately => continue,
+            TurnOutcome::Sleep { seconds } => {
+                tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
+                continue;
+            }
+        }
+    }
+    let u = &session.usage_total;
+    Ok(ServeResponse {
+        text: last_text.unwrap_or_default(),
+        tokens_in: u.input_tokens,
+        tokens_out: u.output_tokens,
+        cost_usd: estimate_cost_usd(&session.config.model, u),
+        error: None,
+    })
 }
 
 // ── TUI ───────────────────────────────────────────────────────────────────

@@ -27,5 +27,6 @@ aether-render.workspace = true
 rustyline = "13"
 walkdir = "2"
 crossterm = "0.28"
+axum = { version = "0.7", default-features = false, features = ["tokio", "http1", "json"] }
 
 [dev-dependencies]
