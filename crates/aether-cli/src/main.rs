@@ -181,6 +181,10 @@ enum Cmd {
         /// Minimum fraction of runs that must pass to count a fixture as passing (0.0–1.0).
         #[arg(long, default_value = "1.0")]
         threshold: f64,
+        /// Comma-separated provider list for cross-provider sweep (e.g. anthropic,bedrock).
+        /// When set, runs the suite through each provider and prints a comparison table.
+        #[arg(long, value_delimiter = ',')]
+        provider: Vec<String>,
     },
     /// Session admin (export to markdown, branch off at a turn).
     Session {
@@ -343,15 +347,24 @@ async fn main() -> Result<()> {
             return run_threat_model(&spec, &model, permission_mode).await
         }
         Some(Cmd::Ctf { dir }) => return run_ctf(&dir, &model, permission_mode).await,
-        Some(Cmd::SecurityEval { suite, json, runs, threshold }) => {
+        Some(Cmd::SecurityEval { suite, json, runs, threshold, provider }) => {
             let disabled = std::env::var(SECURITY_NO_AUTOROUTE_ENV).ok().as_deref() == Some("1");
             let (effective, notice) =
                 route_for_security(&model, explicit_model_on_cli(), disabled);
             if let Some(n) = notice {
                 eprintln!("{n}");
             }
-            return run_security_eval(&suite, &effective, permission_mode, json, runs, threshold)
+            if provider.is_empty() {
+                return run_security_eval(
+                    &suite, &effective, permission_mode, json, runs, threshold,
+                )
                 .await;
+            } else {
+                return run_security_eval_sweep(
+                    &suite, &effective, permission_mode, json, runs, threshold, &provider,
+                )
+                .await;
+            }
         }
         Some(Cmd::Tui) => return run_tui(&model, permission_mode).await,
         Some(Cmd::Serve { bind }) => return run_serve(&bind, &model, permission_mode).await,
@@ -2022,6 +2035,7 @@ async fn review_security_file(
     path: &std::path::Path,
     model: &str,
     permission_mode: aether_perm::PermissionMode,
+    provider_arc: Arc<dyn aether_llm::LlmProvider>,
 ) -> Result<(String, Vec<ReviewIssue>, &'static str)> {
     let body = std::fs::read_to_string(path)
         .with_context(|| format!("read {}", path.display()))?;
@@ -2048,7 +2062,6 @@ async fn review_security_file(
     // user-facing prose, it's emitting an analysis report.
     let gate = Gate::new(Vec::new()).map_err(|e| anyhow!("gate: {e}"))?;
     let tools = ToolRegistry::new();
-    let provider_arc = build_provider().await?;
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
 
     let _ = agent_turn(&mut session, Some(user_prompt)).await?;
@@ -2075,8 +2088,9 @@ async fn run_review(
     if kind != "security" {
         anyhow::bail!("only --kind security is implemented in v0.7 (perf and arch planned)");
     }
+    let provider_arc = build_provider().await?;
     let (final_text, parsed, lang) =
-        review_security_file(path, model, permission_mode).await?;
+        review_security_file(path, model, permission_mode, provider_arc).await?;
     if json_out {
         let report = serde_json::json!({
             "kind": kind,
@@ -2276,14 +2290,16 @@ fn meets_threshold(pass_count: u32, runs: u32, threshold: f64) -> bool {
     (pass_count as f64 / runs as f64) >= threshold
 }
 
-async fn run_security_eval(
+/// Core eval loop — does not print or exit. Returns a `SecurityReport`.
+/// Used by both `run_security_eval` and `run_security_eval_sweep`.
+async fn run_security_eval_inner(
     suite_path: &std::path::Path,
     model: &str,
     permission_mode: aether_perm::PermissionMode,
-    json_out: bool,
     runs: u32,
     threshold: f64,
-) -> Result<()> {
+    provider_arc: Arc<dyn aether_llm::LlmProvider>,
+) -> Result<SecurityReport> {
     let runs = runs.max(1);
     let text = std::fs::read_to_string(suite_path)
         .with_context(|| format!("read {}", suite_path.display()))?;
@@ -2315,7 +2331,7 @@ async fn run_security_eval(
         for _r in 0..runs {
             let started = std::time::Instant::now();
             let (r_passed, r_detail, r_issues) =
-                match review_security_file(&path, model, permission_mode).await {
+                match review_security_file(&path, model, permission_mode, Arc::clone(&provider_arc)).await {
                     Ok((_raw, issues, _lang)) => {
                         let mut matched: Option<String> = None;
                         for blk in &issues {
@@ -2402,7 +2418,7 @@ async fn run_security_eval(
         });
     }
 
-    let report = SecurityReport {
+    Ok(SecurityReport {
         suite: suite_name,
         total: out.len(),
         passed: passed_count,
@@ -2410,19 +2426,18 @@ async fn run_security_eval(
         runs,
         threshold,
         fixtures: out,
-    };
+    })
+}
 
+/// Print a `SecurityReport` to stdout (JSON or human-readable) and exit 1 on failures.
+fn print_and_exit_security_report(report: &SecurityReport, json_out: bool) {
     if json_out {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+        println!("{}", serde_json::to_string_pretty(report).unwrap_or_default());
     } else {
-        let hdr = if runs > 1 {
+        let hdr = if report.runs > 1 {
             format!(
                 "\n=== SECURITY EVAL: {} === {}/{} passed  ({}× runs, threshold {:.0}%)",
-                report.suite,
-                report.passed,
-                report.total,
-                runs,
-                threshold * 100.0
+                report.suite, report.passed, report.total, report.runs, report.threshold * 100.0
             )
         } else {
             format!(
@@ -2433,7 +2448,7 @@ async fn run_security_eval(
         println!("{hdr}");
         for f in &report.fixtures {
             let sym = if f.passed { "✓" } else { "✗" };
-            if runs > 1 {
+            if report.runs > 1 {
                 let rate_pct = f.pass_rate.unwrap_or(0.0) * 100.0;
                 let med = f.median_ms.unwrap_or(0);
                 let mn = f.min_ms.unwrap_or(0);
@@ -2451,7 +2466,123 @@ async fn run_security_eval(
         }
         println!();
     }
-    if failed_count > 0 {
+    if report.failed > 0 {
+        std::process::exit(1);
+    }
+}
+
+/// Outer wrapper: single-provider eval. Builds the default provider, runs
+/// `run_security_eval_inner`, then prints and exits on failure.
+async fn run_security_eval(
+    suite_path: &std::path::Path,
+    model: &str,
+    permission_mode: aether_perm::PermissionMode,
+    json_out: bool,
+    runs: u32,
+    threshold: f64,
+) -> Result<()> {
+    let provider_arc = build_provider().await?;
+    let report =
+        run_security_eval_inner(suite_path, model, permission_mode, runs, threshold, provider_arc)
+            .await?;
+    print_and_exit_security_report(&report, json_out);
+    Ok(())
+}
+
+/// Build a named provider by string slug. Accepts "anthropic", "bedrock", "vertex".
+async fn build_named_provider(name: &str) -> Result<Arc<dyn aether_llm::LlmProvider>> {
+    match name.to_lowercase().as_str() {
+        "bedrock" => {
+            let (p, _src) = aether_llm::bedrock::BedrockProvider::from_credential_chain()
+                .await
+                .map_err(|e| anyhow!("bedrock provider: {e}"))?;
+            Ok(Arc::new(p))
+        }
+        "vertex" => {
+            let p = aether_llm::vertex::VertexProvider::from_env()
+                .map_err(|e| anyhow!("vertex provider: {e}"))?;
+            Ok(Arc::new(p))
+        }
+        "anthropic" => {
+            let p = aether_llm::anthropic::AnthropicProvider::from_env_or_credentials()
+                .context("no auth source for anthropic provider")?;
+            Ok(Arc::new(p))
+        }
+        other => anyhow::bail!("unknown provider '{other}' — valid: anthropic, bedrock, vertex"),
+    }
+}
+
+/// Cross-provider sweep: runs the same suite through each named provider and
+/// prints a comparison table. Exits 1 if any provider has failures.
+async fn run_security_eval_sweep(
+    suite_path: &std::path::Path,
+    model: &str,
+    permission_mode: aether_perm::PermissionMode,
+    json_out: bool,
+    runs: u32,
+    threshold: f64,
+    providers: &[String],
+) -> Result<()> {
+    let mut reports: Vec<(String, SecurityReport)> = Vec::new();
+    let mut any_failed = false;
+
+    for pname in providers {
+        let provider_arc = match build_named_provider(pname).await {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("[sweep] skipping {pname}: {e}");
+                continue;
+            }
+        };
+        match run_security_eval_inner(
+            suite_path,
+            model,
+            permission_mode,
+            runs,
+            threshold,
+            provider_arc,
+        )
+        .await
+        {
+            Ok(report) => {
+                if report.failed > 0 {
+                    any_failed = true;
+                }
+                reports.push((pname.clone(), report));
+            }
+            Err(e) => {
+                eprintln!("[sweep] {pname} eval error: {e}");
+                any_failed = true;
+            }
+        }
+    }
+
+    if json_out {
+        let out: Vec<serde_json::Value> = reports
+            .iter()
+            .map(|(name, r)| {
+                serde_json::json!({ "provider": name, "report": r })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+    } else {
+        println!("\n=== CROSS-PROVIDER SWEEP: {} ===", suite_path.display());
+        println!(
+            "  {:<12} {:>6} {:>6} {:>6}",
+            "provider", "passed", "failed", "total"
+        );
+        println!("  {}", "-".repeat(38));
+        for (name, r) in &reports {
+            let marker = if r.failed > 0 { " ✗" } else { " ✓" };
+            println!(
+                "  {:<12} {:>6} {:>6} {:>6}{}",
+                name, r.passed, r.failed, r.total, marker
+            );
+        }
+        println!();
+    }
+
+    if any_failed {
         std::process::exit(1);
     }
     Ok(())
@@ -4333,5 +4464,58 @@ mod tests {
     fn meets_threshold_below() {
         // 1/3 ≈ 0.333 < 0.50 → fails
         assert!(!meets_threshold(1, 3, 0.50));
+    }
+
+    // ── B5: cross-provider sweep helpers ─────────────────────────────────
+
+    #[test]
+    fn build_named_provider_rejects_unknown() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let err = rt
+            .block_on(build_named_provider("bogus"))
+            .err()
+            .expect("expected an error for unknown provider");
+        assert!(
+            format!("{err}").contains("unknown provider"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn print_and_exit_security_report_json_contains_suite() {
+        // Capture stdout for JSON mode — we can't actually call process::exit,
+        // so test the report serialises correctly instead.
+        let report = SecurityReport {
+            suite: "test-suite".into(),
+            total: 2,
+            passed: 2,
+            failed: 0,
+            runs: 1,
+            threshold: 1.0,
+            fixtures: vec![],
+        };
+        // Just verify the report round-trips through serde cleanly.
+        let json = serde_json::to_string_pretty(&report).unwrap();
+        assert!(json.contains("test-suite"));
+        assert!(json.contains("\"passed\": 2"));
+    }
+
+    #[test]
+    fn sweep_provider_name_normalisation() {
+        // build_named_provider normalises via .to_lowercase(), so "Anthropic"
+        // should reach the same branch as "anthropic". We can only test the
+        // error branch synchronously; the happy path requires credentials.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let err = rt
+            .block_on(build_named_provider("BOGUS_UPPER"))
+            .err()
+            .expect("expected an error for unknown provider name");
+        assert!(format!("{err}").contains("unknown provider"), "got: {err}");
     }
 }
