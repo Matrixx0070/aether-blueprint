@@ -1,114 +1,113 @@
-# Next 24-hour autonomous plan
+# Next 24-hour autonomous plan — Plan M
 
-Drafted at end of Plan K (v0.14 → v0.15) with empirical observations
-folded in. Pick up here on resume.
+Drafted at end of Plan L (v0.15 → v0.16). Picks up the v0.17+ scope items
+listed in `ROADMAP.md` and the LOW/MEDIUM findings from L6 self-audit.
 
 ---
 
-## Plan L — IDE surface + multi-turn benchmark + plugin loader
+## Plan M — sandbox + IDE polish + production hardening
 
-**MISSION**: Move aether from "CLI + auditable harness" → "embeddable
-into editor surfaces and richer task shapes," with empirical proof at
-each step.
+**MISSION**: Close the L4-deferred safety gap (WASM sandbox for plugins),
+upgrade the VS Code extension from skeleton to functional dev UI, and
+add WS authentication so `aether serve --bind 0.0.0.0:...` is safe.
 
 **DONE MEANS** (5 criteria):
 
-1. **HTTP WebSocket chat endpoint** — `aether serve --bind ...` already
-   exists; add a `/ws/chat` route that streams JSON-RPC-style messages
-   for browser clients. Verified by a minimal HTML page that
-   connects + sends a prompt + renders streamed deltas.
-2. **VS Code extension skeleton** in a new `crates/aether-vscode/`
-   directory (TypeScript inside, compile via `tsc`). Bare-minimum:
-   command palette entry "aether: ask" that spawns `aether -p` via
-   child_process and streams stdout into the active editor's bottom
-   panel. Builds cleanly with `npm install && npm run compile`.
-3. **Multi-turn benchmark tasks** — extend coding-eval with 3 tasks
-   that REQUIRE clarification before fixing. Each task's `prompt:`
-   field is deliberately underspecified; the task `verify.sh` accepts
-   either a clarification-then-fix sequence OR a sensible default
-   assumption that gets disclosed in the resulting code. Tests the
-   agent's ability to handle ambiguity.
-4. **WASM plugin loader (smallest viable)** — `wasmtime` crate as a
-   workspace dep; new `aether-plugin` crate that loads `.wasm` files
-   from `~/.aether/plugins/` and exposes them as tools through the
-   existing `ToolRegistry`. Single example plugin (`echo.wasm`) that
-   compiles from a 20-LoC Rust source.
-5. **v0.16.0 binary release shipped + verified** — 4-platform tarballs
-   + SHA256SUMS attached + `./aether --version` confirms.
+1. **WASM-sandboxed plugin loader** in a NEW crate `aether-plugin-wasm`
+   (does NOT replace L4 subprocess plugins — both ship; users pick).
+   Uses `wasmtime` with WASI preview1. Same manifest format as L4 plus
+   a `runtime: "wasm"` field. Example plugin: an `echo.wasm` built from
+   a 20-LoC Rust source via `rustup target add wasm32-wasi-preview1 &&
+   cargo build --target wasm32-wasi-preview1 --release`. Live-verified
+   end-to-end (sandboxed plugin echoes input).
+2. **WS bearer-token auth** on `aether serve /ws/chat`. New
+   `AETHER_SERVE_TOKEN` env var; if set, the WS handler refuses
+   connections without a matching `Authorization: Bearer <token>`
+   header. Documented in the existing serve startup message. Live-
+   verified: connection without token → 401; with correct token → OK.
+3. **VS Code extension multi-turn webview panel** replacing the
+   one-shot output-channel UI from L2. New `panel.html` + `panel.ts`
+   that connect to a long-lived `aether serve` over `/ws/chat` and
+   render streamed deltas in a Markdown-rendered view. UNVERIFIED for
+   actual VS Code launch (still no headless harness in this env) but
+   compiles + the webview HTML renders in isolated browser test.
+4. **Plugin manifest signing** (HMAC-SHA256). Optional `signature`
+   field in `manifest.json` matched against `$AETHER_PLUGIN_HMAC_KEY`.
+   Unsigned plugins still load (warning printed) — opt-in trust model.
+   3 unit tests including a tamper-detection case.
+5. **v0.17.0 binary release** shipped + verified, all 4 platforms.
 
 **ASSUMPTIONS** (defaults picked):
 
-- WebSocket transport: `tokio-tungstenite` (already a dep from G2 MCP
-  work). No auth on the WS endpoint by default — bind defaults to
-  127.0.0.1 like the existing HTTP server.
-- VS Code extension: TypeScript, single source file, `vscode` engine
-  ^1.85.0, packages with `vsce`. Marketplace publish is out of scope.
-- Plugin manifest: minimal JSON sidecar (`echo.wasm.json`) declaring
-  `name + description + input_schema`. No signing or sandbox escape
-  protections in v1 — plugins run with full WASI capabilities.
-- Multi-turn tasks: agent's response counts as a clarification if it
-  contains a `?` in the first assistant text block AND no tool calls.
+- WASM runtime: `wasmtime` ≥ 25, `wasi-preview1` enabled (matches the
+  stable WASI surface most language toolchains target as of 2026-06).
+- Resource limits per WASM plugin: 64 MB memory, 10s wall-clock. No
+  per-instruction fuel metering in v1 (too coarse a tradeoff).
+- WS auth: simple shared-secret bearer. JWT / OAuth flows are out of
+  scope (separate slice).
+- VS Code panel: client-side Markdown rendering via `markdown-it`
+  (single CDN script, not bundled). Avoids the npm build complexity.
 
 **NON-GOALS** (explicitly out):
 
-- JetBrains plugin (separate language stack + ecosystem; 8h+ alone).
+- JetBrains plugin (Kotlin language stack; M+1 candidate).
 - Apple notarization (paid Developer ID required).
-- Plugin marketplace + signature verification.
-- Multi-user / collaborative session sharing.
-- Mantle BYOC provider (uncertain API shape — defer).
+- Plugin marketplace + per-plugin reputation system.
+- WASM gas/fuel metering (planned for v0.18+).
+- Mantle BYOC provider.
 
 **Phase breakdown** (~24h):
 
 | Phase | Time | Slices |
 |-------|------|--------|
-| **L1**: HTTP WS chat endpoint | 4h | tokio-tungstenite route on `aether serve` + minimal HTML test page + smoke-test |
-| **L2**: VS Code ext skeleton | 5h | new dir, package.json, single TS extension file, child_process spawn of `aether -p`, deltas to output channel, README, .vsix build |
-| **L3**: Multi-turn coding tasks | 4h | 3 new fixtures (ambiguous bug fix, "which approach do you want" feature, design-tradeoff refactor) + verify scripts that accept clarification-first OR sensible-default; live run |
-| **L4**: WASM plugin loader | 6h | wasmtime workspace dep, new `aether-plugin` crate, plugin manifest schema, `~/.aether/plugins/` discovery, `Tool` adapter, one example echo plugin, 3-4 unit tests |
-| **L5**: Ship v0.16.0 | 2h | bump, tag, push, autobuild verify, install test |
-| **L6**: Self-audit + next plan | 3h | verifier pass, M-plan draft |
+| **M1**: `aether-plugin-wasm` crate | 7h | wasmtime workspace dep, ManifestRuntime enum, WasmPluginTool adapter, resource limits, `runtime: "wasm"` discovery branch, 4 unit tests |
+| **M2**: example WASM plugin | 2h | minimal Rust source compiled to wasm32-wasi-preview1, manifest, live verification |
+| **M3**: WS bearer-token auth | 3h | extract token from upgrade headers, refuse on mismatch, kill-switch `AETHER_SERVE_NO_AUTH=1`, smoke test both branches |
+| **M4**: VS Code webview panel | 6h | panel.html + panel.ts, WS connection state machine, streamed-delta rendering, smoke test via `code --extensionDevelopmentPath` if available; UNVERIFIED otherwise |
+| **M5**: plugin HMAC signing | 3h | sign / verify helpers, optional manifest field, 3 unit tests, smoke verify with a tampered manifest |
+| **M6**: ship v0.17.0 | 1h | bump + tag + autobuild + install verify |
+| **M7**: self-audit + Plan N | 2h | LOW/MEDIUM scan + draft |
 
-**API budget**: $5-10 for L3 multi-turn live runs. Negligible for L1/L2/L4.
+**API budget**: $5-10 for live verification round-trips. Negligible
+otherwise.
 
 **WEAKEST POINT**:
 
-L3 multi-turn tasks. Defining "what counts as a clarification vs a
-default-assumed answer" is itself a research question. Backup: skip
-L3, replace with **3-run stability matrix on the v3 15-task suite**
-(15 × 3 = 45 runs, ~$6.50, ~30 min, produces a mean ± stddev cost
-table per task — directly useful for cost-modelling consumers).
+M4 — VS Code webview panel. Without `code` on the path, the actual UI
+rendering can't be confirmed; smoke tests stop at "page HTML parses
+and the JS bundle compiles." Honest label in commit + README.
 
 **Failure modes to catch via self-audit**:
 
-- L1 WS endpoint that silently buffers instead of streaming → log
-  visible per-chunk write times.
-- L2 VS Code extension that compiles but doesn't actually load in VS
-  Code → manual smoke test with `code --extensionDevelopmentPath` if
-  VS Code is reachable; else mark UNVERIFIED.
-- L4 plugin loader that runs but doesn't sandbox — be honest in docs.
-- Token budget overrun: cap at $15 and stop.
+- WASM plugin that exhausts memory limit → wasmtime aborts; check
+  ToolError surface is informative, not a panic.
+- WS handler that accepts a partial-bearer or wrong-prefix token →
+  ensure the comparison is constant-time AND scheme-strict.
+- VS Code panel that streams correctly but never closes the WS → leak
+  on multiple panel opens.
+- Plugin HMAC verifier that returns ok on absent signature (forgetting
+  to fail-closed when signing is mandatory in CI mode).
 
 ---
 
-## Pre-flight checklist (run at session start)
+## Pre-flight checklist (run at next-session start)
 
 1. `git -C /root/aether-blueprint status` — clean tree?
-2. `git -C /root/aether-blueprint log -5 --oneline` — verify last commit is v0.15.0 docs
+2. `git -C /root/aether-blueprint log -5 --oneline` — last commit is v0.16.0 docs?
 3. `cargo test --workspace --release` — all green before adding new code
-4. `gh release view v0.15.0` — confirm v0.15.0 binary release is live
-5. Re-read this plan + the previous session's `wiki/hot.md` entry
-
-If any precheck fails: stop and ask. Don't paper over.
+4. `gh release view v0.16.0` — confirm v0.16.0 binary is live
+5. `wasmtime --version` — wasmtime CLI optional but useful for plugin debugging
+6. `rustup target list --installed | grep wasm32-wasi-preview1` — target installed?
 
 ---
 
-## After this 24h: candidate plans for the NEXT 24h
+## Candidate plans for 24h after Plan M
 
-- **Plan M** (productization): JetBrains plugin, Apple notarization
-  (if user has Developer ID), GitHub Marketplace presence
-- **Plan N** (cost optimization): cache-aware retry, partial-stream
-  resume, sub-agent fan-out for parallel codebase analysis
-- **Plan O** (research): a real SWE-Bench-Lite submission with aether's
-  numbers + harness description published as a technical report
-
-These are user-direction items, not autonomous defaults.
+- **Plan N** (production posture): rate limit + concurrent-session cap
+  on `aether serve`, audit-log forwarding to syslog/SIEM, per-org
+  policy file enforcement at provider construction.
+- **Plan O** (cost optimization): cache-aware retry, partial-stream
+  resume, sub-agent fan-out for parallel codebase analysis.
+- **Plan P** (research artifact): a real SWE-Bench-Lite submission
+  with aether's numbers + harness description published as a
+  technical report.
