@@ -9,3 +9,5 @@ description = "AetherCode MCP client — JSON-RPC over stdio/SSE, surfaces remot
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
