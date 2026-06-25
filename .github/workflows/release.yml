@@ -80,21 +80,35 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: install cross (linux-aarch64 only)
+      # Cross-compile path: install the aarch64 toolchain via apt and
+      # tell cargo to use it via target-specific linker + CC env vars.
+      # Replaces the previous `cross` (Docker) path that fell back to
+      # native cargo on runners without Docker available.
+      - name: install aarch64-linux toolchain (linux-aarch64 only)
         if: matrix.cross
-        run: cargo install cross --git https://github.com/cross-rs/cross --rev v0.2.5
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: build release binary (native)
         if: ${{ !matrix.cross }}
         run: cargo build --release --target ${{ matrix.target }} -p aether-cli
 
-      - name: build release binary (cross)
+      - name: build release binary (cross via apt toolchain)
         if: matrix.cross
-        run: cross build --release --target ${{ matrix.target }} -p aether-cli
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
+        run: cargo build --release --target ${{ matrix.target }} -p aether-cli
 
-      - name: strip binary (linux)
+      - name: strip binary (linux native)
         if: runner.os == 'Linux' && !matrix.cross
         run: strip target/${{ matrix.target }}/release/aether
+
+      - name: strip binary (linux aarch64 cross)
+        if: matrix.cross
+        run: aarch64-linux-gnu-strip target/${{ matrix.target }}/release/aether
 
       - name: strip binary (macos)
         if: runner.os == 'macOS'
