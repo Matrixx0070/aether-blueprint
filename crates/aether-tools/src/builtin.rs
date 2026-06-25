@@ -724,6 +724,116 @@ fn html_to_text(html: &str) -> String {
     s.trim().to_string()
 }
 
+// ── TodoWrite (model's own task tracker) ──────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct TodoItem {
+    content: String,
+    #[serde(default = "default_status")]
+    status: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    active_form: Option<String>,
+}
+
+fn default_status() -> String {
+    "pending".into()
+}
+
+#[derive(Debug, Deserialize)]
+struct TodoWriteInput {
+    todos: Vec<TodoItem>,
+}
+
+pub struct TodoWriteTool {
+    state: std::sync::Mutex<Vec<(String, String)>>,
+}
+
+impl TodoWriteTool {
+    pub fn new() -> Self {
+        Self {
+            state: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl Default for TodoWriteTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for TodoWriteTool {
+    fn name(&self) -> &str {
+        "TodoWrite"
+    }
+    fn description(&self) -> &str {
+        "Track your in-progress task list. Replace the full list each call. \
+         Useful for breaking a complex request into discrete steps and \
+         showing progress to the user. Status values: pending, in_progress, \
+         completed. Exactly one task should be in_progress at a time."
+    }
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "todos": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "content":     { "type": "string" },
+                            "status":      { "type": "string", "enum": ["pending","in_progress","completed"] },
+                            "active_form": { "type": "string", "description": "Present-continuous form shown during in_progress" }
+                        },
+                        "required": ["content", "status"]
+                    }
+                }
+            },
+            "required": ["todos"]
+        })
+    }
+    async fn run(&self, input: Value) -> Result<String, ToolError> {
+        let inp: TodoWriteInput = parse_input(input)?;
+        let new_state: Vec<(String, String)> = inp
+            .todos
+            .into_iter()
+            .map(|t| (t.status, t.content))
+            .collect();
+        // Replace whole list
+        let mut guard = self.state.lock().expect("TodoWrite mutex");
+        *guard = new_state.clone();
+        // Render summary
+        let mut out = String::new();
+        let mut pending = 0;
+        let mut in_progress = 0;
+        let mut completed = 0;
+        for (i, (status, content)) in new_state.iter().enumerate() {
+            let mark = match status.as_str() {
+                "completed" => {
+                    completed += 1;
+                    "x"
+                }
+                "in_progress" => {
+                    in_progress += 1;
+                    "~"
+                }
+                _ => {
+                    pending += 1;
+                    " "
+                }
+            };
+            out.push_str(&format!("{:>2}. [{}] {}\n", i + 1, mark, content));
+        }
+        out.push_str(&format!(
+            "\n[totals: {} pending, {} in_progress, {} completed]",
+            pending, in_progress, completed
+        ));
+        Ok(out)
+    }
+}
+
 // ── registry helper ───────────────────────────────────────────────────────
 
 pub fn register_builtins(registry: &mut crate::ToolRegistry) {
@@ -735,6 +845,7 @@ pub fn register_builtins(registry: &mut crate::ToolRegistry) {
     registry.register(Box::new(GlobTool));
     registry.register(Box::new(LsTool));
     registry.register(Box::new(WebFetchTool));
+    registry.register(Box::new(TodoWriteTool::new()));
 }
 
 #[cfg(test)]
@@ -822,7 +933,7 @@ mod tests {
         let mut r = ToolRegistry::new();
         register_builtins(&mut r);
         let names = r.names();
-        for expected in ["Bash", "Read", "Write", "Edit", "Grep", "Glob", "LS", "WebFetch"] {
+        for expected in ["Bash", "Read", "Write", "Edit", "Grep", "Glob", "LS", "WebFetch", "TodoWrite"] {
             assert!(names.contains(&expected.to_string()), "missing: {expected}");
         }
     }
