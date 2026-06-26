@@ -239,6 +239,13 @@ enum Cmd {
         #[command(subcommand)]
         sub: PluginCmd,
     },
+    /// SSO admin: configure an OIDC issuer + run a browser login flow.
+    /// Persists a short-lived id_token to ~/.aether/sso.token (mode 0600).
+    /// AETHER_REQUIRE_SSO=1 blocks REPL / print mode unless a token exists.
+    Sso {
+        #[command(subcommand)]
+        sub: SsoCmd,
+    },
     /// Cost + usage dashboard. Reads from ~/.aether/usage.db (populated
     /// per-turn by REPL / print / serve). Use --by-model or --by-tool
     /// to group; --days N to filter (default 7).
@@ -260,6 +267,34 @@ enum Cmd {
         #[arg(long, conflicts_with_all = ["json", "csv"])]
         tail: bool,
     },
+}
+
+#[derive(Subcommand, Debug)]
+enum SsoCmd {
+    /// Write or update ~/.aether/sso.json.
+    /// Discovers the issuer's metadata via the OIDC well-known endpoint.
+    Configure {
+        /// OIDC issuer URL, e.g. https://accounts.example.com.
+        /// Aether GETs `{issuer}/.well-known/openid-configuration`
+        /// and writes the discovered endpoints to sso.json.
+        #[arg(long)]
+        issuer: String,
+        /// OAuth client id (public client; no client_secret stored).
+        #[arg(long)]
+        client_id: String,
+        /// Space-separated scopes (default: "openid profile email").
+        #[arg(long, default_value = "openid profile email")]
+        scopes: String,
+    },
+    /// Show the current configuration + token status.
+    Status,
+    /// Run the browser auth-code flow + persist the id_token.
+    /// Binds 127.0.0.1:<random> as the redirect target, opens the
+    /// authorization URL in the system browser, and accepts a single
+    /// callback. Times out after 120 s.
+    Login,
+    /// Delete ~/.aether/sso.token (does not touch sso.json).
+    Logout,
 }
 
 #[derive(Subcommand, Debug)]
@@ -509,6 +544,9 @@ async fn main() -> Result<()> {
         Some(Cmd::Plugin { sub }) => {
             return plugin_cmd(sub);
         }
+        Some(Cmd::Sso { sub }) => {
+            return sso_cmd(sub).await;
+        }
         Some(Cmd::Usage { days, by_model, by_tool, json, csv, tail }) => {
             return run_usage_cmd(days, by_model, by_tool, json, csv, tail).await;
         }
@@ -741,6 +779,7 @@ async fn run_print_agent(
     permission_mode: aether_perm::PermissionMode,
     prompt: &str,
 ) -> Result<()> {
+    ensure_sso_or_bail()?;
         let config = SessionConfig {
         model: model.to_string(),
         permission_mode,
@@ -988,6 +1027,7 @@ async fn run_repl(
     permission_mode: aether_perm::PermissionMode,
     initial_prompt: Option<String>,
 ) -> Result<()> {
+    ensure_sso_or_bail()?;
         let config = SessionConfig {
         model: model.to_string(),
         permission_mode,
@@ -5601,6 +5641,400 @@ fn plugin_cmd(sub: PluginCmd) -> Result<()> {
             }
         }
     }
+}
+
+// ── SSO ──────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct SsoConfig {
+    issuer: String,
+    client_id: String,
+    scopes: String,
+    /// OIDC-discovered endpoints — written by `sso configure` so the
+    /// login flow doesn't re-discover every time.
+    authorization_endpoint: String,
+    token_endpoint: String,
+    #[serde(default)]
+    jwks_uri: Option<String>,
+}
+
+fn sso_config_path() -> Result<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .ok_or_else(|| anyhow!("HOME not set"))?;
+    Ok(PathBuf::from(home).join(".aether/sso.json"))
+}
+
+fn sso_token_path() -> Result<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .ok_or_else(|| anyhow!("HOME not set"))?;
+    Ok(PathBuf::from(home).join(".aether/sso.token"))
+}
+
+fn load_sso_config() -> Result<Option<SsoConfig>> {
+    let path = sso_config_path()?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+    let cfg: SsoConfig = serde_json::from_slice(&bytes)
+        .with_context(|| format!("parse {}", path.display()))?;
+    Ok(Some(cfg))
+}
+
+/// Returns true when the on-disk token is present + non-empty. The
+/// authoritative check is operator-side (e.g. introspection at the
+/// issuer); aether keeps the surface intentionally narrow.
+fn sso_token_present() -> bool {
+    let Ok(p) = sso_token_path() else { return false };
+    std::fs::metadata(&p)
+        .map(|m| m.len() > 0)
+        .unwrap_or(false)
+}
+
+/// If `AETHER_REQUIRE_SSO=1` is set and no token is on disk, bail out
+/// before the agent loop starts. Called at the top of REPL / print
+/// mode entry points.
+fn ensure_sso_or_bail() -> Result<()> {
+    if std::env::var("AETHER_REQUIRE_SSO").ok().as_deref() != Some("1") {
+        return Ok(());
+    }
+    if sso_token_present() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "AETHER_REQUIRE_SSO=1 but no SSO token present at {} — run `aether sso login` first",
+        sso_token_path().map(|p| p.display().to_string()).unwrap_or_else(|_| "(HOME unset)".into())
+    );
+}
+
+async fn sso_cmd(sub: SsoCmd) -> Result<()> {
+    match sub {
+        SsoCmd::Configure { issuer, client_id, scopes } => {
+            let issuer_trim = issuer.trim_end_matches('/').to_string();
+            let discovery_url = format!("{}/.well-known/openid-configuration", issuer_trim);
+            eprintln!("[sso configure] GET {discovery_url}");
+            let resp = reqwest::get(&discovery_url)
+                .await
+                .with_context(|| format!("GET {discovery_url}"))?;
+            if !resp.status().is_success() {
+                anyhow::bail!(
+                    "discovery failed: HTTP {} from {}",
+                    resp.status(),
+                    discovery_url
+                );
+            }
+            let meta: serde_json::Value = resp
+                .json()
+                .await
+                .context("parse discovery JSON")?;
+            let authorization_endpoint = meta
+                .get("authorization_endpoint")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("discovery doc missing `authorization_endpoint`"))?
+                .to_string();
+            let token_endpoint = meta
+                .get("token_endpoint")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("discovery doc missing `token_endpoint`"))?
+                .to_string();
+            let jwks_uri = meta
+                .get("jwks_uri")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let cfg = SsoConfig {
+                issuer: issuer_trim,
+                client_id,
+                scopes,
+                authorization_endpoint,
+                token_endpoint,
+                jwks_uri,
+            };
+            let path = sso_config_path()?;
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+            let json = serde_json::to_string_pretty(&cfg)?;
+            std::fs::write(&path, json).with_context(|| format!("write {}", path.display()))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(
+                    &path,
+                    std::fs::Permissions::from_mode(0o600),
+                );
+            }
+            eprintln!("[sso configure] wrote {} (0600)", path.display());
+            eprintln!("  issuer:                   {}", cfg.issuer);
+            eprintln!("  client_id:                {}", cfg.client_id);
+            eprintln!("  scopes:                   {}", cfg.scopes);
+            eprintln!("  authorization_endpoint:   {}", cfg.authorization_endpoint);
+            eprintln!("  token_endpoint:           {}", cfg.token_endpoint);
+            Ok(())
+        }
+        SsoCmd::Status => {
+            let cfg_path = sso_config_path()?;
+            let tok_path = sso_token_path()?;
+            let cfg = load_sso_config()?;
+            println!("config: {}", cfg_path.display());
+            match cfg {
+                Some(c) => {
+                    println!("  issuer:    {}", c.issuer);
+                    println!("  client_id: {}", c.client_id);
+                    println!("  scopes:    {}", c.scopes);
+                }
+                None => println!("  (no sso.json — run `aether sso configure ...` first)"),
+            }
+            println!("token: {}", tok_path.display());
+            println!(
+                "  present: {} ({} bytes)",
+                sso_token_present(),
+                std::fs::metadata(&tok_path).map(|m| m.len()).unwrap_or(0)
+            );
+            println!(
+                "  AETHER_REQUIRE_SSO: {}",
+                std::env::var("AETHER_REQUIRE_SSO").unwrap_or_else(|_| "(unset)".into())
+            );
+            Ok(())
+        }
+        SsoCmd::Login => sso_login().await,
+        SsoCmd::Logout => {
+            let path = sso_token_path()?;
+            match std::fs::remove_file(&path) {
+                Ok(_) => eprintln!("[sso logout] removed {}", path.display()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    eprintln!("[sso logout] no token at {} (already logged out)", path.display());
+                }
+                Err(e) => anyhow::bail!("remove {}: {e}", path.display()),
+            }
+            Ok(())
+        }
+    }
+}
+
+/// PKCE-protected OAuth 2.0 authorization-code flow. Binds a short-
+/// lived 127.0.0.1 listener (kernel-chosen port), opens the system
+/// browser at the authorization endpoint, accepts ONE callback, then
+/// exchanges the code for tokens. Persists `id_token` to disk; falls
+/// back to `access_token` if no id_token is issued.
+async fn sso_login() -> Result<()> {
+    use base64::Engine as _;
+    use sha2::Digest;
+
+    let cfg = load_sso_config()?
+        .ok_or_else(|| anyhow!("no sso.json — run `aether sso configure ...` first"))?;
+
+    // Bind a kernel-chosen port for the redirect endpoint.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .context("bind 127.0.0.1:0 for OAuth redirect")?;
+    let port = listener
+        .local_addr()
+        .context("local_addr on redirect listener")?
+        .port();
+    let redirect_uri = format!("http://127.0.0.1:{port}/aether-sso-callback");
+
+    // PKCE: high-entropy verifier + S256 challenge.
+    let verifier = {
+        use rand_core::RngCore;
+        let mut buf = [0u8; 32];
+        rand_core::OsRng.fill_bytes(&mut buf);
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
+    };
+    let challenge = {
+        let digest = sha2::Sha256::digest(verifier.as_bytes());
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
+    };
+    let state = {
+        use rand_core::RngCore;
+        let mut buf = [0u8; 16];
+        rand_core::OsRng.fill_bytes(&mut buf);
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
+    };
+
+    let auth_url = format!(
+        "{base}?response_type=code&client_id={cid}&redirect_uri={ru}&scope={sc}&state={st}&code_challenge={ch}&code_challenge_method=S256",
+        base = cfg.authorization_endpoint,
+        cid = urlencode(&cfg.client_id),
+        ru = urlencode(&redirect_uri),
+        sc = urlencode(&cfg.scopes),
+        st = urlencode(&state),
+        ch = challenge,
+    );
+
+    eprintln!("[sso login] open this URL in your browser:");
+    eprintln!("  {auth_url}");
+    // Best-effort browser open. We DON'T fail if it doesn't — the URL
+    // above is enough for the operator to copy-paste.
+    let _ = std::process::Command::new("xdg-open")
+        .arg(&auth_url)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    let _ = std::process::Command::new("open")
+        .arg(&auth_url)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    eprintln!("[sso login] waiting on 127.0.0.1:{port} (timeout 120 s)…");
+
+    listener.set_nonblocking(false).ok();
+    let timeout_at = std::time::Instant::now() + std::time::Duration::from_secs(120);
+
+    let (code, returned_state) = loop {
+        if std::time::Instant::now() >= timeout_at {
+            anyhow::bail!("sso login: timeout waiting for browser callback");
+        }
+        listener
+            .set_nonblocking(true)
+            .context("set_nonblocking on listener")?;
+        match listener.accept() {
+            Ok((mut sock, _)) => {
+                sock.set_read_timeout(Some(std::time::Duration::from_secs(10))).ok();
+                use std::io::{Read, Write};
+                let mut buf = [0u8; 4096];
+                let n = sock.read(&mut buf).context("read HTTP request")?;
+                let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                let first = req.lines().next().unwrap_or("");
+                // Parse "GET /path?query HTTP/1.1"
+                let target = first.split_whitespace().nth(1).unwrap_or("");
+                let query = target.splitn(2, '?').nth(1).unwrap_or("");
+                let mut got_code: Option<String> = None;
+                let mut got_state: Option<String> = None;
+                let mut got_error: Option<String> = None;
+                for pair in query.split('&') {
+                    let mut kv = pair.splitn(2, '=');
+                    let k = kv.next().unwrap_or("");
+                    let v = urldecode(kv.next().unwrap_or(""));
+                    match k {
+                        "code" => got_code = Some(v),
+                        "state" => got_state = Some(v),
+                        "error" => got_error = Some(v),
+                        _ => {}
+                    }
+                }
+                let body_html = if got_error.is_some() {
+                    "<h2>aether sso: error</h2><p>Check the CLI window.</p>"
+                } else if got_code.is_some() && got_state.as_deref() == Some(&state) {
+                    "<h2>aether sso: success</h2><p>You can close this tab.</p>"
+                } else {
+                    "<h2>aether sso: unexpected callback</h2><p>State mismatch.</p>"
+                };
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body_html.len(),
+                    body_html
+                );
+                let _ = sock.write_all(resp.as_bytes());
+                if let Some(e) = got_error {
+                    anyhow::bail!("OIDC issuer returned error: {e}");
+                }
+                let code = got_code
+                    .ok_or_else(|| anyhow!("callback missing `code` parameter"))?;
+                let returned_state = got_state.unwrap_or_default();
+                break (code, returned_state);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                continue;
+            }
+            Err(e) => anyhow::bail!("accept: {e}"),
+        }
+    };
+
+    if returned_state != state {
+        anyhow::bail!(
+            "OIDC state mismatch (replay/CSRF defense) — refusing to exchange code"
+        );
+    }
+
+    eprintln!("[sso login] exchanging code at {}", cfg.token_endpoint);
+    let client = reqwest::Client::new();
+    let form: Vec<(&str, &str)> = vec![
+        ("grant_type", "authorization_code"),
+        ("code", &code),
+        ("redirect_uri", &redirect_uri),
+        ("client_id", &cfg.client_id),
+        ("code_verifier", &verifier),
+    ];
+    let resp = client
+        .post(&cfg.token_endpoint)
+        .form(&form)
+        .send()
+        .await
+        .context("POST token_endpoint")?;
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("token exchange failed: {body}");
+    }
+    let token_resp: serde_json::Value = resp.json().await.context("parse token JSON")?;
+    let id_token = token_resp
+        .get("id_token")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let access_token = token_resp
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let token_value = id_token
+        .or(access_token)
+        .ok_or_else(|| anyhow!("token response has neither id_token nor access_token"))?;
+
+    let tok_path = sso_token_path()?;
+    if let Some(parent) = tok_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::write(&tok_path, &token_value).context("write sso.token")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(
+            &tok_path,
+            std::fs::Permissions::from_mode(0o600),
+        );
+    }
+    eprintln!(
+        "[sso login] persisted token ({} bytes, 0600) to {}",
+        token_value.len(),
+        tok_path.display()
+    );
+    Ok(())
+}
+
+fn urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        let c = b as char;
+        if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~') {
+            out.push(c);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+fn urldecode(s: &str) -> String {
+    let mut out = Vec::with_capacity(s.len());
+    let mut chars = s.bytes().peekable();
+    while let Some(b) = chars.next() {
+        if b == b'%' {
+            let h1 = chars.next();
+            let h2 = chars.next();
+            if let (Some(a), Some(b)) = (h1, h2) {
+                if let (Some(av), Some(bv)) = (
+                    (a as char).to_digit(16),
+                    (b as char).to_digit(16),
+                ) {
+                    out.push(((av << 4) | bv) as u8);
+                    continue;
+                }
+            }
+        } else if b == b'+' {
+            out.push(b' ');
+            continue;
+        }
+        out.push(b);
+    }
+    String::from_utf8_lossy(&out).to_string()
 }
 
 fn trust_cmd(sub: TrustCmd) -> Result<()> {
