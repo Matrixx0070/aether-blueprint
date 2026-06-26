@@ -23,7 +23,25 @@ Each tarball ships with a SHA256 the script verifies before extraction. See
 `INSTALL.md` for the manual download + verify path and the source-build
 fallback.
 
-## Status: v0.24.0
+## Status: v0.25.0
+
+Plan U shipped six observability + enterprise alt-path + key-hygiene features (24h autonomous run):
+
+- **U4 signed-commit integration test** — closes T3 LOW; mints a
+  gpg key + signed commit in tests/u4-signed-commit.sh and asserts
+  the green-light path of `--require-signed-commit`.
+- **U5 `/v1/complete` provider pool** — closes S7 LOW; back-to-back
+  completions reuse one HTTP client + auth (~240ms saved on the 2nd).
+- **U3 `aether plugin trust audit`** — per-key git-log provenance
+  with --remote; file-mtime fallback otherwise.
+- **U1 Prometheus `/metrics`** — 8 atomic counters on `aether
+  serve`; bearer-protected when configured.
+- **U2 webhook notifications** — `aether webhook configure / list
+  / remove / test`; POSTs carry an `X-Aether-Signature: sha256=…`
+  header signed with HMAC-SHA256 over the body.
+- **U6 SAML scaffolding** — `aether sso configure-saml` fetches
+  IdP metadata, extracts SSO endpoint + cert. XXE-safe (DOCTYPE +
+  ENTITY refused, body capped at 1 MiB). Login flow lands in Plan V.
 
 Plan T shipped six follow-ups that close every S7 audit MED/LOW carried into this plan (24h autonomous run):
 

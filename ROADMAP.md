@@ -491,12 +491,40 @@ extensibility.
   build, Mantle sweep) remain DONE/UNVERIFIED; closing pending
   operator inputs.
 
-## v0.25 — next (draft)
+## v0.25 — observability + enterprise alt-paths + key hygiene — shipped 2026-06-26
 
-- Plan U slices: SAML support (alt to OIDC), notification webhooks,
-  trust keychain rotation policy + key-age telemetry, Prometheus
-  metrics endpoint on `aether serve`, signed-commit success-path
-  integration test (closes T3 LOW).
+- **U4 signed-commit integration test** at tests/u4-signed-commit.sh
+  — mints a throwaway gpg key + signed commit, asserts
+  `--require-signed-commit` exits 0 + "carries a valid signature".
+  Closes T3 LOW.
+- **U5 provider pool for /v1/complete** — process-wide
+  Mutex<HashMap<provider_name, Arc<dyn LlmProvider>>>; back-to-back
+  completions reuse one HTTP client + auth. ~240ms saved on the 2nd
+  request. Closes S7 LOW.
+- **U3 `aether plugin trust audit`** — surfaces per-key git-log
+  provenance (commit SHA + date that introduced each key) when a
+  team keychain remote is provided; file-mtime fallback otherwise.
+- **U1 Prometheus /metrics on `aether serve`** — 8 atomic counters
+  (turns, tool_calls, errors, complete, rollback, 429, 4xx,
+  duration_ms_sum). Bearer-protected when AETHER_SERVE_TOKEN is set.
+- **U2 webhook notifications** — `aether webhook configure / list /
+  remove / test`. POSTs carry `X-Aether-Signature: sha256=<hex(hmac_
+  sha256(secret, body))>` (GitHub-webhook shape). Hooked into
+  rollback_handler.
+- **U6 SAML scaffolding** — `aether sso configure-saml --idp-metadata-
+  url` fetches IdP metadata, extracts SSO endpoint + binding + X509
+  signing cert, persists to ~/.aether/sso-saml.json. XXE-safe (DOCTYPE
+  + ENTITY refused; body capped at 1 MiB).
+
+## v0.26 — next (draft)
+
+- SAML login flow (consumes sso-saml.json; redirect/POST binding;
+  signed-assertion validation) — Plan V scope
+- Webhook hook coverage for the remaining events (trust-add /
+  trust-remove / sso-token-rotate / plugin-load-failure)
+- Labelled Prometheus metrics (per-tool tool_calls_total breakdown)
+- Provider pool TTL / `aether serve reload-pool` for cred rotation
+- Closing R1/R2/R3 cred-blocked verifiers
 
 ## v0.9 — enterprise
 

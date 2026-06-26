@@ -131,4 +131,11 @@ format: `[slice] [status] [commit] [verifier] [live-check] note`
 | T5 | DONE | a1eb994 | n/a | 4 live cases: --remove-from-team without/with --push round-trip + non-matching prefix error | `trust sync --remove-from-team <hex>` |
 | T2 | DONE | 40a608a | n/a | live: 2 Edits (13ms, 2ms) + 1 Bash (81ms) — no aliasing under per-tool_use_id keying | per-tool_use_id keying in tool_calls |
 | T6 | DONE/UNVERIFIED | n/a | R1 Bedrock streaming, R2 JetBrains build, R3 Mantle sweep all carry forward — no operator AWS/JDK21/Mantle inputs supplied this run | R1/R2/R3 cred-blocked verifiers carried to Plan U |
+| T7 | DONE | a018deb | n/a | v0.24.0 release LIVE (4 platforms, run 28270037477); cosign verify-blob → "Verified OK" against published artifact | v0.24.0 ship + Plan U draft + cosign live-verify |
+| U4 | DONE | 4217c06 | n/a | tests/u4-signed-commit.sh: gpg key + signed commit + ed25519 manifest → "carries a valid signature" + exit 0 | signed-commit success-path integration test (closes T3 LOW) |
+| U5 | DONE | 8abb89a | n/a | 2 back-to-back /v1/complete requests: req1=1.647s, req2=1.408s (~240ms saved on pool hit) | /v1/complete provider pool (closes S7 LOW) |
+| U3 | DONE | d251d29 | n/a | trust audit --remote: 3 keys shown with distinct SHAs + dates (53cc4ec/81abd45/cae68f1); CAUGHT-FIX --diff-filter=A→pickaxe | aether plugin trust audit (key age + git-log provenance) |
+| U1 | DONE | b6cacc0 | n/a | /metrics exposes 8 counters; live: turns=2, complete=2, rollback=1, 4xx=1 after live traffic | Prometheus /metrics endpoint |
+| U2 | DONE | 991d854 | n/a | configure/list/test fired 2 webhooks; HMAC over body byte-perfect match (a722e89958cb...) | webhook notifications (HMAC-SHA256 signed POST) |
+| U6 | DONE | 21ba787 | n/a | configure-saml: spec-conforming metadata → sso-saml.json with IdP+SP+SSO+cert; DOCTYPE/ENTITY metadata → XXE-bait refused | SAML scaffolding (alt-path to OIDC) |
 
