@@ -314,7 +314,35 @@ pub fn append_audit(
         .open(&path)
         .map_err(|e| SecError::Io(e.to_string()))?;
     writeln!(f, "{line}").map_err(|e| SecError::Io(e.to_string()))?;
+
+    // Optional syslog tee: when AETHER_AUDIT_SYSLOG=1, also send the
+    // entry to the system logger (Unix `LOG_USER`). Failure to reach
+    // syslog is silently swallowed — the JSONL is the authoritative
+    // record; syslog is a forwarding convenience. Windows / non-Unix
+    // platforms skip silently.
+    #[cfg(unix)]
+    {
+        if std::env::var("AETHER_AUDIT_SYSLOG").ok().as_deref() == Some("1") {
+            // Use /dev/log if available; lazy and best-effort.
+            let _ = forward_to_syslog(&line);
+        }
+    }
     Ok(())
+}
+
+#[cfg(unix)]
+fn forward_to_syslog(line: &str) -> std::io::Result<()> {
+    use std::os::unix::net::UnixDatagram;
+    let sock = UnixDatagram::unbound()?;
+    // RFC 3164-ish: <14> = facility LOG_USER (1) * 8 + severity INFO (6) = 14
+    let msg = format!("<14>aether-audit: {line}");
+    // /dev/log is the standard syslog socket on Linux.
+    let mut written = sock.send_to(msg.as_bytes(), "/dev/log");
+    if written.is_err() {
+        // macOS / BSD often use /var/run/log instead.
+        written = sock.send_to(msg.as_bytes(), "/var/run/log");
+    }
+    written.map(|_| ()).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
 }
 
 pub fn last_audit_hash() -> Result<String, SecError> {

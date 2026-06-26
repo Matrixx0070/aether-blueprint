@@ -243,18 +243,41 @@ enum Cmd {
 
 #[derive(Subcommand, Debug)]
 enum PluginCmd {
-    /// Compute the HMAC-SHA256 signature for a plugin manifest and
-    /// write it back into the file under the "signature" field. Reads
-    /// the key from $AETHER_PLUGIN_HMAC_KEY (or fail if unset).
+    /// Compute the signature for a plugin manifest and write it back
+    /// into the file under the "signature" field. Algorithm controlled
+    /// by --algorithm (default "hmac-sha256"). For "hmac-sha256",
+    /// reads the key from $AETHER_PLUGIN_HMAC_KEY. For "ed25519",
+    /// reads the private key (hex) from --private-key or
+    /// $AETHER_PLUGIN_ED25519_PRIVKEY.
     Sign {
         /// Path to the manifest.json to sign.
         manifest: PathBuf,
+        /// Signing algorithm: "hmac-sha256" (default) or "ed25519".
+        #[arg(long, default_value = "hmac-sha256")]
+        algorithm: String,
+        /// Path to the ed25519 private-key file (hex-encoded 32
+        /// bytes). Ignored for HMAC. Falls back to
+        /// $AETHER_PLUGIN_ED25519_PRIVKEY when unset.
+        #[arg(long)]
+        private_key: Option<PathBuf>,
     },
-    /// Verify a manifest's existing signature against
-    /// $AETHER_PLUGIN_HMAC_KEY. Exits 0 on valid, 1 on mismatch.
+    /// Verify a manifest's existing signature. Algorithm is read from
+    /// the manifest itself. Uses $AETHER_PLUGIN_HMAC_KEY (hmac-sha256)
+    /// or --public-key / $AETHER_PLUGIN_ED25519_PUBKEY (ed25519).
     Verify {
         /// Path to the manifest.json to verify.
         manifest: PathBuf,
+        /// Path to the ed25519 public-key file (hex-encoded 32 bytes).
+        /// Falls back to $AETHER_PLUGIN_ED25519_PUBKEY when unset.
+        #[arg(long)]
+        public_key: Option<PathBuf>,
+    },
+    /// Generate a fresh ed25519 keypair and write it to two files:
+    /// `<name>.priv` (private key, mode 0600) and `<name>.pub`
+    /// (public key). Print both hex values to stdout.
+    Keypair {
+        /// File-name stem; produces `<stem>.priv` and `<stem>.pub`.
+        stem: PathBuf,
     },
 }
 
@@ -313,6 +336,13 @@ enum AuditCmd {
     },
     /// Verify the tamper-evident hash chain across the entire audit log.
     Verify,
+    /// Tail the audit log; use --follow to stream new entries (Ctrl-C to stop).
+    Tail {
+        #[arg(long)]
+        follow: bool,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -363,6 +393,15 @@ async fn main() -> Result<()> {
         .clone()
         .or_else(|| settings.default_model.clone())
         .unwrap_or_else(|| DEFAULT_MODEL.to_string());
+
+    // N4: per-org policy gate. If a policy file exists and declares
+    // `model_allowlist`, refuse boot when the resolved model isn't on
+    // it. Plugin / scope commands still work — the policy applies to
+    // model usage specifically.
+    if let Err(e) = enforce_model_policy(&model) {
+        eprintln!("[policy] refusing to start: {e}");
+        std::process::exit(2);
+    }
 
     if let Some(d) = &cli.cwd {
         std::env::set_current_dir(d).with_context(|| format!("cwd: {}", d.display()))?;
@@ -507,6 +546,96 @@ fn with_retry(inner: Arc<dyn aether_llm::LlmProvider>) -> Arc<dyn aether_llm::Ll
 
 /// Construct the active provider as a trait object. All callers should
 /// route through this rather than direct AnthropicProvider construction.
+/// Per-org policy file at `~/.aether/policy.json` (or
+/// `$AETHER_POLICY_FILE`). When present:
+///   - `model_allowlist`: if non-empty, the resolved model MUST be in
+///     the list, else `build_provider` returns an error.
+///   - `tool_blocklist`: stored in OnceCell so the executor can check
+///     it (see `policy_allows_tool`). v0.18: enforced at executor
+///     dispatch.
+///   - `max_tokens_per_turn`: caps `SessionConfig.max_tokens_per_turn`
+///     at session construction.
+///
+/// Loaded once per process; updates require restart. (Live reload is a
+/// v0.19 follow-up.)
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct PolicyFile {
+    #[serde(default)]
+    pub model_allowlist: Vec<String>,
+    #[serde(default)]
+    pub tool_blocklist: Vec<String>,
+    #[serde(default)]
+    pub max_tokens_per_turn: Option<u32>,
+}
+
+fn policy_path() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("AETHER_POLICY_FILE") {
+        if !p.is_empty() {
+            return Some(PathBuf::from(p));
+        }
+    }
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".aether/policy.json"))
+}
+
+static POLICY: once_cell::sync::OnceCell<PolicyFile> = once_cell::sync::OnceCell::new();
+
+fn load_policy() -> &'static PolicyFile {
+    POLICY.get_or_init(|| {
+        let path = match policy_path() {
+            Some(p) => p,
+            None => return PolicyFile::default(),
+        };
+        match std::fs::read(&path) {
+            Ok(bytes) => match serde_json::from_slice::<PolicyFile>(&bytes) {
+                Ok(p) => {
+                    eprintln!("[policy] loaded {}", path.display());
+                    if !p.model_allowlist.is_empty() {
+                        eprintln!("  model_allowlist: {:?}", p.model_allowlist);
+                    }
+                    if !p.tool_blocklist.is_empty() {
+                        eprintln!("  tool_blocklist: {:?}", p.tool_blocklist);
+                    }
+                    if let Some(cap) = p.max_tokens_per_turn {
+                        eprintln!("  max_tokens_per_turn: {cap}");
+                    }
+                    p
+                }
+                Err(e) => {
+                    eprintln!("[policy] {}: parse error: {e}", path.display());
+                    PolicyFile::default()
+                }
+            },
+            Err(_) => PolicyFile::default(),
+        }
+    })
+}
+
+/// True iff `tool_name` is allowed by the active policy. v0.18 wires
+/// this into the executor; today it's available for callers to query.
+pub fn policy_allows_tool(tool_name: &str) -> bool {
+    !load_policy().tool_blocklist.iter().any(|t| t == tool_name)
+}
+
+/// Apply the model allowlist to a resolved model name. Returns Err if
+/// the model is blocked.
+fn enforce_model_policy(model: &str) -> Result<()> {
+    let p = load_policy();
+    if p.model_allowlist.is_empty() {
+        return Ok(());
+    }
+    if p.model_allowlist.iter().any(|m| m == model) {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "policy: model `{model}` is not in model_allowlist (set in {})",
+            policy_path()
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<unknown>".into())
+        )
+    }
+}
+
 async fn build_provider() -> Result<Arc<dyn aether_llm::LlmProvider>> {
     match active_provider_name().as_str() {
         "bedrock" => {
@@ -1701,6 +1830,61 @@ struct ServeResponse {
 struct ServeState {
     default_model: String,
     permission_mode: aether_perm::PermissionMode,
+    rate: Arc<RateLimiter>,
+    /// Atomically-counted in-flight sessions across /v1/messages + /ws/chat.
+    active: Arc<std::sync::atomic::AtomicUsize>,
+    /// Hard cap; once `active >= max_sessions`, 503 with Retry-After.
+    max_sessions: usize,
+}
+
+/// Simple in-memory token-bucket rate limiter keyed by client IP.
+///
+/// Defaults: `AETHER_SERVE_RATE_LIMIT_RPM` requests per minute per IP
+/// (default 60). Bucket capacity matches RPM (clients can burst the
+/// first 60 in one second then are smoothed). Refill = continuous at
+/// `rpm/60` tokens/sec.
+///
+/// State is in-process — multi-replica deployments should put a real
+/// gateway in front. Kill-switch via `AETHER_SERVE_RATE_LIMIT_RPM=0`.
+struct RateLimiter {
+    rpm: u32,
+    buckets: std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, f64)>>,
+}
+
+impl RateLimiter {
+    fn from_env() -> Self {
+        let rpm = std::env::var("AETHER_SERVE_RATE_LIMIT_RPM")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(60u32);
+        Self {
+            rpm,
+            buckets: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// Returns Ok(()) on accept, Err(retry_after_secs) on throttle.
+    fn check(&self, ip: &str) -> Result<(), u64> {
+        if self.rpm == 0 {
+            return Ok(()); // explicitly disabled
+        }
+        let cap = self.rpm as f64;
+        let refill_per_sec = cap / 60.0;
+        let now = std::time::Instant::now();
+        let mut g = self.buckets.lock().expect("rate buckets");
+        let entry = g.entry(ip.to_string()).or_insert((now, cap));
+        let elapsed = now.duration_since(entry.0).as_secs_f64();
+        entry.1 = (entry.1 + elapsed * refill_per_sec).min(cap);
+        entry.0 = now;
+        if entry.1 >= 1.0 {
+            entry.1 -= 1.0;
+            Ok(())
+        } else {
+            // seconds until a token is available
+            let need = 1.0 - entry.1;
+            Err((need / refill_per_sec).ceil() as u64)
+        }
+    }
 }
 
 async fn run_serve(
@@ -1708,33 +1892,26 @@ async fn run_serve(
     model: &str,
     permission_mode: aether_perm::PermissionMode,
 ) -> Result<()> {
-    use axum::{routing::post, Json, Router};
+    use axum::{routing::post, Router};
+    let max_sessions: usize = std::env::var("AETHER_SERVE_MAX_SESSIONS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(32);
     let state = ServeState {
         default_model: model.to_string(),
         permission_mode,
+        rate: Arc::new(RateLimiter::from_env()),
+        active: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        max_sessions,
     };
     let app = Router::new()
         .route(
             "/v1/messages",
-            post(|axum::extract::State(state): axum::extract::State<ServeState>,
-                  Json(req): Json<ServeRequest>| async move {
-                let model = req.model.unwrap_or(state.default_model);
-                let res = serve_one_turn(&model, state.permission_mode, &req.prompt).await;
-                match res {
-                    Ok(r) => Json(r),
-                    Err(e) => Json(ServeResponse {
-                        text: String::new(),
-                        tokens_in: 0,
-                        tokens_out: 0,
-                        cost_usd: 0.0,
-                        error: Some(e.to_string()),
-                    }),
-                }
-            }),
+            post(post_messages_handler),
         )
         .route("/ws/chat", axum::routing::get(ws_chat_handler))
         .route("/healthz", axum::routing::get(|| async { "ok" }))
-        .with_state(state);
+        .with_state(state.clone());
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .with_context(|| format!("bind {bind}"))?;
@@ -1753,8 +1930,102 @@ async fn run_serve(
     eprintln!("  POST /v1/messages  {{\"prompt\": \"...\", \"model\": \"...\"}}  (default model: {model})");
     eprintln!("  GET  /ws/chat      (WebSocket; send {{\"prompt\":\"...\"}} text frames, receive delta + done frames){auth_note}");
     eprintln!("  GET  /healthz");
+    eprintln!(
+        "  [rate-limit: {} rpm/IP, max-sessions: {}]",
+        state.rate.rpm, state.max_sessions
+    );
     axum::serve(listener, app).await.context("axum serve")?;
     Ok(())
+}
+
+/// Helpers shared by both /v1/messages and /ws/chat: rate-limit + session-cap.
+/// Returns Ok(()) on accept; Err(Response) on throttle (caller returns it).
+fn extract_client_ip(headers: &axum::http::HeaderMap) -> String {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "unknown".into())
+}
+
+fn rate_check(state: &ServeState, ip: &str) -> Result<(), axum::response::Response> {
+    if let Err(retry) = state.rate.check(ip) {
+        return Err(axum::response::Response::builder()
+            .status(axum::http::StatusCode::TOO_MANY_REQUESTS)
+            .header("Retry-After", retry.to_string())
+            .body(axum::body::Body::from(format!(
+                r#"{{"error":"rate_limited","retry_after_secs":{retry}}}"#,
+            )))
+            .unwrap_or_default());
+    }
+    Ok(())
+}
+
+fn session_acquire(state: &ServeState) -> Result<SessionGuard, axum::response::Response> {
+    use std::sync::atomic::Ordering;
+    let prev = state.active.fetch_add(1, Ordering::SeqCst);
+    if prev >= state.max_sessions {
+        state.active.fetch_sub(1, Ordering::SeqCst);
+        return Err(axum::response::Response::builder()
+            .status(axum::http::StatusCode::SERVICE_UNAVAILABLE)
+            .header("Retry-After", "5")
+            .body(axum::body::Body::from(format!(
+                r#"{{"error":"session_cap_reached","cap":{}}}"#,
+                state.max_sessions
+            )))
+            .unwrap_or_default());
+    }
+    Ok(SessionGuard {
+        active: Arc::clone(&state.active),
+    })
+}
+
+/// RAII session counter — decrements on drop so a panic / early return
+/// still releases the slot.
+struct SessionGuard {
+    active: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Drop for SessionGuard {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// `POST /v1/messages` — one-shot agent turn over HTTP.
+async fn post_messages_handler(
+    axum::extract::State(state): axum::extract::State<ServeState>,
+    headers: axum::http::HeaderMap,
+    body: axum::Json<ServeRequest>,
+) -> axum::response::Response {
+    let ip = extract_client_ip(&headers);
+    if let Err(resp) = rate_check(&state, &ip) {
+        return resp;
+    }
+    let _guard = match session_acquire(&state) {
+        Ok(g) => g,
+        Err(resp) => return resp,
+    };
+    let req = body.0;
+    let model = req.model.unwrap_or(state.default_model.clone());
+    let res = serve_one_turn(&model, state.permission_mode, &req.prompt).await;
+    let body = match res {
+        Ok(r) => r,
+        Err(e) => ServeResponse {
+            text: String::new(),
+            tokens_in: 0,
+            tokens_out: 0,
+            cost_usd: 0.0,
+            error: Some(e.to_string()),
+        },
+    };
+    let json = serde_json::to_string(&body).unwrap_or_else(|_| "{}".into());
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(json))
+        .unwrap_or_default()
 }
 
 /// WebSocket chat handler. Each client connection accepts a JSON text frame
@@ -1768,6 +2039,14 @@ async fn ws_chat_handler(
     headers: axum::http::HeaderMap,
     ws: axum::extract::WebSocketUpgrade,
 ) -> axum::response::Response {
+    let ip = extract_client_ip(&headers);
+    if let Err(resp) = rate_check(&state, &ip) {
+        return resp;
+    }
+    let guard = match session_acquire(&state) {
+        Ok(g) => g,
+        Err(resp) => return resp,
+    };
     // Optional bearer auth: when AETHER_SERVE_TOKEN is set, the client
     // must send `Authorization: Bearer <that_token>` on the upgrade
     // request. Constant-time comparison so a wrong token doesn't leak
@@ -1795,7 +2074,13 @@ async fn ws_chat_handler(
             }
         }
     }
-    ws.on_upgrade(move |socket| handle_ws_chat(socket, state))
+    ws.on_upgrade(move |socket| {
+        let _guard = guard; // keep session counted for the WS lifetime
+        async move {
+            handle_ws_chat(socket, state).await;
+            drop(_guard);
+        }
+    })
 }
 
 /// Constant-time byte comparison so wrong tokens don't reveal length /
@@ -3640,6 +3925,47 @@ fn audit_cmd(sub: AuditCmd) -> Result<()> {
                 std::process::exit(1);
             }
         },
+        AuditCmd::Tail { follow, limit } => {
+            let path = aether_sec::audit_path();
+            // Initial dump: last `limit` entries.
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                let lines: Vec<&str> = content.lines().collect();
+                let start = lines.len().saturating_sub(limit);
+                for line in &lines[start..] {
+                    println!("{line}");
+                }
+            }
+            if !follow {
+                return Ok(());
+            }
+            // Naive follow: poll the file size and stream new bytes.
+            // Good enough for operator tooling; switch to inotify if we
+            // hit > 1 req/sec sustained.
+            let mut last_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                let cur_size = match std::fs::metadata(&path) {
+                    Ok(m) => m.len(),
+                    Err(_) => continue,
+                };
+                if cur_size > last_size {
+                    if let Ok(mut f) = std::fs::File::open(&path) {
+                        use std::io::{Read, Seek, SeekFrom};
+                        let _ = f.seek(SeekFrom::Start(last_size));
+                        let mut buf = String::new();
+                        if f.read_to_string(&mut buf).is_ok() {
+                            print!("{buf}");
+                            use std::io::Write;
+                            let _ = std::io::stdout().flush();
+                        }
+                    }
+                    last_size = cur_size;
+                } else if cur_size < last_size {
+                    // File truncated / rotated — reset.
+                    last_size = cur_size;
+                }
+            }
+        }
     }
 }
 
@@ -4222,60 +4548,126 @@ fn register_subprocess_plugins(tools: &mut ToolRegistry) {
 }
 
 fn plugin_cmd(sub: PluginCmd) -> Result<()> {
-    let key = std::env::var("AETHER_PLUGIN_HMAC_KEY")
-        .context("AETHER_PLUGIN_HMAC_KEY not set — required for plugin sign/verify")?;
-    if key.is_empty() {
-        anyhow::bail!("AETHER_PLUGIN_HMAC_KEY is empty");
-    }
     match sub {
-        PluginCmd::Sign { manifest } => {
+        PluginCmd::Keypair { stem } => {
+            let (priv_hex, pub_hex) = aether_plugin::ed25519_keypair();
+            let priv_path = stem.with_extension("priv");
+            let pub_path = stem.with_extension("pub");
+            std::fs::write(&priv_path, &priv_hex)
+                .with_context(|| format!("write {}", priv_path.display()))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(
+                    &priv_path,
+                    std::fs::Permissions::from_mode(0o600),
+                );
+            }
+            std::fs::write(&pub_path, &pub_hex)
+                .with_context(|| format!("write {}", pub_path.display()))?;
+            println!("[plugin keypair] wrote {} (0600) and {}", priv_path.display(), pub_path.display());
+            println!("  private = {priv_hex}");
+            println!("  public  = {pub_hex}");
+            Ok(())
+        }
+        PluginCmd::Sign { manifest, algorithm, private_key } => {
             let bytes = std::fs::read(&manifest)
                 .with_context(|| format!("read {}", manifest.display()))?;
-            let sig = aether_plugin::canonical_manifest_hmac(&bytes, key.as_bytes())
-                .map_err(|e| anyhow!("hmac: {e}"))?;
-            // Write back: parse, set "signature", serialise pretty.
+            let sig = match algorithm.as_str() {
+                "hmac-sha256" => {
+                    let key = std::env::var("AETHER_PLUGIN_HMAC_KEY")
+                        .context("AETHER_PLUGIN_HMAC_KEY not set — required for HMAC signing")?;
+                    if key.is_empty() {
+                        anyhow::bail!("AETHER_PLUGIN_HMAC_KEY is empty");
+                    }
+                    aether_plugin::canonical_manifest_hmac(&bytes, key.as_bytes())
+                        .map_err(|e| anyhow!("hmac: {e}"))?
+                }
+                "ed25519" => {
+                    let priv_hex = match private_key {
+                        Some(p) => std::fs::read_to_string(&p)
+                            .with_context(|| format!("read {}", p.display()))?,
+                        None => std::env::var("AETHER_PLUGIN_ED25519_PRIVKEY").context(
+                            "set --private-key <PATH> or AETHER_PLUGIN_ED25519_PRIVKEY",
+                        )?,
+                    };
+                    aether_plugin::ed25519_sign(&bytes, priv_hex.trim())
+                        .map_err(|e| anyhow!("ed25519 sign: {e}"))?
+                }
+                other => anyhow::bail!(
+                    "unknown algorithm '{other}' (supported: hmac-sha256, ed25519)"
+                ),
+            };
+            // Write back: parse, set "signature" + "algorithm", serialise.
             let mut value: serde_json::Value = serde_json::from_slice(&bytes)
                 .context("manifest is not valid JSON")?;
             if let Some(obj) = value.as_object_mut() {
-                obj.insert(
-                    "signature".into(),
-                    serde_json::Value::String(sig.clone()),
-                );
+                obj.insert("signature".into(), serde_json::Value::String(sig.clone()));
+                if algorithm != "hmac-sha256" {
+                    obj.insert("algorithm".into(), serde_json::Value::String(algorithm.clone()));
+                }
             } else {
                 anyhow::bail!("manifest root must be a JSON object");
             }
             let out = serde_json::to_string_pretty(&value)?;
             std::fs::write(&manifest, out)
                 .with_context(|| format!("write {}", manifest.display()))?;
-            println!("[plugin sign] wrote signature to {}", manifest.display());
+            println!(
+                "[plugin sign] wrote {} signature to {}",
+                algorithm,
+                manifest.display()
+            );
             println!("  signature = {sig}");
             Ok(())
         }
-        PluginCmd::Verify { manifest } => {
+        PluginCmd::Verify { manifest, public_key } => {
             let bytes = std::fs::read(&manifest)
                 .with_context(|| format!("read {}", manifest.display()))?;
-            // Runtime-agnostic verifier: extract signature + name from raw
-            // JSON so this works for both subprocess (has `command`) and
-            // WASM (has `wasm_path`) manifests.
-            let (sig_opt, name) =
-                aether_plugin::extract_signature_and_name(&bytes).map_err(|e| anyhow!("{e}"))?;
+            let (sig_opt, alg, name) =
+                aether_plugin::extract_signature_algorithm_and_name(&bytes)
+                    .map_err(|e| anyhow!("{e}"))?;
             let Some(claimed_hex) = sig_opt else {
                 anyhow::bail!("manifest has no `signature` field");
             };
-            match aether_plugin::verify_manifest_signature_raw(
-                &bytes,
-                &claimed_hex,
-                &name,
-                key.as_bytes(),
-            ) {
-                Ok(true) => {
-                    println!("[plugin verify] OK — {name} signature valid");
-                    Ok(())
+            match alg.as_str() {
+                "hmac-sha256" => {
+                    let key = std::env::var("AETHER_PLUGIN_HMAC_KEY")
+                        .context("AETHER_PLUGIN_HMAC_KEY not set — required to verify HMAC")?;
+                    if key.is_empty() {
+                        anyhow::bail!("AETHER_PLUGIN_HMAC_KEY is empty");
+                    }
+                    match aether_plugin::verify_manifest_signature_raw(
+                        &bytes,
+                        &claimed_hex,
+                        &name,
+                        key.as_bytes(),
+                    ) {
+                        Ok(true) => {
+                            println!("[plugin verify] OK — {name} hmac-sha256 signature valid");
+                            Ok(())
+                        }
+                        Ok(false) => unreachable!("Some(sig) above"),
+                        Err(e) => anyhow::bail!("verify failed: {e}"),
+                    }
                 }
-                Ok(false) => unreachable!("Some(sig) was checked above"),
-                Err(e) => {
-                    anyhow::bail!("verify failed: {e}");
+                "ed25519" => {
+                    let pub_hex = match public_key {
+                        Some(p) => std::fs::read_to_string(&p)
+                            .with_context(|| format!("read {}", p.display()))?,
+                        None => std::env::var("AETHER_PLUGIN_ED25519_PUBKEY")
+                            .context("set --public-key <PATH> or AETHER_PLUGIN_ED25519_PUBKEY")?,
+                    };
+                    match aether_plugin::ed25519_verify(&bytes, &claimed_hex, pub_hex.trim()) {
+                        Ok(()) => {
+                            println!("[plugin verify] OK — {name} ed25519 signature valid");
+                            Ok(())
+                        }
+                        Err(e) => anyhow::bail!("verify failed: {e}"),
+                    }
                 }
+                other => anyhow::bail!(
+                    "unknown algorithm '{other}' in manifest (supported: hmac-sha256, ed25519)"
+                ),
             }
         }
     }
