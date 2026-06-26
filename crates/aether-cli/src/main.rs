@@ -2521,6 +2521,64 @@ async fn ws_run_one_turn_streamed(
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
     apply_policy_to_session(&mut session);
 
+    // Q2: install a tool-hook that streams a `tool_use` frame the
+    // INSTANT the executor dispatches each tool. Compared to the v0.20
+    // end-of-turn batch, this lets the client (VS Code panel) render
+    // diffs incrementally, which is the prerequisite for Q1
+    // Accept/Reject — the user must be able to react before the next
+    // tool fires. The hook also captures the file's PRE-state for
+    // Edit/Write, which the panel needs to render rollback later.
+    let tx_for_hook = delta_tx.clone();
+    session.executor.set_tool_hook(Box::new(
+        move |phase: aether_core::executor::ToolHookPhase,
+              tool_name: &str,
+              input: &serde_json::Value,
+              _output: Option<&str>,
+              _is_error: bool|
+              -> Vec<String> {
+            if !matches!(phase, aether_core::executor::ToolHookPhase::Pre) {
+                return Vec::new();
+            }
+            // Capture pre-state for rollback support (Q1). For Edit/Write,
+            // read the file's current contents BEFORE the tool runs so
+            // the client can later POST back to /v1/rollback. We send
+            // it as a sibling `original_contents` field; absent means
+            // "the file did not exist before" (Reject = delete).
+            let original_contents = if tool_name == "Edit" || tool_name == "Write" {
+                input
+                    .get("file_path")
+                    .and_then(|v| v.as_str())
+                    .map(|p| std::fs::read_to_string(p).ok())
+            } else {
+                None
+            };
+            let frame = match original_contents {
+                Some(Some(s)) => serde_json::json!({
+                    "type": "tool_use",
+                    "name": tool_name,
+                    "input": input,
+                    "original_contents": s,
+                }),
+                Some(None) => serde_json::json!({
+                    "type": "tool_use",
+                    "name": tool_name,
+                    "input": input,
+                    // Explicit null = file did not exist; client should
+                    // delete on Reject rather than overwriting.
+                    "original_contents": serde_json::Value::Null,
+                    "did_not_exist": true,
+                }),
+                None => serde_json::json!({
+                    "type": "tool_use",
+                    "name": tool_name,
+                    "input": input,
+                }),
+            };
+            let _ = tx_for_hook.send(frame.to_string());
+            Vec::new()
+        },
+    ));
+
     let mut next_input: Option<String> = Some(prompt.to_string());
     let mut last_text: Option<String> = None;
     loop {
@@ -2530,11 +2588,10 @@ async fn ws_run_one_turn_streamed(
             let _ = tx_clone.send(frame.to_string());
         });
         let outcome = agent_turn_streamed(&mut session, next_input.take(), sink).await?;
-        // After a turn the last history item may be ToolResults; the
-        // Assistant block that owns the tool_uses we want to report
-        // is the most-recent Assistant going backwards. Walk in reverse
-        // until we hit it.
-        if let Some(ConversationItem::Assistant { text, tool_uses }) = session
+        // Capture the assistant's text for the terminal `done` frame.
+        // tool_use frames are now streamed by the executor hook above,
+        // so we no longer scan history backwards for them.
+        if let Some(ConversationItem::Assistant { text, .. }) = session
             .history
             .iter()
             .rev()
@@ -2542,19 +2599,6 @@ async fn ws_run_one_turn_streamed(
         {
             if let Some(t) = text {
                 last_text = Some(t.clone());
-            }
-            // Emit a `tool_use` frame per tool the agent invoked, so the
-            // panel can render an inline diff for Edit/Write or a labelled
-            // entry for any other tool. This is best-effort; if the
-            // receiver dropped (client closed), the send fails silently.
-            for tu in tool_uses {
-                let frame = serde_json::json!({
-                    "type": "tool_use",
-                    "id": tu.id,
-                    "name": tu.name,
-                    "input": tu.input,
-                });
-                let _ = delta_tx.send(frame.to_string());
             }
         }
         match outcome {
