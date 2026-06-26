@@ -1,14 +1,31 @@
 {
     "name": "aether",
-    "displayName": "aether",
+    "displayName": "Aether",
     "description": "Agentic coding via aether — runs aether-cli as a child process, streams output into VS Code.",
-    "version": "0.17.0",
+    "version": "0.20.0",
     "publisher": "matrixx0070",
     "license": "Apache-2.0",
     "engines": {
         "vscode": "^1.85.0"
     },
     "main": "./out/extension.js",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/Matrixx0070/aether-blueprint.git",
+        "directory": "editor/vscode"
+    },
+    "homepage": "https://github.com/Matrixx0070/aether-blueprint#readme",
+    "bugs": {
+        "url": "https://github.com/Matrixx0070/aether-blueprint/issues"
+    },
+    "keywords": [
+        "ai",
+        "agent",
+        "claude",
+        "coding-assistant",
+        "anthropic",
+        "llm"
+    ],
     "categories": [
         "Programming Languages",
         "Other"
