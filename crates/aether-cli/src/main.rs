@@ -327,6 +327,13 @@ enum PluginCmd {
         /// Falls back to $AETHER_PLUGIN_ED25519_PUBKEY when unset.
         #[arg(long)]
         public_key: Option<PathBuf>,
+        /// Refuse the manifest if the `commit_sha` field is missing.
+        /// The signature already covers commit_sha when present
+        /// (canonical_manifest_bytes strips only `signature`), so
+        /// this gates ON THE PRESENCE of the field rather than on the
+        /// signature math.
+        #[arg(long)]
+        enforce_commit_pinned: bool,
     },
     /// Generate a fresh ed25519 keypair and write it to two files:
     /// `<name>.priv` (private key, mode 0600) and `<name>.pub`
@@ -5590,7 +5597,7 @@ fn plugin_cmd(sub: PluginCmd) -> Result<()> {
             Ok(())
         }
         PluginCmd::Trust { sub } => trust_cmd(sub),
-        PluginCmd::Verify { manifest, public_key } => {
+        PluginCmd::Verify { manifest, public_key, enforce_commit_pinned } => {
             let bytes = std::fs::read(&manifest)
                 .with_context(|| format!("read {}", manifest.display()))?;
             let (sig_opt, alg, name) =
@@ -5599,6 +5606,19 @@ fn plugin_cmd(sub: PluginCmd) -> Result<()> {
             let Some(claimed_hex) = sig_opt else {
                 anyhow::bail!("manifest has no `signature` field");
             };
+            if enforce_commit_pinned {
+                let v: serde_json::Value = serde_json::from_slice(&bytes)
+                    .with_context(|| format!("parse {}", manifest.display()))?;
+                let cs = v.get("commit_sha").and_then(|x| x.as_str());
+                match cs {
+                    Some(s) if !s.is_empty() => {
+                        eprintln!("[plugin verify] commit_sha pinned: {s}");
+                    }
+                    _ => anyhow::bail!(
+                        "--enforce-commit-pinned: manifest is missing `commit_sha` field"
+                    ),
+                }
+            }
             match alg.as_str() {
                 "hmac-sha256" => {
                     let key = std::env::var("AETHER_PLUGIN_HMAC_KEY")

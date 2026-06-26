@@ -117,6 +117,12 @@ pub struct PluginManifest {
     /// asymmetric signing (marketplace use case).
     #[serde(default)]
     pub algorithm: Option<String>,
+    /// Optional commit SHA the plugin was built from. When set, the
+    /// canonical bytes signed include this field, so a forged manifest
+    /// that swaps the commit also invalidates the signature. Required
+    /// for `aether plugin verify --enforce-commit-pinned` to pass.
+    #[serde(default)]
+    pub commit_sha: Option<String>,
 }
 
 /// Compute the HMAC-SHA256 of a manifest's JSON content with the
