@@ -411,6 +411,20 @@ enum PluginCmd {
 enum TrustCmd {
     /// List trusted ed25519 public keys.
     List,
+    /// Audit each trusted key with provenance: when it was added,
+    /// from where. With `--remote`, runs `git log` against a team
+    /// keychain repo and surfaces the commit SHA + date that
+    /// introduced each key. Without `--remote`, falls back to the
+    /// local file's mtime (less informative; flagged as such).
+    Audit {
+        /// Team keychain git remote (same one passed to `trust sync`).
+        /// When omitted, only file-mtime provenance is shown.
+        #[arg(long)]
+        remote: Option<String>,
+        /// Branch override (matches `trust sync --branch`).
+        #[arg(long)]
+        branch: Option<String>,
+    },
     /// Append a public key (hex; reads from --file PATH or stdin if
     /// omitted). Duplicates are de-duped.
     Add {
@@ -7163,7 +7177,108 @@ fn trust_cmd(sub: TrustCmd) -> Result<()> {
         TrustCmd::Sync { remote, branch, push, remove_from_team } => {
             trust_sync(&path, &remote, branch, push, remove_from_team)
         }
+        TrustCmd::Audit { remote, branch } => trust_audit(&path, remote, branch),
     }
+}
+
+/// U3: audit each trusted key. With `remote`, clones the team repo
+/// shallow and runs `git log --diff-filter=A -L /<key>/,+1:trusted-keys.txt`
+/// for each key — surfacing the commit SHA + date that introduced
+/// it. Without `remote`, falls back to the LOCAL keychain file's
+/// mtime as a less-informative provenance (one timestamp shared by
+/// every key).
+fn trust_audit(local_path: &Path, remote: Option<String>, branch: Option<String>) -> Result<()> {
+    let keys = aether_plugin::load_trust_keychain();
+    if keys.is_empty() {
+        eprintln!(
+            "[trust audit] no keys in {} — nothing to audit",
+            local_path.display()
+        );
+        return Ok(());
+    }
+    if let Some(remote) = remote {
+        let tmp = tempfile_dir()?;
+        let mut clone_cmd = std::process::Command::new("git");
+        clone_cmd.args(["clone", "--quiet"]);
+        if let Some(b) = branch.as_deref() {
+            clone_cmd.args(["--branch", b]);
+        }
+        let out = clone_cmd
+            .arg(&remote)
+            .arg(&tmp)
+            .output()
+            .with_context(|| format!("git clone {remote}"))?;
+        if !out.status.success() {
+            let _ = std::fs::remove_dir_all(&tmp);
+            anyhow::bail!(
+                "git clone {remote} failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        println!("# trust audit — {} key(s), remote: {remote}", keys.len());
+        println!("{:<12}  {:<25}  {}", "SHA", "ADDED", "KEY");
+        println!("{}", "-".repeat(110));
+        for key in &keys {
+            // `-S <key>` is git's pickaxe: matches commits where the
+            // COUNT of <key> in the file changed. Coupled with
+            // --reverse + .first(), this surfaces the commit that
+            // first introduced the key. We deliberately omit
+            // --diff-filter=A because that only matches the commit
+            // that ADDED the file (which is only true for the first
+            // key — subsequent keys MODIFY trusted-keys.txt).
+            let log_out = std::process::Command::new("git")
+                .args(["-C"])
+                .arg(&tmp)
+                .args([
+                    "log",
+                    "--reverse",
+                    "--format=%h\t%ai",
+                    "-S",
+                    key,
+                    "--",
+                    TEAM_KEYCHAIN_FILENAME,
+                ])
+                .output()
+                .context("git log")?;
+            let stdout = String::from_utf8_lossy(&log_out.stdout);
+            let first = stdout.lines().next().unwrap_or("");
+            let mut it = first.splitn(2, '\t');
+            let sha = it.next().unwrap_or("");
+            let date = it.next().unwrap_or("");
+            if sha.is_empty() {
+                println!(
+                    "{:<12}  {:<25}  {key}",
+                    "(local-only)", "—"
+                );
+            } else {
+                println!("{sha:<12}  {date:<25}  {key}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+        return Ok(());
+    }
+    // Local-only fallback: file mtime shared across keys.
+    let mtime = std::fs::metadata(local_path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| {
+            chrono::DateTime::<chrono::Utc>::from_timestamp(d.as_secs() as i64, 0)
+                .map(|d| d.to_rfc3339())
+                .unwrap_or_else(|| "<unknown>".into())
+        })
+        .unwrap_or_else(|| "<unknown>".into());
+    println!(
+        "# trust audit — {} key(s), provenance: local file mtime ({mtime})",
+        keys.len()
+    );
+    println!("# (use --remote <git-url> for per-key git-log provenance)");
+    println!("{:<12}  {:<25}  {}", "SHA", "ADDED", "KEY");
+    println!("{}", "-".repeat(110));
+    for key in &keys {
+        println!("{:<12}  {mtime:<25}  {key}", "(file-mtime)");
+    }
+    Ok(())
 }
 
 const TEAM_KEYCHAIN_FILENAME: &str = "trusted-keys.txt";
