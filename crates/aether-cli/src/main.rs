@@ -2125,6 +2125,7 @@ async fn run_serve(
                 .delete(trust_remove_handler),
         )
         .route("/v1/rollback", post(rollback_handler))
+        .route("/v1/complete", post(complete_handler))
         .route("/healthz", axum::routing::get(|| async { "ok" }))
         .with_state(state.clone());
     let listener = tokio::net::TcpListener::bind(bind)
@@ -2148,6 +2149,7 @@ async fn run_serve(
     eprintln!("  POST /v1/trust     add a key (body: {{\"public_key\":\"<hex>\"}})");
     eprintln!("  DEL  /v1/trust     remove a key (body: {{\"prefix\":\"<hex>\"}})");
     eprintln!("  POST /v1/rollback  roll a file back to a captured pre-state (body: {{\"file_path\":\"<p>\",\"original_contents\":\"<s>\",\"did_not_exist\":bool}})");
+    eprintln!("  POST /v1/complete  code-completion SSE stream (body: {{\"before\":\"<s>\",\"after\":\"<s>\",\"model\":\"<id>\",\"language\":\"<id>\"}})");
     eprintln!("  GET  /healthz");
     eprintln!(
         "  [rate-limit: {} rpm/IP, max-sessions: {}]",
@@ -2667,6 +2669,151 @@ async fn rollback_handler(
             Err(e) => trust_error_response(500, &format!("write {}: {e}", path.display())),
         }
     }
+}
+
+#[derive(Deserialize)]
+struct CompleteRequest {
+    /// Text BEFORE the cursor (the "prefix" the model sees).
+    before: String,
+    /// Text AFTER the cursor (the "suffix" — gives the model
+    /// the right context for what comes next). May be empty.
+    #[serde(default)]
+    after: String,
+    /// Optional language hint (e.g. "rust", "python") — appears
+    /// in the prompt so the model knows what syntax to emit.
+    #[serde(default)]
+    language: Option<String>,
+    /// Optional model override (default: state.default_model).
+    #[serde(default)]
+    model: Option<String>,
+}
+
+/// `POST /v1/complete` — fill-in-the-middle code completion.
+/// Streams the model's response as SSE `data: <json>\n\n` frames.
+/// Frame types: `{"type":"delta","text":"…"}` per token chunk,
+/// terminating `{"type":"done","tokens_in":N,"tokens_out":M,"cost_usd":X}`.
+/// Same bearer + tenant gates as /ws/chat.
+async fn complete_handler(
+    axum::extract::State(state): axum::extract::State<ServeState>,
+    headers: axum::http::HeaderMap,
+    body: axum::Json<CompleteRequest>,
+) -> axum::response::Response {
+    let ip = extract_client_ip(&headers);
+    if let Err(resp) = rate_check(&state, &ip) {
+        return resp;
+    }
+    if let Err(resp) = check_bearer(&headers) {
+        return resp;
+    }
+    let tenant = match extract_tenant(&headers) {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    if let Err(resp) = check_tenant_acl(&headers, tenant.as_deref()) {
+        return resp;
+    }
+    let req = body.0;
+    let model = req.model.unwrap_or(state.default_model.clone());
+    let language = req
+        .language
+        .as_deref()
+        .map(|l| format!(" ({l})"))
+        .unwrap_or_default();
+    let prompt = format!(
+        "You are a code-completion assistant. Output ONLY the code that fills the gap between BEFORE and AFTER. No prose, no fences, no preamble.\n\n=== BEFORE{language} ===\n{}\n=== AFTER ===\n{}\n=== COMPLETION ===\n",
+        req.before, req.after
+    );
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let pm = state.permission_mode;
+
+    let task = tokio::spawn(async move {
+        complete_run_one_turn(&model, pm, &prompt, tx).await
+    });
+
+    // Pipe channel → SSE body via futures_util::Stream.
+    use futures_util::StreamExt;
+    let event_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx).map(
+        |json| Ok::<_, std::convert::Infallible>(
+            axum::response::sse::Event::default().data(json)
+        ),
+    );
+    let terminal = async move {
+        let outcome = task.await;
+        let terminal_json = match outcome {
+            Ok(Ok(r)) => serde_json::json!({
+                "type": "done",
+                "tokens_in": r.tokens_in,
+                "tokens_out": r.tokens_out,
+                "cost_usd": r.cost_usd,
+                "error": r.error,
+            }),
+            Ok(Err(e)) => serde_json::json!({"type":"error","message": e.to_string()}),
+            Err(e) => serde_json::json!({"type":"error","message": format!("agent task: {e}")}),
+        };
+        Ok::<_, std::convert::Infallible>(
+            axum::response::sse::Event::default().data(terminal_json.to_string()),
+        )
+    };
+    let stream = event_stream.chain(futures_util::stream::once(terminal));
+    use axum::response::IntoResponse;
+    axum::response::sse::Sse::new(stream)
+        .keep_alive(axum::response::sse::KeepAlive::default())
+        .into_response()
+}
+
+/// Run a fresh one-shot agent turn for /v1/complete and stream
+/// `{"type":"delta","text":"…"}` JSON frames into the channel.
+async fn complete_run_one_turn(
+    model: &str,
+    permission_mode: aether_perm::PermissionMode,
+    prompt: &str,
+    delta_tx: tokio::sync::mpsc::UnboundedSender<String>,
+) -> Result<ServeResponse> {
+    let config = SessionConfig {
+        model: model.to_string(),
+        permission_mode,
+        max_tokens_per_turn: PRINT_MODE_MAX_TOKENS,
+    };
+    let overlay = Fable5Overlay::new(OverlayConfig::default());
+    let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
+    // Empty tool registry — completions are pure text, no tools.
+    let tools = ToolRegistry::new();
+    let provider_arc: Arc<dyn aether_llm::LlmProvider> = build_provider().await?;
+    let mut session = Session::new(config, overlay, provider_arc, gate, tools);
+    apply_policy_to_session(&mut session);
+
+    let mut last_text: Option<String> = None;
+    let tx_clone = delta_tx.clone();
+    let sink: aether_llm::TextDeltaSink = Box::new(move |delta: &str| {
+        let frame = serde_json::json!({"type":"delta","text":delta});
+        let _ = tx_clone.send(frame.to_string());
+    });
+    let _ = agent_turn_streamed(&mut session, Some(prompt.to_string()), sink).await?;
+    if let Some(ConversationItem::Assistant { text, .. }) = session
+        .history
+        .iter()
+        .rev()
+        .find(|item| matches!(item, ConversationItem::Assistant { .. }))
+    {
+        if let Some(t) = text {
+            last_text = Some(t.clone());
+        }
+    }
+    let u = &session.usage_total;
+    let cost = estimate_cost_usd(&session.config.model, u);
+    if std::env::var("AETHER_NO_USAGE_DB").ok().as_deref() != Some("1")
+        && u.input_tokens + u.output_tokens > 0
+    {
+        record_turn_usage(Some("complete"), &session.config.model, u, cost);
+    }
+    Ok(ServeResponse {
+        text: last_text.unwrap_or_default(),
+        tokens_in: u.input_tokens,
+        tokens_out: u.output_tokens,
+        cost_usd: cost,
+        error: None,
+    })
 }
 
 fn trust_error_response(code: u16, msg: &str) -> axum::response::Response {
