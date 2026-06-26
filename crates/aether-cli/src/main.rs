@@ -2522,9 +2522,31 @@ async fn ws_run_one_turn_streamed(
             let _ = tx_clone.send(frame.to_string());
         });
         let outcome = agent_turn_streamed(&mut session, next_input.take(), sink).await?;
-        if let Some(ConversationItem::Assistant { text, .. }) = session.history.last() {
+        // After a turn the last history item may be ToolResults; the
+        // Assistant block that owns the tool_uses we want to report
+        // is the most-recent Assistant going backwards. Walk in reverse
+        // until we hit it.
+        if let Some(ConversationItem::Assistant { text, tool_uses }) = session
+            .history
+            .iter()
+            .rev()
+            .find(|item| matches!(item, ConversationItem::Assistant { .. }))
+        {
             if let Some(t) = text {
                 last_text = Some(t.clone());
+            }
+            // Emit a `tool_use` frame per tool the agent invoked, so the
+            // panel can render an inline diff for Edit/Write or a labelled
+            // entry for any other tool. This is best-effort; if the
+            // receiver dropped (client closed), the send fails silently.
+            for tu in tool_uses {
+                let frame = serde_json::json!({
+                    "type": "tool_use",
+                    "id": tu.id,
+                    "name": tu.name,
+                    "input": tu.input,
+                });
+                let _ = delta_tx.send(frame.to_string());
             }
         }
         match outcome {

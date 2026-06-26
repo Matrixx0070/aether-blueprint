@@ -98,6 +98,15 @@ body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); font-fami
 .role { font-weight: 600; font-size: 11px; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.04em; }
 pre { background: var(--vscode-textBlockQuote-background); padding: 8px; border-radius: 3px; overflow-x: auto; font-family: var(--vscode-editor-font-family); }
 code { font-family: var(--vscode-editor-font-family); }
+.toolcall { margin: 6px 0; padding: 8px 10px; background: var(--vscode-textBlockQuote-background); border-left: 3px solid var(--accent); font-size: 12px; }
+.toolcall .head { font-weight: 600; color: var(--accent); margin-bottom: 4px; }
+.toolcall .meta { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+.diff { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
+.diff > div { background: var(--vscode-editor-background); padding: 6px; border: 1px solid var(--vscode-input-border, transparent); overflow-x: auto; }
+.diff > div pre { background: transparent; padding: 0; margin: 0; font-size: 11px; line-height: 1.4; white-space: pre; font-family: var(--vscode-editor-font-family); }
+.diff .label { font-weight: 600; color: var(--muted); font-size: 10px; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.04em; }
+.diff .before .label { color: var(--vscode-errorForeground); }
+.diff .after  .label { color: var(--vscode-charts-green); }
 #input-bar { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--vscode-input-border, transparent); background: var(--bg); }
 #prompt { flex: 1; padding: 6px 8px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, transparent); border-radius: 3px; font-family: inherit; font-size: inherit; resize: none; }
 button { padding: 6px 10px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; border-radius: 3px; cursor: pointer; font-family: inherit; font-size: inherit; }
@@ -164,6 +173,75 @@ function appendSystem(text) {
     history.scrollTop = history.scrollHeight;
 }
 
+function escapeHtml(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
+/**
+ * Render a tool-use inline. For Edit / Write / NotebookEdit we draw a
+ * two-pane before/after; for other tools we show name + a one-line
+ * input summary so the user can see what the agent is doing without
+ * scrolling the JSON.
+ *
+ * READ-ONLY in v0.20 — no Accept/Reject (deferred to v0.21).
+ */
+function appendToolUse(name, input) {
+    input = input || {};
+    const div = document.createElement('div');
+    div.className = 'toolcall';
+    const head = document.createElement('div');
+    head.className = 'head';
+    head.textContent = '🔧 ' + name;
+    div.appendChild(head);
+
+    if (name === 'Edit' && typeof input.file_path === 'string') {
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = input.file_path;
+        div.appendChild(meta);
+        const diff = document.createElement('div');
+        diff.className = 'diff';
+        diff.innerHTML =
+            '<div class="before"><div class="label">before</div><pre>' +
+            escapeHtml(input.old_string) +
+            '</pre></div><div class="after"><div class="label">after</div><pre>' +
+            escapeHtml(input.new_string) +
+            '</pre></div>';
+        div.appendChild(diff);
+    } else if (name === 'Write' && typeof input.file_path === 'string') {
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = input.file_path + ' (new contents)';
+        div.appendChild(meta);
+        const diff = document.createElement('div');
+        diff.className = 'diff';
+        diff.innerHTML =
+            '<div class="after" style="grid-column: 1 / -1"><div class="label">contents</div><pre>' +
+            escapeHtml(input.content) +
+            '</pre></div>';
+        div.appendChild(diff);
+    } else {
+        // Generic tool — print a short input summary so the user has signal.
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        let summary = '';
+        try {
+            summary = JSON.stringify(input);
+        } catch {
+            summary = String(input);
+        }
+        if (summary.length > 200) summary = summary.slice(0, 197) + '…';
+        meta.textContent = summary;
+        div.appendChild(meta);
+    }
+
+    history.appendChild(div);
+    history.scrollTop = history.scrollHeight;
+}
+
 function connect() {
     if (!cfg) {
         setStatus('no config yet', 'disconnected');
@@ -213,6 +291,11 @@ function connect() {
                 if (msg.error) {
                     appendSystem('error: ' + msg.error);
                 }
+            } else if (msg.type === 'tool_use') {
+                // Close out any in-flight agent bubble so the tool block
+                // renders BELOW the text the model emitted before it.
+                currentAgentDiv = null;
+                appendToolUse(msg.name, msg.input);
             } else if (msg.type === 'error') {
                 appendSystem('error: ' + msg.message);
                 inFlight = false;
