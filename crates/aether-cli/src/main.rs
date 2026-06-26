@@ -831,6 +831,34 @@ fn enforce_model_policy(model: &str) -> Result<()> {
     }
 }
 
+/// U5: process-wide pool of provider Arcs, keyed by
+/// `active_provider_name()` (which already encapsulates auth +
+/// transport selection). `complete_run_one_turn` consults this so
+/// back-to-back /v1/complete requests reuse one HTTP client (the
+/// underlying reqwest::Client + auth handshake). One-shot CLI
+/// callers don't benefit and stay on direct `build_provider()`.
+///
+/// Cache miss → real build → insert. Cache hit → Arc::clone. Errors
+/// are NOT cached (an env-var change later in the process can fix
+/// the next call).
+static PROVIDER_POOL: once_cell::sync::Lazy<
+    tokio::sync::Mutex<std::collections::HashMap<String, Arc<dyn aether_llm::LlmProvider>>>,
+> = once_cell::sync::Lazy::new(|| tokio::sync::Mutex::new(std::collections::HashMap::new()));
+
+async fn get_or_build_provider() -> Result<Arc<dyn aether_llm::LlmProvider>> {
+    let key = active_provider_name();
+    {
+        let g = PROVIDER_POOL.lock().await;
+        if let Some(p) = g.get(&key) {
+            return Ok(Arc::clone(p));
+        }
+    }
+    let p = build_provider().await?;
+    let mut g = PROVIDER_POOL.lock().await;
+    g.insert(key, Arc::clone(&p));
+    Ok(p)
+}
+
 async fn build_provider() -> Result<Arc<dyn aether_llm::LlmProvider>> {
     match active_provider_name().as_str() {
         "bedrock" => {
@@ -2811,7 +2839,9 @@ async fn complete_run_one_turn(
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
     // Empty tool registry — completions are pure text, no tools.
     let tools = ToolRegistry::new();
-    let provider_arc: Arc<dyn aether_llm::LlmProvider> = build_provider().await?;
+    // U5: use the pooled provider so back-to-back /v1/complete
+    // requests reuse one HTTP client + auth handshake.
+    let provider_arc: Arc<dyn aether_llm::LlmProvider> = get_or_build_provider().await?;
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
     apply_policy_to_session(&mut session);
 
