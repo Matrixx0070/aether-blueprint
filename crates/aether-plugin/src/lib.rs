@@ -24,8 +24,10 @@
 
 use aether_tools::{Tool, ToolError};
 use async_trait::async_trait;
+use hmac::{Hmac, Mac};
 use serde::Deserialize;
 use serde_json::Value;
+use sha2::Sha256;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
@@ -33,6 +35,8 @@ use tokio::process::Command;
 
 const PLUGIN_DIR_ENV: &str = "AETHER_PLUGIN_DIR";
 const DEFAULT_PLUGIN_REL: &str = ".aether/plugins";
+const HMAC_KEY_ENV: &str = "AETHER_PLUGIN_HMAC_KEY";
+const ENFORCE_SIGNING_ENV: &str = "AETHER_PLUGIN_ENFORCE_SIGNING";
 
 #[derive(Debug, thiserror::Error)]
 pub enum PluginError {
@@ -62,6 +66,132 @@ pub struct PluginManifest {
     /// Optional working directory override. Defaults to the plugin dir.
     #[serde(default)]
     pub cwd: Option<PathBuf>,
+    /// Optional hex-encoded HMAC-SHA256 of the JSON manifest (with the
+    /// `signature` field removed) using the key in $AETHER_PLUGIN_HMAC_KEY.
+    /// When $AETHER_PLUGIN_ENFORCE_SIGNING=1, unsigned plugins are
+    /// rejected at discovery time; otherwise unsigned plugins still
+    /// load (with a stderr warning).
+    #[serde(default)]
+    pub signature: Option<String>,
+}
+
+/// Compute the HMAC-SHA256 of a manifest's JSON content with the
+/// `signature` field removed. Used by both sign and verify paths so
+/// they always produce identical bytes.
+pub fn canonical_manifest_hmac(json_bytes: &[u8], key: &[u8]) -> Result<String, PluginError> {
+    let mut value: Value = serde_json::from_slice(json_bytes)
+        .map_err(|e| PluginError::Manifest("<bytes>".into(), e.to_string()))?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove("signature");
+    }
+    // Canonical form: serde_json sorts neither keys nor whitespace
+    // deterministically by default; serialise via `to_string` (no
+    // pretty-print) which IS deterministic for a Map<String, Value>
+    // because serde_json::Map preserves insertion order. To guard
+    // against reordering, sort keys explicitly before hashing.
+    let canonical = canonicalise(value);
+    let canonical_bytes = canonical.as_bytes();
+    let mut mac = Hmac::<Sha256>::new_from_slice(key)
+        .map_err(|e| PluginError::Manifest("<key>".into(), e.to_string()))?;
+    mac.update(canonical_bytes);
+    let tag = mac.finalize().into_bytes();
+    Ok(hex::encode(tag))
+}
+
+/// Recursively sort all object keys in a JSON value to produce a
+/// deterministic string. Required because object-key insertion order
+/// is NOT a canonical-form guarantee across JSON producers.
+fn canonicalise(v: Value) -> String {
+    fn walk(v: &Value, out: &mut String) {
+        match v {
+            Value::Null => out.push_str("null"),
+            Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+            Value::Number(n) => out.push_str(&n.to_string()),
+            Value::String(s) => {
+                out.push('"');
+                for ch in s.chars() {
+                    match ch {
+                        '"' => out.push_str("\\\""),
+                        '\\' => out.push_str("\\\\"),
+                        '\n' => out.push_str("\\n"),
+                        '\r' => out.push_str("\\r"),
+                        '\t' => out.push_str("\\t"),
+                        c if (c as u32) < 0x20 => {
+                            out.push_str(&format!("\\u{:04x}", c as u32))
+                        }
+                        c => out.push(c),
+                    }
+                }
+                out.push('"');
+            }
+            Value::Array(arr) => {
+                out.push('[');
+                for (i, item) in arr.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    walk(item, out);
+                }
+                out.push(']');
+            }
+            Value::Object(obj) => {
+                let mut keys: Vec<&String> = obj.keys().collect();
+                keys.sort();
+                out.push('{');
+                for (i, k) in keys.into_iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    out.push('"');
+                    out.push_str(k);
+                    out.push_str("\":");
+                    walk(&obj[k], out);
+                }
+                out.push('}');
+            }
+        }
+    }
+    let mut out = String::new();
+    walk(&v, &mut out);
+    out
+}
+
+/// Verify a plugin manifest's signature. Returns:
+///   - `Ok(true)` — manifest carries a valid signature
+///   - `Ok(false)` — no signature present (caller decides whether to
+///     reject based on $AETHER_PLUGIN_ENFORCE_SIGNING)
+///   - `Err(...)` — signature present but does not verify
+pub fn verify_manifest_signature(
+    json_bytes: &[u8],
+    manifest: &PluginManifest,
+    key: &[u8],
+) -> Result<bool, PluginError> {
+    let Some(claimed_hex) = manifest.signature.as_deref() else {
+        return Ok(false);
+    };
+    let claimed = hex::decode(claimed_hex)
+        .map_err(|e| PluginError::Manifest(manifest.name.clone(), format!("bad hex signature: {e}")))?;
+    let computed_hex = canonical_manifest_hmac(json_bytes, key)?;
+    let computed = hex::decode(&computed_hex)
+        .map_err(|e| PluginError::Manifest(manifest.name.clone(), e.to_string()))?;
+    // Constant-time compare.
+    if claimed.len() != computed.len() {
+        return Err(PluginError::Manifest(
+            manifest.name.clone(),
+            "signature length mismatch".into(),
+        ));
+    }
+    let mut diff: u8 = 0;
+    for i in 0..claimed.len() {
+        diff |= claimed[i] ^ computed[i];
+    }
+    if diff != 0 {
+        return Err(PluginError::Manifest(
+            manifest.name.clone(),
+            "signature does not match".into(),
+        ));
+    }
+    Ok(true)
 }
 
 /// Adapter that wraps a plugin manifest as an aether-tools `Tool`.
@@ -169,6 +299,13 @@ pub fn plugin_dir() -> Option<PathBuf> {
 
 /// Walk the plugin dir; for every subdirectory that contains a
 /// `manifest.json`, parse it and produce a `PluginTool`.
+///
+/// HMAC signing:
+///   - If `$AETHER_PLUGIN_HMAC_KEY` is set, every manifest with a
+///     `signature` field is verified against it. A failed verify
+///     SKIPS the plugin and logs to stderr.
+///   - If `$AETHER_PLUGIN_ENFORCE_SIGNING=1`, unsigned plugins are
+///     ALSO skipped (default: load with warning).
 pub fn discover_plugins() -> Vec<PluginTool> {
     let Some(root) = plugin_dir() else {
         return Vec::new();
@@ -176,6 +313,9 @@ pub fn discover_plugins() -> Vec<PluginTool> {
     let Ok(entries) = std::fs::read_dir(&root) else {
         return Vec::new();
     };
+    let hmac_key = std::env::var(HMAC_KEY_ENV).ok().filter(|s| !s.is_empty());
+    let enforce = std::env::var(ENFORCE_SIGNING_ENV).ok().as_deref() == Some("1");
+
     let mut out = Vec::new();
     for entry in entries.flatten() {
         if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
@@ -183,17 +323,51 @@ pub fn discover_plugins() -> Vec<PluginTool> {
         }
         let dir = entry.path();
         let manifest_path = dir.join("manifest.json");
-        if let Ok(bytes) = std::fs::read(&manifest_path) {
-            match serde_json::from_slice::<PluginManifest>(&bytes) {
-                Ok(manifest) => out.push(PluginTool::new(manifest, dir)),
+        let Ok(bytes) = std::fs::read(&manifest_path) else {
+            continue;
+        };
+        let manifest: PluginManifest = match serde_json::from_slice(&bytes) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!(
+                    "[aether-plugin] {}: bad manifest: {e}",
+                    manifest_path.display()
+                );
+                continue;
+            }
+        };
+
+        // Signature handling.
+        if let Some(key_str) = &hmac_key {
+            match verify_manifest_signature(&bytes, &manifest, key_str.as_bytes()) {
+                Ok(true) => {
+                    // Signed and valid.
+                }
+                Ok(false) => {
+                    if enforce {
+                        eprintln!(
+                            "[aether-plugin] {}: unsigned manifest rejected ({}=1)",
+                            manifest.name, ENFORCE_SIGNING_ENV
+                        );
+                        continue;
+                    } else {
+                        eprintln!(
+                            "[aether-plugin] {}: WARN — unsigned plugin loaded; set {}=1 to enforce",
+                            manifest.name, ENFORCE_SIGNING_ENV
+                        );
+                    }
+                }
                 Err(e) => {
                     eprintln!(
-                        "[aether-plugin] {}: bad manifest: {e}",
-                        manifest_path.display()
+                        "[aether-plugin] {}: signature verification FAILED — refusing to load: {e}",
+                        manifest.name
                     );
+                    continue;
                 }
             }
         }
+
+        out.push(PluginTool::new(manifest, dir));
     }
     out
 }
@@ -275,6 +449,56 @@ mod tests {
         assert_eq!(found[0].description(), "test plugin");
     }
 
+    #[test]
+    fn hmac_round_trips() {
+        let manifest_json = br#"{
+            "name": "signed",
+            "description": "test",
+            "input_schema": {"type":"object"},
+            "command": "/bin/true"
+        }"#;
+        let key = b"super-secret-key";
+        let sig = canonical_manifest_hmac(manifest_json, key).expect("hmac");
+        // Embed the signature back into the manifest and verify.
+        let full_json = format!(
+            r#"{{"name":"signed","description":"test","input_schema":{{"type":"object"}},"command":"/bin/true","signature":"{sig}"}}"#
+        );
+        let manifest: PluginManifest = serde_json::from_str(&full_json).unwrap();
+        let ok = verify_manifest_signature(full_json.as_bytes(), &manifest, key).unwrap();
+        assert!(ok, "round-trip verify");
+    }
+
+    #[test]
+    fn hmac_detects_tamper() {
+        let manifest_json = br#"{
+            "name": "signed",
+            "description": "test",
+            "input_schema": {"type":"object"},
+            "command": "/bin/true"
+        }"#;
+        let key = b"super-secret-key";
+        let sig = canonical_manifest_hmac(manifest_json, key).expect("hmac");
+        // Tamper: change the command but keep the original signature.
+        let tampered = format!(
+            r#"{{"name":"signed","description":"test","input_schema":{{"type":"object"}},"command":"/usr/bin/rm","signature":"{sig}"}}"#
+        );
+        let manifest: PluginManifest = serde_json::from_str(&tampered).unwrap();
+        let err =
+            verify_manifest_signature(tampered.as_bytes(), &manifest, key).expect_err("should fail");
+        assert!(
+            matches!(err, PluginError::Manifest(_, ref msg) if msg.contains("does not match")),
+            "wrong error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn hmac_unsigned_returns_false() {
+        let manifest_json = br#"{"name":"x","description":"","input_schema":{},"command":"/bin/true"}"#;
+        let manifest: PluginManifest = serde_json::from_slice(manifest_json).unwrap();
+        let ok = verify_manifest_signature(manifest_json, &manifest, b"key").unwrap();
+        assert!(!ok, "no signature → Ok(false)");
+    }
+
     #[tokio::test]
     async fn live_subprocess_plugin_executes() {
         // Create a tiny shell-script "plugin" that reads stdin JSON and
@@ -306,6 +530,7 @@ mod tests {
             command: "./echo.sh".into(),
             args: vec![],
             cwd: None,
+            signature: None,
         };
         let tool = PluginTool::new(manifest, plugin_dir);
         let out = tool
