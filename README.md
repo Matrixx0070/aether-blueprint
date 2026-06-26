@@ -23,7 +23,31 @@ Each tarball ships with a SHA256 the script verifies before extraction. See
 `INSTALL.md` for the manual download + verify path and the source-build
 fallback.
 
-## Status: v0.18.0
+## Status: v0.19.0
+
+Plan O shipped five executor-policy + cost-transparency features (24h autonomous run):
+
+- **O1 tool-blocklist enforced at executor dispatch** — `Executor`
+  carries the policy blocklist; the dispatch path returns a structured
+  refusal BEFORE the permission check fires, so `bypassPermissions`
+  cannot override the operator policy.
+- **O2 apply_policy_to_session()** — every `Session::new` site (print,
+  REPL, TUI, HTTP `/v1/messages`, WS `/ws/chat`, sub-agents) pulls
+  `tool_blocklist` and `max_tokens_per_turn` from `~/.aether/policy.json`
+  and applies them at construction time.
+- **O3 `aether usage` cost dashboard** — SQLite-backed,
+  `~/.aether/usage.db`. Versioned schema; informative version-mismatch
+  error on binary/db skew. Reader:
+  `aether usage [--days N] [--by-model] [--by-tool] [--json]`.
+  Writers fire in every agent path; `AETHER_NO_USAGE_DB=1` opts out.
+- **O4 inotify-based audit tail** — `audit tail --follow` now uses
+  the `notify` crate (inotify Linux, kqueue macOS, RDCW Windows).
+  Watches the parent dir so log rotations don't lose the subscription;
+  2-second timeout doubles as rotation safety.
+- **O5 plugin trust keychain** — `~/.aether/plugin-trust.txt` holds
+  one hex ed25519 public key per line. `aether plugin trust
+  list/add/remove`. `discover_plugins()` accepts any listed key for
+  ed25519 manifests; `AETHER_PLUGIN_ED25519_PUBKEY` still works.
 
 Plan N shipped five production-posture features (24h autonomous run):
 

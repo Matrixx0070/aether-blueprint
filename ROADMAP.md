@@ -340,15 +340,38 @@ extensibility.
   `AETHER_SERVE_MAX_SESSIONS` (default 32). RAII `SessionGuard` so
   panics / WS hangups release the slot.
 
-## v0.19 — executor policy enforcement + cost dashboard (next)
+## v0.19 — executor policy enforcement + cost dashboard — shipped 2026-06-26
 
-- Tool-blocklist + max-tokens-per-turn enforced inside the executor
-  (today they're parsed but not applied to dispatch)
-- Live cost dashboard via `aether usage --days N --by-model --by-tool`
-- Inotify-based audit tail (replace 500ms poll)
-- Asymmetric plugin keychain integration (rather than raw hex files)
+- **O1 tool-blocklist enforced at executor dispatch**. New
+  `Executor::policy_blocklist` field + `set_policy_blocklist` setter +
+  `is_policy_blocked` dispatch-time check. `bypassPermissions` cannot
+  override the policy blocklist (that is the entire point of the
+  layer). 4 new unit tests; aether-core lib: 36 passed.
+- **O2 apply_policy_to_session()** wired at all 9 `Session::new` sites
+  (print, REPL, TUI, serve_one_turn, ws_run_one_turn_streamed,
+  sub-agents). Caps `max_tokens_per_turn` to the policy ceiling when
+  smaller; pushes `tool_blocklist` into the executor.
+- **O3 aether usage SQLite dashboard** at `~/.aether/usage.db`.
+  Versioned schema (errors on mismatch). Per-turn writers in print
+  mode, REPL (delta = post-pre), HTTP `/v1/messages`, WS `/ws/chat`.
+  Reader: `aether usage [--days N] [--by-model] [--by-tool] [--json]`.
+  `AETHER_NO_USAGE_DB=1` disables the writer.
+- **O4 inotify-based audit tail** via `notify` crate (cross-platform:
+  inotify Linux, kqueue macOS, RDCW Windows). Watches the parent dir
+  so log rotations don't blind the subscription. 2-second timeout
+  doubles as rotation safety poll.
+- **O5 plugin trust keychain** at `~/.aether/plugin-trust.txt`.
+  Line-delimited hex ed25519 public keys. `aether plugin trust
+  list/add/remove`. `discover_plugins()` accepts any trusted key for
+  ed25519 manifests. `AETHER_PLUGIN_ED25519_PUBKEY` remains as a
+  zero-config fallback.
+
+## v0.20 — cross-IDE + remote BYOC (next, draft)
+
 - JetBrains plugin (Kotlin, separate language stack)
-- BYOC: Mantle
+- Mantle BYOC provider (HTTP-based remote LLM)
+- VS Code marketplace publish (extension rebrand + signing)
+- Plugin trust keychain integration into the VS Code extension
 
 ## v0.9 — enterprise
 

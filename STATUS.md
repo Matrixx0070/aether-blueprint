@@ -92,4 +92,8 @@ format: `[slice] [status] [commit] [verifier] [live-check] note`
 | M6 | DONE | d45b0e4,d3f4… | n/a | v0.17.0 binary release LIVE (4 platforms, $0.0025 test cost) | bump 0.17.0 |
 | N1 | DONE | 1495bb8,8cabdce | n/a | 11/11 aether-plugin tests (+4 ed25519) · live keypair + sign + verify + tamper + cross-keypair | ed25519 asymmetric plugin signing |
 | N2-N5 | DONE | af17fd4 | n/a | workspace tests green; live rate-limit/policy/tail verification pending v0.18 binary | rate limit + audit syslog + audit tail + policy file + session cap |
+| N6+N7 | DONE | 8399387 | n/a | v0.18.0 workspace bump · Plan O drafted | bump 0.18.0, docs refresh, Plan O draft |
+| O1+O2 | DONE | ae5df73 | n/a | 36/36 aether-core (+4 policy_blocklist tests) | executor enforces policy tool-blocklist + token cap primitive |
+| O2+O3 | DONE | 89ccb2e | n/a | live: `aether usage --days 7 --by-model` → 1 row · in=3332 out=5 $0.0027 | apply_policy_to_session + aether usage SQLite dashboard |
+| O4+O5 | DONE | 29b1fbf | n/a | live: wrong-key keychain rejects ed25519 plugin · right-key loads (TrustTest) | inotify audit tail (notify crate) + plugin trust keychain |
 
