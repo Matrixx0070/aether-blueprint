@@ -239,6 +239,19 @@ enum Cmd {
         #[command(subcommand)]
         sub: PluginCmd,
     },
+    /// Cost + usage dashboard. Reads from ~/.aether/usage.db (populated
+    /// per-turn by REPL / print / serve). Use --by-model or --by-tool
+    /// to group; --days N to filter (default 7).
+    Usage {
+        #[arg(long, default_value_t = 7)]
+        days: u32,
+        #[arg(long)]
+        by_model: bool,
+        #[arg(long)]
+        by_tool: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -464,6 +477,9 @@ async fn main() -> Result<()> {
         Some(Cmd::Plugin { sub }) => {
             return plugin_cmd(sub);
         }
+        Some(Cmd::Usage { days, by_model, by_tool, json }) => {
+            return run_usage_cmd(days, by_model, by_tool, json).await;
+        }
         Some(Cmd::Config { sub }) => {
             match sub {
                 ConfigCmd::Show => {
@@ -610,10 +626,29 @@ fn load_policy() -> &'static PolicyFile {
     })
 }
 
-/// True iff `tool_name` is allowed by the active policy. v0.18 wires
-/// this into the executor; today it's available for callers to query.
+/// True iff `tool_name` is allowed by the active policy. v0.19 wires
+/// this into the executor via `apply_policy_to_session`.
 pub fn policy_allows_tool(tool_name: &str) -> bool {
     !load_policy().tool_blocklist.iter().any(|t| t == tool_name)
+}
+
+/// Apply the active policy to a freshly-constructed `Session`. Called
+/// at every Session::new site so policy enforcement is consistent
+/// across REPL / print / TUI / serve / coding-eval paths.
+///
+/// Today:
+///   - `tool_blocklist` → `Executor::set_policy_blocklist`
+///   - `max_tokens_per_turn` → `SessionConfig.max_tokens_per_turn` cap
+fn apply_policy_to_session(session: &mut Session) {
+    let p = load_policy();
+    if !p.tool_blocklist.is_empty() {
+        session.executor.set_policy_blocklist(p.tool_blocklist.clone());
+    }
+    if let Some(cap) = p.max_tokens_per_turn {
+        if session.config.max_tokens_per_turn > cap {
+            session.config.max_tokens_per_turn = cap;
+        }
+    }
 }
 
 /// Apply the model allowlist to a resolved model name. Returns Err if
@@ -710,6 +745,7 @@ async fn run_print_agent(
     register_subprocess_plugins(&mut tools);
     register_wasm_plugins(&mut tools);
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
+    apply_policy_to_session(&mut session);
     inject_project_context(&mut session);
     if let Some(idx) = memory_index_reminder() {
         session.push_reminder(Reminder::new(
@@ -805,6 +841,15 @@ async fn run_print_agent(
     // Opt-in usage line on stderr — opt-in so default `-p` output stays
     // clean for shell pipelines. Used by `aether coding-eval` to capture
     // per-task token spend.
+    // Record usage to SQLite. Silent on DB error — observability, not
+    // load-bearing. Skipped via AETHER_NO_USAGE_DB=1 (useful for tests).
+    if std::env::var("AETHER_NO_USAGE_DB").ok().as_deref() != Some("1")
+        && session.usage_total.input_tokens + session.usage_total.output_tokens > 0
+    {
+        let u = &session.usage_total;
+        let cost = estimate_cost_usd(&session.config.model, u);
+        record_turn_usage(None, &session.config.model, u, cost);
+    }
     if std::env::var("AETHER_PRINT_USAGE").ok().as_deref() == Some("1") {
         let u = &session.usage_total;
         let cost = estimate_cost_usd(&session.config.model, u);
@@ -945,6 +990,7 @@ async fn run_repl(
     register_wasm_plugins(&mut tools);
 
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
+    apply_policy_to_session(&mut session);
     // Install an interactive permission prompter for mutating tools when in
     // Default mode. Reads y / n / a from stderr; `a` upgrades to always-allow
     // for that tool name for the remainder of the session.
@@ -1118,6 +1164,7 @@ async fn run_repl(
 
         let mut next_input: Option<String> = Some(user_msg);
         let stream_disabled = std::env::var("AETHER_NO_STREAM").ok().as_deref() == Some("1");
+        let pre_usage = session.usage_total.clone();
         loop {
             // Stream text deltas to stdout as they arrive. The leading
             // "aether › " is printed up-front so the cursor is in the
@@ -1192,6 +1239,7 @@ async fn run_repl(
                     continue;
                 }
                 TurnOutcome::Exit => {
+                    record_turn_delta(&session, &session_id, &pre_usage);
                     if let Some(p) = history_path.as_ref() {
                         let _ = editor.save_history(p);
                     }
@@ -1199,12 +1247,42 @@ async fn run_repl(
                 }
             }
         }
+        record_turn_delta(&session, &session_id, &pre_usage);
     }
 
     if let Some(p) = history_path.as_ref() {
         let _ = editor.save_history(p);
     }
     Ok(())
+}
+
+/// Compute the delta from `pre` to `session.usage_total`, and persist it to
+/// the usage SQLite db as a single turn-record. Silent on failure. Skipped
+/// if AETHER_NO_USAGE_DB=1 or if the delta is empty.
+fn record_turn_delta(
+    session: &Session,
+    session_id: &str,
+    pre: &aether_llm::Usage,
+) {
+    if std::env::var("AETHER_NO_USAGE_DB").ok().as_deref() == Some("1") {
+        return;
+    }
+    let cur = &session.usage_total;
+    let delta = aether_llm::Usage {
+        input_tokens: cur.input_tokens.saturating_sub(pre.input_tokens),
+        output_tokens: cur.output_tokens.saturating_sub(pre.output_tokens),
+        cache_creation_input_tokens: cur
+            .cache_creation_input_tokens
+            .saturating_sub(pre.cache_creation_input_tokens),
+        cache_read_input_tokens: cur
+            .cache_read_input_tokens
+            .saturating_sub(pre.cache_read_input_tokens),
+    };
+    if delta.input_tokens + delta.output_tokens == 0 {
+        return;
+    }
+    let cost = estimate_cost_usd(&session.config.model, &delta);
+    record_turn_usage(Some(session_id), &session.config.model, &delta, cost);
 }
 
 fn print_banner(session_id: &str, model: &str, resume: &ResumeMode) {
@@ -2204,6 +2282,7 @@ async fn ws_run_one_turn_streamed(
         permission_mode,
     )));
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
+    apply_policy_to_session(&mut session);
 
     let mut next_input: Option<String> = Some(prompt.to_string());
     let mut last_text: Option<String> = None;
@@ -2229,11 +2308,17 @@ async fn ws_run_one_turn_streamed(
         }
     }
     let u = &session.usage_total;
+    let cost = estimate_cost_usd(&session.config.model, u);
+    if std::env::var("AETHER_NO_USAGE_DB").ok().as_deref() != Some("1")
+        && u.input_tokens + u.output_tokens > 0
+    {
+        record_turn_usage(Some("serve-ws"), &session.config.model, u, cost);
+    }
     Ok(ServeResponse {
         text: last_text.unwrap_or_default(),
         tokens_in: u.input_tokens,
         tokens_out: u.output_tokens,
-        cost_usd: estimate_cost_usd(&session.config.model, u),
+        cost_usd: cost,
         error: None,
     })
 }
@@ -2268,6 +2353,7 @@ async fn serve_one_turn(
         permission_mode,
     )));
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
+    apply_policy_to_session(&mut session);
 
     let mut next_input: Option<String> = Some(prompt.to_string());
     let mut last_text: Option<String> = None;
@@ -2288,11 +2374,17 @@ async fn serve_one_turn(
         }
     }
     let u = &session.usage_total;
+    let cost = estimate_cost_usd(&session.config.model, u);
+    if std::env::var("AETHER_NO_USAGE_DB").ok().as_deref() != Some("1")
+        && u.input_tokens + u.output_tokens > 0
+    {
+        record_turn_usage(Some("serve-http"), &session.config.model, u, cost);
+    }
     Ok(ServeResponse {
         text: last_text.unwrap_or_default(),
         tokens_in: u.input_tokens,
         tokens_out: u.output_tokens,
-        cost_usd: estimate_cost_usd(&session.config.model, u),
+        cost_usd: cost,
         error: None,
     })
 }
@@ -2339,6 +2431,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
     register_wasm_plugins(&mut tools);
 
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
+    apply_policy_to_session(&mut session);
     inject_project_context(&mut session);
     if let Some(idx) = memory_index_reminder() {
         session.push_reminder(Reminder::new(
@@ -2699,6 +2792,7 @@ async fn review_security_file(
     let gate = Gate::new(Vec::new()).map_err(|e| anyhow!("gate: {e}"))?;
     let tools = ToolRegistry::new();
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
+    apply_policy_to_session(&mut session);
 
     let _ = agent_turn(&mut session, Some(user_prompt)).await?;
     let final_text = session
@@ -3250,6 +3344,226 @@ async fn run_security_eval_sweep(
     Ok(())
 }
 
+// ── usage tracking ───────────────────────────────────────────────────────
+
+const USAGE_SCHEMA_VERSION: u32 = 1;
+
+fn usage_db_path() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(|h| PathBuf::from(h).join(".aether/usage.db"))
+        .unwrap_or_else(|| PathBuf::from(".aether-usage.db"))
+}
+
+fn open_usage_db() -> Result<rusqlite::Connection> {
+    let path = usage_db_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let conn = rusqlite::Connection::open(&path)
+        .with_context(|| format!("open usage db at {}", path.display()))?;
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS schema_version (
+            version INTEGER PRIMARY KEY
+        );
+        CREATE TABLE IF NOT EXISTS turns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            session_id TEXT,
+            model TEXT NOT NULL,
+            input_tokens INTEGER NOT NULL,
+            output_tokens INTEGER NOT NULL,
+            cache_creation_tokens INTEGER NOT NULL,
+            cache_read_tokens INTEGER NOT NULL,
+            cost_usd REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS turns_ts_idx ON turns(ts);
+        CREATE TABLE IF NOT EXISTS tool_calls (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            session_id TEXT,
+            tool_name TEXT NOT NULL,
+            duration_ms INTEGER NOT NULL,
+            is_error INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS tool_calls_ts_idx ON tool_calls(ts);
+        "#,
+    )?;
+    let existing: Option<u32> = conn
+        .query_row("SELECT version FROM schema_version LIMIT 1", [], |r| r.get(0))
+        .ok();
+    if let Some(v) = existing {
+        if v != USAGE_SCHEMA_VERSION {
+            anyhow::bail!(
+                "usage.db schema version {v} != binary's {USAGE_SCHEMA_VERSION}; \
+                 delete {} or use an aether version that matches",
+                path.display()
+            );
+        }
+    } else {
+        conn.execute(
+            "INSERT INTO schema_version (version) VALUES (?1)",
+            [USAGE_SCHEMA_VERSION],
+        )?;
+    }
+    Ok(conn)
+}
+
+/// Append a row to `turns`. Silently swallows DB errors — observability,
+/// not load-bearing. Called from REPL / print / serve paths.
+fn record_turn_usage(
+    session_id: Option<&str>,
+    model: &str,
+    usage: &aether_llm::Usage,
+    cost_usd: f64,
+) {
+    let ts = chrono::Utc::now().to_rfc3339();
+    let conn = match open_usage_db() {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let _ = conn.execute(
+        "INSERT INTO turns (ts, session_id, model, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        rusqlite::params![
+            ts,
+            session_id,
+            model,
+            usage.input_tokens as i64,
+            usage.output_tokens as i64,
+            usage.cache_creation_input_tokens as i64,
+            usage.cache_read_input_tokens as i64,
+            cost_usd,
+        ],
+    );
+}
+
+#[derive(Debug)]
+struct UsageRow {
+    label: String,
+    turns: i64,
+    in_tokens: i64,
+    out_tokens: i64,
+    cost_usd: f64,
+}
+
+async fn run_usage_cmd(days: u32, by_model: bool, by_tool: bool, json_out: bool) -> Result<()> {
+    let conn = open_usage_db()?;
+    let cutoff = (chrono::Utc::now() - chrono::Duration::days(days as i64)).to_rfc3339();
+
+    if by_tool {
+        let mut stmt = conn.prepare(
+            "SELECT tool_name, COUNT(*), COALESCE(SUM(duration_ms), 0), SUM(is_error) \
+             FROM tool_calls WHERE ts >= ?1 GROUP BY tool_name ORDER BY 2 DESC",
+        )?;
+        let rows = stmt
+            .query_map([cutoff.as_str()], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })?
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>();
+        if json_out {
+            let v: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|(t, n, dur, err)| {
+                    serde_json::json!({
+                        "tool": t,
+                        "calls": n,
+                        "total_duration_ms": dur,
+                        "error_count": err,
+                    })
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&v)?);
+        } else {
+            println!(
+                "\n=== TOOL USAGE (last {} days, {} tools) ===",
+                days,
+                rows.len()
+            );
+            println!(
+                "  {:<24} {:>8} {:>14} {:>8}",
+                "tool", "calls", "total_ms", "errors"
+            );
+            println!("  {}", "-".repeat(60));
+            for (t, n, dur, err) in &rows {
+                println!("  {t:<24} {n:>8} {dur:>14} {err:>8}");
+            }
+        }
+        return Ok(());
+    }
+
+    let group_col = if by_model { "model" } else { "'(all models)'" };
+    let sql = format!(
+        "SELECT {group_col}, COUNT(*), \
+                COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), \
+                COALESCE(SUM(cost_usd), 0.0) \
+         FROM turns WHERE ts >= ?1 GROUP BY 1 ORDER BY 5 DESC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows: Vec<UsageRow> = stmt
+        .query_map([cutoff.as_str()], |r| {
+            Ok(UsageRow {
+                label: r.get(0)?,
+                turns: r.get(1)?,
+                in_tokens: r.get(2)?,
+                out_tokens: r.get(3)?,
+                cost_usd: r.get(4)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+    if json_out {
+        let v: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "label": r.label,
+                    "turns": r.turns,
+                    "input_tokens": r.in_tokens,
+                    "output_tokens": r.out_tokens,
+                    "cost_usd": r.cost_usd,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&v)?);
+    } else {
+        let label_col = if by_model { "model" } else { "scope" };
+        println!("\n=== USAGE (last {} days) ===", days);
+        println!(
+            "  {:<32} {:>6} {:>10} {:>10} {:>10}",
+            label_col, "turns", "in_tok", "out_tok", "cost_usd"
+        );
+        println!("  {}", "-".repeat(74));
+        let mut tot_turns = 0i64;
+        let mut tot_in = 0i64;
+        let mut tot_out = 0i64;
+        let mut tot_cost = 0.0f64;
+        for r in &rows {
+            println!(
+                "  {:<32} {:>6} {:>10} {:>10} ${:>9.4}",
+                r.label, r.turns, r.in_tokens, r.out_tokens, r.cost_usd
+            );
+            tot_turns += r.turns;
+            tot_in += r.in_tokens;
+            tot_out += r.out_tokens;
+            tot_cost += r.cost_usd;
+        }
+        println!("  {}", "-".repeat(74));
+        println!(
+            "  {:<32} {:>6} {:>10} {:>10} ${:>9.4}",
+            "TOTAL", tot_turns, tot_in, tot_out, tot_cost
+        );
+        println!();
+    }
+    Ok(())
+}
+
 // ── coding-eval ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -3672,6 +3986,7 @@ async fn run_threat_model(
     let tools = ToolRegistry::new();
     let provider_arc = build_provider().await?;
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
+    apply_policy_to_session(&mut session);
 
     let _ = agent_turn(&mut session, Some(user_prompt)).await?;
     let final_text = session
@@ -3772,6 +4087,7 @@ async fn run_ctf(
     aether_tools::builtin::register_builtins(&mut tools);
     let provider_arc = build_provider().await?;
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
+    apply_policy_to_session(&mut session);
 
     let mut next_input = Some(user_prompt);
     let started = std::time::Instant::now();
@@ -4261,6 +4577,7 @@ async fn run_eval_case(
     register_builtins(&mut tools);
     let provider_arc: Arc<dyn aether_llm::LlmProvider> = build_provider().await?;
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
+    apply_policy_to_session(&mut session);
 
     let mut next_input: Option<String> = Some(case.prompt.clone());
     let mut last_text: Option<String> = None;

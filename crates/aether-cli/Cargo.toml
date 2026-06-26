@@ -31,6 +31,7 @@ aether-mem.workspace = true
 aether-sec.workspace = true
 aether-plugin.workspace = true
 aether-plugin-wasm.workspace = true
+rusqlite.workspace = true
 once_cell.workspace = true
 chrono.workspace = true
 rustyline = "13"
