@@ -292,6 +292,30 @@ enum PluginCmd {
         /// File-name stem; produces `<stem>.priv` and `<stem>.pub`.
         stem: PathBuf,
     },
+    /// Manage the plugin trust keychain at ~/.aether/plugin-trust.txt.
+    /// Any ed25519 public key listed here is accepted by the loader,
+    /// so projects can rotate keys and ship signed plugins from
+    /// multiple identities without env-var juggling.
+    Trust {
+        #[command(subcommand)]
+        sub: TrustCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum TrustCmd {
+    /// List trusted ed25519 public keys.
+    List,
+    /// Append a public key (hex; reads from --file PATH or stdin if
+    /// omitted). Duplicates are de-duped.
+    Add {
+        /// File holding the hex public key. Omit to read stdin.
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
+    /// Remove a public key by hex prefix (substring match against the
+    /// stored line). Errors if no key matches.
+    Remove { prefix: String },
 }
 
 #[derive(Subcommand, Debug)]
@@ -4254,32 +4278,84 @@ fn audit_cmd(sub: AuditCmd) -> Result<()> {
             if !follow {
                 return Ok(());
             }
-            // Naive follow: poll the file size and stream new bytes.
-            // Good enough for operator tooling; switch to inotify if we
-            // hit > 1 req/sec sustained.
-            let mut last_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-            loop {
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                let cur_size = match std::fs::metadata(&path) {
-                    Ok(m) => m.len(),
-                    Err(_) => continue,
-                };
-                if cur_size > last_size {
-                    if let Ok(mut f) = std::fs::File::open(&path) {
-                        use std::io::{Read, Seek, SeekFrom};
-                        let _ = f.seek(SeekFrom::Start(last_size));
-                        let mut buf = String::new();
-                        if f.read_to_string(&mut buf).is_ok() {
-                            print!("{buf}");
-                            use std::io::Write;
-                            let _ = std::io::stdout().flush();
-                        }
-                    }
-                    last_size = cur_size;
-                } else if cur_size < last_size {
-                    // File truncated / rotated — reset.
-                    last_size = cur_size;
+            audit_tail_follow(&path)
+        }
+    }
+}
+
+/// Follow the audit log, streaming new bytes as they land. Uses the
+/// platform's filesystem-event API (inotify on Linux, kqueue on macOS,
+/// ReadDirectoryChangesW on Windows) via the `notify` crate. A 2-second
+/// poll fallback runs in parallel — this catches log-rotation edge
+/// cases where the inode changes mid-stream and the watcher loses its
+/// subscription. Truncation resets `last_size`.
+fn audit_tail_follow(path: &std::path::Path) -> Result<()> {
+    use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+    use std::io::{Read, Seek, SeekFrom, Write};
+
+    let mut last_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+
+    // mpsc → blocking recv with timeout. The notify watcher pushes
+    // events; the timeout doubles as the rotation-safety poll.
+    let (tx, rx) = std::sync::mpsc::channel::<notify::Result<notify::Event>>();
+    let mut watcher: RecommendedWatcher =
+        RecommendedWatcher::new(tx, Config::default()).map_err(|e| anyhow!("watcher: {e}"))?;
+    // Watch the parent dir so we still get events after rotation (which
+    // would unlink the file we're watching).
+    let watch_target = path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    watcher
+        .watch(watch_target, RecursiveMode::NonRecursive)
+        .map_err(|e| anyhow!("watch {}: {e}", watch_target.display()))?;
+
+    let drain = |last_size: &mut u64| {
+        let cur_size = match std::fs::metadata(path) {
+            Ok(m) => m.len(),
+            Err(_) => return,
+        };
+        if cur_size > *last_size {
+            if let Ok(mut f) = std::fs::File::open(path) {
+                let _ = f.seek(SeekFrom::Start(*last_size));
+                let mut buf = String::new();
+                if f.read_to_string(&mut buf).is_ok() {
+                    print!("{buf}");
+                    let _ = std::io::stdout().flush();
                 }
+            }
+            *last_size = cur_size;
+        } else if cur_size < *last_size {
+            *last_size = cur_size;
+        }
+    };
+
+    loop {
+        match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+            Ok(Ok(ev)) => {
+                // Only drain on events that touch our target file. Other
+                // files in the parent dir produce no output.
+                if !ev.paths.iter().any(|p| p == path) {
+                    continue;
+                }
+                if matches!(
+                    ev.kind,
+                    EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
+                ) {
+                    drain(&mut last_size);
+                }
+            }
+            Ok(Err(_)) => {
+                // Watcher error — fall through to the periodic poll.
+                drain(&mut last_size);
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // 2-second safety poll: catches rotations where inotify
+                // missed the new inode (rare but real on log rotators
+                // that swap files atomically).
+                drain(&mut last_size);
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(anyhow!("audit-tail watcher disconnected"));
             }
         }
     }
@@ -4949,6 +5025,7 @@ fn plugin_cmd(sub: PluginCmd) -> Result<()> {
             println!("  signature = {sig}");
             Ok(())
         }
+        PluginCmd::Trust { sub } => trust_cmd(sub),
         PluginCmd::Verify { manifest, public_key } => {
             let bytes = std::fs::read(&manifest)
                 .with_context(|| format!("read {}", manifest.display()))?;
@@ -4998,6 +5075,100 @@ fn plugin_cmd(sub: PluginCmd) -> Result<()> {
                     "unknown algorithm '{other}' in manifest (supported: hmac-sha256, ed25519)"
                 ),
             }
+        }
+    }
+}
+
+fn trust_cmd(sub: TrustCmd) -> Result<()> {
+    let path = aether_plugin::trust_keychain_path()
+        .ok_or_else(|| anyhow!("HOME not set — cannot resolve trust keychain path"))?;
+    match sub {
+        TrustCmd::List => {
+            let keys = aether_plugin::load_trust_keychain();
+            if keys.is_empty() {
+                eprintln!("[plugin trust] no keys in {}", path.display());
+                return Ok(());
+            }
+            eprintln!("[plugin trust] {} key(s) in {}:", keys.len(), path.display());
+            for k in keys {
+                println!("{k}");
+            }
+            Ok(())
+        }
+        TrustCmd::Add { file } => {
+            let raw = match file {
+                Some(p) => std::fs::read_to_string(&p)
+                    .with_context(|| format!("read {}", p.display()))?,
+                None => {
+                    use std::io::Read;
+                    let mut s = String::new();
+                    std::io::stdin()
+                        .read_to_string(&mut s)
+                        .context("read stdin")?;
+                    s
+                }
+            };
+            let key = raw.trim();
+            if key.is_empty() {
+                anyhow::bail!("empty key");
+            }
+            if hex::decode(key)
+                .map(|b| b.len() != 32)
+                .unwrap_or(true)
+            {
+                anyhow::bail!(
+                    "key must be 32-byte hex-encoded ed25519 public key (got {} chars)",
+                    key.len()
+                );
+            }
+            let existing = aether_plugin::load_trust_keychain();
+            if existing.iter().any(|k| k == key) {
+                eprintln!("[plugin trust] key already trusted; no change");
+                return Ok(());
+            }
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+            let mut content = std::fs::read_to_string(&path).unwrap_or_default();
+            if !content.is_empty() && !content.ends_with('\n') {
+                content.push('\n');
+            }
+            content.push_str(key);
+            content.push('\n');
+            std::fs::write(&path, content)
+                .with_context(|| format!("write {}", path.display()))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            }
+            eprintln!("[plugin trust] added key to {}", path.display());
+            Ok(())
+        }
+        TrustCmd::Remove { prefix } => {
+            let existing = aether_plugin::load_trust_keychain();
+            let pre = prefix.trim();
+            if pre.is_empty() {
+                anyhow::bail!("empty prefix");
+            }
+            let kept: Vec<String> =
+                existing.iter().filter(|k| !k.starts_with(pre)).cloned().collect();
+            if kept.len() == existing.len() {
+                anyhow::bail!("no trusted key starts with '{pre}'");
+            }
+            let mut out = String::new();
+            for k in &kept {
+                out.push_str(k);
+                out.push('\n');
+            }
+            std::fs::write(&path, out)
+                .with_context(|| format!("write {}", path.display()))?;
+            eprintln!(
+                "[plugin trust] removed {} key(s) matching '{pre}' — {} remain",
+                existing.len() - kept.len(),
+                kept.len()
+            );
+            Ok(())
         }
     }
 }

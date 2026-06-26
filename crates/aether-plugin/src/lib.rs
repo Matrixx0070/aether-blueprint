@@ -38,6 +38,39 @@ const PLUGIN_DIR_ENV: &str = "AETHER_PLUGIN_DIR";
 const DEFAULT_PLUGIN_REL: &str = ".aether/plugins";
 const HMAC_KEY_ENV: &str = "AETHER_PLUGIN_HMAC_KEY";
 const ENFORCE_SIGNING_ENV: &str = "AETHER_PLUGIN_ENFORCE_SIGNING";
+const TRUST_KEYCHAIN_REL: &str = ".aether/plugin-trust.txt";
+
+/// Path to the plugin trust keychain (`~/.aether/plugin-trust.txt`).
+/// Returns None when $HOME is not set. The file is line-delimited:
+/// one hex-encoded ed25519 public key per line; lines starting with
+/// `#` and blank lines are ignored.
+pub fn trust_keychain_path() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(TRUST_KEYCHAIN_REL))
+}
+
+/// Read the trust keychain. Returns an empty Vec when the file is
+/// absent or unreadable. Comment lines (`#…`) and blanks are skipped.
+/// Duplicates are de-duplicated, preserving first-seen order.
+pub fn load_trust_keychain() -> Vec<String> {
+    let Some(path) = trust_keychain_path() else {
+        return Vec::new();
+    };
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if seen.insert(trimmed.to_string()) {
+            out.push(trimmed.to_string());
+        }
+    }
+    out
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum PluginError {
@@ -457,11 +490,18 @@ pub fn discover_plugins() -> Vec<PluginTool> {
         return Vec::new();
     };
     let hmac_key = std::env::var(HMAC_KEY_ENV).ok().filter(|s| !s.is_empty());
-    let ed_pubkey = std::env::var("AETHER_PLUGIN_ED25519_PUBKEY")
+    let ed_pubkey_env = std::env::var("AETHER_PLUGIN_ED25519_PUBKEY")
         .ok()
         .filter(|s| !s.is_empty());
+    // ed25519 trust set = env-pubkey (if any) ∪ ~/.aether/plugin-trust.txt
+    let mut ed_trust_set: Vec<String> = load_trust_keychain();
+    if let Some(env_key) = &ed_pubkey_env {
+        if !ed_trust_set.iter().any(|k| k == env_key) {
+            ed_trust_set.insert(0, env_key.clone());
+        }
+    }
     let enforce = std::env::var(ENFORCE_SIGNING_ENV).ok().as_deref() == Some("1");
-    let any_key_configured = hmac_key.is_some() || ed_pubkey.is_some();
+    let any_key_configured = hmac_key.is_some() || !ed_trust_set.is_empty();
 
     let mut out = Vec::new();
     for entry in entries.flatten() {
@@ -503,21 +543,40 @@ pub fn discover_plugins() -> Vec<PluginTool> {
                         }
                     }
                     "ed25519" => {
-                        if let Some(pubkey) = &ed_pubkey {
-                            match ed25519_verify(
-                                &bytes,
-                                manifest.signature.as_deref().unwrap_or(""),
-                                pubkey,
-                            ) {
-                                Ok(()) => Ok(true),
-                                Err(e) => Err(e),
-                            }
-                        } else {
+                        if ed_trust_set.is_empty() {
                             Err(PluginError::Manifest(
                                 manifest.name.clone(),
-                                "ed25519 manifest but no AETHER_PLUGIN_ED25519_PUBKEY set"
+                                "ed25519 manifest but no trusted key configured \
+                                 (set AETHER_PLUGIN_ED25519_PUBKEY or add a key to \
+                                 ~/.aether/plugin-trust.txt)"
                                     .into(),
                             ))
+                        } else {
+                            // Accept any key in the trust set. Iterate until
+                            // one verifies; collect the last error otherwise
+                            // so the diagnostic is informative.
+                            let sig_hex = manifest.signature.as_deref().unwrap_or("");
+                            let mut last_err: Option<PluginError> = None;
+                            let mut ok = false;
+                            for pk in &ed_trust_set {
+                                match ed25519_verify(&bytes, sig_hex, pk) {
+                                    Ok(()) => {
+                                        ok = true;
+                                        break;
+                                    }
+                                    Err(e) => last_err = Some(e),
+                                }
+                            }
+                            if ok {
+                                Ok(true)
+                            } else {
+                                Err(last_err.unwrap_or_else(|| {
+                                    PluginError::Manifest(
+                                        manifest.name.clone(),
+                                        "ed25519 verify: no trusted key matched".into(),
+                                    )
+                                }))
+                            }
                         }
                     }
                     other => Err(PluginError::Manifest(
