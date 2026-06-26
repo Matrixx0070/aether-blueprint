@@ -254,6 +254,13 @@ enum Cmd {
         #[command(subcommand)]
         sub: TenantCmd,
     },
+    /// Webhook notifications: register HTTPS endpoints that fire on
+    /// key events. Stored at ~/.aether/webhooks.json (mode 0600).
+    /// Each POST carries an X-Aether-Signature: sha256=<hex> header.
+    Webhook {
+        #[command(subcommand)]
+        sub: WebhookCmd,
+    },
     /// Cost + usage dashboard. Reads from ~/.aether/usage.db (populated
     /// per-turn by REPL / print / serve). Use --by-model or --by-tool
     /// to group; --days N to filter (default 7).
@@ -336,6 +343,42 @@ enum TenantCmd {
         from_stdin: bool,
         #[arg(long)]
         tenant: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum WebhookCmd {
+    /// List configured webhooks.
+    List,
+    /// Add a webhook. The same URL can subscribe to multiple events
+    /// (one row per (url, event) pair).
+    Configure {
+        /// Endpoint URL (http or https).
+        #[arg(long)]
+        url: String,
+        /// Event name to subscribe. Known events: trust-add,
+        /// trust-remove, rollback, plugin-load-failure, sso-token-rotate.
+        #[arg(long)]
+        event: String,
+        /// Optional shared secret for HMAC-SHA256 signing. When set,
+        /// X-Aether-Signature: sha256=<hex(hmac(secret, body))> is
+        /// added to every POST. Stored RAW (file is 0600).
+        #[arg(long)]
+        secret: Option<String>,
+    },
+    /// Remove a webhook by (url[, event]) — omit event to remove all
+    /// subscriptions for that URL.
+    Remove {
+        #[arg(long)]
+        url: String,
+        #[arg(long)]
+        event: Option<String>,
+    },
+    /// Fire a test POST against every subscriber of <event> using
+    /// a synthetic payload.
+    Test {
+        #[arg(long)]
+        event: String,
     },
 }
 
@@ -650,6 +693,9 @@ async fn main() -> Result<()> {
         }
         Some(Cmd::Tenant { sub }) => {
             return tenant_cmd(sub);
+        }
+        Some(Cmd::Webhook { sub }) => {
+            return webhook_cmd(sub).await;
         }
         Some(Cmd::Usage { days, by_model, by_tool, json, csv, tail }) => {
             return run_usage_cmd(days, by_model, by_tool, json, csv, tail).await;
@@ -2712,11 +2758,18 @@ async fn rollback_handler(
     }
     if req.did_not_exist {
         match std::fs::remove_file(&path) {
-            Ok(_) => axum::response::Response::builder()
+            Ok(_) => {
+                let payload = serde_json::json!({
+                    "file_path": path.display().to_string(),
+                    "mode": "removed",
+                });
+                tokio::spawn(fire_webhook("rollback", payload));
+                axum::response::Response::builder()
                 .status(axum::http::StatusCode::OK)
                 .header("content-type", "application/json")
                 .body(axum::body::Body::from(r#"{"status":"removed"}"#))
-                .unwrap_or_default(),
+                .unwrap_or_default()
+            },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // Already absent — treat as no-op success so the client
                 // can replay the request safely.
@@ -7159,6 +7212,183 @@ fn tenant_cmd(sub: TenantCmd) -> Result<()> {
             Ok(())
         }
     }
+}
+
+// ── U2: webhook notifications ────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct WebhookConfig {
+    #[serde(default = "default_webhook_version")]
+    version: u32,
+    #[serde(default)]
+    webhooks: Vec<WebhookRow>,
+}
+
+impl Default for WebhookConfig {
+    fn default() -> Self {
+        Self { version: default_webhook_version(), webhooks: Vec::new() }
+    }
+}
+
+fn default_webhook_version() -> u32 { 1 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct WebhookRow {
+    url: String,
+    event: String,
+    /// Raw shared secret. Stored as-is so the same value can be used
+    /// for HMAC signing. File is 0600.
+    #[serde(default)]
+    secret: Option<String>,
+}
+
+fn webhooks_path() -> Result<PathBuf> {
+    let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME not set"))?;
+    Ok(PathBuf::from(home).join(".aether/webhooks.json"))
+}
+
+fn load_webhooks() -> Result<WebhookConfig> {
+    let path = webhooks_path()?;
+    if !path.exists() {
+        return Ok(WebhookConfig::default());
+    }
+    let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+    let cfg: WebhookConfig = serde_json::from_slice(&bytes)
+        .with_context(|| format!("parse {}", path.display()))?;
+    Ok(cfg)
+}
+
+fn save_webhooks(cfg: &WebhookConfig) -> Result<()> {
+    let path = webhooks_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let json = serde_json::to_string_pretty(cfg)?;
+    std::fs::write(&path, json).with_context(|| format!("write {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+fn webhook_secret_fingerprint(secret: &str) -> String {
+    let hex = sha256_hex(secret);
+    format!("sha256:{}…", &hex[..12.min(hex.len())])
+}
+
+async fn webhook_cmd(sub: WebhookCmd) -> Result<()> {
+    match sub {
+        WebhookCmd::List => {
+            let cfg = load_webhooks()?;
+            if cfg.webhooks.is_empty() {
+                let path = webhooks_path()?;
+                eprintln!("[webhook] no rows in {} — no notifications fire", path.display());
+                return Ok(());
+            }
+            eprintln!("[webhook] {} row(s) (v{}):", cfg.webhooks.len(), cfg.version);
+            for w in &cfg.webhooks {
+                let fp = w
+                    .secret
+                    .as_deref()
+                    .map(webhook_secret_fingerprint)
+                    .unwrap_or_else(|| "<none>".into());
+                println!("  url={}  event={}  secret={}", w.url, w.event, fp);
+            }
+            Ok(())
+        }
+        WebhookCmd::Configure { url, event, secret } => {
+            let mut cfg = load_webhooks()?;
+            // De-dupe by (url, event) — re-configure replaces the secret.
+            if let Some(row) = cfg.webhooks.iter_mut().find(|w| w.url == url && w.event == event) {
+                row.secret = secret.clone();
+                eprintln!("[webhook] updated row url={url} event={event}");
+            } else {
+                cfg.webhooks.push(WebhookRow {
+                    url: url.clone(),
+                    event: event.clone(),
+                    secret: secret.clone(),
+                });
+                eprintln!("[webhook] new row url={url} event={event}");
+            }
+            save_webhooks(&cfg)?;
+            Ok(())
+        }
+        WebhookCmd::Remove { url, event } => {
+            let mut cfg = load_webhooks()?;
+            let before = cfg.webhooks.len();
+            match event {
+                Some(e) => cfg.webhooks.retain(|w| !(w.url == url && w.event == e)),
+                None => cfg.webhooks.retain(|w| w.url != url),
+            }
+            let removed = before - cfg.webhooks.len();
+            if removed == 0 {
+                anyhow::bail!("no webhook row matched url={url}");
+            }
+            save_webhooks(&cfg)?;
+            eprintln!("[webhook] removed {removed} row(s)");
+            Ok(())
+        }
+        WebhookCmd::Test { event } => {
+            let payload = serde_json::json!({
+                "test": true,
+                "note": "synthetic event from `aether webhook test`",
+            });
+            fire_webhook(&event, payload).await;
+            Ok(())
+        }
+    }
+}
+
+/// Fire any webhook subscribers for `event`. Best-effort; failures
+/// land in stderr and do NOT block the caller. Each POST carries a
+/// `X-Aether-Signature: sha256=<hex>` header when the row has a
+/// secret configured.
+async fn fire_webhook(event: &str, payload: serde_json::Value) {
+    let cfg = match load_webhooks() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[webhook] load failed: {e}");
+            return;
+        }
+    };
+    let body = serde_json::to_string(&serde_json::json!({
+        "event": event,
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "payload": payload,
+    }))
+    .unwrap_or_else(|_| "{}".into());
+    let client = reqwest::Client::new();
+    for w in cfg.webhooks.iter().filter(|w| w.event == event) {
+        let mut req = client
+            .post(&w.url)
+            .header("content-type", "application/json");
+        if let Some(secret) = &w.secret {
+            let sig = hmac_sha256_hex(secret.as_bytes(), body.as_bytes());
+            req = req.header("X-Aether-Signature", format!("sha256={sig}"));
+        }
+        let resp = req.body(body.clone()).send().await;
+        match resp {
+            Ok(r) if r.status().is_success() => {
+                eprintln!("[webhook] {event} → {} ({})", w.url, r.status());
+            }
+            Ok(r) => {
+                eprintln!("[webhook] {event} → {} HTTP {}", w.url, r.status());
+            }
+            Err(e) => {
+                eprintln!("[webhook] {event} → {} send failed: {e}", w.url);
+            }
+        }
+    }
+}
+
+fn hmac_sha256_hex(key: &[u8], msg: &[u8]) -> String {
+    use hmac::Mac;
+    type HmacSha256 = hmac::Hmac<sha2::Sha256>;
+    let mut mac = HmacSha256::new_from_slice(key).expect("hmac accepts any key length");
+    mac.update(msg);
+    hex::encode(mac.finalize().into_bytes())
 }
 
 fn trust_cmd(sub: TrustCmd) -> Result<()> {

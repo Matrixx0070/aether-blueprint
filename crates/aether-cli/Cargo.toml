@@ -40,6 +40,7 @@ sha2.workspace = true
 rand_core.workspace = true
 jsonwebtoken.workspace = true
 tokio-stream.workspace = true
+hmac.workspace = true
 once_cell.workspace = true
 chrono.workspace = true
 rustyline = "13"
