@@ -30,7 +30,7 @@ use aether_tools::{builtin::register_builtins, ToolRegistry};
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use std::io::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 const DEFAULT_MODEL: &str = "claude-opus-4-7";
@@ -414,6 +414,24 @@ enum TrustCmd {
     /// Remove a public key by hex prefix (substring match against the
     /// stored line). Errors if no key matches.
     Remove { prefix: String },
+    /// Sync the local trust keychain with a git-backed team copy.
+    /// Pulls additively (union semantics) by default; pass --push to
+    /// also write the merged set back to the remote. Uses the host's
+    /// git config (identity, ssh keys) — no new secret storage.
+    Sync {
+        /// Git remote URL (https or ssh). The remote MUST have a
+        /// regular file at `trusted-keys.txt` at the default branch
+        /// root. The line format is the same as the local keychain:
+        /// hex pubkeys, one per line; comments (#) and blanks ignored.
+        #[arg(long)]
+        remote: String,
+        /// Branch override (default: detected via `git symbolic-ref refs/remotes/origin/HEAD`).
+        #[arg(long)]
+        branch: Option<String>,
+        /// Push the merged set back to the remote.
+        #[arg(long, default_value_t = false)]
+        push: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -6899,7 +6917,160 @@ fn trust_cmd(sub: TrustCmd) -> Result<()> {
             );
             Ok(())
         }
+        TrustCmd::Sync { remote, branch, push } => trust_sync(&path, &remote, branch, push),
     }
+}
+
+const TEAM_KEYCHAIN_FILENAME: &str = "trusted-keys.txt";
+
+/// S6: sync ~/.aether/plugin-trust.txt with a git-backed team copy.
+/// Pulls (additively) the team's `trusted-keys.txt` and merges into
+/// the local keychain. With `push`, also commits + pushes the merged
+/// set back. Uses the host's git config — no new secret storage.
+fn trust_sync(local_path: &Path, remote: &str, branch: Option<String>, push: bool) -> Result<()> {
+    let tmp = tempfile_dir()?;
+    let mut clone_cmd = std::process::Command::new("git");
+    clone_cmd.args(["clone", "--depth=1", "--quiet"]);
+    if let Some(b) = branch.as_deref() {
+        clone_cmd.args(["--branch", b]);
+    }
+    let clone_out = clone_cmd
+        .arg(remote)
+        .arg(&tmp)
+        .output()
+        .with_context(|| format!("git clone {remote}"))?;
+    if !clone_out.status.success() {
+        let _ = std::fs::remove_dir_all(&tmp);
+        anyhow::bail!(
+            "git clone {remote} failed: {}",
+            String::from_utf8_lossy(&clone_out.stderr).trim()
+        );
+    }
+
+    let team_file = tmp.join(TEAM_KEYCHAIN_FILENAME);
+    let team_existing = std::fs::read_to_string(&team_file).unwrap_or_default();
+    let team_keys = parse_keychain_lines(&team_existing);
+    let local_keys = aether_plugin::load_trust_keychain();
+
+    let mut merged: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::<String>::new();
+    for k in local_keys.iter().chain(team_keys.iter()) {
+        if seen.insert(k.clone()) {
+            merged.push(k.clone());
+        }
+    }
+
+    let added_local = merged.len() - local_keys.len();
+    let added_team = merged.len() - team_keys.len();
+
+    let mut merged_text = String::new();
+    for k in &merged {
+        merged_text.push_str(k);
+        merged_text.push('\n');
+    }
+    if let Some(parent) = local_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::write(local_path, &merged_text)
+        .with_context(|| format!("write {}", local_path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(
+            local_path,
+            std::fs::Permissions::from_mode(0o600),
+        );
+    }
+    eprintln!(
+        "[plugin trust sync] local: had {} key(s), added {} from {remote} → now {}",
+        local_keys.len(),
+        added_local,
+        merged.len(),
+    );
+
+    if push {
+        std::fs::write(&team_file, &merged_text)
+            .with_context(|| format!("write {}", team_file.display()))?;
+        let add = std::process::Command::new("git")
+            .args(["-C"])
+            .arg(&tmp)
+            .args(["add", TEAM_KEYCHAIN_FILENAME])
+            .output()
+            .context("git add")?;
+        if !add.status.success() {
+            let _ = std::fs::remove_dir_all(&tmp);
+            anyhow::bail!(
+                "git add failed: {}",
+                String::from_utf8_lossy(&add.stderr).trim()
+            );
+        }
+        let diff_check = std::process::Command::new("git")
+            .args(["-C"])
+            .arg(&tmp)
+            .args(["diff", "--cached", "--quiet"])
+            .status()
+            .context("git diff --cached")?;
+        if diff_check.success() {
+            // No staged changes — local was already a subset of team.
+            let _ = std::fs::remove_dir_all(&tmp);
+            eprintln!(
+                "[plugin trust sync] nothing to push: team copy already up to date with merged set ({} key(s))",
+                merged.len()
+            );
+            return Ok(());
+        }
+        let commit = std::process::Command::new("git")
+            .args(["-C"])
+            .arg(&tmp)
+            .args(["commit", "-m"])
+            .arg(format!(
+                "trust: sync from local ({added_team} new key(s), {} total)",
+                merged.len()
+            ))
+            .output()
+            .context("git commit")?;
+        if !commit.status.success() {
+            let _ = std::fs::remove_dir_all(&tmp);
+            anyhow::bail!(
+                "git commit failed: {}",
+                String::from_utf8_lossy(&commit.stderr).trim()
+            );
+        }
+        let push_out = std::process::Command::new("git")
+            .args(["-C"])
+            .arg(&tmp)
+            .args(["push"])
+            .output()
+            .context("git push")?;
+        if !push_out.status.success() {
+            let _ = std::fs::remove_dir_all(&tmp);
+            anyhow::bail!(
+                "git push failed: {}",
+                String::from_utf8_lossy(&push_out.stderr).trim()
+            );
+        }
+        eprintln!(
+            "[plugin trust sync] pushed {} new key(s) to {remote}",
+            added_team
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+    Ok(())
+}
+
+fn parse_keychain_lines(content: &str) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for line in content.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        if seen.insert(t.to_string()) {
+            out.push(t.to_string());
+        }
+    }
+    out
 }
 
 /// Discover WASM-sandboxed plugins (sister loader to the subprocess
