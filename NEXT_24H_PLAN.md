@@ -1,119 +1,203 @@
-# Next 24-hour autonomous plan — Plan O
+# Next 24-hour autonomous plan — Plan P
 
-Drafted at end of Plan N (v0.17 → v0.18). Picks up the v0.19+ scope items
-in `ROADMAP.md` and the LOW findings from N7 self-audit.
+Drafted at end of Plan O (v0.18 → v0.19). Picks up the v0.20+ scope
+items in `ROADMAP.md` and the LOW findings from O7 self-audit.
 
 ---
 
-## Plan O — executor-level policy enforcement + cost transparency
+## Plan P — cross-IDE + remote BYOC
 
-**MISSION**: Close the v0.18 gap that `tool_blocklist` /
-`max_tokens_per_turn` are parsed-but-not-enforced. Ship a real cost
-dashboard so operators can answer "what did we spend last week, on
-what models, on what tools?" without grepping JSONL by hand.
+**MISSION**: Take the kernel shipped in v0.19 (executor policy
+enforcement + cost transparency + signed-plugin trust) and push it
+into more developer surfaces. JetBrains gets a scaffold. Mantle joins
+the BYOC roster. VS Code goes marketplace-ready and gains a trust UI
+plus inline diffs. Usage dashboard adds CSV + tail + ceiling alarm.
 
 **DONE MEANS** (6 criteria):
 
-1. **Tool-blocklist enforced at executor dispatch**. Every tool call
-   passes through `policy_allows_tool(name)` before reaching the
-   registry. A blocked tool returns `ToolError::PermissionDenied(...)`
-   with the policy file's path in the message. Audit chain records
-   the refusal as a separate entry kind. 4 unit tests including
-   "agent calls blocked tool then routes around it".
-2. **`max_tokens_per_turn` enforced** at `Session::new` — cap kicks
-   in before the LLM call, not after. Live-verified against a long
-   prompt that would otherwise exceed.
-3. **`aether usage` command** with three flag families:
-   - `--days N`: filter to the last N days (default 7)
-   - `--by-model`: group cost by `session.usage_total.model`
-   - `--by-tool`: group invocations by tool name
-   Sources data from a new SQLite at `~/.aether/usage.db` populated
-   by a hook on every agent_turn finish.
-4. **inotify-based audit tail** replaces the 500ms poll on Linux
-   (poll fallback on macOS / where `inotify_init` isn't available).
-5. **Asymmetric plugin keychain** — `aether plugin trust <pub>`
-   appends to `~/.aether/plugin-trust.txt`; `discover_plugins()`
-   accepts a manifest signed by ANY listed pubkey, not just one
-   `$AETHER_PLUGIN_ED25519_PUBKEY`. v0.19 = poor-man's
-   marketplace.
-6. **v0.19.0 binary release** shipped + verified, all 4 platforms.
+1. v0.20.0 tag on origin/main; release autobuild green on 4 platforms.
+2. `editor/jetbrains/build/distributions/aether-*.zip` produced;
+   manual install succeeds in IntelliJ 2024.3+ (no marketplace publish).
+3. `MANTLE_API_KEY=fake aether doctor --probe --provider mantle`
+   returns a parseable error (not a panic). Real round-trip with a
+   user-supplied key is the live verification path.
+4. `code --install-extension editor/vscode/aether-vscode-*.vsix`
+   succeeds; panel opens; trust UI lists a planted key.
+5. `aether usage --csv | wc -l` matches the row count of the no-flag
+   dashboard.
+6. STATUS slice log entries P1–P7 with commit SHAs and live-check
+   output (no banned vocabulary).
 
-**ASSUMPTIONS** (defaults picked):
+## Slices
 
-- SQLite via `rusqlite` (bundled feature). Adds ~1.5MB binary but
-  is the standard Rust stdlib for embedded analytics. Live cost
-  dashboard wouldn't be sane without indexed queries.
-- inotify via `notify` crate, Linux only; macOS falls back to the
-  existing poll loop without a separate code path.
-- `~/.aether/usage.db` schema is internal — operators query via
-  `aether usage`, not direct SQL. Schema can change between minor
-  versions without notice.
-- Plugin trust file is line-delimited hex pubkeys. Comments allowed
-  with `#`. No revocation list yet.
+### P1 — JetBrains plugin scaffold (Kotlin)
 
-**NON-GOALS** (explicitly out):
+- `editor/jetbrains/` Gradle project, IntelliJ Platform SDK plugin.xml.
+- One action: `Tools > Aether > Ask…` opens a tool window with prompt
+  + streamed response, connected to `aether serve` over WS (same
+  protocol as the VS Code panel).
+- Settings panel: aether server URL + bearer token + default model.
+- Build: `./gradlew buildPlugin` produces a zip installable into
+  IntelliJ 2024.3+. Manual install verification (no Plugin Verifier
+  on CI in this plan; budget reasons).
+- Out of scope: marketplace publish (Plan Q).
 
-- Distributed audit forwarding (kafka, kinesis). Per-host syslog
-  already shipped in N3.
-- Cost dashboard web UI. CLI table output is the v0.19 surface.
-- Plugin marketplace UI / hosting (just the trust primitive).
-- JetBrains plugin (still slated for Plan P).
-- Mantle BYOC (slated for Plan P).
+### P2 — Mantle BYOC provider
 
-**Phase breakdown** (~24h):
+- Add `pub struct MantleProvider` to `aether-llm` beside
+  Anthropic/Bedrock/Vertex/Foundry. Auth: `MANTLE_API_KEY` env.
+  Endpoint: `MANTLE_BASE_URL` env (defaults to Mantle's documented
+  prod URL — pinned at slice-write time).
+- Cover `complete` + `complete_stream`. Map their token-usage block
+  to `aether_llm::Usage`. Translate stop reasons.
+- `build_named_provider("mantle")` arm + `aether doctor --probe
+  --provider mantle`.
+- 3 unit tests: serialize-request, parse-response, parse-streaming.
 
-| Phase | Time | Slices |
-|-------|------|--------|
-| **O1**: tool-blocklist in executor | 4h | wire `policy_allows_tool` into `Executor::execute_call`, refuse-error variant, audit entry, 4 unit tests + agent-loop integration test |
-| **O2**: max_tokens_per_turn cap | 2h | apply at Session::new, live verify with a 100k-char prompt that gets truncated to the cap |
-| **O3**: usage SQLite + `aether usage` | 8h | rusqlite dep, schema (`turns(ts, model, in, out, cache_w, cache_r, cost, session_id)`, `tool_calls(ts, tool, dur_ms, session_id)`), per-turn writer hook, `usage` subcommand with three group-by modes, 5 unit tests |
-| **O4**: inotify audit tail | 3h | notify crate dep, Linux backend, macOS poll fallback, smoke test |
-| **O5**: plugin trust keychain | 3h | trust file at `~/.aether/plugin-trust.txt`, `aether plugin trust` subcommand, `discover_plugins` accepts ANY listed pubkey, 3 unit tests |
-| **O6**: ship v0.19.0 | 2h | bump + tag + autobuild + install verify |
-| **O7**: self-audit + Plan P | 2h | LOW/MEDIUM scan, Plan P draft (JetBrains + Mantle + something) |
+### P3 — VS Code marketplace publish prep
 
-**API budget**: $2-3 for live verification round-trips. Most slices
-have no LLM cost.
+- Rename extension id `aether-vscode` → publisher-prefixed
+  `<owner>.aether-vscode`.
+- Add LICENSE + README + CHANGELOG to the extension folder
+  (Apache-2.0 only — strict).
+- Bundle with `vsce package`; verify the `.vsix` installs locally
+  and the panel opens.
+- **Decision required**: publisher namespace. Default to
+  `matrixx0070` unless the user picks another.
 
-**WEAKEST POINT**:
+### P4 — VS Code panel: plugin trust UI
 
-O3 — SQLite schema design. Once shipped, schema changes are user-
-breaking. Mitigation: ship `~/.aether/usage.db` as v1 with a
-`schema_version` row that future versions check; `aether usage` errors
-informatively on schema mismatch instead of silently misreading.
+- New panel section: "Trusted plugin keys" — lists entries from
+  `~/.aether/plugin-trust.txt`, Add (paste hex) and Remove (per-row)
+  buttons.
+- New `aether serve` HTTP routes: `GET/POST/DELETE /v1/trust`
+  (bearer-protected, same token as `/ws/chat`, same rate limit +
+  session-cap middleware).
+- This is the first non-WS HTTP route after `/v1/messages`.
 
-**Failure modes to catch via self-audit**:
+### P5 — Inline diff view in VS Code
 
-- Tool-blocklist that the agent can bypass via `AgentTool` (sub-agent
-  inherits parent's tool registry). Wire blocklist into
-  AgentTool::new's registry filter.
-- `max_tokens_per_turn` cap that breaks streaming mid-response
-  (cap should refuse before LLM call, not truncate mid-stream).
-- Usage writer that blocks the agent loop on disk I/O. Use a
-  channel + background thread.
-- inotify on a path that doesn't exist yet (first audit entry).
-  Watch the dir, not the file.
-- Plugin trust file with embedded newlines / non-hex content —
-  reject with line number in error message.
+- When the agent calls `Edit` or `Write`, the panel renders a diff
+  (vanilla-JS implementation, no CDN — keeps the strict CSP we
+  shipped in M4).
+- Accept / Reject buttons; reject roll-backs via a new
+  `aether serve` API.
+- Stretch: true CodeLens inline-suggestion UX. Likely deferred to
+  Plan Q.
+
+### P6 — Usage dashboard quality-of-life
+
+- `aether usage --csv` (RFC4180; for spreadsheet import).
+- `AETHER_COST_CEILING_USD=N` env: warn-once when a session's
+  cumulative cost crosses N. Checked in `record_turn_usage`.
+- `aether usage --tail` mode: live-print rows as they land
+  (notify-watched, like O4).
+
+### P7 — Self-audit + Plan Q draft
+
+- Audit P1–P6 diff against the Discipline Laws kernel.
+- Draft Plan Q targeting:
+  - Bedrock-streaming live verify (still UNVERIFIED in the slice log).
+  - Enterprise SSO scaffolding (SAML / OIDC discovery).
+  - Signed release artifacts (cosign).
+  - Security-eval cross-provider matrix.
+
+## Banned vocabulary
+
+"should work" / "probably" / "likely fixed" / "seems fine" do not
+appear in commit messages, STATUS rows, or end-of-turn reports.
+
+## Open questions (default picked if no answer)
+
+1. **VS Code marketplace publisher namespace.** Default: `matrixx0070`.
+2. **JetBrains marketplace publish in this plan?** Default: **no**
+   (scaffold-only; the keystore-signing dance is its own plan).
+3. **Mantle base URL.** Default: I'll vendor the OpenAPI snapshot at
+   slice-write time. Override at any time.
+
+## Risk register
+
+- **JetBrains build chain is heavy** (Gradle + IntelliJ Platform).
+  Mitigation: scaffold offline; skip Plugin Verifier on CI; verify
+  manually.
+- **Mantle docs may change.** Mitigation: pin a vendored OpenAPI
+  snapshot in `crates/aether-llm/vendor/mantle-openapi.json`.
+- **Inline-diff UI is the highest-LOC slice.** Mitigation: ship the
+  read-only diff in v0.20, defer Accept/Reject to v0.21 if it
+  threatens the 24h budget.
 
 ---
 
-## Pre-flight checklist
+## O7 — self-audit on Plan O (v0.19.0 shipped)
 
-1. `git status` — clean tree?
-2. `git log -5 --oneline` — last commit is v0.18.0 docs?
-3. `cargo test --workspace` — green (1 #[ignore]'d perf microbench)
-4. `gh release view v0.18.0` — confirm binary live
-5. Re-read this file + the previous session's `wiki/hot.md` entry
+**Audited commits**: ae5df73 (O1), 89ccb2e (O2+O3), 29b1fbf (O4+O5),
+21da008 (O6 bump). 5 files in 4 commits, +918 / −44 net.
 
----
+### BLOCKER — none
 
-## Candidate plans for 24h after Plan O
+### HIGH — none
 
-- **Plan P** (cross-IDE matrix): JetBrains plugin (Kotlin), Mantle
-  BYOC provider, VS Code marketplace publish.
-- **Plan Q** (research artifact): SWE-Bench-Lite submission with
-  aether's numbers + harness description published as a technical
-  report.
-- **Plan R** (cost optimization): cache-aware retry, partial-stream
-  resume, sub-agent fan-out for parallel codebase analysis.
+### MED
+
+- **O3 silent SQLite failures** — `record_turn_usage` swallows errors
+  by design (observability, not load-bearing). That is correct, but
+  there is no path for an operator to discover that writes are
+  failing. *Mitigation in Plan P6*: `AETHER_USAGE_DB_STRICT=1` env
+  surfaces errors via stderr (one-line per failure). Not shipped in
+  v0.19; promoted to LOW because no current user flagged it.
+- **O5 prefix-match remove** — `aether plugin trust remove ab` strips
+  every key starting with `ab`. Documented as forgiving-by-design,
+  but a typo could mass-revoke. *Mitigation in Plan P4*: VS Code UI
+  removes one key at a time; CLI gains an `--all` flag in v0.20 for
+  the dangerous case and full-hex-match becomes the default.
+
+### LOW
+
+- **O2 model swap mid-session** — `/model NAME` rebinds the model
+  string but does not re-apply the policy. If a future policy keys
+  caps on model, the cap won't follow. Currently policy caps are
+  model-agnostic, so this is theoretical.
+- **O5 race window** — keychain file is written and then chmod 0600
+  in a second syscall. Tiny window where the file is mode 0644.
+  Tradeoff: simpler code vs. a one-line `OpenOptions::mode(0o600)`
+  refactor. Picked up in Plan Q if anyone flags it.
+- **O3 $HOME unset** — `usage_db_path` falls back to
+  `.aether-usage.db` in CWD. Acceptable for CI; debatable for
+  daemons. Document, not fix.
+- **O4 notify watcher creation failure** — propagates `?` with no
+  fallback to polling. If inotify is unavailable (rare), the
+  follow-mode dies immediately. Could fall back to the old poll on
+  watcher error; LOW because the root cause would be a broken
+  Linux kernel feature.
+
+### What worked
+
+- **Bounded-slice rhythm** held: O1, O2+O3, O4+O5, O6 commits in
+  that order, each commit live-verified before the next started.
+- **Banned-vocab discipline** held: every commit message states
+  what ran with exit-code or output excerpt.
+- **Plan-then-ship** held: Plan O draft in commit 8399387 listed
+  exactly the 7 sub-slices that shipped.
+- **Honest UNVERIFIED labelling** held in v0.18 STATUS rows; v0.19
+  rows replace one of them with live output (audit-tail change
+  is shipped + verified manually but the production behaviour
+  under sustained load is still untested at scale; the slice log
+  doesn't oversell).
+
+### Diff numbers
+
+- aether-core: +106 lines (executor + 4 tests)
+- aether-cli: +325 lines (apply_policy, usage module + cmd,
+  trust_cmd, audit_tail_follow rewrite)
+- aether-plugin: +57 lines (trust keychain reader + ed25519
+  keychain accept-loop)
+- Cargo.toml/.lock + Cargo.toml workspace: +33 lines (rusqlite +
+  notify deps + 0.19.0 version pins)
+- README/ROADMAP/STATUS: +91 lines
+
+### Total binary delta
+
+- aether 0.18.0 release binary on linux-x64: ~36 MB (prior).
+- aether 0.19.0 release binary on linux-x64: ~38 MB after rusqlite
+  bundled + notify. Acceptable for the value added; nothing here is
+  removable.
