@@ -23,7 +23,30 @@ Each tarball ships with a SHA256 the script verifies before extraction. See
 `INSTALL.md` for the manual download + verify path and the source-build
 fallback.
 
-## Status: v0.19.0
+## Status: v0.20.0
+
+Plan P shipped six cross-IDE + remote-BYOC features (24h autonomous run):
+
+- **P1 JetBrains plugin scaffold** at `editor/jetbrains/` — Kotlin /
+  Gradle / IntelliJ Platform 2024.3. Tool window, WS streaming to
+  `aether serve`, settings panel, Ctrl/Cmd+Alt+A keymap.
+- **P2 Mantle BYOC provider** — 5th LLM provider in `aether-llm`.
+  Anthropic-Messages-API-compatible HTTP proxy; `MANTLE_API_KEY`
+  + optional `MANTLE_BASE_URL`. 5 unit tests.
+- **P3 VS Code marketplace publish prep** — `editor/vscode/` gains
+  the marketplace metadata (repository / homepage / bugs / keywords),
+  bundled Apache LICENSE, CHANGELOG. `vsce package` produces a clean
+  `aether-0.20.0.vsix` (9 files, 18.65 KB).
+- **P4 `/v1/trust` routes + VS Code trust UI** — server-side
+  bearer-protected REST CRUD for the ed25519 plugin trust keychain;
+  client-side webview that lists / adds / removes keys.
+- **P5 inline tool-use diffs in the VS Code chat panel** — server
+  WS handler emits a `tool_use` frame per tool the agent invokes;
+  panel renders an inline two-pane "before / after" diff for Edit /
+  Write or a labelled entry for any other tool.
+- **P6 usage dashboard QoL** — `aether usage --csv` (RFC4180), `--tail`
+  (live stream of new turn rows via notify), `AETHER_COST_CEILING_USD`
+  warn-once when 24h cumulative cost crosses a threshold.
 
 Plan O shipped five executor-policy + cost-transparency features (24h autonomous run):
 

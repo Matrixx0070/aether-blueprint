@@ -366,12 +366,41 @@ extensibility.
   ed25519 manifests. `AETHER_PLUGIN_ED25519_PUBKEY` remains as a
   zero-config fallback.
 
-## v0.20 — cross-IDE + remote BYOC (next, draft)
+## v0.20 — cross-IDE + remote BYOC — shipped 2026-06-26
 
-- JetBrains plugin (Kotlin, separate language stack)
-- Mantle BYOC provider (HTTP-based remote LLM)
-- VS Code marketplace publish (extension rebrand + signing)
-- Plugin trust keychain integration into the VS Code extension
+- **P1 JetBrains plugin scaffold** at `editor/jetbrains/` — Kotlin /
+  Gradle / IntelliJ Platform 2024.3. Tool window, WS streaming
+  to `aether serve`, settings panel, Ctrl/Cmd+Alt+A. UNVERIFIED
+  build chain in CI (heavy IntelliJ Platform download); manual
+  install path documented.
+- **P2 Mantle BYOC provider** — 5th provider in `aether-llm` next
+  to Anthropic/Bedrock/Vertex/Azure. Anthropic-Messages-API-
+  compatible proxy; `MANTLE_API_KEY` + optional `MANTLE_BASE_URL`.
+  5 unit tests.
+- **P3 VS Code marketplace publish prep** — repository / homepage /
+  bugs / keywords metadata; bundled Apache-2.0 LICENSE; CHANGELOG.
+  `vsce package` produces `aether-0.20.0.vsix` (9 files, 18.65 KB).
+- **P4 `/v1/trust` routes + VS Code trust UI** — server gains
+  `GET/POST/DELETE /v1/trust` (bearer-protected). VS Code adds an
+  `aether.openTrust` command + webview that lists / adds /
+  removes trusted ed25519 keys.
+- **P5 inline tool-use diffs in the VS Code chat panel** — server
+  WS handler emits a `tool_use` frame per tool the agent invokes;
+  panel renders an inline "before / after" diff for Edit / Write
+  or a labelled entry for any other tool. Read-only in v0.20
+  (Accept/Reject deferred to v0.21).
+- **P6 usage dashboard QoL** — `aether usage --csv` (RFC4180),
+  `--tail` (notify-based live stream of new turn rows),
+  `AETHER_COST_CEILING_USD` warn-once when 24h spend crosses the
+  ceiling.
+
+## v0.21 — next (draft)
+
+- VS Code panel Accept/Reject for inline tool-use diffs
+- Per-tool tool_use streaming (currently emitted in a batch at
+  end-of-turn)
+- JetBrains marketplace publish (deferred from Plan P)
+- Bedrock streaming live verify (still UNVERIFIED on the slice log)
 
 ## v0.9 — enterprise
 

@@ -96,4 +96,11 @@ format: `[slice] [status] [commit] [verifier] [live-check] note`
 | O1+O2 | DONE | ae5df73 | n/a | 36/36 aether-core (+4 policy_blocklist tests) | executor enforces policy tool-blocklist + token cap primitive |
 | O2+O3 | DONE | 89ccb2e | n/a | live: `aether usage --days 7 --by-model` → 1 row · in=3332 out=5 $0.0027 | apply_policy_to_session + aether usage SQLite dashboard |
 | O4+O5 | DONE | 29b1fbf | n/a | live: wrong-key keychain rejects ed25519 plugin · right-key loads (TrustTest) | inotify audit tail (notify crate) + plugin trust keychain |
+| O6+O7 | DONE | 21da008,bfdc79f | n/a | v0.19.0 release LIVE (4 platforms, run 28220631082, SHA256SUMS OK, ./aether --version 0.19.0) | v0.19.0 ship + Plan P draft |
+| P1 | DONE | d6a0ef3 | n/a | UNVERIFIED build chain (no JDK21+gradle in env); scaffold structurally complete | JetBrains plugin scaffold (Kotlin, IntelliJ Platform 2024.3) |
+| P2 | DONE | 2ebb946 | n/a | 5/5 mantle tests · `--provider mantle` lists in error · `mantle` provider builds | Mantle BYOC provider (Anthropic-compatible) |
+| P3 | DONE | 712ddbe | n/a | aether-0.20.0.vsix built (9 files, 18.65 KB, LICENSE bundled) | VS Code marketplace prep (metadata + bundled LICENSE) |
+| P4 | DONE | dd14915 | n/a | live: 6 trust-route paths + bearer 401 + correct 200 verified via curl | /v1/trust routes + VS Code trust panel |
+| P5 | DONE | 9220af3 | n/a | live: WS probe → tool_use:1 + Edit input visible + /tmp/p5-ws.txt edited | inline tool-use diff in VS Code chat panel |
+| P6 | DONE | 43dbf51 | n/a | live: --csv, --tail (live row capture), AETHER_COST_CEILING_USD warn all verified | usage --csv / --tail / cost ceiling |
 
