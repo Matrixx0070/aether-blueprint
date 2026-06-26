@@ -55,7 +55,7 @@ from the release page and verify by hand:
 #   aether-vX.Y.Z-macos-x86_64.tar.gz
 #   aether-vX.Y.Z-macos-aarch64.tar.gz
 
-VERSION=v0.12.0
+VERSION=v0.21.0
 TARBALL=aether-${VERSION}-linux-x86_64.tar.gz
 BASE=https://github.com/Matrixx0070/aether-blueprint/releases/download/${VERSION}
 
@@ -70,6 +70,32 @@ tar -xzf "$TARBALL"
 sudo install -m 0755 aether /usr/local/bin/aether
 aether --version
 ```
+
+### Optional: cosign verification (v0.21+)
+
+From v0.21 the release workflow signs `SHA256SUMS` with cosign
+keyless via GitHub Actions OIDC. Verify the chain:
+
+```sh
+# install cosign once: https://docs.sigstore.dev/cosign/installation/
+
+curl -fLO "$BASE/SHA256SUMS.sig"
+curl -fLO "$BASE/SHA256SUMS.pem"
+
+cosign verify-blob \
+  --signature SHA256SUMS.sig \
+  --certificate SHA256SUMS.pem \
+  --certificate-identity-regexp \
+    'https://github.com/Matrixx0070/aether-blueprint/\.github/workflows/release\.yml@.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  SHA256SUMS
+```
+
+If `cosign verify-blob` exits 0, every tarball whose hash is in
+`SHA256SUMS` (verified with `sha256sum -c` above) was built by THIS
+repo's release workflow at the tagged commit. No long-lived signing
+key — the certificate is short-lived and bound to the GitHub
+workflow run that produced it.
 
 ## 3. Build from source
 

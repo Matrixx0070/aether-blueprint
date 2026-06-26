@@ -20,7 +20,8 @@ on:
         type: string
 
 permissions:
-  contents: write  # needed to create the GitHub Release + upload assets
+  contents: write   # create the GitHub Release + upload assets
+  id-token: write   # mint OIDC token for cosign keyless signing
 
 jobs:
   build:
@@ -177,6 +178,34 @@ jobs:
           cat *.tar.gz.sha256 | sort > SHA256SUMS
           ls -la
 
+      - name: install cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.1'
+
+      # Keyless cosign: signs the SHA256SUMS file (one signature covers
+      # every artifact whose hash is in it) using the workflow's OIDC
+      # token. Verifiers run:
+      #   cosign verify-blob \
+      #     --signature SHA256SUMS.sig \
+      #     --certificate SHA256SUMS.pem \
+      #     --certificate-identity-regexp \
+      #       'https://github.com/Matrixx0070/aether-blueprint/.+' \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      #     SHA256SUMS
+      - name: cosign-sign SHA256SUMS (keyless)
+        shell: bash
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+        run: |
+          set -euo pipefail
+          cd dist
+          cosign sign-blob --yes \
+            --output-signature SHA256SUMS.sig \
+            --output-certificate SHA256SUMS.pem \
+            SHA256SUMS
+          ls -la
+
       - name: create release
         uses: softprops/action-gh-release@v2
         with:
@@ -188,3 +217,5 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/SHA256SUMS
+            dist/SHA256SUMS.sig
+            dist/SHA256SUMS.pem
