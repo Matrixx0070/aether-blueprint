@@ -438,6 +438,13 @@ enum TrustCmd {
         /// Push the merged set back to the remote.
         #[arg(long, default_value_t = false)]
         push: bool,
+        /// SUBTRACTIVE mode: remove every team key matching this hex
+        /// prefix AND remove the matching local keys. Requires --push
+        /// to make the team-side removal take effect; without --push,
+        /// only the local copy is updated (equivalent to `aether
+        /// plugin trust remove <prefix>`).
+        #[arg(long, value_name = "HEX_PREFIX")]
+        remove_from_team: Option<String>,
     },
 }
 
@@ -7122,7 +7129,9 @@ fn trust_cmd(sub: TrustCmd) -> Result<()> {
             );
             Ok(())
         }
-        TrustCmd::Sync { remote, branch, push } => trust_sync(&path, &remote, branch, push),
+        TrustCmd::Sync { remote, branch, push, remove_from_team } => {
+            trust_sync(&path, &remote, branch, push, remove_from_team)
+        }
     }
 }
 
@@ -7132,7 +7141,13 @@ const TEAM_KEYCHAIN_FILENAME: &str = "trusted-keys.txt";
 /// Pulls (additively) the team's `trusted-keys.txt` and merges into
 /// the local keychain. With `push`, also commits + pushes the merged
 /// set back. Uses the host's git config — no new secret storage.
-fn trust_sync(local_path: &Path, remote: &str, branch: Option<String>, push: bool) -> Result<()> {
+fn trust_sync(
+    local_path: &Path,
+    remote: &str,
+    branch: Option<String>,
+    push: bool,
+    remove_from_team: Option<String>,
+) -> Result<()> {
     let tmp = tempfile_dir()?;
     let mut clone_cmd = std::process::Command::new("git");
     clone_cmd.args(["clone", "--depth=1", "--quiet"]);
@@ -7157,16 +7172,60 @@ fn trust_sync(local_path: &Path, remote: &str, branch: Option<String>, push: boo
     let team_keys = parse_keychain_lines(&team_existing);
     let local_keys = aether_plugin::load_trust_keychain();
 
-    let mut merged: Vec<String> = Vec::new();
-    let mut seen = std::collections::HashSet::<String>::new();
-    for k in local_keys.iter().chain(team_keys.iter()) {
-        if seen.insert(k.clone()) {
-            merged.push(k.clone());
+    // T5 subtractive path: --remove-from-team <prefix> removes every
+    // team key starting with <prefix> AND every local key starting
+    // with the same prefix. Push the result back if --push given.
+    let merged: Vec<String>;
+    let mut removed_local = 0usize;
+    let mut removed_team = 0usize;
+    let mut added_local = 0usize;
+    let mut added_team = 0usize;
+    if let Some(prefix) = remove_from_team.as_deref() {
+        let prefix = prefix.trim();
+        if prefix.is_empty() {
+            let _ = std::fs::remove_dir_all(&tmp);
+            anyhow::bail!("--remove-from-team prefix is empty");
         }
+        let local_after: Vec<String> = local_keys
+            .iter()
+            .filter(|k| !k.starts_with(prefix))
+            .cloned()
+            .collect();
+        removed_local = local_keys.len() - local_after.len();
+        let team_after: Vec<String> = team_keys
+            .iter()
+            .filter(|k| !k.starts_with(prefix))
+            .cloned()
+            .collect();
+        removed_team = team_keys.len() - team_after.len();
+        merged = local_after;
+        if removed_local == 0 && removed_team == 0 {
+            let _ = std::fs::remove_dir_all(&tmp);
+            anyhow::bail!(
+                "no key starts with '{prefix}' in local OR team copy — nothing to remove"
+            );
+        }
+        // Stage the subtracted team file for push.
+        let mut team_text = String::new();
+        for k in &team_after {
+            team_text.push_str(k);
+            team_text.push('\n');
+        }
+        std::fs::write(&team_file, &team_text)
+            .with_context(|| format!("write {}", team_file.display()))?;
+    } else {
+        // Additive pull (S6 default).
+        let mut m: Vec<String> = Vec::new();
+        let mut seen = std::collections::HashSet::<String>::new();
+        for k in local_keys.iter().chain(team_keys.iter()) {
+            if seen.insert(k.clone()) {
+                m.push(k.clone());
+            }
+        }
+        added_local = m.len() - local_keys.len();
+        added_team = m.len() - team_keys.len();
+        merged = m;
     }
-
-    let added_local = merged.len() - local_keys.len();
-    let added_team = merged.len() - team_keys.len();
 
     let mut merged_text = String::new();
     for k in &merged {
@@ -7186,16 +7245,44 @@ fn trust_sync(local_path: &Path, remote: &str, branch: Option<String>, push: boo
             std::fs::Permissions::from_mode(0o600),
         );
     }
-    eprintln!(
-        "[plugin trust sync] local: had {} key(s), added {} from {remote} → now {}",
-        local_keys.len(),
-        added_local,
-        merged.len(),
-    );
+    if remove_from_team.is_some() {
+        eprintln!(
+            "[plugin trust sync] subtractive: removed {} from local, {} from team copy → now {}",
+            removed_local, removed_team, merged.len(),
+        );
+    } else {
+        eprintln!(
+            "[plugin trust sync] local: had {} key(s), added {} from {remote} → now {}",
+            local_keys.len(),
+            added_local,
+            merged.len(),
+        );
+    }
 
-    if push {
-        std::fs::write(&team_file, &merged_text)
-            .with_context(|| format!("write {}", team_file.display()))?;
+    // Push the team file when --push, OR when --remove-from-team and
+    // there were team removals (so the subtractive change actually
+    // lands). Without --push in subtractive mode, we still updated
+    // local but leave the remote unchanged.
+    let team_needs_push =
+        push || (remove_from_team.is_some() && removed_team > 0 && push);
+    if push || remove_from_team.is_some() {
+        // Stage the team file content. For --push (additive), write the
+        // merged union. For subtractive mode, the file was already
+        // rewritten above; for --push without subtractive, write the
+        // merged set now.
+        if remove_from_team.is_none() {
+            std::fs::write(&team_file, &merged_text)
+                .with_context(|| format!("write {}", team_file.display()))?;
+        }
+        if !team_needs_push && !push {
+            // Subtractive without --push: local already updated, leave
+            // team alone.
+            eprintln!(
+                "[plugin trust sync] team copy left unchanged (re-run with --push to land team removal)"
+            );
+            let _ = std::fs::remove_dir_all(&tmp);
+            return Ok(());
+        }
         let add = std::process::Command::new("git")
             .args(["-C"])
             .arg(&tmp)
@@ -7224,14 +7311,22 @@ fn trust_sync(local_path: &Path, remote: &str, branch: Option<String>, push: boo
             );
             return Ok(());
         }
+        let commit_msg = if remove_from_team.is_some() {
+            format!(
+                "trust: sync subtractive ({removed_team} key(s) removed, {} remain)",
+                merged.len()
+            )
+        } else {
+            format!(
+                "trust: sync from local ({added_team} new key(s), {} total)",
+                merged.len()
+            )
+        };
         let commit = std::process::Command::new("git")
             .args(["-C"])
             .arg(&tmp)
             .args(["commit", "-m"])
-            .arg(format!(
-                "trust: sync from local ({added_team} new key(s), {} total)",
-                merged.len()
-            ))
+            .arg(&commit_msg)
             .output()
             .context("git commit")?;
         if !commit.status.success() {
@@ -7254,10 +7349,16 @@ fn trust_sync(local_path: &Path, remote: &str, branch: Option<String>, push: boo
                 String::from_utf8_lossy(&push_out.stderr).trim()
             );
         }
-        eprintln!(
-            "[plugin trust sync] pushed {} new key(s) to {remote}",
-            added_team
-        );
+        if remove_from_team.is_some() {
+            eprintln!(
+                "[plugin trust sync] pushed subtractive change ({removed_team} removed) to {remote}"
+            );
+        } else {
+            eprintln!(
+                "[plugin trust sync] pushed {} new key(s) to {remote}",
+                added_team
+            );
+        }
     }
     let _ = std::fs::remove_dir_all(&tmp);
     Ok(())
