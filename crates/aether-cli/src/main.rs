@@ -4254,16 +4254,25 @@ fn plugin_cmd(sub: PluginCmd) -> Result<()> {
         PluginCmd::Verify { manifest } => {
             let bytes = std::fs::read(&manifest)
                 .with_context(|| format!("read {}", manifest.display()))?;
-            let m: aether_plugin::PluginManifest = serde_json::from_slice(&bytes)
-                .context("parse manifest")?;
-            match aether_plugin::verify_manifest_signature(&bytes, &m, key.as_bytes()) {
+            // Runtime-agnostic verifier: extract signature + name from raw
+            // JSON so this works for both subprocess (has `command`) and
+            // WASM (has `wasm_path`) manifests.
+            let (sig_opt, name) =
+                aether_plugin::extract_signature_and_name(&bytes).map_err(|e| anyhow!("{e}"))?;
+            let Some(claimed_hex) = sig_opt else {
+                anyhow::bail!("manifest has no `signature` field");
+            };
+            match aether_plugin::verify_manifest_signature_raw(
+                &bytes,
+                &claimed_hex,
+                &name,
+                key.as_bytes(),
+            ) {
                 Ok(true) => {
-                    println!("[plugin verify] OK — {} signature valid", m.name);
+                    println!("[plugin verify] OK — {name} signature valid");
                     Ok(())
                 }
-                Ok(false) => {
-                    anyhow::bail!("manifest has no `signature` field");
-                }
+                Ok(false) => unreachable!("Some(sig) was checked above"),
                 Err(e) => {
                     anyhow::bail!("verify failed: {e}");
                 }

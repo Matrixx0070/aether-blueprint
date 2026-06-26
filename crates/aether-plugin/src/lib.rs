@@ -169,15 +169,28 @@ pub fn verify_manifest_signature(
     let Some(claimed_hex) = manifest.signature.as_deref() else {
         return Ok(false);
     };
-    let claimed = hex::decode(claimed_hex)
-        .map_err(|e| PluginError::Manifest(manifest.name.clone(), format!("bad hex signature: {e}")))?;
+    verify_manifest_signature_raw(json_bytes, claimed_hex, &manifest.name, key)
+}
+
+/// Runtime-agnostic verifier — accepts raw signature hex + name, so
+/// callers don't need to deserialise into the subprocess-specific
+/// `PluginManifest` struct. The `aether plugin verify` CLI uses this
+/// so WASM-runtime manifests (which omit `command`) verify too.
+pub fn verify_manifest_signature_raw(
+    json_bytes: &[u8],
+    claimed_hex: &str,
+    name_for_error: &str,
+    key: &[u8],
+) -> Result<bool, PluginError> {
+    let claimed = hex::decode(claimed_hex).map_err(|e| {
+        PluginError::Manifest(name_for_error.to_string(), format!("bad hex signature: {e}"))
+    })?;
     let computed_hex = canonical_manifest_hmac(json_bytes, key)?;
     let computed = hex::decode(&computed_hex)
-        .map_err(|e| PluginError::Manifest(manifest.name.clone(), e.to_string()))?;
-    // Constant-time compare.
+        .map_err(|e| PluginError::Manifest(name_for_error.to_string(), e.to_string()))?;
     if claimed.len() != computed.len() {
         return Err(PluginError::Manifest(
-            manifest.name.clone(),
+            name_for_error.to_string(),
             "signature length mismatch".into(),
         ));
     }
@@ -187,11 +200,30 @@ pub fn verify_manifest_signature(
     }
     if diff != 0 {
         return Err(PluginError::Manifest(
-            manifest.name.clone(),
+            name_for_error.to_string(),
             "signature does not match".into(),
         ));
     }
     Ok(true)
+}
+
+/// Extract the `signature` and `name` fields from a JSON-only view of
+/// the manifest. Doesn't enforce the subprocess-loader schema.
+pub fn extract_signature_and_name(
+    json_bytes: &[u8],
+) -> Result<(Option<String>, String), PluginError> {
+    let v: serde_json::Value = serde_json::from_slice(json_bytes)
+        .map_err(|e| PluginError::Manifest("<bytes>".into(), e.to_string()))?;
+    let name = v
+        .get("name")
+        .and_then(|n| n.as_str())
+        .unwrap_or("<unnamed>")
+        .to_string();
+    let sig = v
+        .get("signature")
+        .and_then(|n| n.as_str())
+        .map(|s| s.to_string());
+    Ok((sig, name))
 }
 
 /// Adapter that wraps a plugin manifest as an aether-tools `Tool`.
