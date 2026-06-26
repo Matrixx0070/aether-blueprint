@@ -2802,10 +2802,18 @@ async fn complete_run_one_turn(
     apply_policy_to_session(&mut session);
 
     let mut last_text: Option<String> = None;
+    // T4 fence-strip: wrap the sink in a stateful filter that
+    // swallows a leading ```language\n fence (and the matching
+    // trailing ```) so the client gets clean code.
     let tx_clone = delta_tx.clone();
+    let stripper = std::sync::Arc::new(std::sync::Mutex::new(FenceStripper::new()));
     let sink: aether_llm::TextDeltaSink = Box::new(move |delta: &str| {
-        let frame = serde_json::json!({"type":"delta","text":delta});
-        let _ = tx_clone.send(frame.to_string());
+        let mut g = stripper.lock().expect("fence stripper mutex");
+        let cleaned = g.feed(delta);
+        if !cleaned.is_empty() {
+            let frame = serde_json::json!({"type":"delta","text":cleaned});
+            let _ = tx_clone.send(frame.to_string());
+        }
     });
     let _ = agent_turn_streamed(&mut session, Some(prompt.to_string()), sink).await?;
     if let Some(ConversationItem::Assistant { text, .. }) = session
@@ -2832,6 +2840,138 @@ async fn complete_run_one_turn(
         cost_usd: cost,
         error: None,
     })
+}
+
+/// T4: state machine that strips a leading ```language\n fence and
+/// a trailing ``` fence from the model's streamed completion output.
+/// Designed for streaming: each call to feed() may receive an
+/// arbitrary chunk; output is buffered just enough to make the
+/// fence detection deterministic.
+///
+/// States:
+///   Detecting → accumulating bytes until we know whether the output
+///               starts with ```. Emits nothing until decided.
+///   Inside    → emitting bytes; defers the last 3-char tail in case
+///               it's the start of a closing ```.
+///   PassThrough → no leading fence found; emit everything verbatim.
+struct FenceStripper {
+    state: FenceState,
+    buf: String,
+    /// Held-back tail (for Inside state) — at most 3 chars; gets
+    /// emitted when more text arrives that confirms it's not a fence.
+    tail: String,
+}
+
+enum FenceState {
+    Detecting,
+    Inside,
+    PassThrough,
+    /// Saw the closing ``` — any future deltas (the model's epilogue)
+    /// are dropped to keep the completion output clean.
+    EatingEverything,
+}
+
+impl FenceStripper {
+    fn new() -> Self {
+        Self {
+            state: FenceState::Detecting,
+            buf: String::new(),
+            tail: String::new(),
+        }
+    }
+
+    fn feed(&mut self, delta: &str) -> String {
+        let mut out = String::new();
+        match self.state {
+            FenceState::Detecting => {
+                self.buf.push_str(delta);
+                // Has the first newline arrived? If so, we can decide.
+                if let Some(nl) = self.buf.find('\n') {
+                    let first_line = self.buf[..nl].trim_start();
+                    if first_line.starts_with("```") {
+                        // Leading fence — drop the first line, advance to Inside.
+                        let rest = &self.buf[nl + 1..];
+                        self.state = FenceState::Inside;
+                        let drained = rest.to_string();
+                        self.buf.clear();
+                        out.push_str(&self.flush_inside(&drained));
+                    } else {
+                        // No fence — pass everything through, including the
+                        // first newline.
+                        self.state = FenceState::PassThrough;
+                        out.push_str(&self.buf);
+                        self.buf.clear();
+                    }
+                } else {
+                    // No newline yet — could_be_fence stays open ONLY if
+                    // the buffer is a strict prefix of "```". Anything
+                    // else (e.g. "`Hello" — TypeScript template literal)
+                    // commits to PassThrough immediately so we never
+                    // swallow real backtick-using code.
+                    let trimmed = self.buf.trim_start();
+                    let could_be_fence = trimmed.is_empty()
+                        || trimmed == "`"
+                        || trimmed == "``"
+                        || trimmed.starts_with("```");
+                    if !could_be_fence || self.buf.len() > 256 {
+                        self.state = FenceState::PassThrough;
+                        out.push_str(&self.buf);
+                        self.buf.clear();
+                    }
+                }
+            }
+            FenceState::Inside => {
+                out.push_str(&self.flush_inside(delta));
+            }
+            FenceState::PassThrough => {
+                out.push_str(delta);
+            }
+            FenceState::EatingEverything => { /* drop */ }
+        }
+        out
+    }
+
+    /// Process bytes while Inside a code fence: defer up to 3 trailing
+    /// chars in case they're the start of a closing ```. When a real
+    /// closing ``` arrives, swallow everything from there onward.
+    fn flush_inside(&mut self, delta: &str) -> String {
+        let combined = format!("{}{}", self.tail, delta);
+        self.tail.clear();
+        // Find a closing ``` anywhere; if present, emit up to it and
+        // drop the remainder (whitespace + closing fence + anything
+        // the model added after).
+        if let Some(idx) = combined.find("```") {
+            // Trim trailing whitespace before the fence too.
+            let before_fence = &combined[..idx];
+            let trimmed = before_fence.trim_end_matches(|c: char| c.is_whitespace());
+            self.state = FenceState::PassThrough; // emit any future deltas verbatim
+                                                  // (model is usually done; this guards
+                                                  // against tokens after the fence).
+            // But we want to ELIDE everything past the close, including
+            // any further deltas — switch to a sink-eating mode.
+            self.state = FenceState::EatingEverything;
+            return trimmed.to_string();
+        }
+        // No fence in this chunk. Defer the last up-to-3 chars in
+        // case they're the start of one.
+        let mut tail_size = 0usize;
+        for (i, _) in combined.char_indices().rev() {
+            tail_size = combined.len() - i;
+            if tail_size >= 3 {
+                break;
+            }
+        }
+        let split = combined.len().saturating_sub(tail_size.min(3));
+        let emitted = combined[..split].to_string();
+        self.tail = combined[split..].to_string();
+        // Only defer if the tail contains backticks; otherwise emit fully.
+        if !self.tail.contains('`') {
+            let full = format!("{}{}", emitted, self.tail);
+            self.tail.clear();
+            return full;
+        }
+        emitted
+    }
 }
 
 fn trust_error_response(code: u16, msg: &str) -> axum::response::Response {
