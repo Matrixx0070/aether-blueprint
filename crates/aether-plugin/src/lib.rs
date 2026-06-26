@@ -40,19 +40,49 @@ const HMAC_KEY_ENV: &str = "AETHER_PLUGIN_HMAC_KEY";
 const ENFORCE_SIGNING_ENV: &str = "AETHER_PLUGIN_ENFORCE_SIGNING";
 const TRUST_KEYCHAIN_REL: &str = ".aether/plugin-trust.txt";
 
-/// Path to the plugin trust keychain (`~/.aether/plugin-trust.txt`).
-/// Returns None when $HOME is not set. The file is line-delimited:
-/// one hex-encoded ed25519 public key per line; lines starting with
-/// `#` and blank lines are ignored.
+/// Path to the global plugin trust keychain (`~/.aether/plugin-trust.txt`).
+/// Returns None when $HOME is not set.
 pub fn trust_keychain_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|h| PathBuf::from(h).join(TRUST_KEYCHAIN_REL))
+}
+
+/// Resolve the trust keychain path for a given tenant. When `tenant`
+/// is None or empty, falls back to the global path (single-tenant
+/// install behavior unchanged). When set, points at
+/// `~/.aether/tenants/<slug>/plugin-trust.txt`.
+///
+/// Slug validation: only ASCII alphanumeric + `-` + `_` are allowed;
+/// anything else returns None so the loader can reject the request
+/// upstream. This blocks `../` traversal at the helper boundary.
+pub fn trust_keychain_path_for(tenant: Option<&str>) -> Option<PathBuf> {
+    let Some(slug) = tenant.filter(|s| !s.is_empty()) else {
+        return trust_keychain_path();
+    };
+    if !slug
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return None;
+    }
+    let home = std::env::var_os("HOME")?;
+    Some(
+        PathBuf::from(home)
+            .join(".aether/tenants")
+            .join(slug)
+            .join("plugin-trust.txt"),
+    )
 }
 
 /// Read the trust keychain. Returns an empty Vec when the file is
 /// absent or unreadable. Comment lines (`#…`) and blanks are skipped.
 /// Duplicates are de-duplicated, preserving first-seen order.
 pub fn load_trust_keychain() -> Vec<String> {
-    let Some(path) = trust_keychain_path() else {
+    load_trust_keychain_for(None)
+}
+
+/// Tenant-scoped variant. Empty or None tenant ⇒ global keychain.
+pub fn load_trust_keychain_for(tenant: Option<&str>) -> Vec<String> {
+    let Some(path) = trust_keychain_path_for(tenant) else {
         return Vec::new();
     };
     let Ok(content) = std::fs::read_to_string(&path) else {

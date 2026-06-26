@@ -2317,7 +2317,34 @@ struct TrustListResponse {
     path: String,
 }
 
-/// `GET /v1/trust` — list trusted ed25519 plugin pubkeys.
+/// Extract optional `X-Aether-Tenant` header. Returns Ok(None) when
+/// the header is absent or empty; Err response when the value
+/// contains characters that aren't [A-Za-z0-9_-].
+fn extract_tenant(
+    headers: &axum::http::HeaderMap,
+) -> Result<Option<String>, axum::response::Response> {
+    let Some(raw) = headers.get("x-aether-tenant") else {
+        return Ok(None);
+    };
+    let s = raw.to_str().unwrap_or("").trim();
+    if s.is_empty() {
+        return Ok(None);
+    }
+    if !s
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(trust_error_response(
+            400,
+            "X-Aether-Tenant must match [A-Za-z0-9_-]+",
+        ));
+    }
+    Ok(Some(s.to_string()))
+}
+
+/// `GET /v1/trust` — list trusted ed25519 plugin pubkeys for the
+/// optional X-Aether-Tenant; falls back to the global keychain when
+/// the header is absent.
 async fn trust_list_handler(
     axum::extract::State(state): axum::extract::State<ServeState>,
     headers: axum::http::HeaderMap,
@@ -2329,8 +2356,12 @@ async fn trust_list_handler(
     if let Err(resp) = check_bearer(&headers) {
         return resp;
     }
-    let keys = aether_plugin::load_trust_keychain();
-    let path = aether_plugin::trust_keychain_path()
+    let tenant = match extract_tenant(&headers) {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    let keys = aether_plugin::load_trust_keychain_for(tenant.as_deref());
+    let path = aether_plugin::trust_keychain_path_for(tenant.as_deref())
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "<HOME unset>".to_string());
     let body = serde_json::to_string(&TrustListResponse { keys, path })
@@ -2357,15 +2388,19 @@ async fn trust_add_handler(
     if let Err(resp) = check_bearer(&headers) {
         return resp;
     }
+    let tenant = match extract_tenant(&headers) {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
     let key = body.0.public_key.trim();
     if key.is_empty() || hex::decode(key).map(|b| b.len() != 32).unwrap_or(true) {
         return trust_error_response(400, "key must be 32-byte hex-encoded ed25519 public key");
     }
-    let path = match aether_plugin::trust_keychain_path() {
+    let path = match aether_plugin::trust_keychain_path_for(tenant.as_deref()) {
         Some(p) => p,
-        None => return trust_error_response(500, "HOME not set"),
+        None => return trust_error_response(500, "HOME not set or bad tenant slug"),
     };
-    let existing = aether_plugin::load_trust_keychain();
+    let existing = aether_plugin::load_trust_keychain_for(tenant.as_deref());
     if existing.iter().any(|k| k == key) {
         return trust_error_response(409, "key already trusted");
     }
@@ -2408,15 +2443,19 @@ async fn trust_remove_handler(
     if let Err(resp) = check_bearer(&headers) {
         return resp;
     }
+    let tenant = match extract_tenant(&headers) {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
     let prefix = body.0.prefix.trim();
     if prefix.is_empty() {
         return trust_error_response(400, "empty prefix");
     }
-    let path = match aether_plugin::trust_keychain_path() {
+    let path = match aether_plugin::trust_keychain_path_for(tenant.as_deref()) {
         Some(p) => p,
-        None => return trust_error_response(500, "HOME not set"),
+        None => return trust_error_response(500, "HOME not set or bad tenant slug"),
     };
-    let existing = aether_plugin::load_trust_keychain();
+    let existing = aether_plugin::load_trust_keychain_for(tenant.as_deref());
     let kept: Vec<String> = existing
         .iter()
         .filter(|k| !k.starts_with(prefix))
@@ -3775,7 +3814,7 @@ async fn run_security_eval_sweep(
 
 // ── usage tracking ───────────────────────────────────────────────────────
 
-const USAGE_SCHEMA_VERSION: u32 = 1;
+const USAGE_SCHEMA_VERSION: u32 = 2;
 
 fn usage_db_path() -> PathBuf {
     std::env::var_os("HOME")
@@ -3790,6 +3829,9 @@ fn open_usage_db() -> Result<rusqlite::Connection> {
     }
     let conn = rusqlite::Connection::open(&path)
         .with_context(|| format!("open usage db at {}", path.display()))?;
+    // Step 1: ensure schema_version + base tables exist. CREATE TABLE
+    // IF NOT EXISTS is a no-op when the table already exists at the
+    // older shape; the v1→v2 migration below handles the column add.
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS schema_version (
@@ -3804,7 +3846,8 @@ fn open_usage_db() -> Result<rusqlite::Connection> {
             output_tokens INTEGER NOT NULL,
             cache_creation_tokens INTEGER NOT NULL,
             cache_read_tokens INTEGER NOT NULL,
-            cost_usd REAL NOT NULL
+            cost_usd REAL NOT NULL,
+            tenant TEXT
         );
         CREATE INDEX IF NOT EXISTS turns_ts_idx ON turns(ts);
         CREATE TABLE IF NOT EXISTS tool_calls (
@@ -3813,7 +3856,8 @@ fn open_usage_db() -> Result<rusqlite::Connection> {
             session_id TEXT,
             tool_name TEXT NOT NULL,
             duration_ms INTEGER NOT NULL,
-            is_error INTEGER NOT NULL
+            is_error INTEGER NOT NULL,
+            tenant TEXT
         );
         CREATE INDEX IF NOT EXISTS tool_calls_ts_idx ON tool_calls(ts);
         "#,
@@ -3821,20 +3865,66 @@ fn open_usage_db() -> Result<rusqlite::Connection> {
     let existing: Option<u32> = conn
         .query_row("SELECT version FROM schema_version LIMIT 1", [], |r| r.get(0))
         .ok();
-    if let Some(v) = existing {
-        if v != USAGE_SCHEMA_VERSION {
+    match existing {
+        Some(v) if v == USAGE_SCHEMA_VERSION => { /* up to date */ }
+        Some(v) if v < USAGE_SCHEMA_VERSION => {
+            // Pre-existing DB at an older schema version: tables exist
+            // at the v1 shape (no `tenant` column). Add the column,
+            // then the index. ALTER ADD COLUMN tolerates the column
+            // existing only via err — use OR IGNORE pattern via direct
+            // pragma check.
+            if v == 1 {
+                let cols: Vec<String> = conn
+                    .prepare("PRAGMA table_info(turns)")?
+                    .query_map([], |r| r.get::<_, String>(1))?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                if !cols.iter().any(|c| c == "tenant") {
+                    conn.execute("ALTER TABLE turns ADD COLUMN tenant TEXT", [])?;
+                }
+                let cols2: Vec<String> = conn
+                    .prepare("PRAGMA table_info(tool_calls)")?
+                    .query_map([], |r| r.get::<_, String>(1))?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                if !cols2.iter().any(|c| c == "tenant") {
+                    conn.execute("ALTER TABLE tool_calls ADD COLUMN tenant TEXT", [])?;
+                }
+                conn.execute("UPDATE schema_version SET version = ?1", [USAGE_SCHEMA_VERSION])?;
+                eprintln!(
+                    "[usage db] migrated {} v1 → v2 (added `tenant` column)",
+                    path.display()
+                );
+            } else {
+                anyhow::bail!(
+                    "usage.db schema version {v} is older than {USAGE_SCHEMA_VERSION} \
+                     but no migration path is defined; delete {} and start fresh",
+                    path.display()
+                );
+            }
+        }
+        Some(v) => {
             anyhow::bail!(
-                "usage.db schema version {v} != binary's {USAGE_SCHEMA_VERSION}; \
-                 delete {} or use an aether version that matches",
-                path.display()
+                "usage.db schema version {v} is newer than binary's {USAGE_SCHEMA_VERSION}; \
+                 upgrade aether or point AETHER_USAGE_DB at a fresh path",
             );
         }
-    } else {
-        conn.execute(
-            "INSERT INTO schema_version (version) VALUES (?1)",
-            [USAGE_SCHEMA_VERSION],
-        )?;
+        None => {
+            conn.execute(
+                "INSERT INTO schema_version (version) VALUES (?1)",
+                [USAGE_SCHEMA_VERSION],
+            )?;
+        }
     }
+    // Step 2: indexes that depend on columns added in migrations.
+    // Safe to run unconditionally because the column is guaranteed
+    // present at this point (fresh DB has it; migrated DB just got it).
+    conn.execute_batch(
+        r#"
+        CREATE INDEX IF NOT EXISTS turns_tenant_idx ON turns(tenant);
+        CREATE INDEX IF NOT EXISTS tool_calls_tenant_idx ON tool_calls(tenant);
+        "#,
+    )?;
     Ok(conn)
 }
 
