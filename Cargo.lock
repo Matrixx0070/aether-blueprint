@@ -29,6 +29,7 @@ dependencies = [
  "crossterm",
  "futures-util",
  "hex",
+ "jsonwebtoken",
  "notify",
  "once_cell",
  "rand_core 0.6.4",

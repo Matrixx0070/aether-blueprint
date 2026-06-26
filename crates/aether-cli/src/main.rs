@@ -6084,6 +6084,24 @@ async fn sso_login() -> Result<()> {
         .get("access_token")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
+
+    // S2: when an id_token is present AND the issuer published a
+    // jwks_uri, validate the JWT signature locally before persisting.
+    // Refuses to write the token on failure — the operator gets the
+    // OIDC issuer's real provenance proof, not just "the file is non-
+    // empty". When jwks_uri is None (older issuers), the validation
+    // is skipped with a warning. When only access_token came back
+    // (no id_token), validation is also skipped.
+    if let (Some(jwt), Some(jwks_uri)) = (id_token.as_deref(), cfg.jwks_uri.as_deref()) {
+        eprintln!("[sso login] validating id_token against {jwks_uri}");
+        validate_id_token(jwt, jwks_uri, &cfg.client_id, &cfg.issuer).await?;
+        eprintln!("[sso login] id_token signature OK");
+    } else if id_token.is_some() && cfg.jwks_uri.is_none() {
+        eprintln!(
+            "[sso login] WARN id_token present but issuer published no jwks_uri — skipping signature validation"
+        );
+    }
+
     let token_value = id_token
         .or(access_token)
         .ok_or_else(|| anyhow!("token response has neither id_token nor access_token"))?;
@@ -6106,6 +6124,93 @@ async fn sso_login() -> Result<()> {
         token_value.len(),
         tok_path.display()
     );
+    Ok(())
+}
+
+/// Fetch the issuer's JWKS, find the JWK matching the JWT header's
+/// `kid`, and verify the signature locally. Supports RS256 and ES256
+/// (the two most widely-deployed OIDC algorithms). Also asserts
+/// `iss` and `aud` claims match the configured issuer + client_id.
+///
+/// Returns Ok(()) when the token is valid; Err with a human-readable
+/// reason otherwise. Refuses to persist on any error path so an
+/// attacker who controls the token endpoint can't slip in a forged
+/// id_token by manipulating the response body.
+async fn validate_id_token(
+    jwt: &str,
+    jwks_uri: &str,
+    expected_aud: &str,
+    expected_iss: &str,
+) -> Result<()> {
+    use jsonwebtoken::{Algorithm, DecodingKey, Validation};
+
+    // 1. Decode the unverified header to learn the kid + alg.
+    let header =
+        jsonwebtoken::decode_header(jwt).context("id_token: cannot decode JWT header")?;
+    let kid = header.kid.ok_or_else(|| anyhow!("id_token header missing `kid`"))?;
+    let alg = header.alg;
+    // Restrict accepted algorithms to the two we'll actually verify;
+    // anything else is rejected even if the JWK matches.
+    if !matches!(alg, Algorithm::RS256 | Algorithm::ES256) {
+        anyhow::bail!(
+            "id_token alg `{:?}` not in accepted set (RS256, ES256)",
+            alg
+        );
+    }
+
+    // 2. Pull the JWKS and find the matching key.
+    let jwks: serde_json::Value = reqwest::get(jwks_uri)
+        .await
+        .with_context(|| format!("GET {jwks_uri}"))?
+        .json()
+        .await
+        .context("parse JWKS JSON")?;
+    let keys = jwks
+        .get("keys")
+        .and_then(|k| k.as_array())
+        .ok_or_else(|| anyhow!("JWKS doc has no `keys` array"))?;
+    let jwk = keys
+        .iter()
+        .find(|k| k.get("kid").and_then(|v| v.as_str()) == Some(&kid))
+        .ok_or_else(|| anyhow!("no JWK matched kid `{kid}`"))?;
+
+    let decoding_key = match alg {
+        Algorithm::RS256 => {
+            let n = jwk
+                .get("n")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("RS256 JWK missing `n`"))?;
+            let e = jwk
+                .get("e")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("RS256 JWK missing `e`"))?;
+            DecodingKey::from_rsa_components(n, e)
+                .context("DecodingKey::from_rsa_components")?
+        }
+        Algorithm::ES256 => {
+            let x = jwk
+                .get("x")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("ES256 JWK missing `x`"))?;
+            let y = jwk
+                .get("y")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("ES256 JWK missing `y`"))?;
+            DecodingKey::from_ec_components(x, y)
+                .context("DecodingKey::from_ec_components")?
+        }
+        _ => unreachable!("alg restricted above"),
+    };
+
+    // 3. Validate signature + iss + aud + exp.
+    let mut validation = Validation::new(alg);
+    validation.set_issuer(&[expected_iss]);
+    validation.set_audience(&[expected_aud]);
+    // Default: exp validated, 60s leeway. Don't loosen further.
+    let _token_data: jsonwebtoken::TokenData<serde_json::Value> =
+        jsonwebtoken::decode(jwt, &decoding_key, &validation)
+            .context("id_token signature/claims verify")?;
+
     Ok(())
 }
 
