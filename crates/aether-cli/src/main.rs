@@ -376,6 +376,12 @@ enum PluginCmd {
         /// signature math.
         #[arg(long)]
         enforce_commit_pinned: bool,
+        /// Resolve the manifest's `commit_sha` against a git repo URL
+        /// (or local path). Runs `git ls-remote <url> <sha>` and
+        /// exits non-zero if the SHA doesn't resolve. Closes the
+        /// "commit_sha is opaque" weakest point from R5.
+        #[arg(long)]
+        resolve_commit: Option<String>,
     },
     /// Generate a fresh ed25519 keypair and write it to two files:
     /// `<name>.priv` (private key, mode 0600) and `<name>.pub`
@@ -5711,6 +5717,101 @@ fn register_subprocess_plugins(tools: &mut ToolRegistry) {
     );
 }
 
+/// S4: Confirm `sha` is reachable in the given git repo.
+///   - When `repo` is a URL (contains `://` or starts with `git@`):
+///     `git ls-remote <repo> <sha>` (probes refs) AND a separate
+///     `git fetch --depth=1 <repo> <sha>` into a temp bare repo
+///     (catches the SHA-not-on-any-ref case).
+///   - When `repo` is a local path (or `.`): `git -C <path>
+///     cat-file -t <sha>` and assert the type is `commit`.
+fn resolve_commit_in_repo(repo: &str, sha: &str) -> Result<()> {
+    let is_url = repo.contains("://") || repo.starts_with("git@");
+    if is_url {
+        // ls-remote first — fast, no clone.
+        let out = std::process::Command::new("git")
+            .args(["ls-remote", repo])
+            .output()
+            .with_context(|| format!("git ls-remote {repo}"))?;
+        if !out.status.success() {
+            anyhow::bail!(
+                "git ls-remote {repo} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        // ls-remote lines: "<sha>\t<ref>". Match if any line begins
+        // with the full SHA OR with a prefix that the user supplied.
+        let found = stdout.lines().any(|line| {
+            line.split_whitespace()
+                .next()
+                .map(|first| first == sha || first.starts_with(sha))
+                .unwrap_or(false)
+        });
+        if found {
+            eprintln!("[plugin verify] commit_sha {sha} resolved via ls-remote refs of {repo}");
+            return Ok(());
+        }
+        // ls-remote only lists ref tips; the SHA could still be an
+        // unannotated commit reachable via fetch. Try a shallow fetch.
+        let tmp = tempfile_dir()?;
+        let init = std::process::Command::new("git")
+            .args(["init", "--bare", "--quiet"])
+            .arg(&tmp)
+            .output()
+            .context("git init --bare")?;
+        if !init.status.success() {
+            anyhow::bail!(
+                "git init --bare failed: {}",
+                String::from_utf8_lossy(&init.stderr)
+            );
+        }
+        let fetch = std::process::Command::new("git")
+            .args(["-C"])
+            .arg(&tmp)
+            .args(["fetch", "--depth=1", repo, sha])
+            .output()
+            .context("git fetch")?;
+        // Clean up before reporting either path.
+        let _ = std::fs::remove_dir_all(&tmp);
+        if !fetch.status.success() {
+            anyhow::bail!(
+                "commit_sha {sha} not reachable in {repo} via ls-remote or fetch: {}",
+                String::from_utf8_lossy(&fetch.stderr).trim()
+            );
+        }
+        eprintln!("[plugin verify] commit_sha {sha} resolved via shallow fetch of {repo}");
+        Ok(())
+    } else {
+        let out = std::process::Command::new("git")
+            .args(["-C", repo, "cat-file", "-t", sha])
+            .output()
+            .with_context(|| format!("git -C {repo} cat-file -t {sha}"))?;
+        if !out.status.success() {
+            anyhow::bail!(
+                "git cat-file -t {sha} in {repo} failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        let kind = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if kind != "commit" {
+            anyhow::bail!("{sha} in {repo} is a `{kind}`, not a commit");
+        }
+        eprintln!("[plugin verify] commit_sha {sha} is a real commit in {repo}");
+        Ok(())
+    }
+}
+
+fn tempfile_dir() -> Result<PathBuf> {
+    use std::time::SystemTime;
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dir = std::env::temp_dir().join(format!("aether-resolve-{nanos}"));
+    std::fs::create_dir_all(&dir).with_context(|| format!("mkdir {}", dir.display()))?;
+    Ok(dir)
+}
+
 fn plugin_cmd(sub: PluginCmd) -> Result<()> {
     match sub {
         PluginCmd::Keypair { stem } => {
@@ -5797,7 +5898,7 @@ fn plugin_cmd(sub: PluginCmd) -> Result<()> {
             Ok(())
         }
         PluginCmd::Trust { sub } => trust_cmd(sub),
-        PluginCmd::Verify { manifest, public_key, enforce_commit_pinned } => {
+        PluginCmd::Verify { manifest, public_key, enforce_commit_pinned, resolve_commit } => {
             let bytes = std::fs::read(&manifest)
                 .with_context(|| format!("read {}", manifest.display()))?;
             let (sig_opt, alg, name) =
@@ -5806,11 +5907,21 @@ fn plugin_cmd(sub: PluginCmd) -> Result<()> {
             let Some(claimed_hex) = sig_opt else {
                 anyhow::bail!("manifest has no `signature` field");
             };
+            let manifest_value: Option<serde_json::Value> =
+                if enforce_commit_pinned || resolve_commit.is_some() {
+                    Some(
+                        serde_json::from_slice(&bytes)
+                            .with_context(|| format!("parse {}", manifest.display()))?,
+                    )
+                } else {
+                    None
+                };
+            let commit_sha = manifest_value
+                .as_ref()
+                .and_then(|v| v.get("commit_sha"))
+                .and_then(|x| x.as_str());
             if enforce_commit_pinned {
-                let v: serde_json::Value = serde_json::from_slice(&bytes)
-                    .with_context(|| format!("parse {}", manifest.display()))?;
-                let cs = v.get("commit_sha").and_then(|x| x.as_str());
-                match cs {
+                match commit_sha {
                     Some(s) if !s.is_empty() => {
                         eprintln!("[plugin verify] commit_sha pinned: {s}");
                     }
@@ -5818,6 +5929,12 @@ fn plugin_cmd(sub: PluginCmd) -> Result<()> {
                         "--enforce-commit-pinned: manifest is missing `commit_sha` field"
                     ),
                 }
+            }
+            if let Some(repo) = &resolve_commit {
+                let sha = commit_sha.ok_or_else(|| {
+                    anyhow!("--resolve-commit requires the manifest to carry `commit_sha`")
+                })?;
+                resolve_commit_in_repo(repo, sha)?;
             }
             match alg.as_str() {
                 "hmac-sha256" => {
