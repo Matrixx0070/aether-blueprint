@@ -2200,6 +2200,7 @@ async fn run_serve(
         )
         .route("/v1/rollback", post(rollback_handler))
         .route("/v1/complete", post(complete_handler))
+        .route("/metrics", axum::routing::get(metrics_handler))
         .route("/healthz", axum::routing::get(|| async { "ok" }))
         .with_state(state.clone());
     let listener = tokio::net::TcpListener::bind(bind)
@@ -2224,6 +2225,7 @@ async fn run_serve(
     eprintln!("  DEL  /v1/trust     remove a key (body: {{\"prefix\":\"<hex>\"}})");
     eprintln!("  POST /v1/rollback  roll a file back to a captured pre-state (body: {{\"file_path\":\"<p>\",\"original_contents\":\"<s>\",\"did_not_exist\":bool}})");
     eprintln!("  POST /v1/complete  code-completion SSE stream (body: {{\"before\":\"<s>\",\"after\":\"<s>\",\"model\":\"<id>\",\"language\":\"<id>\"}})");
+    eprintln!("  GET  /metrics      Prometheus text-format counters (turns, tool_calls, complete, 4xx, 429, rollback)");
     eprintln!("  GET  /healthz");
     eprintln!(
         "  [rate-limit: {} rpm/IP, max-sessions: {}]",
@@ -2246,6 +2248,7 @@ fn extract_client_ip(headers: &axum::http::HeaderMap) -> String {
 
 fn rate_check(state: &ServeState, ip: &str) -> Result<(), axum::response::Response> {
     if let Err(retry) = state.rate.check(ip) {
+        bump(&METRIC_429_TOTAL);
         return Err(axum::response::Response::builder()
             .status(axum::http::StatusCode::TOO_MANY_REQUESTS)
             .header("Retry-After", retry.to_string())
@@ -2694,6 +2697,7 @@ async fn rollback_handler(
     headers: axum::http::HeaderMap,
     body: axum::Json<RollbackRequest>,
 ) -> axum::response::Response {
+    bump(&METRIC_ROLLBACK_TOTAL);
     let ip = extract_client_ip(&headers);
     if let Err(resp) = rate_check(&state, &ip) {
         return resp;
@@ -2772,6 +2776,7 @@ async fn complete_handler(
     headers: axum::http::HeaderMap,
     body: axum::Json<CompleteRequest>,
 ) -> axum::response::Response {
+    bump(&METRIC_COMPLETE_TOTAL);
     let ip = extract_client_ip(&headers);
     if let Err(resp) = rate_check(&state, &ip) {
         return resp;
@@ -3032,7 +3037,79 @@ impl FenceStripper {
     }
 }
 
+// ── U1: Prometheus metrics ───────────────────────────────────────────────
+
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static METRIC_TURNS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static METRIC_TOOL_CALLS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static METRIC_TOOL_CALLS_ERRORS: AtomicU64 = AtomicU64::new(0);
+static METRIC_COMPLETE_TOTAL: AtomicU64 = AtomicU64::new(0);
+static METRIC_ROLLBACK_TOTAL: AtomicU64 = AtomicU64::new(0);
+static METRIC_429_TOTAL: AtomicU64 = AtomicU64::new(0);
+static METRIC_4XX_TOTAL: AtomicU64 = AtomicU64::new(0);
+static METRIC_TURN_DURATION_MS_SUM: AtomicU64 = AtomicU64::new(0);
+
+fn bump(c: &AtomicU64) {
+    c.fetch_add(1, Ordering::Relaxed);
+}
+fn bump_by(c: &AtomicU64, n: u64) {
+    c.fetch_add(n, Ordering::Relaxed);
+}
+
+/// `GET /metrics` — Prometheus exposition format. Honours bearer
+/// auth when AETHER_SERVE_TOKEN is set (operator can put it behind
+/// a firewall otherwise). Rate-limit middleware NOT applied — a
+/// scraper polling once a second should always succeed.
+async fn metrics_handler(headers: axum::http::HeaderMap) -> axum::response::Response {
+    if let Err(resp) = check_bearer(&headers) {
+        return resp;
+    }
+    let body = format!(
+        "# HELP aether_turns_total Agent turns completed across all routes.\n\
+         # TYPE aether_turns_total counter\n\
+         aether_turns_total {}\n\
+         # HELP aether_tool_calls_total Tool dispatches recorded.\n\
+         # TYPE aether_tool_calls_total counter\n\
+         aether_tool_calls_total {}\n\
+         # HELP aether_tool_calls_errors_total Tool dispatches with is_error=true.\n\
+         # TYPE aether_tool_calls_errors_total counter\n\
+         aether_tool_calls_errors_total {}\n\
+         # HELP aether_complete_total POST /v1/complete requests.\n\
+         # TYPE aether_complete_total counter\n\
+         aether_complete_total {}\n\
+         # HELP aether_rollback_total POST /v1/rollback successes.\n\
+         # TYPE aether_rollback_total counter\n\
+         aether_rollback_total {}\n\
+         # HELP aether_429_total Rate-limit refusals.\n\
+         # TYPE aether_429_total counter\n\
+         aether_429_total {}\n\
+         # HELP aether_4xx_total Non-429 client errors emitted.\n\
+         # TYPE aether_4xx_total counter\n\
+         aether_4xx_total {}\n\
+         # HELP aether_turn_duration_ms_sum Cumulative sum of turn durations (ms).\n\
+         # TYPE aether_turn_duration_ms_sum counter\n\
+         aether_turn_duration_ms_sum {}\n",
+        METRIC_TURNS_TOTAL.load(Ordering::Relaxed),
+        METRIC_TOOL_CALLS_TOTAL.load(Ordering::Relaxed),
+        METRIC_TOOL_CALLS_ERRORS.load(Ordering::Relaxed),
+        METRIC_COMPLETE_TOTAL.load(Ordering::Relaxed),
+        METRIC_ROLLBACK_TOTAL.load(Ordering::Relaxed),
+        METRIC_429_TOTAL.load(Ordering::Relaxed),
+        METRIC_4XX_TOTAL.load(Ordering::Relaxed),
+        METRIC_TURN_DURATION_MS_SUM.load(Ordering::Relaxed),
+    );
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header("content-type", "text/plain; version=0.0.4")
+        .body(axum::body::Body::from(body))
+        .unwrap_or_default()
+}
+
 fn trust_error_response(code: u16, msg: &str) -> axum::response::Response {
+    if (400..500).contains(&code) {
+        bump(&METRIC_4XX_TOTAL);
+    }
     let body = format!(
         r#"{{"error":"{}","detail":"{}"}}"#,
         match code {
@@ -4416,6 +4493,7 @@ fn record_turn_usage(
     usage: &aether_llm::Usage,
     cost_usd: f64,
 ) {
+    bump(&METRIC_TURNS_TOTAL);
     let ts = chrono::Utc::now().to_rfc3339();
     let conn = match open_usage_db() {
         Ok(c) => c,
@@ -7967,6 +8045,11 @@ fn record_tool_call(
     is_error: bool,
     tenant: Option<&str>,
 ) {
+    bump(&METRIC_TOOL_CALLS_TOTAL);
+    bump_by(&METRIC_TURN_DURATION_MS_SUM, duration_ms);
+    if is_error {
+        bump(&METRIC_TOOL_CALLS_ERRORS);
+    }
     if std::env::var("AETHER_NO_USAGE_DB").ok().as_deref() == Some("1") {
         return;
     }
