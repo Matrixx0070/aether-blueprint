@@ -15,6 +15,7 @@
 import * as vscode from 'vscode';
 import { spawn, ChildProcess } from 'child_process';
 import { showChatPanel } from './panel';
+import { showTrustPanel } from './trust';
 
 let output: vscode.OutputChannel | null = null;
 let activeProc: ChildProcess | null = null;
@@ -176,6 +177,9 @@ export function activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(vscode.commands.registerCommand('aether.doctor', cmdDoctor));
     context.subscriptions.push(
         vscode.commands.registerCommand('aether.openChat', () => showChatPanel(context)),
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand('aether.openTrust', () => showTrustPanel(context)),
     );
 }
 

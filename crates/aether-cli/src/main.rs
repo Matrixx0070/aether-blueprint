@@ -18,7 +18,7 @@ use aether_core::{agent_turn, agent_turn_streamed, Session, SessionConfig, TurnO
 use aether_overlay::aether_hook::{Reminder, ReminderKind, Source};
 use aether_tools::{Tool, ToolError};
 use async_trait::async_trait;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use aether_llm::{
     anthropic::AnthropicProvider, bedrock::BedrockProvider, vertex::VertexProvider, ContentBlock,
@@ -2012,6 +2012,12 @@ async fn run_serve(
             post(post_messages_handler),
         )
         .route("/ws/chat", axum::routing::get(ws_chat_handler))
+        .route(
+            "/v1/trust",
+            axum::routing::get(trust_list_handler)
+                .post(trust_add_handler)
+                .delete(trust_remove_handler),
+        )
         .route("/healthz", axum::routing::get(|| async { "ok" }))
         .with_state(state.clone());
     let listener = tokio::net::TcpListener::bind(bind)
@@ -2031,6 +2037,9 @@ async fn run_serve(
     };
     eprintln!("  POST /v1/messages  {{\"prompt\": \"...\", \"model\": \"...\"}}  (default model: {model})");
     eprintln!("  GET  /ws/chat      (WebSocket; send {{\"prompt\":\"...\"}} text frames, receive delta + done frames){auth_note}");
+    eprintln!("  GET  /v1/trust     list trusted plugin keys (bearer-protected; same token as /ws/chat)");
+    eprintln!("  POST /v1/trust     add a key (body: {{\"public_key\":\"<hex>\"}})");
+    eprintln!("  DEL  /v1/trust     remove a key (body: {{\"prefix\":\"<hex>\"}})");
     eprintln!("  GET  /healthz");
     eprintln!(
         "  [rate-limit: {} rpm/IP, max-sessions: {}]",
@@ -2198,6 +2207,202 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         diff |= a[i] ^ b[i];
     }
     diff == 0
+}
+
+/// Shared bearer-token gate for `/v1/trust`. Returns Ok(()) when the
+/// request is authorised, or Err with a 401 response. Honours
+/// `AETHER_SERVE_NO_AUTH=1` (skip) and `AETHER_SERVE_TOKEN` (required
+/// when set + non-empty) — same contract as the WS handler.
+fn check_bearer(headers: &axum::http::HeaderMap) -> Result<(), axum::response::Response> {
+    if std::env::var("AETHER_SERVE_NO_AUTH").ok().as_deref() == Some("1") {
+        return Ok(());
+    }
+    let Ok(expected) = std::env::var("AETHER_SERVE_TOKEN") else {
+        return Ok(());
+    };
+    if expected.is_empty() {
+        return Ok(());
+    }
+    let provided = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let presented = provided
+        .strip_prefix("Bearer ")
+        .map(|s| s.trim())
+        .unwrap_or("");
+    if constant_time_eq(presented.as_bytes(), expected.as_bytes()) {
+        Ok(())
+    } else {
+        Err(axum::response::Response::builder()
+            .status(axum::http::StatusCode::UNAUTHORIZED)
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                r#"{"error":"unauthorized","detail":"valid Authorization: Bearer <token> required"}"#,
+            ))
+            .unwrap_or_default())
+    }
+}
+
+#[derive(Deserialize)]
+struct TrustAddRequest {
+    public_key: String,
+}
+
+#[derive(Deserialize)]
+struct TrustRemoveRequest {
+    prefix: String,
+}
+
+#[derive(Serialize)]
+struct TrustListResponse {
+    keys: Vec<String>,
+    path: String,
+}
+
+/// `GET /v1/trust` — list trusted ed25519 plugin pubkeys.
+async fn trust_list_handler(
+    axum::extract::State(state): axum::extract::State<ServeState>,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    let ip = extract_client_ip(&headers);
+    if let Err(resp) = rate_check(&state, &ip) {
+        return resp;
+    }
+    if let Err(resp) = check_bearer(&headers) {
+        return resp;
+    }
+    let keys = aether_plugin::load_trust_keychain();
+    let path = aether_plugin::trust_keychain_path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "<HOME unset>".to_string());
+    let body = serde_json::to_string(&TrustListResponse { keys, path })
+        .unwrap_or_else(|_| "{}".into());
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body))
+        .unwrap_or_default()
+}
+
+/// `POST /v1/trust` — add an ed25519 pubkey to the trust keychain.
+/// Body: `{"public_key":"<hex>"}`. Returns 200 on success, 400 on
+/// validation failure, 409 if the key is already trusted.
+async fn trust_add_handler(
+    axum::extract::State(state): axum::extract::State<ServeState>,
+    headers: axum::http::HeaderMap,
+    body: axum::Json<TrustAddRequest>,
+) -> axum::response::Response {
+    let ip = extract_client_ip(&headers);
+    if let Err(resp) = rate_check(&state, &ip) {
+        return resp;
+    }
+    if let Err(resp) = check_bearer(&headers) {
+        return resp;
+    }
+    let key = body.0.public_key.trim();
+    if key.is_empty() || hex::decode(key).map(|b| b.len() != 32).unwrap_or(true) {
+        return trust_error_response(400, "key must be 32-byte hex-encoded ed25519 public key");
+    }
+    let path = match aether_plugin::trust_keychain_path() {
+        Some(p) => p,
+        None => return trust_error_response(500, "HOME not set"),
+    };
+    let existing = aether_plugin::load_trust_keychain();
+    if existing.iter().any(|k| k == key) {
+        return trust_error_response(409, "key already trusted");
+    }
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut content = std::fs::read_to_string(&path).unwrap_or_default();
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str(key);
+    content.push('\n');
+    if let Err(e) = std::fs::write(&path, content) {
+        return trust_error_response(500, &format!("write {}: {e}", path.display()));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(r#"{"status":"added"}"#))
+        .unwrap_or_default()
+}
+
+/// `DELETE /v1/trust` — remove keys by hex prefix.
+/// Body: `{"prefix":"<hex>"}`. Returns 200 with removed-count on
+/// success, 404 if no key matches.
+async fn trust_remove_handler(
+    axum::extract::State(state): axum::extract::State<ServeState>,
+    headers: axum::http::HeaderMap,
+    body: axum::Json<TrustRemoveRequest>,
+) -> axum::response::Response {
+    let ip = extract_client_ip(&headers);
+    if let Err(resp) = rate_check(&state, &ip) {
+        return resp;
+    }
+    if let Err(resp) = check_bearer(&headers) {
+        return resp;
+    }
+    let prefix = body.0.prefix.trim();
+    if prefix.is_empty() {
+        return trust_error_response(400, "empty prefix");
+    }
+    let path = match aether_plugin::trust_keychain_path() {
+        Some(p) => p,
+        None => return trust_error_response(500, "HOME not set"),
+    };
+    let existing = aether_plugin::load_trust_keychain();
+    let kept: Vec<String> = existing
+        .iter()
+        .filter(|k| !k.starts_with(prefix))
+        .cloned()
+        .collect();
+    let removed = existing.len() - kept.len();
+    if removed == 0 {
+        return trust_error_response(404, &format!("no trusted key starts with '{prefix}'"));
+    }
+    let mut out = String::new();
+    for k in &kept {
+        out.push_str(k);
+        out.push('\n');
+    }
+    if let Err(e) = std::fs::write(&path, out) {
+        return trust_error_response(500, &format!("write {}: {e}", path.display()));
+    }
+    let body = format!(r#"{{"status":"removed","removed":{removed},"remaining":{}}}"#, kept.len());
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body))
+        .unwrap_or_default()
+}
+
+fn trust_error_response(code: u16, msg: &str) -> axum::response::Response {
+    let body = format!(
+        r#"{{"error":"{}","detail":"{}"}}"#,
+        match code {
+            400 => "bad_request",
+            401 => "unauthorized",
+            404 => "not_found",
+            409 => "conflict",
+            500 => "internal",
+            _ => "error",
+        },
+        msg.replace('"', "\\\"")
+    );
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::from_u16(code).unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR))
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body))
+        .unwrap_or_default()
 }
 
 async fn handle_ws_chat(mut socket: axum::extract::ws::WebSocket, state: ServeState) {

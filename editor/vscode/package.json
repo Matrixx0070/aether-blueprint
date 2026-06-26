@@ -48,6 +48,10 @@
             {
                 "command": "aether.openChat",
                 "title": "aether: Open chat panel"
+            },
+            {
+                "command": "aether.openTrust",
+                "title": "aether: Open plugin trust panel"
             }
         ],
         "configuration": {
