@@ -1,0 +1,49 @@
+<idea-plugin>
+    <id>com.aether.jetbrains</id>
+    <name>Aether</name>
+    <vendor email="frankmartin7722@gmail.com" url="https://github.com/Matrixx0070/aether-blueprint">Matrixx0070</vendor>
+
+    <description><![CDATA[
+        Connects JetBrains IDEs to a running <code>aether serve</code> instance.<br/>
+        Open the <b>Aether</b> tool window, type a prompt, watch streamed
+        responses with per-turn token + cost. Configure the server URL and
+        bearer token in <i>Settings &gt; Tools &gt; Aether</i>.<br/>
+        <br/>
+        Same wire protocol as the VS Code panel — point at the same
+        <code>aether serve</code> backend and you get identical behaviour
+        across editors.
+    ]]></description>
+
+    <change-notes><![CDATA[
+        <b>0.20.0</b> — initial scaffold. Tool window, settings panel, WS streaming.
+    ]]></change-notes>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow
+            id="Aether"
+            anchor="right"
+            factoryClass="com.aether.AetherToolWindowFactory"
+            icon="AllIcons.Toolwindows.ToolWindowMessages"/>
+
+        <applicationConfigurable
+            parentId="tools"
+            instance="com.aether.AetherSettingsConfigurable"
+            id="com.aether.settings"
+            displayName="Aether"/>
+
+        <applicationService
+            serviceImplementation="com.aether.AetherSettings"/>
+    </extensions>
+
+    <actions>
+        <action id="com.aether.AskAction"
+                class="com.aether.AskAction"
+                text="Aether: Ask…"
+                description="Ask the Aether agent">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="control alt A"/>
+        </action>
+    </actions>
+</idea-plugin>
