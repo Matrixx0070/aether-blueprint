@@ -23,7 +23,32 @@ Each tarball ships with a SHA256 the script verifies before extraction. See
 `INSTALL.md` for the manual download + verify path and the source-build
 fallback.
 
-## Status: v0.17.0
+## Status: v0.18.0
+
+Plan N shipped five production-posture features (24h autonomous run):
+
+- **N1 ed25519 asymmetric plugin signing** — sister to the v0.17 HMAC
+  path; manifest `algorithm` field dispatches between them. New
+  `aether plugin keypair` generates an ed25519 keypair pair; `sign`
+  accepts `--algorithm ed25519 --private-key <FILE>`; `verify` accepts
+  `--public-key <FILE>`. Discovery checks against
+  `AETHER_PLUGIN_ED25519_PUBKEY`. Trust model uplift: plugin marketplaces
+  are now feasible (publisher signs with private key, consumers verify
+  with public key alone).
+- **N2 token-bucket rate limit** on `/v1/messages` + `/ws/chat`. Per-IP,
+  in-memory; `AETHER_SERVE_RATE_LIMIT_RPM` (default 60). 429 with
+  `Retry-After`. `X-Forwarded-For` honoured.
+- **N3 audit-log syslog forwarding** + `aether audit tail [--follow]`.
+  When `AETHER_AUDIT_SYSLOG=1`, each JSONL entry tees to syslog with
+  facility LOG_USER. `aether audit tail` is operator-friendly with
+  poll-based follow.
+- **N4 per-org policy file** at `~/.aether/policy.json`.
+  `model_allowlist` enforced at boot; `tool_blocklist` +
+  `max_tokens_per_turn` stored for v0.19 enforcement. Path overridable
+  via `AETHER_POLICY_FILE`.
+- **N5 concurrent-session cap** on `aether serve` via
+  `AETHER_SERVE_MAX_SESSIONS` (default 32). 503 with `Retry-After: 5`
+  past the cap. RAII guards so panics still release slots.
 
 Plan M shipped five hardening / surface upgrades (24h autonomous run):
 

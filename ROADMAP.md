@@ -313,13 +313,41 @@ extensibility.
   sufficient for self-verification; asymmetric-signed marketplace
   is v0.18+.
 
-## v0.18 — production posture (next)
+## v0.18 — production posture — shipped 2026-06-26
 
-- Asymmetric plugin signing (ed25519) for marketplace use
-- Rate limit + concurrent-session cap on `aether serve`
-- Audit-log forwarding to syslog / SIEM
-- Per-org policy file enforcement at `build_provider()`
-- JetBrains plugin (Kotlin)
+- **N1 ed25519 asymmetric plugin signing** alongside v0.17 HMAC.
+  Manifest `algorithm` field dispatches; `aether plugin keypair / sign
+  --algorithm ed25519 --private-key / verify --public-key`. Discovery
+  uses `AETHER_PLUGIN_ED25519_PUBKEY`. 4 unit tests including
+  cross-keypair tamper. Live-verified end-to-end this session
+  (round-trip, tamper, cross-keypair).
+- **N2 token-bucket rate limit** on `/v1/messages` + `/ws/chat`.
+  Per-IP, in-memory. `AETHER_SERVE_RATE_LIMIT_RPM` (default 60).
+  X-Forwarded-For honoured. 429 + `Retry-After`. Kill-switch
+  `AETHER_SERVE_RATE_LIMIT_RPM=0`.
+- **N3 audit syslog tee + tail**. `AETHER_AUDIT_SYSLOG=1` forwards
+  every audit_append entry to `/dev/log` (Linux) / `/var/run/log`
+  (macOS) with `LOG_USER` facility. New `aether audit tail [--follow]
+  [--limit N]` subcommand prints recent entries, optionally
+  poll-streaming new ones.
+- **N4 per-org policy file** at `~/.aether/policy.json` (override via
+  `AETHER_POLICY_FILE`). `model_allowlist`: refuses boot (exit code 2)
+  if the resolved model isn't on the list. `tool_blocklist` +
+  `max_tokens_per_turn` stored via OnceCell, ready for executor
+  enforcement in v0.19.
+- **N5 concurrent-session cap** on `aether serve`. Atomic counter on
+  POST `/v1/messages` + WS `/ws/chat`. 503 + `Retry-After: 5` past
+  `AETHER_SERVE_MAX_SESSIONS` (default 32). RAII `SessionGuard` so
+  panics / WS hangups release the slot.
+
+## v0.19 — executor policy enforcement + cost dashboard (next)
+
+- Tool-blocklist + max-tokens-per-turn enforced inside the executor
+  (today they're parsed but not applied to dispatch)
+- Live cost dashboard via `aether usage --days N --by-model --by-tool`
+- Inotify-based audit tail (replace 500ms poll)
+- Asymmetric plugin keychain integration (rather than raw hex files)
+- JetBrains plugin (Kotlin, separate language stack)
 - BYOC: Mantle
 
 ## v0.9 — enterprise

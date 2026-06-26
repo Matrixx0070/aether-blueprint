@@ -1,123 +1,119 @@
-# Next 24-hour autonomous plan — Plan N
+# Next 24-hour autonomous plan — Plan O
 
-Drafted at end of Plan M (v0.16 → v0.17). Picks up the v0.18+ scope items
-listed in `ROADMAP.md` and the LOW findings from M7 self-audit.
+Drafted at end of Plan N (v0.17 → v0.18). Picks up the v0.19+ scope items
+in `ROADMAP.md` and the LOW findings from N7 self-audit.
 
 ---
 
-## Plan N — production posture + plugin marketplace
+## Plan O — executor-level policy enforcement + cost transparency
 
-**MISSION**: Move aether from "single-user CLI / dev IDE" → "multi-user
-production posture" with rate limiting, audit-log forwarding, per-org
-policy enforcement, and asymmetric plugin signing (so a marketplace
-becomes feasible).
+**MISSION**: Close the v0.18 gap that `tool_blocklist` /
+`max_tokens_per_turn` are parsed-but-not-enforced. Ship a real cost
+dashboard so operators can answer "what did we spend last week, on
+what models, on what tools?" without grepping JSONL by hand.
 
 **DONE MEANS** (6 criteria):
 
-1. **Asymmetric plugin signing (ed25519)** alongside the M5 HMAC path.
-   Manifests gain an `algorithm` field — `"hmac-sha256"` (the v0.17
-   default) or `"ed25519"`. New `aether plugin keypair` subcommand
-   produces a fresh ed25519 keypair PEM. `aether plugin sign` accepts
-   `--key <PEM>` and `aether plugin verify` accepts `--public-key
-   <PEM>`. 4 unit tests including a cross-keypair tamper-detect case.
-2. **Rate limit on `aether serve`**. Configurable via env:
-   `AETHER_SERVE_RATE_LIMIT_RPM` (per-IP requests per minute, default
-   60). Token-bucket implementation, in-memory. 429 with
-   `Retry-After: <seconds>` on exhaustion. Live-verified with a hammer
-   loop.
-3. **Audit-log forwarding** — `~/.aether/audit.jsonl` lines optionally
-   tee'd to syslog (Unix `LOG_USER`) when `AETHER_AUDIT_SYSLOG=1` is
-   set. New `aether audit tail --follow` companion to `aether audit
-   verify` so operators can watch live.
-4. **Per-org policy file enforcement** at `build_provider()`. New
-   `~/.aether/policy.json` schema with `model_allowlist`,
-   `tool_blocklist`, `max_tokens_per_turn`. Refusal at boot if config
-   conflicts with policy; live error on tool call if policy changed
-   mid-session. 4 unit tests.
-5. **Concurrent-session cap on `aether serve`** via
-   `AETHER_SERVE_MAX_SESSIONS` (default 32). 503 with
-   `Retry-After: 5` past the cap.
-6. **v0.18.0 binary release** shipped + verified, all 4 platforms.
+1. **Tool-blocklist enforced at executor dispatch**. Every tool call
+   passes through `policy_allows_tool(name)` before reaching the
+   registry. A blocked tool returns `ToolError::PermissionDenied(...)`
+   with the policy file's path in the message. Audit chain records
+   the refusal as a separate entry kind. 4 unit tests including
+   "agent calls blocked tool then routes around it".
+2. **`max_tokens_per_turn` enforced** at `Session::new` — cap kicks
+   in before the LLM call, not after. Live-verified against a long
+   prompt that would otherwise exceed.
+3. **`aether usage` command** with three flag families:
+   - `--days N`: filter to the last N days (default 7)
+   - `--by-model`: group cost by `session.usage_total.model`
+   - `--by-tool`: group invocations by tool name
+   Sources data from a new SQLite at `~/.aether/usage.db` populated
+   by a hook on every agent_turn finish.
+4. **inotify-based audit tail** replaces the 500ms poll on Linux
+   (poll fallback on macOS / where `inotify_init` isn't available).
+5. **Asymmetric plugin keychain** — `aether plugin trust <pub>`
+   appends to `~/.aether/plugin-trust.txt`; `discover_plugins()`
+   accepts a manifest signed by ANY listed pubkey, not just one
+   `$AETHER_PLUGIN_ED25519_PUBKEY`. v0.19 = poor-man's
+   marketplace.
+6. **v0.19.0 binary release** shipped + verified, all 4 platforms.
 
 **ASSUMPTIONS** (defaults picked):
 
-- ed25519 via `ed25519-dalek` (the standard pure-Rust impl, already
-  battle-tested in the rustls ecosystem).
-- Token-bucket rate limit is per-IP (`X-Forwarded-For` honoured when
-  present; raw socket addr otherwise). No distributed rate-limit
-  state — fits the single-process posture; multi-replica is N+1.
-- Policy file is JSON, NOT YAML, for parser uniformity with the rest
-  of `~/.aether/`.
-- Audit-syslog forwarding uses the `syslog` crate (Unix only).
-  Windows users get a no-op + warning.
+- SQLite via `rusqlite` (bundled feature). Adds ~1.5MB binary but
+  is the standard Rust stdlib for embedded analytics. Live cost
+  dashboard wouldn't be sane without indexed queries.
+- inotify via `notify` crate, Linux only; macOS falls back to the
+  existing poll loop without a separate code path.
+- `~/.aether/usage.db` schema is internal — operators query via
+  `aether usage`, not direct SQL. Schema can change between minor
+  versions without notice.
+- Plugin trust file is line-delimited hex pubkeys. Comments allowed
+  with `#`. No revocation list yet.
 
 **NON-GOALS** (explicitly out):
 
-- Plugin marketplace UI itself (just the signing primitive that
-  makes one possible).
-- Federation / multi-server orchestration.
-- mTLS on `aether serve` (TLS termination belongs at a reverse proxy).
-- Hardware-key signing (yubikey, etc.).
-- Apple notarization.
+- Distributed audit forwarding (kafka, kinesis). Per-host syslog
+  already shipped in N3.
+- Cost dashboard web UI. CLI table output is the v0.19 surface.
+- Plugin marketplace UI / hosting (just the trust primitive).
+- JetBrains plugin (still slated for Plan P).
+- Mantle BYOC (slated for Plan P).
 
 **Phase breakdown** (~24h):
 
 | Phase | Time | Slices |
 |-------|------|--------|
-| **N1**: asymmetric plugin signing | 6h | ed25519-dalek dep, algorithm-field on manifest, keypair subcommand, sign/verify accept `--key/--public-key`, 4 unit tests, cross-keypair tamper case |
-| **N2**: rate limit | 3h | token-bucket implementation, X-Forwarded-For parse, axum middleware integration, 429 + Retry-After, hammer-loop smoke test |
-| **N3**: audit-log syslog tee | 3h | syslog crate dep, optional tee on audit_append, `aether audit tail --follow` for live viewing, smoke test on a Linux box |
-| **N4**: per-org policy file | 5h | ~/.aether/policy.json schema (model_allowlist + tool_blocklist + max_tokens_per_turn), parse at build_provider, refuse boot on conflict, live-error on cross-session policy change, 4 unit tests |
-| **N5**: concurrent-session cap | 2h | atomic counter on /v1/messages and /ws/chat, 503 with Retry-After, smoke test |
-| **N6**: ship v0.18.0 | 2h | bump + tag + autobuild + install verify |
-| **N7**: self-audit + Plan O | 3h | LOW/MEDIUM scan, M-style honest report, Plan O draft |
+| **O1**: tool-blocklist in executor | 4h | wire `policy_allows_tool` into `Executor::execute_call`, refuse-error variant, audit entry, 4 unit tests + agent-loop integration test |
+| **O2**: max_tokens_per_turn cap | 2h | apply at Session::new, live verify with a 100k-char prompt that gets truncated to the cap |
+| **O3**: usage SQLite + `aether usage` | 8h | rusqlite dep, schema (`turns(ts, model, in, out, cache_w, cache_r, cost, session_id)`, `tool_calls(ts, tool, dur_ms, session_id)`), per-turn writer hook, `usage` subcommand with three group-by modes, 5 unit tests |
+| **O4**: inotify audit tail | 3h | notify crate dep, Linux backend, macOS poll fallback, smoke test |
+| **O5**: plugin trust keychain | 3h | trust file at `~/.aether/plugin-trust.txt`, `aether plugin trust` subcommand, `discover_plugins` accepts ANY listed pubkey, 3 unit tests |
+| **O6**: ship v0.19.0 | 2h | bump + tag + autobuild + install verify |
+| **O7**: self-audit + Plan P | 2h | LOW/MEDIUM scan, Plan P draft (JetBrains + Mantle + something) |
 
-**API budget**: ~$2-5 for live verification round-trips. Hammer
-loops use Haiku.
+**API budget**: $2-3 for live verification round-trips. Most slices
+have no LLM cost.
 
 **WEAKEST POINT**:
 
-N4 — policy file enforcement. The line between "block tool X" and
-"the agent picks a different valid path around tool X" is fuzzy.
-Honest framing: refuse the call at the executor; let the agent loop
-retry / replan if it can. Tests will pin both the refusal-on-call
-side AND the "agent gets a `refused: policy` ToolError back into
-context" side so behavior is observable.
+O3 — SQLite schema design. Once shipped, schema changes are user-
+breaking. Mitigation: ship `~/.aether/usage.db` as v1 with a
+`schema_version` row that future versions check; `aether usage` errors
+informatively on schema mismatch instead of silently misreading.
 
 **Failure modes to catch via self-audit**:
 
-- Rate limiter that double-counts retries (RetryingProvider →
-  same logical "request" → 5 rapid retries → 429 spuriously).
-- Audit-syslog that buffers forever when syslog is unreachable —
-  silently drop after a configurable backlog.
-- Policy file that allows the model to bypass via a sub-agent
-  (AgentTool inheriting the parent's permissions). Audit the
-  AgentTool registration path.
-- ed25519 verifier that returns ok on absent signature when
-  `algorithm` was set — must fail-closed.
+- Tool-blocklist that the agent can bypass via `AgentTool` (sub-agent
+  inherits parent's tool registry). Wire blocklist into
+  AgentTool::new's registry filter.
+- `max_tokens_per_turn` cap that breaks streaming mid-response
+  (cap should refuse before LLM call, not truncate mid-stream).
+- Usage writer that blocks the agent loop on disk I/O. Use a
+  channel + background thread.
+- inotify on a path that doesn't exist yet (first audit entry).
+  Watch the dir, not the file.
+- Plugin trust file with embedded newlines / non-hex content —
+  reject with line number in error message.
 
 ---
 
-## Pre-flight checklist (run at next-session start)
+## Pre-flight checklist
 
-1. `git -C /root/aether-blueprint status` — clean tree?
-2. `git -C /root/aether-blueprint log -5 --oneline` — last commit
-   is v0.17.0 docs?
-3. `cargo test --workspace --release` — all green before adding new
-   code (note: the `prune_window_perf_at_realistic_scale` test is
-   `#[ignore]`'d and only runs under `-- --ignored`)
-4. `gh release view v0.17.0` — confirm v0.17.0 binary is live
-5. Read this file + the previous session's `wiki/hot.md` entry
+1. `git status` — clean tree?
+2. `git log -5 --oneline` — last commit is v0.18.0 docs?
+3. `cargo test --workspace` — green (1 #[ignore]'d perf microbench)
+4. `gh release view v0.18.0` — confirm binary live
+5. Re-read this file + the previous session's `wiki/hot.md` entry
 
 ---
 
-## Candidate plans for 24h after Plan N
+## Candidate plans for 24h after Plan O
 
-- **Plan O** (cost optimization): cache-aware retry, partial-stream
+- **Plan P** (cross-IDE matrix): JetBrains plugin (Kotlin), Mantle
+  BYOC provider, VS Code marketplace publish.
+- **Plan Q** (research artifact): SWE-Bench-Lite submission with
+  aether's numbers + harness description published as a technical
+  report.
+- **Plan R** (cost optimization): cache-aware retry, partial-stream
   resume, sub-agent fan-out for parallel codebase analysis.
-- **Plan P** (research artifact): a real SWE-Bench-Lite submission
-  with aether's numbers + harness description published as a
-  technical report.
-- **Plan Q** (mantle BYOC + JetBrains): finally close the
-  cross-IDE matrix and the cross-provider matrix to "all the big
-  ones."

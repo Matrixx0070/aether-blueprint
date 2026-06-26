@@ -88,4 +88,8 @@ format: `[slice] [status] [commit] [verifier] [live-check] note`
 | M3 | DONE | 52c2a4d | n/a | constant-time bearer compare + 401 on mismatch | /ws/chat bearer auth |
 | M4 | DONE | 52c2a4d | n/a | tsc clean: extension.js 8KB + panel.js 11KB | VS Code multi-turn webview |
 | M5 | DONE | 0b83a7a | n/a | 7/7 aether-plugin tests (+3 HMAC: round-trip / tamper / unsigned) | plugin HMAC signing + CLI |
+| M5-fix | DONE | ba822da | n/a | live: WASM-manifest verify passed | runtime-agnostic plugin verify |
+| M6 | DONE | d45b0e4,d3f4… | n/a | v0.17.0 binary release LIVE (4 platforms, $0.0025 test cost) | bump 0.17.0 |
+| N1 | DONE | 1495bb8,8cabdce | n/a | 11/11 aether-plugin tests (+4 ed25519) · live keypair + sign + verify + tamper + cross-keypair | ed25519 asymmetric plugin signing |
+| N2-N5 | DONE | af17fd4 | n/a | workspace tests green; live rate-limit/policy/tail verification pending v0.18 binary | rate limit + audit syslog + audit tail + policy file + session cap |
 
