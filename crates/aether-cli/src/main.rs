@@ -234,6 +234,28 @@ enum Cmd {
         #[command(subcommand)]
         sub: ConfigCmd,
     },
+    /// Plugin admin: sign + verify subprocess-plugin manifests.
+    Plugin {
+        #[command(subcommand)]
+        sub: PluginCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum PluginCmd {
+    /// Compute the HMAC-SHA256 signature for a plugin manifest and
+    /// write it back into the file under the "signature" field. Reads
+    /// the key from $AETHER_PLUGIN_HMAC_KEY (or fail if unset).
+    Sign {
+        /// Path to the manifest.json to sign.
+        manifest: PathBuf,
+    },
+    /// Verify a manifest's existing signature against
+    /// $AETHER_PLUGIN_HMAC_KEY. Exits 0 on valid, 1 on mismatch.
+    Verify {
+        /// Path to the manifest.json to verify.
+        manifest: PathBuf,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -400,6 +422,9 @@ async fn main() -> Result<()> {
         Some(Cmd::Mcp { sub }) => {
             return mcp_cmd(sub).await;
         }
+        Some(Cmd::Plugin { sub }) => {
+            return plugin_cmd(sub);
+        }
         Some(Cmd::Config { sub }) => {
             match sub {
                 ConfigCmd::Show => {
@@ -554,6 +579,7 @@ async fn run_print_agent(
     tools.register(Box::new(MemoryReadTool));
     tools.register(Box::new(MemoryWriteTool));
     register_subprocess_plugins(&mut tools);
+    register_wasm_plugins(&mut tools);
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
     inject_project_context(&mut session);
     if let Some(idx) = memory_index_reminder() {
@@ -787,6 +813,7 @@ async fn run_repl(
     tools.register(Box::new(MemoryReadTool));
     tools.register(Box::new(MemoryWriteTool));
     register_subprocess_plugins(&mut tools);
+    register_wasm_plugins(&mut tools);
 
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
     // Install an interactive permission prompter for mutating tools when in
@@ -1712,8 +1739,19 @@ async fn run_serve(
         .await
         .with_context(|| format!("bind {bind}"))?;
     eprintln!("[aether serve] listening on http://{bind}");
+    let auth_note = if std::env::var("AETHER_SERVE_NO_AUTH").ok().as_deref() == Some("1") {
+        " [auth: DISABLED (AETHER_SERVE_NO_AUTH=1)]"
+    } else if std::env::var("AETHER_SERVE_TOKEN")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .is_some()
+    {
+        " [auth: bearer token (AETHER_SERVE_TOKEN set)]"
+    } else {
+        " [auth: NONE — set AETHER_SERVE_TOKEN to require Bearer auth on /ws/chat]"
+    };
     eprintln!("  POST /v1/messages  {{\"prompt\": \"...\", \"model\": \"...\"}}  (default model: {model})");
-    eprintln!("  GET  /ws/chat      (WebSocket; send {{\"prompt\":\"...\"}} text frames, receive delta + done frames)");
+    eprintln!("  GET  /ws/chat      (WebSocket; send {{\"prompt\":\"...\"}} text frames, receive delta + done frames){auth_note}");
     eprintln!("  GET  /healthz");
     axum::serve(listener, app).await.context("axum serve")?;
     Ok(())
@@ -1727,9 +1765,52 @@ async fn run_serve(
 /// connection closes — keeps server logic simple; clients reconnect.
 async fn ws_chat_handler(
     axum::extract::State(state): axum::extract::State<ServeState>,
+    headers: axum::http::HeaderMap,
     ws: axum::extract::WebSocketUpgrade,
 ) -> axum::response::Response {
+    // Optional bearer auth: when AETHER_SERVE_TOKEN is set, the client
+    // must send `Authorization: Bearer <that_token>` on the upgrade
+    // request. Constant-time comparison so a wrong token doesn't leak
+    // length / character info.
+    let kill = std::env::var("AETHER_SERVE_NO_AUTH").ok().as_deref() == Some("1");
+    if !kill {
+        if let Ok(expected) = std::env::var("AETHER_SERVE_TOKEN") {
+            if !expected.is_empty() {
+                let provided = headers
+                    .get(axum::http::header::AUTHORIZATION)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("");
+                let presented = provided
+                    .strip_prefix("Bearer ")
+                    .map(|s| s.trim())
+                    .unwrap_or("");
+                if !constant_time_eq(presented.as_bytes(), expected.as_bytes()) {
+                    return axum::response::Response::builder()
+                        .status(axum::http::StatusCode::UNAUTHORIZED)
+                        .body(axum::body::Body::from(
+                            r#"{"error":"unauthorized","detail":"valid Authorization: Bearer <token> required"}"#,
+                        ))
+                        .unwrap_or_default();
+                }
+            }
+        }
+    }
     ws.on_upgrade(move |socket| handle_ws_chat(socket, state))
+}
+
+/// Constant-time byte comparison so wrong tokens don't reveal length /
+/// first-mismatch position through timing. Returns false on length
+/// mismatch (length-leak is acceptable here; the timing leak across
+/// the body content is what matters).
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for i in 0..a.len() {
+        diff |= a[i] ^ b[i];
+    }
+    diff == 0
 }
 
 async fn handle_ws_chat(mut socket: axum::extract::ws::WebSocket, state: ServeState) {
@@ -1970,6 +2051,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
     tools.register(Box::new(MemoryReadTool));
     tools.register(Box::new(MemoryWriteTool));
     register_subprocess_plugins(&mut tools);
+    register_wasm_plugins(&mut tools);
 
     let mut session = Session::new(config, overlay, provider_arc, gate, tools);
     inject_project_context(&mut session);
@@ -4135,6 +4217,77 @@ fn register_subprocess_plugins(tools: &mut ToolRegistry) {
     }
     eprintln!(
         "[plugin] loaded {count} subprocess plugin(s): {}",
+        names.join(", ")
+    );
+}
+
+fn plugin_cmd(sub: PluginCmd) -> Result<()> {
+    let key = std::env::var("AETHER_PLUGIN_HMAC_KEY")
+        .context("AETHER_PLUGIN_HMAC_KEY not set — required for plugin sign/verify")?;
+    if key.is_empty() {
+        anyhow::bail!("AETHER_PLUGIN_HMAC_KEY is empty");
+    }
+    match sub {
+        PluginCmd::Sign { manifest } => {
+            let bytes = std::fs::read(&manifest)
+                .with_context(|| format!("read {}", manifest.display()))?;
+            let sig = aether_plugin::canonical_manifest_hmac(&bytes, key.as_bytes())
+                .map_err(|e| anyhow!("hmac: {e}"))?;
+            // Write back: parse, set "signature", serialise pretty.
+            let mut value: serde_json::Value = serde_json::from_slice(&bytes)
+                .context("manifest is not valid JSON")?;
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert(
+                    "signature".into(),
+                    serde_json::Value::String(sig.clone()),
+                );
+            } else {
+                anyhow::bail!("manifest root must be a JSON object");
+            }
+            let out = serde_json::to_string_pretty(&value)?;
+            std::fs::write(&manifest, out)
+                .with_context(|| format!("write {}", manifest.display()))?;
+            println!("[plugin sign] wrote signature to {}", manifest.display());
+            println!("  signature = {sig}");
+            Ok(())
+        }
+        PluginCmd::Verify { manifest } => {
+            let bytes = std::fs::read(&manifest)
+                .with_context(|| format!("read {}", manifest.display()))?;
+            let m: aether_plugin::PluginManifest = serde_json::from_slice(&bytes)
+                .context("parse manifest")?;
+            match aether_plugin::verify_manifest_signature(&bytes, &m, key.as_bytes()) {
+                Ok(true) => {
+                    println!("[plugin verify] OK — {} signature valid", m.name);
+                    Ok(())
+                }
+                Ok(false) => {
+                    anyhow::bail!("manifest has no `signature` field");
+                }
+                Err(e) => {
+                    anyhow::bail!("verify failed: {e}");
+                }
+            }
+        }
+    }
+}
+
+/// Discover WASM-sandboxed plugins (sister loader to the subprocess
+/// one). Same dir layout; manifest must declare `"runtime": "wasm"`.
+fn register_wasm_plugins(tools: &mut ToolRegistry) {
+    let plugins = aether_plugin_wasm::discover_wasm_plugins();
+    if plugins.is_empty() {
+        return;
+    }
+    let count = plugins.len();
+    let mut names: Vec<String> = Vec::with_capacity(count);
+    for p in plugins {
+        let name = p.name().to_string();
+        tools.register(Box::new(p));
+        names.push(name);
+    }
+    eprintln!(
+        "[plugin] loaded {count} wasm plugin(s): {}",
         names.join(", ")
     );
 }

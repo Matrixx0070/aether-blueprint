@@ -1,0 +1,15 @@
+{
+    "name": "plugin__wasm_echo",
+    "description": "Sandboxed WASM plugin example. Takes {name: string}, returns a greeting.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "Name to greet"
+            }
+        }
+    },
+    "runtime": "wasm",
+    "wasm_path": "./aether_wasm_echo.wasm"
+}

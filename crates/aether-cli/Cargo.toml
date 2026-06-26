@@ -30,6 +30,7 @@ aether-skill.workspace = true
 aether-mem.workspace = true
 aether-sec.workspace = true
 aether-plugin.workspace = true
+aether-plugin-wasm.workspace = true
 once_cell.workspace = true
 chrono.workspace = true
 rustyline = "13"

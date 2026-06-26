@@ -1,0 +1,20 @@
+[workspace]
+# Empty workspace stanza — keeps this example out of the outer
+# aether-blueprint workspace so the wasm32-wasip1 target doesn't
+# pollute the main workspace's lockfile.
+
+[package]
+name = "aether_wasm_echo"
+version = "0.16.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[[bin]]
+name = "aether_wasm_echo"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = "symbols"
+codegen-units = 1

@@ -10,3 +10,4 @@
 editor/vscode/out/
 editor/vscode/node_modules/
 editor/vscode/*.vsix
+editor/wasm-plugin-example/target/
