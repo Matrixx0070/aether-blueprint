@@ -382,6 +382,13 @@ enum PluginCmd {
         /// "commit_sha is opaque" weakest point from R5.
         #[arg(long)]
         resolve_commit: Option<String>,
+        /// Additionally require that the resolved commit be signed
+        /// (gpg or ssh, per the repo's git config). Runs `git
+        /// verify-commit <sha>` and refuses on missing/bad signature.
+        /// Requires --resolve-commit to point at a LOCAL path (URL
+        /// resolution doesn't fetch the commit object itself).
+        #[arg(long, requires = "resolve_commit")]
+        require_signed_commit: bool,
     },
     /// Generate a fresh ed25519 keypair and write it to two files:
     /// `<name>.priv` (private key, mode 0600) and `<name>.pub`
@@ -6106,6 +6113,45 @@ fn resolve_commit_in_repo(repo: &str, sha: &str) -> Result<()> {
     }
 }
 
+/// T3: run `git verify-commit <sha>` in the given repo and require a
+/// successful gpg/ssh signature validation. Refuses (1) URL repos —
+/// we don't fetch the commit object body in the URL path; only the
+/// SHA's reachability is proven via ls-remote — and (2) any signature
+/// outcome other than "Good signature". The flag enforces operator
+/// intent: "I trust this plugin BECAUSE it was signed by a
+/// pre-known committer key".
+fn require_signed_commit_in_repo(repo: &str, sha: &str) -> Result<()> {
+    let is_url = repo.contains("://") || repo.starts_with("git@");
+    if is_url {
+        anyhow::bail!(
+            "--require-signed-commit currently requires a LOCAL --resolve-commit \
+             path; URL mode only proves reachability, not the commit body"
+        );
+    }
+    let out = std::process::Command::new("git")
+        .args(["-C", repo, "verify-commit", sha])
+        .output()
+        .with_context(|| format!("git -C {repo} verify-commit {sha}"))?;
+    // git verify-commit writes both gpg/ssh-verify status messages
+    // to stderr; success means exit 0 AND "Good signature" / "Good
+    // \"git\" signature" / "Good signature from" appears in stderr.
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    if !out.status.success() {
+        anyhow::bail!(
+            "git verify-commit {sha} failed: {}",
+            stderr.trim()
+        );
+    }
+    if !stderr.contains("Good") {
+        anyhow::bail!(
+            "git verify-commit {sha} exited 0 but stderr lacks 'Good signature': {}",
+            stderr.trim()
+        );
+    }
+    eprintln!("[plugin verify] commit_sha {sha} carries a valid signature");
+    Ok(())
+}
+
 fn tempfile_dir() -> Result<PathBuf> {
     use std::time::SystemTime;
     let nanos = SystemTime::now()
@@ -6203,7 +6249,7 @@ fn plugin_cmd(sub: PluginCmd) -> Result<()> {
             Ok(())
         }
         PluginCmd::Trust { sub } => trust_cmd(sub),
-        PluginCmd::Verify { manifest, public_key, enforce_commit_pinned, resolve_commit } => {
+        PluginCmd::Verify { manifest, public_key, enforce_commit_pinned, resolve_commit, require_signed_commit } => {
             let bytes = std::fs::read(&manifest)
                 .with_context(|| format!("read {}", manifest.display()))?;
             let (sig_opt, alg, name) =
@@ -6240,6 +6286,9 @@ fn plugin_cmd(sub: PluginCmd) -> Result<()> {
                     anyhow!("--resolve-commit requires the manifest to carry `commit_sha`")
                 })?;
                 resolve_commit_in_repo(repo, sha)?;
+                if require_signed_commit {
+                    require_signed_commit_in_repo(repo, sha)?;
+                }
             }
             match alg.as_str() {
                 "hmac-sha256" => {
