@@ -446,16 +446,39 @@ extensibility.
   close the moment the operator supplies AWS creds, JDK 21 +
   Gradle, or a Mantle endpoint respectively.
 
-## v0.23 — next (draft)
+## v0.23 — token-binding, JWT validation, completion API — shipped 2026-06-26
 
-- Token-binding for tenants (bearer ↔ allowed-tenants mapping)
-- JWT signature validation against issuer's jwks_uri (R4 follow-up)
-- Plugin manifest commit_sha → verify the SHA actually exists in
-  a repo the user controls (R5 follow-up)
-- Per-tool tool_call telemetry (latency + error categories) into
-  usage.db `tool_calls` table
-- Code-completion API endpoint
-- Team-shared trust keychain (git-backed)
+- **S2 JWT signature validation in `aether sso login`** — after the
+  token exchange, fetch jwks_uri, find the JWK by `kid`, verify
+  RS256/ES256 + iss + aud + exp locally; refuse to persist the
+  token on any failure. Closes R7 MED #1.
+- **S1 tenant ACL** — `~/.aether/tenants.json` binds bearer-sha256
+  ↔ allowed tenants. `aether tenant grant/list/revoke` admin
+  surface. Server gate returns 403 on mismatch. Closes R7 MED #2.
+- **S3 `tool_calls` writers** — Post-phase tool_hook records
+  `(name, duration_ms, is_error)` rows into the schema row that
+  shipped empty in v0.19. `aether usage --by-tool` finally has data.
+- **S4 `aether plugin verify --resolve-commit <repo>`** — runs
+  `git ls-remote` (URL) or `git cat-file -t` (local path) against
+  the manifest's commit_sha; exits non-zero if the SHA doesn't
+  resolve. Closes R7 LOW #2.
+- **S5 `POST /v1/complete`** — fill-in-the-middle code completion
+  with SSE delta streaming. Same bearer + tenant gates as /ws/chat.
+- **S6 `aether plugin trust sync --remote <git-url> [--push]`** —
+  pulls a team-curated `trusted-keys.txt` and merges it additively
+  (union) into the local keychain. With --push, also writes back.
+
+## v0.24 — next (draft)
+
+- EdDSA support in JWT validation (S2 follow-up)
+- Per-tool tool_use_id keying in tool_calls (S3 follow-up)
+- `aether plugin verify --require-signed-commit` (gpg verify on
+  the resolved SHA — S4 follow-up)
+- Code-completion: server-side fence-strip + language-aware
+  trimming (S5 follow-up)
+- Team trust keychain rotation / revocation semantics (S6 follow-up)
+- Closing R1/R2/R3 cred-blocked UNVERIFIEDs when operator supplies
+  AWS / JDK21 / Mantle inputs
 
 ## v0.9 — enterprise
 

@@ -23,7 +23,24 @@ Each tarball ships with a SHA256 the script verifies before extraction. See
 `INSTALL.md` for the manual download + verify path and the source-build
 fallback.
 
-## Status: v0.22.0
+## Status: v0.23.0
+
+Plan S shipped six features that close every R7 audit MED + open up an SSE completion API + git-backed team trust (24h autonomous run):
+
+- **S2 JWT signature validation** in `aether sso login` — verifies
+  RS256/ES256 against the issuer's jwks_uri before persisting the
+  token. Closes R7 MED #1.
+- **S1 tenant ACL** — `aether tenant grant/list/revoke` + server
+  middleware that 403s on bearer↔tenant mismatch. Closes R7 MED #2.
+- **S3 `tool_calls` writers** — `aether usage --by-tool` now shows
+  real per-tool latencies + error counts.
+- **S4 `aether plugin verify --resolve-commit <repo>`** — proves
+  the manifest's `commit_sha` is a real commit in the named repo.
+- **S5 `POST /v1/complete`** — fill-in-the-middle code completion
+  with SSE delta streaming; same bearer + tenant gates.
+- **S6 `aether plugin trust sync --remote <url> [--push]`** —
+  git-backed team trust keychain; pull is additive (union),
+  optional push writes the merged set back.
 
 Plan R shipped three enterprise-hardening features + carried Q3/Q4/Q5 UNVERIFIEDs (24h autonomous run):
 

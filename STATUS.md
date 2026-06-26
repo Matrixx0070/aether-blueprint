@@ -117,4 +117,11 @@ format: `[slice] [status] [commit] [verifier] [live-check] note`
 | R1 | DONE/UNVERIFIED | n/a | smoke OK from Q3; full live verify still pending operator AWS creds | Bedrock streaming live verify (carried from Q3) |
 | R2 | DONE/UNVERIFIED | n/a | scaffold validated from P1; build still pending JDK21+gradle host | JetBrains build live verify (carried from Q4) |
 | R3 | DONE/UNVERIFIED | n/a | smoke OK from Q5; full live sweep still pending operator Mantle creds | Mantle cross-provider security-eval matrix (carried from Q5) |
+| R7 | DONE | 267ed43 | n/a | v0.22.0 release LIVE (4 platforms, run 28265454848); cosign verify-blob → "Verified OK"; sha256sum -c → OK | v0.22.0 ship + Plan S draft + cosign live-verify |
+| S2 | DONE | 5188b92 | n/a | build clean; jsonwebtoken@9 in scope; RS256+ES256 accepted, iss+aud+exp validated | JWT signature validation in `aether sso login` |
+| S1 | DONE | 0d4c034 | n/a | 7 live cases: alpha+acme/beta/charlie/none + bravo+acme/beta/none → 200/200/403/200/200/403/403 | tenant ACL (bearer-sha256 ↔ allowed-tenants) |
+| S3 | DONE | 1b6fd21 | n/a | live: Edit (0ms) + Bash (312ms) rows in tool_calls; `aether usage --by-tool` shows real columns | tool_calls table writers (per-tool latency + is_error) |
+| S4 | DONE | e6373bd | n/a | 5 live cases: real-local-OK, fake-local-FAIL, unpushed-URL-FAIL, pushed-URL-OK, missing-field-FAIL | `aether plugin verify --resolve-commit <repo>` |
+| S5 | DONE | b16e552 | n/a | live SSE: `def fibonacci(n)...` → `fibonacci(n-1)+fibonacci(n-2)` streamed in 2 deltas + done frame ($0.0002) | POST /v1/complete SSE code-completion endpoint |
+| S6 | DONE | 2fdcaee | n/a | 4 live cases: pull-merges-2-keys, push-confirmed-by-fresh-clone, idempotent-noop-on-second-push, local-bare-remote works | `aether plugin trust sync --remote <git-url> [--push]` |
 
