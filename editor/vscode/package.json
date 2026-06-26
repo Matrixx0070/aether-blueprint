@@ -2,7 +2,7 @@
     "name": "aether",
     "displayName": "aether",
     "description": "Agentic coding via aether — runs aether-cli as a child process, streams output into VS Code.",
-    "version": "0.16.0",
+    "version": "0.17.0",
     "publisher": "matrixx0070",
     "license": "Apache-2.0",
     "engines": {
@@ -27,6 +27,10 @@
             {
                 "command": "aether.doctor",
                 "title": "aether: Doctor (health check)"
+            },
+            {
+                "command": "aether.openChat",
+                "title": "aether: Open chat panel"
             }
         ],
         "configuration": {
@@ -52,6 +56,16 @@
                         "bypassPermissions"
                     ],
                     "description": "Permission mode passed to `aether -p`. bypassPermissions allows aether to Edit/Write/Bash without prompting (use with care)."
+                },
+                "aether.serveUrl": {
+                    "type": "string",
+                    "default": "ws://127.0.0.1:7777/ws/chat",
+                    "description": "WebSocket URL for the chat panel. Run `aether serve --bind 127.0.0.1:7777` separately."
+                },
+                "aether.serveToken": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Optional bearer token sent on the WS upgrade. Required only when the server was started with AETHER_SERVE_TOKEN set."
                 }
             }
         },

@@ -14,6 +14,7 @@
 
 import * as vscode from 'vscode';
 import { spawn, ChildProcess } from 'child_process';
+import { showChatPanel } from './panel';
 
 let output: vscode.OutputChannel | null = null;
 let activeProc: ChildProcess | null = null;
@@ -173,6 +174,9 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.commands.registerCommand('aether.askAboutSelection', cmdAskAboutSelection),
     );
     context.subscriptions.push(vscode.commands.registerCommand('aether.doctor', cmdDoctor));
+    context.subscriptions.push(
+        vscode.commands.registerCommand('aether.openChat', () => showChatPanel(context)),
+    );
 }
 
 export function deactivate(): void {
