@@ -310,6 +310,26 @@ enum SsoCmd {
     Login,
     /// Delete ~/.aether/sso.token (does not touch sso.json).
     Logout,
+    /// Configure a SAML 2.0 IdP. Fetches the IdP's metadata XML at
+    /// --idp-metadata-url, extracts the SingleSignOnService endpoint
+    /// + the IdP signing certificate, and writes the discovered
+    /// fields to ~/.aether/sso-saml.json (mode 0600).
+    ///
+    /// SCAFFOLD ONLY in v0.25 — the parsed endpoint + cert are
+    /// stored, but the redirect-binding login flow + signed
+    /// assertion validation are Plan V scope. The metadata
+    /// extraction uses strict regex matching (no XML parser pulled
+    /// into the dep tree); v0.26+ will swap to a proper parser when
+    /// the login flow lands.
+    ConfigureSaml {
+        /// HTTPS URL of the IdP's federation metadata XML.
+        #[arg(long)]
+        idp_metadata_url: String,
+        /// Entity ID this aether install presents as (the
+        /// SP entityID). Default: aether's own URL.
+        #[arg(long, default_value = "https://aether.invalid/saml/sp")]
+        sp_entity_id: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -6671,6 +6691,9 @@ async fn sso_cmd(sub: SsoCmd) -> Result<()> {
             Ok(())
         }
         SsoCmd::Login => sso_login().await,
+        SsoCmd::ConfigureSaml { idp_metadata_url, sp_entity_id } => {
+            sso_configure_saml(&idp_metadata_url, &sp_entity_id).await
+        }
         SsoCmd::Logout => {
             let path = sso_token_path()?;
             match std::fs::remove_file(&path) {
@@ -6991,6 +7014,121 @@ async fn validate_id_token(
         jsonwebtoken::decode(jwt, &decoding_key, &validation)
             .context("id_token signature/claims verify")?;
 
+    Ok(())
+}
+
+/// U6: SAML scaffolding. Fetches the IdP federation metadata XML at
+/// `idp_metadata_url`, extracts the SSO endpoint URL + signing
+/// certificate, writes to ~/.aether/sso-saml.json (mode 0600).
+///
+/// Parsing uses strict regex anchored to the canonical
+/// SAML 2.0 metadata schema names — NO XML parser is pulled into
+/// the dep tree at this scaffold stage. The trade-off:
+///   + zero new XML-parser CVE surface area
+///   + small + portable
+///   - won't survive a non-canonical metadata document (e.g. one
+///     that uses namespace prefixes other than md:/ds: at top level)
+///
+/// Plan V's SAML login flow will swap to quick-xml when it lands.
+/// For now, an IdP that publishes spec-conforming metadata works.
+async fn sso_configure_saml(idp_metadata_url: &str, sp_entity_id: &str) -> Result<()> {
+    eprintln!("[sso configure-saml] GET {idp_metadata_url}");
+    let resp = reqwest::get(idp_metadata_url)
+        .await
+        .with_context(|| format!("GET {idp_metadata_url}"))?;
+    if !resp.status().is_success() {
+        anyhow::bail!(
+            "metadata fetch failed: HTTP {} from {idp_metadata_url}",
+            resp.status()
+        );
+    }
+    let xml = resp.text().await.context("read metadata body")?;
+    if xml.len() > 1_048_576 {
+        anyhow::bail!("metadata XML > 1 MiB; refusing to parse (likely not a real metadata doc)");
+    }
+    if xml.contains("<!DOCTYPE") || xml.contains("<!ENTITY") {
+        anyhow::bail!(
+            "metadata XML contains DOCTYPE or ENTITY declarations — refusing for XXE safety"
+        );
+    }
+
+    // SingleSignOnService HTTP-Redirect or HTTP-POST binding.
+    let sso_re = regex::Regex::new(
+        r#"(?s)<(?:md:)?SingleSignOnService[^>]*Binding="urn:oasis:names:tc:SAML:2\.0:bindings:HTTP-(Redirect|POST)"[^>]*Location="([^"]+)""#,
+    ).expect("regex");
+    let sso_caps = sso_re
+        .captures(&xml)
+        .ok_or_else(|| anyhow!("no SingleSignOnService with HTTP-Redirect or HTTP-POST binding found"))?;
+    let binding = sso_caps.get(1).map(|m| m.as_str()).unwrap_or("Redirect").to_string();
+    let sso_url = sso_caps
+        .get(2)
+        .ok_or_else(|| anyhow!("SSO Location attribute missing"))?
+        .as_str()
+        .to_string();
+
+    // First X509Certificate inside KeyDescriptor[use="signing"]; falls
+    // back to any X509Certificate if `use=signing` isn't tagged.
+    let cert_signing_re = regex::Regex::new(
+        r#"(?s)<(?:md:)?KeyDescriptor[^>]*use="signing".*?<(?:ds:)?X509Certificate>([\s\S]*?)</(?:ds:)?X509Certificate>"#,
+    ).expect("regex");
+    let cert_any_re = regex::Regex::new(
+        r#"(?s)<(?:ds:)?X509Certificate>([\s\S]*?)</(?:ds:)?X509Certificate>"#,
+    ).expect("regex");
+    let cert_b64 = cert_signing_re
+        .captures(&xml)
+        .and_then(|c| c.get(1))
+        .or_else(|| cert_any_re.captures(&xml).and_then(|c| c.get(1)))
+        .ok_or_else(|| anyhow!("no X509Certificate in IdP metadata"))?
+        .as_str()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("");
+
+    // IdP entityID
+    let entity_re = regex::Regex::new(
+        r#"<(?:md:)?EntityDescriptor[^>]*entityID="([^"]+)""#,
+    ).expect("regex");
+    let idp_entity = entity_re
+        .captures(&xml)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| "<missing>".to_string());
+
+    let path = std::env::var_os("HOME")
+        .map(|h| PathBuf::from(h).join(".aether/sso-saml.json"))
+        .ok_or_else(|| anyhow!("HOME not set"))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let cfg = serde_json::json!({
+        "version": 1,
+        "idp_entity_id": idp_entity,
+        "sp_entity_id": sp_entity_id,
+        "sso_url": sso_url,
+        "sso_binding": binding,
+        "x509_signing_cert_b64": cert_b64,
+        "discovered_at": chrono::Utc::now().to_rfc3339(),
+    });
+    let json = serde_json::to_string_pretty(&cfg)?;
+    std::fs::write(&path, &json).with_context(|| format!("write {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    eprintln!("[sso configure-saml] wrote {} (0600)", path.display());
+    eprintln!("  idp_entity_id: {idp_entity}");
+    eprintln!("  sp_entity_id:  {sp_entity_id}");
+    eprintln!("  sso_url:       {sso_url}");
+    eprintln!("  sso_binding:   HTTP-{binding}");
+    eprintln!(
+        "  x509 signing cert: {} bytes b64",
+        cfg.get("x509_signing_cert_b64")
+            .and_then(|v| v.as_str())
+            .map(str::len)
+            .unwrap_or(0)
+    );
+    eprintln!("[sso configure-saml] scaffold only — login flow lands in Plan V");
     Ok(())
 }
 
