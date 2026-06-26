@@ -3126,6 +3126,7 @@ async fn ws_run_one_turn_streamed(
     let tx_for_hook = delta_tx.clone();
     session.executor.set_tool_hook(Box::new(
         move |phase: aether_core::executor::ToolHookPhase,
+              _tool_use_id: &str,
               tool_name: &str,
               input: &serde_json::Value,
               _output: Option<&str>,
@@ -7727,6 +7728,7 @@ fn install_tool_hook(session: &mut Session, hooks: &HooksFile) {
     // the closure so the S3 telemetry writers fire.
     session.executor.set_tool_hook(Box::new(
         move |phase: ToolHookPhase,
+              tool_use_id: &str,
               tool_name: &str,
               input: &serde_json::Value,
               output: Option<&str>,
@@ -7734,13 +7736,14 @@ fn install_tool_hook(session: &mut Session, hooks: &HooksFile) {
               -> Vec<String> {
             match phase {
                 ToolHookPhase::Pre => {
-                    tool_call_start(tool_name);
+                    tool_call_start(tool_use_id, tool_name);
                     if pre_has_hooks {
                         run_hooks_sync(
                             &pre,
                             "PreToolUse",
                             serde_json::json!({
                                 "tool": tool_name,
+                                "tool_use_id": tool_use_id,
                                 "input": input,
                             }),
                         )
@@ -7749,14 +7752,15 @@ fn install_tool_hook(session: &mut Session, hooks: &HooksFile) {
                     }
                 }
                 ToolHookPhase::Post => {
-                    let dur_ms = tool_call_finish(tool_name);
-                    record_tool_call(None, tool_name, dur_ms, is_error, None);
+                    let (resolved_name, dur_ms) = tool_call_finish(tool_use_id, tool_name);
+                    record_tool_call(None, &resolved_name, dur_ms, is_error, None);
                     if post_has_hooks {
                         run_hooks_sync(
                             &post,
                             "PostToolUse",
                             serde_json::json!({
                                 "tool": tool_name,
+                                "tool_use_id": tool_use_id,
                                 "input": input,
                                 "output": output,
                                 "is_error": is_error,
@@ -7771,27 +7775,42 @@ fn install_tool_hook(session: &mut Session, hooks: &HooksFile) {
     ));
 }
 
-/// Process-wide map of tool_name → Pre-phase start instant. Concurrent
-/// same-name calls will lose precision (Post pops whichever finished
-/// first), which is acceptable for the v0.23 measurement floor —
-/// per-call uniqueness via tool_use_id arrives in a future slice.
-static TOOL_CALL_STARTS: once_cell::sync::Lazy<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>> =
-    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+/// T2: process-wide map of tool_use_id → (tool_name, Pre-phase start
+/// instant). Keyed by tool_use_id so concurrent same-name calls no
+/// longer alias (the v0.23 HashMap<tool_name, Instant> had a
+/// documented race where two Bash calls in the same turn would
+/// confuse durations). When the agent doesn't supply a unique id
+/// (older transports), the call falls back to keying on tool_name
+/// — same v0.23 behaviour, but only on that legacy path.
+static TOOL_CALL_STARTS: once_cell::sync::Lazy<
+    std::sync::Mutex<std::collections::HashMap<String, (String, std::time::Instant)>>,
+> = once_cell::sync::Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
-fn tool_call_start(name: &str) {
+fn tool_call_start(tool_use_id: &str, name: &str) {
+    let key = if tool_use_id.is_empty() {
+        name.to_string()
+    } else {
+        tool_use_id.to_string()
+    };
     if let Ok(mut g) = TOOL_CALL_STARTS.lock() {
-        g.insert(name.to_string(), std::time::Instant::now());
+        g.insert(key, (name.to_string(), std::time::Instant::now()));
     }
 }
 
-/// Returns ms since the matching Pre, or 0 when no Pre was recorded.
-fn tool_call_finish(name: &str) -> u64 {
+/// Returns (resolved_name, ms since the matching Pre). When no Pre
+/// was recorded, falls back to (provided_name, 0).
+fn tool_call_finish(tool_use_id: &str, name: &str) -> (String, u64) {
+    let key = if tool_use_id.is_empty() {
+        name.to_string()
+    } else {
+        tool_use_id.to_string()
+    };
     if let Ok(mut g) = TOOL_CALL_STARTS.lock() {
-        if let Some(start) = g.remove(name) {
-            return start.elapsed().as_millis() as u64;
+        if let Some((stored_name, start)) = g.remove(&key) {
+            return (stored_name, start.elapsed().as_millis() as u64);
         }
     }
-    0
+    (name.to_string(), 0)
 }
 
 /// Append a row to `tool_calls`. Silently swallows DB errors —

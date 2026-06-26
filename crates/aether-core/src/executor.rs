@@ -88,13 +88,16 @@ pub enum ToolHookPhase {
     Post,
 }
 
-/// Tool-hook callback: receives the phase, tool name, input JSON value, and
-/// (post-phase only) the captured tool output + is_error flag. Returns a
-/// list of strings to be injected as kernel reminders before the next LLM
-/// call. Synchronous so the callback can use blocking `std::process` to
+/// Tool-hook callback: receives the phase, tool_use_id (the per-call
+/// id Anthropic emits in the ToolUse block; uniquely keys Pre→Post
+/// pairs even when the agent invokes the same tool name concurrently),
+/// tool name, input JSON value, and (post-phase only) the captured
+/// tool output + is_error flag. Returns a list of strings to be
+/// injected as kernel reminders before the next LLM call.
+/// Synchronous so the callback can use blocking `std::process` to
 /// invoke shell hooks.
 pub type ToolHookCallback = Box<
-    dyn Fn(ToolHookPhase, &str, &serde_json::Value, Option<&str>, bool) -> Vec<String>
+    dyn Fn(ToolHookPhase, &str, &str, &serde_json::Value, Option<&str>, bool) -> Vec<String>
         + Send
         + Sync,
 >;
@@ -243,7 +246,7 @@ impl Executor {
         // (Allowed). Hook outputs accumulate as reminders for the next turn.
         if matches!(decision, PermissionOutcome::Allowed) {
             if let Some(h) = &self.tool_hook {
-                let outs = h(ToolHookPhase::Pre, &tu.name, &tu.input, None, false);
+                let outs = h(ToolHookPhase::Pre, &tu.id, &tu.name, &tu.input, None, false);
                 if !outs.is_empty() {
                     let mut g = self
                         .pending_reminders
@@ -272,6 +275,7 @@ impl Executor {
         if let Some(h) = &self.tool_hook {
             let outs = h(
                 ToolHookPhase::Post,
+                &tu.id,
                 &tu.name,
                 &tu.input,
                 Some(&content),
