@@ -4573,6 +4573,25 @@ fn plugin_cmd(sub: PluginCmd) -> Result<()> {
         PluginCmd::Sign { manifest, algorithm, private_key } => {
             let bytes = std::fs::read(&manifest)
                 .with_context(|| format!("read {}", manifest.display()))?;
+            // Add the `algorithm` field BEFORE computing the signature so
+            // verifiers see the same canonical form. (For hmac-sha256 we
+            // skip this — historical default; manifests without an
+            // explicit `algorithm` are treated as hmac-sha256.)
+            let mut value: serde_json::Value = serde_json::from_slice(&bytes)
+                .context("manifest is not valid JSON")?;
+            if let Some(obj) = value.as_object_mut() {
+                if algorithm != "hmac-sha256" {
+                    obj.insert(
+                        "algorithm".into(),
+                        serde_json::Value::String(algorithm.clone()),
+                    );
+                }
+                // Strip any stale signature so resigning is idempotent.
+                obj.remove("signature");
+            } else {
+                anyhow::bail!("manifest root must be a JSON object");
+            }
+            let signable = serde_json::to_vec(&value)?;
             let sig = match algorithm.as_str() {
                 "hmac-sha256" => {
                     let key = std::env::var("AETHER_PLUGIN_HMAC_KEY")
@@ -4580,7 +4599,7 @@ fn plugin_cmd(sub: PluginCmd) -> Result<()> {
                     if key.is_empty() {
                         anyhow::bail!("AETHER_PLUGIN_HMAC_KEY is empty");
                     }
-                    aether_plugin::canonical_manifest_hmac(&bytes, key.as_bytes())
+                    aether_plugin::canonical_manifest_hmac(&signable, key.as_bytes())
                         .map_err(|e| anyhow!("hmac: {e}"))?
                 }
                 "ed25519" => {
@@ -4591,23 +4610,16 @@ fn plugin_cmd(sub: PluginCmd) -> Result<()> {
                             "set --private-key <PATH> or AETHER_PLUGIN_ED25519_PRIVKEY",
                         )?,
                     };
-                    aether_plugin::ed25519_sign(&bytes, priv_hex.trim())
+                    aether_plugin::ed25519_sign(&signable, priv_hex.trim())
                         .map_err(|e| anyhow!("ed25519 sign: {e}"))?
                 }
                 other => anyhow::bail!(
                     "unknown algorithm '{other}' (supported: hmac-sha256, ed25519)"
                 ),
             };
-            // Write back: parse, set "signature" + "algorithm", serialise.
-            let mut value: serde_json::Value = serde_json::from_slice(&bytes)
-                .context("manifest is not valid JSON")?;
+            // Now embed the signature and write.
             if let Some(obj) = value.as_object_mut() {
                 obj.insert("signature".into(), serde_json::Value::String(sig.clone()));
-                if algorithm != "hmac-sha256" {
-                    obj.insert("algorithm".into(), serde_json::Value::String(algorithm.clone()));
-                }
-            } else {
-                anyhow::bail!("manifest root must be a JSON object");
             }
             let out = serde_json::to_string_pretty(&value)?;
             std::fs::write(&manifest, out)
