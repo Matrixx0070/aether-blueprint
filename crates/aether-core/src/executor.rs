@@ -107,6 +107,11 @@ pub struct Executor {
     /// reminders for the next turn.
     pending_reminders: std::sync::Mutex<Vec<String>>,
     always_allowed: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// Per-org policy: tool names in this list are refused at dispatch
+    /// time with `PermissionOutcome::Refused`, independent of the
+    /// permission mode. Empty list = no policy enforcement.
+    /// Populated at session bootstrap from `~/.aether/policy.json`.
+    policy_blocklist: Vec<String>,
 }
 
 impl Executor {
@@ -117,7 +122,18 @@ impl Executor {
             tool_hook: None,
             pending_reminders: std::sync::Mutex::new(Vec::new()),
             always_allowed: std::sync::Mutex::new(std::collections::HashSet::new()),
+            policy_blocklist: Vec::new(),
         }
+    }
+
+    /// Replace the policy tool-blocklist. Tool names matching any entry
+    /// are refused at dispatch (before permission decide).
+    pub fn set_policy_blocklist(&mut self, names: Vec<String>) {
+        self.policy_blocklist = names;
+    }
+
+    fn is_policy_blocked(&self, name: &str) -> bool {
+        self.policy_blocklist.iter().any(|n| n == name)
     }
 
     /// Install a prompter that's consulted when running in `Default` mode
@@ -184,6 +200,19 @@ impl Executor {
         registry: &ToolRegistry,
         tu: &RecordedToolUse,
     ) -> RecordedToolResult {
+        // Per-org policy blocklist runs BEFORE the static permission
+        // check. A blocked tool cannot be upgraded by a prompter — the
+        // policy is an organisational decision, not a per-call one.
+        if self.is_policy_blocked(&tu.name) {
+            return RecordedToolResult {
+                tool_use_id: tu.id.clone(),
+                content: format!(
+                    "refused: policy: tool `{}` is in tool_blocklist (see ~/.aether/policy.json)",
+                    tu.name
+                ),
+                is_error: true,
+            };
+        }
         // Static policy
         let mut decision = decide(self.mode, &tu.name);
         // Interactive escalation: in Default mode, a refusal can be
@@ -380,6 +409,83 @@ mod tests {
             name: name.into(),
             input: serde_json::json!({}),
         }
+    }
+
+    #[tokio::test]
+    async fn policy_blocklist_refuses_blocked_tool() {
+        let counter = Arc::new(AtomicU64::new(0));
+        let mut reg = ToolRegistry::new();
+        reg.register(Box::new(CountTool {
+            name: "Bash",
+            calls: counter.clone(),
+        }));
+        let mut exec = Executor::new(PermissionMode::BypassPermissions);
+        exec.set_policy_blocklist(vec!["Bash".into()]);
+        let uses = vec![use_call("t1", "Bash")];
+        let out = exec.execute(&reg, &uses).await;
+        assert_eq!(out.len(), 1);
+        assert!(out[0].is_error);
+        assert!(
+            out[0].content.contains("policy: tool `Bash` is in tool_blocklist"),
+            "expected policy refusal, got: {}",
+            out[0].content
+        );
+        // The actual tool MUST NOT have run.
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            0,
+            "blocked tool was dispatched anyway"
+        );
+    }
+
+    #[tokio::test]
+    async fn policy_blocklist_allows_unlisted_tool() {
+        let counter = Arc::new(AtomicU64::new(0));
+        let mut reg = ToolRegistry::new();
+        reg.register(Box::new(CountTool {
+            name: "Read",
+            calls: counter.clone(),
+        }));
+        let mut exec = Executor::new(PermissionMode::BypassPermissions);
+        exec.set_policy_blocklist(vec!["Bash".into(), "Write".into()]);
+        let uses = vec![use_call("t1", "Read")];
+        let out = exec.execute(&reg, &uses).await;
+        assert!(!out[0].is_error);
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn policy_blocklist_overrides_bypass_permissions() {
+        // Even with BypassPermissions (which would normally allow anything),
+        // the policy blocklist still refuses. Policy is org-level, mode is
+        // session-level — policy wins.
+        let counter = Arc::new(AtomicU64::new(0));
+        let mut reg = ToolRegistry::new();
+        reg.register(Box::new(CountTool {
+            name: "WebFetch",
+            calls: counter.clone(),
+        }));
+        let mut exec = Executor::new(PermissionMode::BypassPermissions);
+        exec.set_policy_blocklist(vec!["WebFetch".into()]);
+        let out = exec.execute(&reg, &[use_call("t1", "WebFetch")]).await;
+        assert!(out[0].is_error);
+        assert!(out[0].content.contains("policy"));
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn policy_blocklist_empty_is_no_op() {
+        let counter = Arc::new(AtomicU64::new(0));
+        let mut reg = ToolRegistry::new();
+        reg.register(Box::new(CountTool {
+            name: "Bash",
+            calls: counter.clone(),
+        }));
+        // Note: no set_policy_blocklist call → empty blocklist → no-op
+        let exec = Executor::new(PermissionMode::BypassPermissions);
+        let out = exec.execute(&reg, &[use_call("t1", "Bash")]).await;
+        assert!(!out[0].is_error);
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 
     #[test]
