@@ -24,6 +24,7 @@
 
 use aether_tools::{Tool, ToolError};
 use async_trait::async_trait;
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hmac::{Hmac, Mac};
 use serde::Deserialize;
 use serde_json::Value;
@@ -66,13 +67,23 @@ pub struct PluginManifest {
     /// Optional working directory override. Defaults to the plugin dir.
     #[serde(default)]
     pub cwd: Option<PathBuf>,
-    /// Optional hex-encoded HMAC-SHA256 of the JSON manifest (with the
-    /// `signature` field removed) using the key in $AETHER_PLUGIN_HMAC_KEY.
+    /// Optional hex-encoded signature. Algorithm controlled by the
+    /// `algorithm` field (default: `"hmac-sha256"`).
+    ///   - hmac-sha256: hex(HMAC-SHA256(canonical_manifest, $AETHER_PLUGIN_HMAC_KEY))
+    ///   - ed25519:     hex(ed25519-Sign(canonical_manifest, private_key))
+    ///                  verified with the public key in
+    ///                  $AETHER_PLUGIN_ED25519_PUBKEY (hex-encoded
+    ///                  32-byte VerifyingKey).
     /// When $AETHER_PLUGIN_ENFORCE_SIGNING=1, unsigned plugins are
     /// rejected at discovery time; otherwise unsigned plugins still
     /// load (with a stderr warning).
     #[serde(default)]
     pub signature: Option<String>,
+    /// Signing algorithm. Default `"hmac-sha256"` for backward
+    /// compatibility with v0.17 manifests. Set to `"ed25519"` for
+    /// asymmetric signing (marketplace use case).
+    #[serde(default)]
+    pub algorithm: Option<String>,
 }
 
 /// Compute the HMAC-SHA256 of a manifest's JSON content with the
@@ -207,11 +218,20 @@ pub fn verify_manifest_signature_raw(
     Ok(true)
 }
 
-/// Extract the `signature` and `name` fields from a JSON-only view of
-/// the manifest. Doesn't enforce the subprocess-loader schema.
+/// Extract the `signature`, `algorithm`, and `name` fields from a
+/// JSON-only view of the manifest. Doesn't enforce the
+/// subprocess-loader schema. Algorithm defaults to "hmac-sha256" when
+/// absent.
 pub fn extract_signature_and_name(
     json_bytes: &[u8],
 ) -> Result<(Option<String>, String), PluginError> {
+    let (sig, _alg, name) = extract_signature_algorithm_and_name(json_bytes)?;
+    Ok((sig, name))
+}
+
+pub fn extract_signature_algorithm_and_name(
+    json_bytes: &[u8],
+) -> Result<(Option<String>, String, String), PluginError> {
     let v: serde_json::Value = serde_json::from_slice(json_bytes)
         .map_err(|e| PluginError::Manifest("<bytes>".into(), e.to_string()))?;
     let name = v
@@ -223,7 +243,98 @@ pub fn extract_signature_and_name(
         .get("signature")
         .and_then(|n| n.as_str())
         .map(|s| s.to_string());
-    Ok((sig, name))
+    let alg = v
+        .get("algorithm")
+        .and_then(|n| n.as_str())
+        .unwrap_or("hmac-sha256")
+        .to_string();
+    Ok((sig, alg, name))
+}
+
+// ── ed25519 path ──────────────────────────────────────────────────────────
+
+/// Generate a fresh ed25519 keypair. Returns (private_key_hex,
+/// public_key_hex) — each 32 bytes hex-encoded (64 hex chars).
+pub fn ed25519_keypair() -> (String, String) {
+    use rand_core::OsRng;
+    let mut csprng = OsRng;
+    let signing = SigningKey::generate(&mut csprng);
+    let verifying = signing.verifying_key();
+    (
+        hex::encode(signing.to_bytes()),
+        hex::encode(verifying.to_bytes()),
+    )
+}
+
+/// Sign the canonical form of a manifest with an ed25519 private key.
+/// Returns hex-encoded signature (128 hex chars for the 64-byte sig).
+pub fn ed25519_sign(json_bytes: &[u8], private_key_hex: &str) -> Result<String, PluginError> {
+    let key_bytes = hex::decode(private_key_hex.trim())
+        .map_err(|e| PluginError::Manifest("<key>".into(), format!("private key hex: {e}")))?;
+    if key_bytes.len() != 32 {
+        return Err(PluginError::Manifest(
+            "<key>".into(),
+            format!("ed25519 private key must be 32 bytes, got {}", key_bytes.len()),
+        ));
+    }
+    let mut key_arr = [0u8; 32];
+    key_arr.copy_from_slice(&key_bytes);
+    let signing = SigningKey::from_bytes(&key_arr);
+    let canonical = canonical_manifest_bytes(json_bytes)?;
+    let sig: Signature = signing.sign(&canonical);
+    Ok(hex::encode(sig.to_bytes()))
+}
+
+/// Verify an ed25519 signature against a public key (hex-encoded 32 bytes).
+/// Returns Err on mismatch, Ok(()) on success.
+pub fn ed25519_verify(
+    json_bytes: &[u8],
+    signature_hex: &str,
+    public_key_hex: &str,
+) -> Result<(), PluginError> {
+    let key_bytes = hex::decode(public_key_hex.trim()).map_err(|e| {
+        PluginError::Manifest("<pubkey>".into(), format!("public key hex: {e}"))
+    })?;
+    if key_bytes.len() != 32 {
+        return Err(PluginError::Manifest(
+            "<pubkey>".into(),
+            format!("ed25519 public key must be 32 bytes, got {}", key_bytes.len()),
+        ));
+    }
+    let mut key_arr = [0u8; 32];
+    key_arr.copy_from_slice(&key_bytes);
+    let verifying = VerifyingKey::from_bytes(&key_arr)
+        .map_err(|e| PluginError::Manifest("<pubkey>".into(), e.to_string()))?;
+
+    let sig_bytes = hex::decode(signature_hex.trim())
+        .map_err(|e| PluginError::Manifest("<sig>".into(), format!("signature hex: {e}")))?;
+    if sig_bytes.len() != 64 {
+        return Err(PluginError::Manifest(
+            "<sig>".into(),
+            format!("ed25519 signature must be 64 bytes, got {}", sig_bytes.len()),
+        ));
+    }
+    let mut sig_arr = [0u8; 64];
+    sig_arr.copy_from_slice(&sig_bytes);
+    let signature = Signature::from_bytes(&sig_arr);
+
+    let canonical = canonical_manifest_bytes(json_bytes)?;
+    verifying
+        .verify(&canonical, &signature)
+        .map_err(|e| PluginError::Manifest("<verify>".into(), format!("ed25519 verify: {e}")))
+}
+
+/// Produce the canonical byte sequence used for signing/verification.
+/// Shared between HMAC and ed25519 paths so the SAME wire format
+/// underlies both — the algorithm only changes what we do with the bytes.
+pub fn canonical_manifest_bytes(json_bytes: &[u8]) -> Result<Vec<u8>, PluginError> {
+    let mut value: Value = serde_json::from_slice(json_bytes)
+        .map_err(|e| PluginError::Manifest("<bytes>".into(), e.to_string()))?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove("signature");
+    }
+    let canonical = canonicalise(value);
+    Ok(canonical.into_bytes())
 }
 
 /// Adapter that wraps a plugin manifest as an aether-tools `Tool`.
@@ -346,7 +457,11 @@ pub fn discover_plugins() -> Vec<PluginTool> {
         return Vec::new();
     };
     let hmac_key = std::env::var(HMAC_KEY_ENV).ok().filter(|s| !s.is_empty());
+    let ed_pubkey = std::env::var("AETHER_PLUGIN_ED25519_PUBKEY")
+        .ok()
+        .filter(|s| !s.is_empty());
     let enforce = std::env::var(ENFORCE_SIGNING_ENV).ok().as_deref() == Some("1");
+    let any_key_configured = hmac_key.is_some() || ed_pubkey.is_some();
 
     let mut out = Vec::new();
     for entry in entries.flatten() {
@@ -369,9 +484,50 @@ pub fn discover_plugins() -> Vec<PluginTool> {
             }
         };
 
-        // Signature handling.
-        if let Some(key_str) = &hmac_key {
-            match verify_manifest_signature(&bytes, &manifest, key_str.as_bytes()) {
+        // Signature handling. Algorithm dispatches on the manifest's
+        // `algorithm` field (default "hmac-sha256" for backward compat).
+        if any_key_configured {
+            let alg = manifest.algorithm.as_deref().unwrap_or("hmac-sha256");
+            let verify_result = if manifest.signature.is_none() {
+                Ok(false)
+            } else {
+                match alg {
+                    "hmac-sha256" => {
+                        if let Some(key_str) = &hmac_key {
+                            verify_manifest_signature(&bytes, &manifest, key_str.as_bytes())
+                        } else {
+                            Err(PluginError::Manifest(
+                                manifest.name.clone(),
+                                "hmac-sha256 manifest but no AETHER_PLUGIN_HMAC_KEY set".into(),
+                            ))
+                        }
+                    }
+                    "ed25519" => {
+                        if let Some(pubkey) = &ed_pubkey {
+                            match ed25519_verify(
+                                &bytes,
+                                manifest.signature.as_deref().unwrap_or(""),
+                                pubkey,
+                            ) {
+                                Ok(()) => Ok(true),
+                                Err(e) => Err(e),
+                            }
+                        } else {
+                            Err(PluginError::Manifest(
+                                manifest.name.clone(),
+                                "ed25519 manifest but no AETHER_PLUGIN_ED25519_PUBKEY set"
+                                    .into(),
+                            ))
+                        }
+                    }
+                    other => Err(PluginError::Manifest(
+                        manifest.name.clone(),
+                        format!("unknown signing algorithm: {other}"),
+                    )),
+                }
+            };
+
+            match verify_result {
                 Ok(true) => {
                     // Signed and valid.
                 }
@@ -524,6 +680,48 @@ mod tests {
     }
 
     #[test]
+    fn ed25519_round_trip() {
+        let manifest = br#"{"name":"signed-ed","description":"x","input_schema":{},"command":"/bin/true","algorithm":"ed25519"}"#;
+        let (priv_hex, pub_hex) = ed25519_keypair();
+        let sig = ed25519_sign(manifest, &priv_hex).expect("sign");
+        ed25519_verify(manifest, &sig, &pub_hex).expect("verify");
+    }
+
+    #[test]
+    fn ed25519_detects_tamper() {
+        let manifest = br#"{"name":"signed-ed","description":"x","input_schema":{},"command":"/bin/true","algorithm":"ed25519"}"#;
+        let tampered = br#"{"name":"signed-ed","description":"x","input_schema":{},"command":"/usr/bin/rm","algorithm":"ed25519"}"#;
+        let (priv_hex, pub_hex) = ed25519_keypair();
+        let sig = ed25519_sign(manifest, &priv_hex).expect("sign");
+        let err = ed25519_verify(tampered, &sig, &pub_hex).expect_err("should fail");
+        assert!(
+            matches!(err, PluginError::Manifest(_, ref msg) if msg.contains("verify")),
+            "wrong error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn ed25519_cross_keypair_fails() {
+        // A sig made with one keypair must NOT verify against another's pubkey.
+        let manifest = br#"{"name":"signed-ed","description":"x","input_schema":{},"command":"/bin/true","algorithm":"ed25519"}"#;
+        let (priv_a, _pub_a) = ed25519_keypair();
+        let (_priv_b, pub_b) = ed25519_keypair();
+        let sig = ed25519_sign(manifest, &priv_a).expect("sign");
+        let err = ed25519_verify(manifest, &sig, &pub_b).expect_err("cross-keypair must fail");
+        assert!(
+            matches!(err, PluginError::Manifest(_, ref msg) if msg.contains("verify")),
+            "wrong error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn ed25519_rejects_bad_key_length() {
+        let manifest = br#"{"name":"x"}"#;
+        let err = ed25519_sign(manifest, "deadbeef").expect_err("short key must fail");
+        assert!(matches!(err, PluginError::Manifest(_, ref msg) if msg.contains("32 bytes")));
+    }
+
+    #[test]
     fn hmac_unsigned_returns_false() {
         let manifest_json = br#"{"name":"x","description":"","input_schema":{},"command":"/bin/true"}"#;
         let manifest: PluginManifest = serde_json::from_slice(manifest_json).unwrap();
@@ -563,6 +761,7 @@ mod tests {
             args: vec![],
             cwd: None,
             signature: None,
+            algorithm: None,
         };
         let tool = PluginTool::new(manifest, plugin_dir);
         let out = tool
