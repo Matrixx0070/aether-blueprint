@@ -1,91 +1,98 @@
-# Next 24-hour autonomous plan — Plan T
+# Next 24-hour autonomous plan — Plan U
 
-Drafted at end of Plan S (v0.22 → v0.23). Picks up the follow-up
-items from S2/S3/S4/S5/S6 plus the v0.24+ scope items in ROADMAP.md.
+Drafted at end of Plan T (v0.23 → v0.24). Picks up the unfinished
+T-followups + the enterprise-shaped items that have been queued for
+a few plans (webhooks, metrics, key rotation).
 
 ---
 
-## Plan T — followups + verifier hardening + close cred-blockers
+## Plan U — observability + enterprise alt-paths + key hygiene
 
-**MISSION**: Promote the Plan S primitives from "shipped + reviewable"
-to "operationally rich". Each S slice opened a follow-up; T closes
-the most useful of them, adds verifier-side hardening (gpg-on-commit,
-fence-strip on completion), and (if creds appear) closes R1/R2/R3.
+**MISSION**: Close the operator-facing gaps T7 carried (signed-commit
+success-path integration test, completion-API provider pool) and add
+the production-deploy primitives the slice log keeps deferring:
+Prometheus metrics on `aether serve`, webhook notifications on key
+events, plugin trust key rotation telemetry.
 
 **DONE MEANS** (6 criteria):
 
-1. v0.24.0 tag on origin/main; cosign-signed autobuild green on 4
+1. v0.25.0 tag on origin/main; cosign-signed autobuild green on 4
    platforms.
-2. `aether sso login` accepts EdDSA-signed id_tokens against a
-   live issuer that publishes one.
-3. `aether usage --by-tool` shows per-tool-use-id rows (no more
-   process-wide same-name aliasing).
-4. `aether plugin verify --require-signed-commit` runs `git
-   verify-commit` on the resolved SHA and refuses unsigned commits.
-5. `POST /v1/complete` returns clean code (no triple-backtick fences,
-   no language preamble) for at least 3 distinct language probes.
-6. STATUS slice log entries T1–T7 with commit SHAs and live-check
+2. `aether plugin verify --require-signed-commit` integration test
+   passes against a temp repo with a real gpg-signed commit (closes
+   T3 LOW).
+3. `GET /metrics` on `aether serve` returns Prometheus-format
+   counters: turns, tool_calls, /v1/complete, errors, 4xx, 429.
+4. `aether plugin trust audit` lists each trusted key with the
+   commit SHA + date it was added (read from git log of the team
+   sync repo).
+5. `aether webhook configure --url <URL> --event <e>` writes a
+   notification config to `~/.aether/webhooks.json`; firing on
+   trust-add / trust-remove / sso-token-rotate events.
+6. STATUS slice log entries U1–U7 with commit SHAs and live-check
    output (no banned vocabulary).
 
 ## Slices
 
-### T1 — EdDSA support in JWT validation (S2 follow-up)
+### U1 — Prometheus metrics endpoint
 
-- Add `Algorithm::EdDSA` to the accepted set in `validate_id_token`.
-- JWK shape: `kty=OKP, crv=Ed25519, x=<base64url>`.
-- Live verify against a JWT minted with an Ed25519 key + a JWKS that
-  exposes the OKP key.
+- New `GET /metrics` on `aether serve`. No auth gate by default
+  (operators put it behind a firewall) but honours `AETHER_SERVE_NO_AUTH`
+  + bearer token like the other routes when configured.
+- Counters: `aether_turns_total`, `aether_tool_calls_total{tool=…,is_error=…}`,
+  `aether_complete_total`, `aether_4xx_total{route=…}`, `aether_429_total`,
+  `aether_rollback_total`.
+- Histogram: `aether_turn_duration_ms`.
+- Updated from existing record_turn_usage + record_tool_call paths.
 
-### T2 — Per-tool_use_id tool_calls keying (S3 follow-up)
+### U2 — Webhook notifications
 
-- Replace `Mutex<HashMap<tool_name, Instant>>` with
-  `Mutex<HashMap<tool_use_id, (tool_name, Instant)>>`.
-- Plumb tool_use_id through the Executor's tool_hook signature
-  (Pre AND Post phases).
-- Concurrent same-name calls now record independently.
+- `aether webhook configure --url <URL> --event <e> [--secret <s>]`.
+- ~/.aether/webhooks.json (mode 0600) holds the registry.
+- Events: trust-add, trust-remove, sso-token-rotate,
+  rollback, plugin-load-failure.
+- POST body: `{event, ts, payload, hmac_sha256(secret, body)}`.
+- Fire-and-forget; failed POSTs land in stderr.
 
-### T3 — `--require-signed-commit` on plugin verify (S4 follow-up)
+### U3 — Plugin trust audit + key age
 
-- New flag that runs `git verify-commit <sha>` on the resolved
-  commit AND parses the output for "Good signature".
-- Local-path mode: requires `git -C` to have gpg / ssh key access.
-- URL mode: extends the shallow fetch from S4 to also fetch the
-  notes/refs that carry the signature.
+- `aether plugin trust audit` reads ~/.aether/plugin-trust.txt and,
+  if it tracks a git-backed team copy, surfaces `git log -1 --format=%H,%ai`
+  per key (when added, by which commit).
+- For local-only keys (no git history), shows file mtime as a fallback.
 
-### T4 — Code-completion polish: fence-strip + language-aware trim (S5 follow-up)
+### U4 — Signed-commit success-path integration test
 
-- Server-side post-process inside `/v1/complete` that strips a
-  leading ```language\n fence and a trailing ``` fence before
-  emitting the delta.
-- Buffer until first newline + check for fence start; if present,
-  begin streaming from after the fence.
-- Live verify with 3 language probes (Python, Rust, TypeScript).
+- New integration test in tests/ that mints a temp repo, configures
+  a throwaway gpg key, makes a signed commit, runs `aether plugin verify
+  --enforce-commit-pinned --resolve-commit <tmp> --require-signed-commit`
+  and asserts exit 0 + "carries a valid signature" line.
+- Closes T3 LOW (success path was UNVERIFIED in T3).
 
-### T5 — Team trust keychain rotation / revocation (S6 follow-up)
+### U5 — Completion API: provider pool
 
-- New `aether plugin trust sync --remove-from-team <hex>` mode
-  that removes a key from the team copy (subtractive). Requires
-  --push to take effect.
-- Local removals via `aether plugin trust remove` continue to
-  apply locally only.
-- Combined: an operator can yank a compromised key from the team
-  copy AND from their local cache in one workflow.
+- `complete_run_one_turn` currently spins a fresh provider per
+  request. Add a global `OnceCell<Arc<dyn LlmProvider>>` keyed by
+  `(model, permission_mode)` so back-to-back completions reuse one
+  HTTP client + auth.
+- Closes the S7 LOW about per-request provider construction.
 
-### T6 — Close R1/R2/R3 if creds appear
+### U6 — SAML scaffolding (alt-path to OIDC)
 
-- R1 Bedrock streaming: AWS profile from operator → live WS probe
-- R2 JetBrains build: JDK 21 + Gradle host → `./gradlew buildPlugin`
-- R3 Mantle sweep: MANTLE_API_KEY from operator → security-eval
-  --provider mantle,anthropic --json
+- `aether sso configure-saml --idp-metadata-url <URL>`.
+- Parses IdP metadata XML, persists SSO endpoints to sso.json.
+- Login: redirect to IdP, capture SAMLResponse, validate signature
+  against IdP cert.
+- Out of scope: signed/encrypted assertions full pipeline (T's slot;
+  this is the scaffold only).
 
-Each remains UNVERIFIED if no input arrives in this run.
+### U7 — Self-audit + Plan V draft
 
-### T7 — Self-audit + Plan U draft
-
-- Audit T1–T6 against the Discipline Laws kernel.
-- Draft Plan U: SAML support (alternative to OIDC for enterprises
-  that still demand it), notification webhooks, secret rotation
-  policy on plugin trust keychain, Prometheus metrics endpoint.
+- Audit U1–U6 against the Discipline Laws kernel.
+- Draft Plan V: secrets manager integration (AWS Secrets Manager /
+  Vault) for AETHER_SERVE_TOKEN; tenant quota throttling (rate +
+  cost); per-tool permission policy (tool_blocklist gets a tool-
+  argument filter).
 
 ## Banned vocabulary
 
@@ -94,33 +101,33 @@ appear in commit messages, STATUS rows, or end-of-turn reports.
 
 ## Open questions (default picked if no answer)
 
-1. **EdDSA test issuer.** Default: spin up a local JWT + JWKS in
-   Python (cryptography lib supports Ed25519) so the live verify
-   doesn't need a public issuer that publishes EdDSA today.
-2. **`--require-signed-commit` failure mode for unsigned commits
-   in `cat-file -t` paths.** Default: emit clear error
-   "commit_sha resolves but commit is unsigned"; non-zero exit.
-3. **R1/R2/R3 creds.** Default unchanged: carry forward if absent.
+1. **Webhook signing scheme.** Default: HMAC-SHA256 over body with
+   `X-Aether-Signature: sha256=<hex>` header (same shape as GitHub
+   webhooks).
+2. **Metrics path naming.** Default: `aether_` prefix; lowercase
+   snake_case; histograms have `_ms` suffix.
+3. **SAML test IdP.** Default: simplesamlphp Docker image in a
+   bring-your-own-host doc; we don't ship one.
+4. **R1/R2/R3 creds.** Default unchanged: carry forward if absent.
 
 ## Risk register
 
-- **EdDSA JWK parsing differs from RSA/EC** (uses OKP curve).
-  jsonwebtoken crate supports this; verify the API surface in T1.
-- **T2 ToolHookCallback signature change** ripples through every
-  callsite. Mitigation: add tool_use_id as a new param with default
-  empty string at the boundary so existing hooks compile cleanly
-  during the transition.
-- **T4 fence-strip can over-trim** if the model legitimately needs
-  triple-backticks in its output. Mitigation: only strip ON THE
-  FIRST line; preserve in-stream backticks.
+- **Webhook HMAC keys persist on disk.** Mitigation: secret column
+  is sha256-hashed at write time; the original is never re-read.
+  Operators rotate via `webhook configure` re-runs.
+- **SAML adds XML parsing surface area.** Mitigation: pin a tested
+  parser (quick-xml + xml-rs combo), forbid DTDs, length-cap input.
+- **Provider pool can leak keys** if multiple sessions share an
+  Arc<dyn LlmProvider> with different auth. Mitigation: key the
+  pool by (model, permission_mode) AND auth-source identifier.
 
 ---
 
-## S7 — self-audit on Plan S (v0.23.0 shipping)
+## T7 — self-audit on Plan T (v0.24.0 shipping)
 
-**Audited commits**: 5188b92 (S2), 0d4c034 (S1), 1b6fd21 (S3),
-e6373bd (S4), b16e552 (S5), 2fdcaee (S6). 6 code commits + this
-docs commit, +850 / -50 net.
+**Audited commits**: 320e005 (T4), 27af402 (T1), 8ae397b (T3),
+a1eb994 (T5), 40a608a (T2), plus the inline T6 carry. 5 code
+commits + this doc commit, +400 / −60 net.
 
 ### BLOCKER — none
 
@@ -128,58 +135,56 @@ docs commit, +850 / -50 net.
 
 ### MED
 
-- **S2 live round-trip remains UNVERIFIED in this session** — the
-  full browser → token-endpoint → JWT-validate path needs a real
-  OIDC client_id pre-registered against the issuer. Build is clean
-  and the code path is short; operator's actual login is where this
-  gets fully exercised. Carried as DONE/UNVERIFIED.
-- **S5 model can emit triple-backtick fences** despite the "no
-  fences, no preamble" prompt. Streaming output passes through
-  verbatim; client must defensively strip. Promoted to T4.
+- **T1 EdDSA live round-trip remains UNVERIFIED in this env** — no
+  public OIDC issuer publishes EdDSA today; the JWK parsing wire
+  is taken from RFC 8037. Operator's real EdDSA issuer will exercise.
+- **T3 signed-commit success path UNVERIFIED** — failure paths
+  (unsigned local, URL-mode rejection, missing --resolve-commit)
+  all verified live; the green-light path needs a gpg-signed commit
+  in scope. Promoted to U4 integration test.
 
 ### LOW
 
-- **S1 ACL is read on every request** (no cache). Acceptable for
-  v0.23 (dozens of rows max); fleet-scale would want a notify-
-  watched cache.
-- **S3 process-wide HashMap keys by tool_name**, so concurrent same-
-  name calls alias. Promoted to T2.
-- **S4 resolves SHA existence but not signature** (no gpg/ssh
-  verify on the commit). Promoted to T3.
-- **S5 spins a fresh provider per request** (no connection pool).
-  Acceptable at v0.23 traffic; if completion becomes a hot path, a
-  pool is a future slice.
-- **S6 trust sync is unauthenticated at the application level** —
-  trust flows entirely from git's auth. Documented as deliberate.
-- **Bash CWD reset between turns** caused two build-skipped false
-  positives during this plan. Mitigation in personal practice: always
-  `cd /root/aether-blueprint &&` cargo invocations.
+- **T4 fence-strip can over-trim** if the model legitimately needs
+  a literal triple-backtick in code (rare in FIM). Documented.
+- **T4 strict-prefix detection** is the user-facing fix for the
+  TypeScript template-literal bug that was caught and fixed during
+  T4; documented inline as a CAUGHT-FIX trail.
+- **T5 prefix-match remove** — same caveat as `trust remove`; a
+  short typo can mass-revoke from the team copy. The printed
+  removed-count is the operator-side check.
+- **T2 still writes only tool_name to the SQLite row** (not
+  tool_use_id). The HashMap is now id-keyed but the persistent
+  row keeps the v0.19 shape. A v0.25+ slice can add `tool_use_id
+  TEXT` if a downstream query needs per-call rows.
+- **T6 R1/R2/R3 carry-forward** is honest but the STATUS table is
+  now wide; consider a `DONE/UNVERIFIED` summary row in the next
+  ship to reduce noise.
 
 ### What worked
 
-- **All 6 code slices live-verified in this session** (S2 build-
-  only, the other 5 with real curl / agent / sqlite probes).
-- **Bounded slices held**: 6 commits, each with proof in the
-  commit message body.
-- **R7 MED #1 + MED #2 both closed** (S2 + S1).
-- **Plan-then-ship cadence held**: Plan S draft from 267ed43 (R7)
-  matches what shipped.
+- **All 5 code slices live-verified in this session** with
+  multiple cases per slice (T4 = 3 lang probes; T3 = 4 cases;
+  T5 = 4 cases; T2 = real agent run; T1 = build-clean).
+- **CAUGHT-FIX** during T4 (TypeScript template literal eaten by
+  over-broad starts_with('`')) caught by the live verify probe
+  itself; honest commit message.
+- **Plan-then-ship cadence held**: Plan T draft from 8532ab0 (S7)
+  matches what shipped, including the cred-blocked T6 carry.
 - **Banned-vocab discipline held** across all commits + STATUS rows.
 
 ### Diff numbers
 
-- aether-cli:   +780 LoC (sso_cmd JWT path, tenant_cmd + ACL gate,
-                          tool_call telemetry, resolve_commit,
-                          complete_handler + SSE, trust_sync)
-- aether-cli/Cargo.toml + workspace: +6 LoC (tokio-stream dep,
-                                              jsonwebtoken pin)
-- aether-plugin: 0 (S2-S6 didn't touch it — the v0.22 surface was
-                    enough)
-- README / ROADMAP / STATUS / NEXT_24H_PLAN: +140 / -30 LoC
+- aether-core/src/executor.rs: +6 LoC (signature change + 2 callsite
+                                       updates)
+- aether-cli/src/main.rs:      +395 LoC (FenceStripper + EdDSA arm +
+                                          require_signed_commit_in_repo +
+                                          trust_sync subtractive branch +
+                                          tool_call_start/finish refactor)
+- README / ROADMAP / STATUS / NEXT_24H_PLAN: +140 / -50 LoC
 
 ### Total binary delta
 
-- aether 0.22.0 release binary on linux-x64: ~40 MB
 - aether 0.23.0 release binary on linux-x64: ~41 MB
-  (tokio-stream tiny; jsonwebtoken brings in ring-style RSA/EC code
-  that monomorphises to ~700 KB).
+- aether 0.24.0 release binary on linux-x64: ~41 MB
+  (no new deps; jsonwebtoken's EdDSA arm was already linked).

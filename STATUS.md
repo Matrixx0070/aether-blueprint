@@ -124,4 +124,11 @@ format: `[slice] [status] [commit] [verifier] [live-check] note`
 | S4 | DONE | e6373bd | n/a | 5 live cases: real-local-OK, fake-local-FAIL, unpushed-URL-FAIL, pushed-URL-OK, missing-field-FAIL | `aether plugin verify --resolve-commit <repo>` |
 | S5 | DONE | b16e552 | n/a | live SSE: `def fibonacci(n)...` → `fibonacci(n-1)+fibonacci(n-2)` streamed in 2 deltas + done frame ($0.0002) | POST /v1/complete SSE code-completion endpoint |
 | S6 | DONE | 2fdcaee | n/a | 4 live cases: pull-merges-2-keys, push-confirmed-by-fresh-clone, idempotent-noop-on-second-push, local-bare-remote works | `aether plugin trust sync --remote <git-url> [--push]` |
+| S7 | DONE | 8532ab0 | n/a | v0.23.0 release LIVE on 4 platforms; cosign verify-blob → "Verified OK"; sha256sum -c → OK | v0.23.0 ship + Plan T draft + cosign live-verify |
+| T4 | DONE | 320e005 | n/a | 3 live language probes (Python/Rust/TypeScript), template literal preserved after fence-detection fix | /v1/complete server-side fence-strip |
+| T1 | DONE | 27af402 | n/a | build clean + accepted-set message updated to (RS256, ES256, EdDSA); JWK kty=OKP/crv=Ed25519 parsing wired | EdDSA in `aether sso login` JWT validation |
+| T3 | DONE | 8ae397b | n/a | 4 live cases: unsigned-local FAIL, pushed-URL refused-by-helper, missing --resolve-commit clap-rejected | `plugin verify --require-signed-commit` |
+| T5 | DONE | a1eb994 | n/a | 4 live cases: --remove-from-team without/with --push round-trip + non-matching prefix error | `trust sync --remove-from-team <hex>` |
+| T2 | DONE | 40a608a | n/a | live: 2 Edits (13ms, 2ms) + 1 Bash (81ms) — no aliasing under per-tool_use_id keying | per-tool_use_id keying in tool_calls |
+| T6 | DONE/UNVERIFIED | n/a | R1 Bedrock streaming, R2 JetBrains build, R3 Mantle sweep all carry forward — no operator AWS/JDK21/Mantle inputs supplied this run | R1/R2/R3 cred-blocked verifiers carried to Plan U |
 

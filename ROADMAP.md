@@ -468,17 +468,35 @@ extensibility.
   pulls a team-curated `trusted-keys.txt` and merges it additively
   (union) into the local keychain. With --push, also writes back.
 
-## v0.24 — next (draft)
+## v0.24 — followups + verifier hardening — shipped 2026-06-26
 
-- EdDSA support in JWT validation (S2 follow-up)
-- Per-tool tool_use_id keying in tool_calls (S3 follow-up)
-- `aether plugin verify --require-signed-commit` (gpg verify on
-  the resolved SHA — S4 follow-up)
-- Code-completion: server-side fence-strip + language-aware
-  trimming (S5 follow-up)
-- Team trust keychain rotation / revocation semantics (S6 follow-up)
-- Closing R1/R2/R3 cred-blocked UNVERIFIEDs when operator supplies
-  AWS / JDK21 / Mantle inputs
+- **T4 `/v1/complete` fence-strip** — server-side state machine
+  strips leading ```language\n + trailing ``` from streamed SSE
+  deltas; strict prefix check preserves backtick template literals.
+- **T1 EdDSA in JWT validation** — `aether sso login` now accepts
+  RS256 + ES256 + EdDSA. OKP/Ed25519 JWK parsing via
+  `DecodingKey::from_ed_components`.
+- **T3 `plugin verify --require-signed-commit`** — runs `git
+  verify-commit <sha>` on the resolved local commit; refuses
+  unsigned. URL mode explicitly rejected (commit body not fetched).
+- **T5 `plugin trust sync --remove-from-team <hex>`** — subtractive
+  complement to the S6 union pull; with --push, the team copy
+  drops the matching keys too. Without --push, only local is
+  updated.
+- **T2 per-tool_use_id `tool_calls` keying** — `ToolHookCallback`
+  signature extended with tool_use_id; HashMap key is the id
+  (Anthropic's per-call unique id), so concurrent same-name calls
+  no longer alias.
+- T6 — R1/R2/R3 cred-blocked verifiers (Bedrock streaming, JetBrains
+  build, Mantle sweep) remain DONE/UNVERIFIED; closing pending
+  operator inputs.
+
+## v0.25 — next (draft)
+
+- Plan U slices: SAML support (alt to OIDC), notification webhooks,
+  trust keychain rotation policy + key-age telemetry, Prometheus
+  metrics endpoint on `aether serve`, signed-commit success-path
+  integration test (closes T3 LOW).
 
 ## v0.9 — enterprise
 

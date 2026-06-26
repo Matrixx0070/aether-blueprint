@@ -23,7 +23,26 @@ Each tarball ships with a SHA256 the script verifies before extraction. See
 `INSTALL.md` for the manual download + verify path and the source-build
 fallback.
 
-## Status: v0.23.0
+## Status: v0.24.0
+
+Plan T shipped six follow-ups that close every S7 audit MED/LOW carried into this plan (24h autonomous run):
+
+- **T4 `/v1/complete` fence-strip** — server now strips ```language\n
+  + closing ``` from streamed deltas. Template literals preserved
+  by a strict prefix check.
+- **T1 EdDSA in JWT validation** — `aether sso login` accepts RS256
+  + ES256 + EdDSA against the issuer's jwks_uri.
+- **T3 `plugin verify --require-signed-commit`** — runs `git
+  verify-commit` on the resolved commit; refuses unsigned. URL
+  mode explicitly rejected.
+- **T5 `plugin trust sync --remove-from-team`** — subtractive sister
+  to S6's union pull. Without --push: local-only. With --push:
+  team copy drops the matching keys too.
+- **T2 per-tool_use_id `tool_calls` keying** — `ToolHookCallback`
+  carries the call's tool_use_id; concurrent same-name calls no
+  longer alias under the v0.23 HashMap.
+- T6 — R1/R2/R3 cred-blocked verifiers (Bedrock, JetBrains, Mantle)
+  remain UNVERIFIED.
 
 Plan S shipped six features that close every R7 audit MED + open up an SSE completion API + git-backed team trust (24h autonomous run):
 
