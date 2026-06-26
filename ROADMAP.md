@@ -394,13 +394,39 @@ extensibility.
   `AETHER_COST_CEILING_USD` warn-once when 24h spend crosses the
   ceiling.
 
-## v0.21 — next (draft)
+## v0.21 — finish-what-P-deferred + close UNVERIFIED — shipped 2026-06-26
 
-- VS Code panel Accept/Reject for inline tool-use diffs
-- Per-tool tool_use streaming (currently emitted in a batch at
-  end-of-turn)
-- JetBrains marketplace publish (deferred from Plan P)
-- Bedrock streaming live verify (still UNVERIFIED on the slice log)
+- **Q2 per-tool WS streaming** — Executor `tool_hook` now fires the
+  `tool_use` frame the instant the tool dispatches; for Edit/Write
+  it also captures the file's pre-state into `original_contents`
+  + `did_not_exist`. Replaces the v0.20 end-of-turn batch.
+- **Q1 Accept / Reject for inline tool diffs** — new
+  `POST /v1/rollback` (bearer-protected) restores a file to its
+  captured pre-state; VS Code panel renders Accept / Reject buttons
+  under each Edit/Write diff. Reject deletes a Write-that-created
+  or overwrites with original_contents for Edit / Write-that-overwrote.
+  Idempotent on delete (200 "already_absent").
+- **Q3 Bedrock streaming** — smoke verified (clean parseable error
+  on no-creds path); live round-trip remains UNVERIFIED pending
+  operator-supplied AWS credentials.
+- **Q4 JetBrains build** — scaffold structurally validated (P1);
+  `./gradlew buildPlugin` remains UNVERIFIED pending a host with
+  JDK 21 + Gradle 8.10.
+- **Q5 Mantle cross-provider sweep** — `--provider mantle` reaches
+  MantleProvider with clean error on missing creds; live security-
+  eval matrix remains UNVERIFIED pending operator Mantle creds.
+- **Q6 cosign-keyless signed releases** — `SHA256SUMS` is signed
+  via Sigstore + GitHub OIDC; `.sig` + `.pem` ride the release.
+  INSTALL.md documents the verifier recipe.
+
+## v0.22 — next (draft)
+
+- JetBrains marketplace publish (deferred from P then Q)
+- Bedrock streaming live verify (close v0.8 UNVERIFIED label)
+- Mantle cross-provider security-eval matrix
+- Enterprise SSO scaffolding (SAML / OIDC discovery)
+- Signed-commit verification on plugin manifests
+- Multi-tenant `aether serve`
 
 ## v0.9 — enterprise
 

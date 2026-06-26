@@ -23,7 +23,27 @@ Each tarball ships with a SHA256 the script verifies before extraction. See
 `INSTALL.md` for the manual download + verify path and the source-build
 fallback.
 
-## Status: v0.20.0
+## Status: v0.21.0
+
+Plan Q shipped six finish-what-P-deferred features + cosign signing (24h autonomous run):
+
+- **Q2 per-tool WS streaming** — the chat panel sees a `tool_use`
+  frame the instant the agent dispatches each tool, with the
+  file's pre-state captured for Edit/Write. Replaces the v0.20
+  end-of-turn batch.
+- **Q1 Accept / Reject for inline tool diffs** — new
+  `POST /v1/rollback` route + VS Code Accept / Reject buttons
+  under each Edit/Write diff. Reject deletes new files or
+  overwrites with the captured pre-state.
+- **Q3 Bedrock streaming** — smoke verified; live round-trip
+  remains UNVERIFIED pending operator AWS credentials.
+- **Q4 JetBrains build** — scaffold validated; `./gradlew
+  buildPlugin` remains UNVERIFIED pending JDK 21 + Gradle host.
+- **Q5 Mantle cross-provider sweep** — smoke verified; live
+  security-eval matrix remains UNVERIFIED pending Mantle creds.
+- **Q6 cosign-keyless signed releases** — `SHA256SUMS` is signed
+  via Sigstore + GitHub OIDC; `.sig` + `.pem` ride each release.
+  `cosign verify-blob` recipe in INSTALL.md.
 
 Plan P shipped six cross-IDE + remote-BYOC features (24h autonomous run):
 

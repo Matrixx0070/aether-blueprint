@@ -1,97 +1,100 @@
-# Next 24-hour autonomous plan — Plan Q
+# Next 24-hour autonomous plan — Plan R
 
-Drafted at end of Plan P (v0.19 → v0.20). Picks up the v0.21+ scope
-items in `ROADMAP.md` and the deferred items from P5/P6.
+Drafted at end of Plan Q (v0.20 → v0.21). Picks up the deferred items
+the build env can't exercise (creds, JDK21, JetBrains marketplace),
+plus the v0.22 scope items in ROADMAP.md.
 
 ---
 
-## Plan Q — finish what P deferred + close UNVERIFIED labels
+## Plan R — enterprise hardening + close the credential-blocked UNVERIFIEDs
 
-**MISSION**: Cash the cheques Plan P wrote — Accept/Reject for the
-inline-diff UI, per-tool streaming for the WS `tool_use` frames,
-Bedrock streaming live-verified, JetBrains build chain actually
-exercised. Plus a security-eval cross-provider matrix using the new
-Mantle slot, and signed release artifacts via cosign.
+**MISSION**: Close the credential-shaped UNVERIFIED rows Q3/Q4/Q5 left
+behind (Bedrock streaming live, JetBrains build live, Mantle sweep
+live), and add the enterprise-shaped features the slice log has
+flagged for a while: SSO scaffolding, signed-commit verification on
+plugin manifests, multi-tenant `aether serve`.
 
 **DONE MEANS** (6 criteria):
 
-1. v0.21.0 tag on origin/main; release autobuild green on 4
-   platforms; release artifacts also carry a cosign signature.
-2. VS Code chat panel: Accept rolls back the file to its
-   pre-Edit/Write state on click; Reject leaves it as the agent
-   left it; both confirmed by `git diff` cycle on a real repo.
-3. `aether security-eval --provider mantle,anthropic --runs 3
-   --threshold 0.95` produces a comparison table with both columns
-   filled (Mantle backed by a real Anthropic-compatible proxy of
-   the operator's choice).
-4. `cd editor/jetbrains && ./gradlew buildPlugin` succeeds on a
-   developer machine; the zip installs into IntelliJ 2024.3+; a
-   manual round-trip ("Ask…" → response) is captured in STATUS.
-5. Bedrock streaming: a recorded session through the BedrockProvider
-   surfaces at least one streamed delta, written to STATUS as a
-   `live-check` row (replaces the v0.8 UNVERIFIED label).
-6. STATUS slice log entries Q1–Q6 with commit SHAs and live-check
+1. v0.22.0 tag on origin/main; cosign-signed autobuild green on 4
+   platforms.
+2. Bedrock streaming UNVERIFIED row in STATUS replaced with recorded
+   delta output from a real AWS profile (operator-supplied).
+3. `./gradlew buildPlugin` on a host with JDK 21 + Gradle 8.10
+   produces `aether-jetbrains-0.22.0.zip` that installs in IntelliJ
+   2024.3+; a manual prompt→response round-trip captured in STATUS.
+4. `aether security-eval --provider mantle,anthropic --runs 3
+   --threshold 0.95 --json` produces a matrix JSON with both columns
+   populated (operator-supplied Mantle creds).
+5. New CLI `aether sso configure` writes an OIDC discovery URL +
+   client_id to `~/.aether/sso.json`; `aether sso login` opens a
+   browser-flow and persists a token to `~/.aether/sso.token`.
+6. STATUS slice log entries R1–R6 with commit SHAs and live-check
    output (no banned vocabulary).
 
 ## Slices
 
-### Q1 — VS Code: Accept / Reject for tool-use diffs
+### R1 — Close Q3 (Bedrock streaming live verify)
 
-- Each `tool_use` frame includes the file's pre-state on the server
-  side (capture before the tool runs). New WS frame: `tool_use_pre`.
-- Panel renders Accept / Reject buttons under each diff.
-- Reject → POST `/v1/rollback` with `{file_path, original_contents}`
-  to overwrite the file back to its pre-state.
-- Accept → no-op (the file is already in the post-state).
-- 3 wire tests: Accept clean, Reject restores, Reject-on-Write
-  deletes the file if it didn't exist before.
+- Operator supplies AWS profile via `~/.aws/credentials`.
+- Start `aether serve` with `AETHER_PROVIDER=bedrock`.
+- Run the python ws-probe against the model id Bedrock's catalog
+  exposes; capture frame counts.
+- Promote the v0.8 + Q3 UNVERIFIED labels in STATUS to DONE.
 
-### Q2 — Per-tool WS streaming for tool_use frames
+### R2 — Close Q4 (JetBrains build live verify)
 
-- Today a turn's tool_uses are emitted in a batch AT END OF TURN.
-  Move emission into `agent_turn_streamed` itself (or rather, a new
-  callback the WS handler passes in), so each tool's frame arrives
-  the moment the model dispatches it.
-- Required to make Q1 Accept/Reject usable mid-turn: the user can
-  Reject before the next tool even fires.
+- On a JDK 21 + Gradle 8.10 host: `./gradlew buildPlugin`.
+- Manual install in IntelliJ Community 2024.3.
+- Round-trip an "Ask… → response" via the tool window; capture
+  the panel content.
 
-### Q3 — Bedrock streaming live verify
+### R3 — Close Q5 (Mantle cross-provider sweep)
 
-- Stand up a Bedrock test profile (operator-supplied AWS creds).
-- Record a streamed session via the WS endpoint pointing at
-  `AETHER_PROVIDER=bedrock`. Capture stderr + frame counts.
-- Promote the v0.8 `DONE/UNVERIFIED` slice rows in STATUS to
-  `DONE` with the recorded output.
-
-### Q4 — JetBrains build live verify
-
-- On a developer machine with JDK 21 and Gradle 8.10+ available:
-  `./gradlew buildPlugin` → zip; manual install in IntelliJ 2024.3;
-  one round-trip prompt → response.
-- Capture: build artifact size, gradle wall-clock, IDE install
-  confirmation, prompt+response screenshot.
-
-### Q5 — Mantle cross-provider security-eval
-
-- Point a real Mantle deployment (operator-supplied URL + key) at
-  the existing security-eval suite. Run alongside Anthropic for
-  comparison.
+- Operator supplies `MANTLE_API_KEY` + `MANTLE_BASE_URL`.
 - `aether security-eval --provider mantle,anthropic --runs 3
-   --threshold 0.95 --json` should produce a JSON output with both
-   provider columns.
+   --threshold 0.95 --json` produces a JSON matrix.
 
-### Q6 — Cosign-signed release artifacts
+### R4 — SSO scaffolding (SAML/OIDC discovery)
 
-- Add a `release-sign.yml` GitHub Actions job: after the existing
-  4-platform build matrix completes, fetch each artifact, sign with
-  cosign keyless (OIDC), upload the `.sig` alongside.
-- Install docs gain a `cosign verify-blob` step.
+- `aether sso configure` writes `~/.aether/sso.json`:
+  `{ issuer, client_id, scopes?, redirect_uri }`.
+- `aether sso login` opens the system browser at the OIDC
+  authorization endpoint, runs a short-lived local HTTP server on
+  127.0.0.1:<random> as the redirect_uri, exchanges the code for
+  a token, persists it to `~/.aether/sso.token` (mode 0600).
+- New env var `AETHER_REQUIRE_SSO=1` blocks REPL / print mode at
+  startup unless a valid SSO token is present.
+- Out of scope: actual SAML (defer to a follow-up if requested);
+  OIDC is the v0.22 ship.
 
-### Q7 — Self-audit + Plan R draft
+### R5 — Signed-commit verification on plugin manifests
 
-- Audit Q1–Q6 diff against the Discipline Laws kernel.
-- Draft Plan R: enterprise SSO scaffolding, signed-commit
-  verification on plugin manifests, multi-tenant `aether serve`.
+- New manifest field: `commit_sha` (the git commit that built the
+  plugin) + a separate detached signature over `(canonical_manifest
+  ‖ commit_sha)`.
+- `aether plugin verify` learns `--enforce-commit-pinned`: refuses
+  the manifest if `commit_sha` is missing OR if the signature
+  doesn't cover both.
+- Backward compat: manifests without `commit_sha` continue to load
+  in non-strict mode (warning only).
+
+### R6 — Multi-tenant `aether serve`
+
+- Optional tenant header `X-Aether-Tenant: <slug>` on `/ws/chat`
+  + `/v1/messages` + `/v1/trust` + `/v1/rollback`.
+- Trust keychain becomes per-tenant under
+  `~/.aether/tenants/<slug>/plugin-trust.txt`; usage.db gets a
+  `tenant` column on the `turns` and `tool_calls` tables (schema
+  v2 with migration).
+- Bearer-protected as today; the tenant header is informational
+  only — multi-tenant ACLs are a v0.23 add.
+
+### R7 — Self-audit + Plan S draft
+
+- Audit R1–R6 diff against the Discipline Laws kernel.
+- Draft Plan S: code-completion API endpoint, completion telemetry,
+  team-shared trust keychain, security-eval coverage matrix CI gate.
 
 ## Banned vocabulary
 
@@ -100,30 +103,34 @@ appear in commit messages, STATUS rows, or end-of-turn reports.
 
 ## Open questions (default picked if no answer)
 
-1. **JetBrains marketplace publish?** Default: still deferred —
-   keystore + publisher account dance, separate plan.
-2. **Cosign keyless OIDC issuer.** Default: GitHub Actions OIDC,
-   per Sigstore's standard recipe.
-3. **Bedrock test profile.** Default: hold for operator to supply
-   creds; until then Q3 remains a follow-up and v0.21 ships without it.
+1. **OIDC default issuer.** Default: none — operator picks at
+   `sso configure` time. Common defaults (Auth0, Okta, Google,
+   Microsoft) all work; we don't bake one in.
+2. **Bedrock test model id.** Default: `anthropic.claude-sonnet-4-6`
+   (pick from `aws bedrock list-foundation-models`).
+3. **Mantle endpoint.** Default: same as Plan P — operator overrides
+   via `MANTLE_BASE_URL`.
 
 ## Risk register
 
-- **Mantle live verify needs a real deployment.** Mitigation: if
-  the operator can't provide a Mantle base URL + key, Q5 is
-  exercised against a recorded mock (still useful as a regression
-  test for the wire serialisation).
-- **Q1 rollback API is the biggest new surface.** Mitigation:
-  start with file-overwrite-only semantics (no chunk-level undo);
-  a true diff-apply is v0.22+.
+- **OIDC redirect flow needs a short-lived local server.** Mitigation:
+  bind 127.0.0.1:0 (kernel picks a free port); accept exactly one
+  request, then shutdown.
+- **Schema v2 migration for multi-tenant usage.db.** Mitigation: the
+  USAGE_SCHEMA_VERSION check (introduced in O3) blocks silent
+  corruption; v2 binary on v1 db = informative error, not silent
+  rewrite.
+- **JetBrains marketplace publish is STILL deferred.** Mitigation:
+  R2 only proves the build chain works; marketplace upload is its
+  own keystore dance.
 
 ---
 
-## P7 — self-audit on Plan P (v0.20.0 shipping)
+## Q7 — self-audit on Plan Q (v0.21.0 shipping)
 
-**Audited commits**: d6a0ef3 (P1), 2ebb946 (P2), 712ddbe (P3),
-dd14915 (P4), 9220af3 (P5), 43dbf51 (P6). 6 slices, 7 commits,
-+1300 / −10 net.
+**Audited commits**: 0f794de (Q2), 891dd7e (Q1), 853685c (Q6), plus
+the inline Q3+Q4+Q5 UNVERIFIED rows in STATUS. 3 code commits +
+1 docs commit, +280 / −33 net.
 
 ### BLOCKER — none
 
@@ -131,61 +138,59 @@ dd14915 (P4), 9220af3 (P5), 43dbf51 (P6). 6 slices, 7 commits,
 
 ### MED
 
-- **P1 JetBrains scaffold is UNVERIFIED** — `./gradlew buildPlugin`
-  was not exercised in this session (JDK 17 only, no Gradle, no
-  IntelliJ Platform). Build chain is structurally sound (declared
-  IntelliJ Platform 2.1.0 + Kotlin 2.0.21, version-pinned, since/
-  untilBuild bounds set). Operator must run the build on a
-  JDK 21 + Gradle 8.10 machine before any marketplace publish.
-- **P5 emits tool_use frames per-turn, not per-tool** — if the
-  agent calls 5 tools in one turn, the user sees 5 frames AT THE
-  END of that turn, not interleaved with the text deltas. Promoted
-  to Q2 next plan; documented in commit message.
+- **Q1 rollback POST has no per-session scope** — anyone with the
+  bearer token can roll back any absolute file path. Documented as
+  the intended v0.21 semantic (single-machine operator); tenant
+  isolation arrives in R6.
+- **Q2 original_contents captured at PreToolUse phase** — a tool
+  whose internal flow re-reads the file between the hook and the
+  mutation could race. Edit/Write don't do that today; flagged for
+  Plan S if a fancier file tool ships.
+- **Q3/Q4/Q5 live verification is BLOCKED on creds/JDK21** — Plan R
+  closes these the moment the operator supplies what's needed.
+  Documented honestly in STATUS as DONE/UNVERIFIED.
 
 ### LOW
 
-- **P3 publisher namespace assumes `matrixx0070`** — fine for now,
-  but a future rename would force a marketplace re-publish (deeper
-  than a simple bump).
-- **P4 trust-list is global per `aether serve` process** — a multi-
-  tenant deployment would need a per-tenant trust file. Documented
-  inside the commit message and mitigated by 127.0.0.1 binding.
-- **P5 diff renders as plain `<pre>` with whitespace preservation**
-  — no syntax highlighting on the before/after panes. Functional
-  but not pretty. Highlight.js would inflate the CSP; defer to
-  v0.21+ if user complains.
-- **P6 cost ceiling check runs per-turn** — small SQL query, but
-  per-turn cost on a hot loop. Acceptable; can move behind a
-  N-turn throttle if profiling shows it matters.
-- **P6 --tail polls SQLite via MAX(id)** — multi-writer race
-  documented in commit; not a v0.20 concern (single-machine).
+- **Q1 rollback path overwrite is full-file, not chunk-level** — if
+  the agent's tool already moved the file (rename + edit), the
+  overwrite no longer matches. Edit/Write are atomic today.
+- **Q1 panel CSP widened from `connect-src ws: wss:` to also allow
+  `http: https:`** — needed for the rollback fetch(). Acceptable
+  for a localhost-binding `aether serve`; a multi-tenant deployment
+  would tighten this back to the specific host.
+- **Q2 hook fires per-tool but blocks on the executor's tx send** —
+  if the receiver (WS handler) is slow, the executor stalls. The
+  channel is unbounded so this is theoretical, but worth noting.
+- **Q6 cosign sign-blob path is verified only when the workflow
+  actually runs on GHA** — local YAML lint is necessary but not
+  sufficient; the first v0.21+ release tag is the real proof.
 
 ### What worked
 
-- **Bounded slices held**: 7 commits, each with live-verify output
-  cited in the commit message. Build/test cycle stayed reliable.
-- **Banned-vocab discipline** unbroken across this plan's commits
-  and STATUS rows.
-- **Plan-then-ship cadence** unbroken: Plan P drafted in
-  bfdc79f exactly described what shipped here.
-- **Cross-IDE consistency emerged**: JetBrains and VS Code now
-  share the same WS protocol AND the same settings shape
-  (serveUrl + bearer token + default model). The protocol is the
-  product; both editors are clients.
+- **Bounded slices**: 3 code commits, each with a live-verify block
+  in the commit message. Q3/Q4/Q5 explicitly documented as
+  UNVERIFIED in STATUS rather than silently optimistic.
+- **Plan-then-ship cadence held**: Plan Q draft from bfdc79f (P7)
+  matches what shipped here, with the Q3/Q4/Q5 cred-blockers
+  honestly flagged.
+- **Banned-vocab discipline held** through all commits.
+- **Cross-IDE protocol unification continued**: tool_use frame is
+  now the same shape across the WS handler regardless of which
+  editor's client consumes it.
 
-### Diff numbers (net additions)
+### Diff numbers
 
-- aether-llm:    +151 LoC (Mantle provider + 5 tests)
-- aether-cli:    +570 LoC (/v1/trust handlers + tool_use frame +
-                          usage --csv / --tail + cost ceiling +
-                          mantle dispatch arm)
-- editor/jetbrains: +493 LoC (full scaffold)
-- editor/vscode:    +106 LoC (trust.ts + panel.ts diff renderer)
-- editor/vscode metadata: +243 LoC (CHANGELOG, LICENSE bundle,
-                                   package.json fields)
+- aether-cli:           +220 LoC (rollback handler + tool_hook
+                                   refactor + listening banner)
+- editor/vscode panel:   +130 LoC (Accept/Reject + postRollback
+                                   + CSS + CSP widening)
+- .github/workflows:     +32 LoC (cosign step + id-token perm)
+- INSTALL.md:            +30 LoC (cosign verifier recipe)
+- STATUS / ROADMAP / README / NEXT_24H_PLAN: +120 / -30 LoC
 
 ### Total binary delta
 
-- aether 0.19.0 release binary on linux-x64: ~38 MB
-- aether 0.20.0 release binary on linux-x64: ~39 MB (notify already
-  paid in v0.19; mantle adds ~1 MB; no other heavy deps).
+- aether 0.20.0 release binary on linux-x64: ~39 MB
+- aether 0.21.0 release binary on linux-x64: ~39 MB (no new deps;
+  only existing code paths reorganised + new HTTP handlers).

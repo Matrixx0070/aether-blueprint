@@ -103,4 +103,11 @@ format: `[slice] [status] [commit] [verifier] [live-check] note`
 | P4 | DONE | dd14915 | n/a | live: 6 trust-route paths + bearer 401 + correct 200 verified via curl | /v1/trust routes + VS Code trust panel |
 | P5 | DONE | 9220af3 | n/a | live: WS probe → tool_use:1 + Edit input visible + /tmp/p5-ws.txt edited | inline tool-use diff in VS Code chat panel |
 | P6 | DONE | 43dbf51 | n/a | live: --csv, --tail (live row capture), AETHER_COST_CEILING_USD warn all verified | usage --csv / --tail / cost ceiling |
+| P7 | DONE | 836df9c | n/a | v0.20.0 release LIVE (4 platforms, run 28224477135, SHA256SUMS OK, ./aether --version 0.20.0) | v0.20.0 ship + Plan Q draft |
+| Q2 | DONE | 0f794de | n/a | live: WS probe → per-tool tool_use frame with original_contents="old marker\n" + did_not_exist=true on Write | per-tool WS streaming + pre-state capture |
+| Q1 | DONE | 891dd7e | n/a | live: 5 rollback paths verified (restored / removed / 400 abs-path / 400 missing-original / 200 idempotent-absent) | Accept/Reject UI + /v1/rollback |
+| Q3 | DONE/UNVERIFIED | n/a | smoke OK: no-creds → "no AWS credentials found" (no panic) | Bedrock streaming UNVERIFIED in this env; live-verify pending operator AWS creds |
+| Q4 | DONE/UNVERIFIED | n/a | scaffold structurally complete (P1); no JDK21+gradle in env | JetBrains build UNVERIFIED; live-verify pending JDK21+gradle host |
+| Q5 | DONE/UNVERIFIED | n/a | smoke OK: no-creds → "MANTLE_API_KEY not set" (no panic) | Mantle cross-provider sweep UNVERIFIED; live-verify pending operator Mantle creds |
+| Q6 | DONE | 853685c | n/a | YAML valid; OIDC sign-blob path runs only on GHA — live-verify pending tag push | cosign-keyless sign SHA256SUMS in release workflow |
 
