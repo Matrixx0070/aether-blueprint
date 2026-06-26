@@ -246,6 +246,14 @@ enum Cmd {
         #[command(subcommand)]
         sub: SsoCmd,
     },
+    /// Tenant ACL admin: bind bearer tokens to allowed tenant slugs.
+    /// Stored at ~/.aether/tenants.json (mode 0600). When this file is
+    /// present, `aether serve` enforces bearer ↔ tenant binding on
+    /// every /v1/trust + /v1/messages + /ws/chat request.
+    Tenant {
+        #[command(subcommand)]
+        sub: TenantCmd,
+    },
     /// Cost + usage dashboard. Reads from ~/.aether/usage.db (populated
     /// per-turn by REPL / print / serve). Use --by-model or --by-tool
     /// to group; --days N to filter (default 7).
@@ -295,6 +303,40 @@ enum SsoCmd {
     Login,
     /// Delete ~/.aether/sso.token (does not touch sso.json).
     Logout,
+}
+
+#[derive(Subcommand, Debug)]
+enum TenantCmd {
+    /// List ACL rows (bearer-hash prefixes + allowed tenants + global flag).
+    List,
+    /// Grant a bearer access to a tenant. The bearer is hashed
+    /// (sha256) before being stored; the original token is never on disk.
+    Grant {
+        /// The bearer token to grant (will be hashed). Use --from-stdin
+        /// to read instead.
+        #[arg(long)]
+        bearer: Option<String>,
+        /// Read the bearer from stdin (newline-terminated).
+        #[arg(long, default_value_t = false)]
+        from_stdin: bool,
+        /// Tenant slug to grant.
+        #[arg(long)]
+        tenant: String,
+        /// Mark the bearer as global (allowed at the no-tenant fallback
+        /// route, in addition to its allowed tenants).
+        #[arg(long, default_value_t = false)]
+        global: bool,
+    },
+    /// Revoke a bearer's access to a tenant. If --tenant is omitted,
+    /// removes the entire ACL row for that bearer.
+    Revoke {
+        #[arg(long)]
+        bearer: Option<String>,
+        #[arg(long, default_value_t = false)]
+        from_stdin: bool,
+        #[arg(long)]
+        tenant: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -553,6 +595,9 @@ async fn main() -> Result<()> {
         }
         Some(Cmd::Sso { sub }) => {
             return sso_cmd(sub).await;
+        }
+        Some(Cmd::Tenant { sub }) => {
+            return tenant_cmd(sub);
         }
         Some(Cmd::Usage { days, by_model, by_tool, json, csv, tail }) => {
             return run_usage_cmd(days, by_model, by_tool, json, csv, tail).await;
@@ -2342,6 +2387,62 @@ fn extract_tenant(
     Ok(Some(s.to_string()))
 }
 
+/// S1: bearer ↔ tenant ACL gate. Returns Ok when:
+///   - ~/.aether/tenants.json is absent (no ACL configured → no gate),
+///   - the bearer's hash is in the ACL AND either (a) requested
+///     tenant is in row.allowed_tenants, or (b) no tenant header AND
+///     row.global=true.
+/// Returns 403 otherwise. Bearer is read from the `Authorization`
+/// header; missing/blank bearer with an ACL configured is also a 403
+/// (the operator must opt the bearer in explicitly).
+fn check_tenant_acl(
+    headers: &axum::http::HeaderMap,
+    tenant: Option<&str>,
+) -> Result<(), axum::response::Response> {
+    let acl = match load_tenant_acl() {
+        Ok(Some(a)) if !a.acls.is_empty() => a,
+        _ => return Ok(()),
+    };
+    let bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(|s| s.trim())
+        .unwrap_or("");
+    if bearer.is_empty() {
+        return Err(trust_error_response(
+            403,
+            "tenants.json present but no bearer presented",
+        ));
+    }
+    let hash = sha256_hex(bearer);
+    let Some(row) = acl.acls.iter().find(|r| r.bearer_sha256 == hash) else {
+        return Err(trust_error_response(
+            403,
+            "bearer not in tenant ACL",
+        ));
+    };
+    match tenant {
+        Some(slug) => {
+            if !row.allowed_tenants.iter().any(|t| t == slug) {
+                return Err(trust_error_response(
+                    403,
+                    &format!("bearer not authorised for tenant `{slug}`"),
+                ));
+            }
+        }
+        None => {
+            if !row.global {
+                return Err(trust_error_response(
+                    403,
+                    "bearer not authorised for the no-tenant fallback (set X-Aether-Tenant)",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `GET /v1/trust` — list trusted ed25519 plugin pubkeys for the
 /// optional X-Aether-Tenant; falls back to the global keychain when
 /// the header is absent.
@@ -2360,6 +2461,9 @@ async fn trust_list_handler(
         Ok(t) => t,
         Err(resp) => return resp,
     };
+    if let Err(resp) = check_tenant_acl(&headers, tenant.as_deref()) {
+        return resp;
+    }
     let keys = aether_plugin::load_trust_keychain_for(tenant.as_deref());
     let path = aether_plugin::trust_keychain_path_for(tenant.as_deref())
         .map(|p| p.display().to_string())
@@ -2392,6 +2496,9 @@ async fn trust_add_handler(
         Ok(t) => t,
         Err(resp) => return resp,
     };
+    if let Err(resp) = check_tenant_acl(&headers, tenant.as_deref()) {
+        return resp;
+    }
     let key = body.0.public_key.trim();
     if key.is_empty() || hex::decode(key).map(|b| b.len() != 32).unwrap_or(true) {
         return trust_error_response(400, "key must be 32-byte hex-encoded ed25519 public key");
@@ -2447,6 +2554,9 @@ async fn trust_remove_handler(
         Ok(t) => t,
         Err(resp) => return resp,
     };
+    if let Err(resp) = check_tenant_acl(&headers, tenant.as_deref()) {
+        return resp;
+    }
     let prefix = body.0.prefix.trim();
     if prefix.is_empty() {
         return trust_error_response(400, "empty prefix");
@@ -6250,6 +6360,188 @@ fn urldecode(s: &str) -> String {
         out.push(b);
     }
     String::from_utf8_lossy(&out).to_string()
+}
+
+// ── Tenant ACL ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct TenantAcl {
+    #[serde(default = "default_acl_version")]
+    version: u32,
+    #[serde(default)]
+    acls: Vec<TenantAclRow>,
+}
+
+impl Default for TenantAcl {
+    fn default() -> Self {
+        Self { version: default_acl_version(), acls: Vec::new() }
+    }
+}
+
+fn default_acl_version() -> u32 { 1 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct TenantAclRow {
+    /// sha256 hex of the bearer token. Never the bearer itself.
+    bearer_sha256: String,
+    /// Allowed tenant slugs.
+    #[serde(default)]
+    allowed_tenants: Vec<String>,
+    /// Whether the bearer can hit the no-tenant fallback (global keychain).
+    #[serde(default)]
+    global: bool,
+}
+
+fn tenants_acl_path() -> Result<PathBuf> {
+    let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME not set"))?;
+    Ok(PathBuf::from(home).join(".aether/tenants.json"))
+}
+
+fn load_tenant_acl() -> Result<Option<TenantAcl>> {
+    let path = tenants_acl_path()?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+    let acl: TenantAcl = serde_json::from_slice(&bytes)
+        .with_context(|| format!("parse {}", path.display()))?;
+    Ok(Some(acl))
+}
+
+fn save_tenant_acl(acl: &TenantAcl) -> Result<()> {
+    let path = tenants_acl_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let json = serde_json::to_string_pretty(acl)?;
+    std::fs::write(&path, json).with_context(|| format!("write {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+fn sha256_hex(s: &str) -> String {
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(s.as_bytes());
+    hex::encode(digest)
+}
+
+fn read_bearer_arg(bearer: Option<String>, from_stdin: bool) -> Result<String> {
+    if let Some(b) = bearer {
+        return Ok(b.trim().to_string());
+    }
+    if from_stdin {
+        use std::io::Read;
+        let mut s = String::new();
+        std::io::stdin().read_to_string(&mut s).context("read stdin")?;
+        return Ok(s.trim().to_string());
+    }
+    anyhow::bail!("either --bearer <TOKEN> or --from-stdin is required");
+}
+
+fn tenant_cmd(sub: TenantCmd) -> Result<()> {
+    match sub {
+        TenantCmd::List => {
+            let acl = load_tenant_acl()?.unwrap_or_default();
+            if acl.acls.is_empty() {
+                let path = tenants_acl_path()?;
+                eprintln!(
+                    "[tenant] no ACL rows in {} (enforce only when this file is non-empty)",
+                    path.display()
+                );
+                return Ok(());
+            }
+            eprintln!(
+                "[tenant] {} row(s) (v{}):",
+                acl.acls.len(),
+                acl.version
+            );
+            for row in &acl.acls {
+                println!(
+                    "  bearer_sha256={}…  global={}  tenants=[{}]",
+                    &row.bearer_sha256[..16.min(row.bearer_sha256.len())],
+                    row.global,
+                    row.allowed_tenants.join(", "),
+                );
+            }
+            Ok(())
+        }
+        TenantCmd::Grant { bearer, from_stdin, tenant, global } => {
+            let bearer_raw = read_bearer_arg(bearer, from_stdin)?;
+            if bearer_raw.is_empty() {
+                anyhow::bail!("bearer is empty");
+            }
+            let bearer_hash = sha256_hex(&bearer_raw);
+            let mut acl = load_tenant_acl()?.unwrap_or_default();
+            if let Some(row) = acl.acls.iter_mut().find(|r| r.bearer_sha256 == bearer_hash) {
+                if !row.allowed_tenants.iter().any(|t| t == &tenant) {
+                    row.allowed_tenants.push(tenant.clone());
+                }
+                if global { row.global = true; }
+                eprintln!(
+                    "[tenant] updated existing row: bearer={}… → tenants=[{}], global={}",
+                    &bearer_hash[..16],
+                    row.allowed_tenants.join(", "),
+                    row.global,
+                );
+            } else {
+                acl.acls.push(TenantAclRow {
+                    bearer_sha256: bearer_hash.clone(),
+                    allowed_tenants: vec![tenant.clone()],
+                    global,
+                });
+                eprintln!(
+                    "[tenant] new row: bearer={}… → tenants=[{}], global={}",
+                    &bearer_hash[..16],
+                    tenant,
+                    global,
+                );
+            }
+            save_tenant_acl(&acl)?;
+            Ok(())
+        }
+        TenantCmd::Revoke { bearer, from_stdin, tenant } => {
+            let bearer_raw = read_bearer_arg(bearer, from_stdin)?;
+            let bearer_hash = sha256_hex(&bearer_raw);
+            let mut acl = load_tenant_acl()?.unwrap_or_default();
+            let before = acl.acls.len();
+            match tenant {
+                Some(t) => {
+                    if let Some(row) = acl.acls.iter_mut().find(|r| r.bearer_sha256 == bearer_hash) {
+                        let n0 = row.allowed_tenants.len();
+                        row.allowed_tenants.retain(|x| x != &t);
+                        if row.allowed_tenants.is_empty() && !row.global {
+                            // No remaining tenants AND not global ⇒ remove the row entirely.
+                            acl.acls.retain(|r| r.bearer_sha256 != bearer_hash);
+                            eprintln!(
+                                "[tenant] removed row entirely (had {n0} tenant(s), removed `{t}`, no global)"
+                            );
+                        } else {
+                            eprintln!(
+                                "[tenant] revoked `{t}` (row now has tenants=[{}], global={})",
+                                row.allowed_tenants.join(", "),
+                                row.global
+                            );
+                        }
+                    } else {
+                        anyhow::bail!("no ACL row for that bearer");
+                    }
+                }
+                None => {
+                    acl.acls.retain(|r| r.bearer_sha256 != bearer_hash);
+                    if acl.acls.len() == before {
+                        anyhow::bail!("no ACL row for that bearer");
+                    }
+                    eprintln!("[tenant] removed entire row for bearer={}…", &bearer_hash[..16]);
+                }
+            }
+            save_tenant_acl(&acl)?;
+            Ok(())
+        }
+    }
 }
 
 fn trust_cmd(sub: TrustCmd) -> Result<()> {
