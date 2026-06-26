@@ -80,4 +80,12 @@ format: `[slice] [status] [commit] [verifier] [live-check] note`
 | L2 | DONE | (commit) | n/a | tsc -p . clean, 211-line extension.js | VS Code skeleton |
 | L3 | DONE | 8bbdf9e | n/a | **3/3 PASS, $0.61, agent committed+rationaled** | 3 multi-turn design-decision tasks |
 | L4 | DONE | (commit) | n/a | 4/4 plugin tests + live end-to-end echo | subprocess plugin loader |
+| L5 | DONE | ccab63a | n/a | v0.16.0 binary release LIVE on 4 platforms | bump 0.16.0 |
+| L6 | DONE | 03f4f89 | n/a | 0 BLOCKER/HIGH · 2 MED (auth + plugin signing → Plan M) | self-audit + Plan M draft |
+| CI-fix | DONE | 9bdb7b7 | n/a | linux-aarch64 cross-compile via apt toolchain (was: cross/Docker fallback) | release workflow fix |
+| M1 | DONE | (next) | n/a | wasmtime workspace compile + 47KB example .wasm built | WASM-sandboxed plugin loader |
+| M2 | DONE | (next) | n/a | editor/wasm-plugin-example/ ready (50 LoC Rust → wasm32-wasip1) | example WASM plugin |
+| M3 | DONE | 52c2a4d | n/a | constant-time bearer compare + 401 on mismatch | /ws/chat bearer auth |
+| M4 | DONE | 52c2a4d | n/a | tsc clean: extension.js 8KB + panel.js 11KB | VS Code multi-turn webview |
+| M5 | DONE | 0b83a7a | n/a | 7/7 aether-plugin tests (+3 HMAC: round-trip / tamper / unsigned) | plugin HMAC signing + CLI |
 

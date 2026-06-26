@@ -287,14 +287,39 @@ WASM plugin sandboxing remains the v0.17+ goal — subprocess is the
 practical v1 surface that ships now and gives users immediate
 extensibility.
 
-## v0.17 — plugin sandboxing + IDE polish (next)
+## v0.17 — plugin sandboxing + IDE polish — shipped 2026-06-26
 
-- WASM plugin loader via wasmtime (sandboxed alternative to L4
-  subprocess plugins)
-- VS Code extension: dedicated webview panel with multi-turn chat
-- VS Code extension: WebSocket backend integration (talk to long-lived
-  `aether serve` instead of spawn-per-prompt)
-- JetBrains plugin (Kotlin, separate language stack)
+- **M1 WASM-sandboxed plugin loader** (`aether-plugin-wasm` crate)
+  alongside the v0.16 subprocess loader. Both coexist; the manifest's
+  `runtime` field routes to the right backend. wasmtime + WASI
+  preview1. 64 MiB / 30 s caps. No network, no FS except declared
+  `allow_dirs`. Pure compile-time-deps add; no runtime changes for
+  users who don't use WASM plugins.
+- **M2 example WASM plugin** at `editor/wasm-plugin-example/` — 50-line
+  Rust source → 47 KB optimised .wasm, zero dependencies.
+- **M3 `/ws/chat` bearer auth**: when `AETHER_SERVE_TOKEN` is set,
+  upgrades require `Authorization: Bearer <token>`. Constant-time
+  comparison. Kill-switch `AETHER_SERVE_NO_AUTH=1`. Closes the L6
+  finding that `aether serve --bind 0.0.0.0:...` was unauthenticated.
+- **M4 VS Code multi-turn webview** panel — `aether: Open chat panel`
+  command opens a webview that connects to `aether serve` over WS,
+  streams Markdown deltas, shows per-turn token + cost in a footer.
+  Vanilla JS + markdown-it CDN under strict CSP. No extra npm deps.
+- **M5 plugin HMAC signing** — opt-in tamper detection.
+  `aether plugin sign / verify` CLI; agent runtime checks manifest
+  signatures when `AETHER_PLUGIN_HMAC_KEY` is set. Unsigned manifests
+  load with a warning by default; refuse with
+  `AETHER_PLUGIN_ENFORCE_SIGNING=1`. Trust model: symmetric HMAC,
+  sufficient for self-verification; asymmetric-signed marketplace
+  is v0.18+.
+
+## v0.18 — production posture (next)
+
+- Asymmetric plugin signing (ed25519) for marketplace use
+- Rate limit + concurrent-session cap on `aether serve`
+- Audit-log forwarding to syslog / SIEM
+- Per-org policy file enforcement at `build_provider()`
+- JetBrains plugin (Kotlin)
 - BYOC: Mantle
 
 ## v0.9 — enterprise

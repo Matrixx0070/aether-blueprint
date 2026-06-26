@@ -23,7 +23,29 @@ Each tarball ships with a SHA256 the script verifies before extraction. See
 `INSTALL.md` for the manual download + verify path and the source-build
 fallback.
 
-## Status: v0.16.0
+## Status: v0.17.0
+
+Plan M shipped five hardening / surface upgrades (24h autonomous run):
+
+- **M1 WASM-sandboxed plugin loader** — new `aether-plugin-wasm` crate
+  via wasmtime + WASI preview1. Sister loader to the v0.16 subprocess
+  plugins; both coexist via the manifest `runtime` field. 64 MiB memory
+  cap, 30 s wall-clock timeout, no network, no filesystem except
+  manifest-declared `allow_dirs`.
+- **M2 Example WASM plugin** at `editor/wasm-plugin-example/` — 50-line
+  Rust source → 47 KB optimised .wasm, zero deps.
+- **M3 WS bearer-token auth** on `/ws/chat` — `AETHER_SERVE_TOKEN`
+  required; constant-time comparison; 401 on mismatch. Kill-switch
+  `AETHER_SERVE_NO_AUTH=1`.
+- **M4 VS Code multi-turn webview panel** — `aether: Open chat panel`
+  command connects to `aether serve` over WS, renders streamed deltas
+  as Markdown, shows per-turn token + cost. Vanilla JS + markdown-it
+  from CDN under a strict CSP.
+- **M5 Plugin HMAC-SHA256 signing** — opt-in tamper detection for
+  plugin manifests. `aether plugin sign / verify` subcommands; agent
+  startup verifies signatures against `AETHER_PLUGIN_HMAC_KEY` when
+  set; unsigned plugins still load by default (warning) or refuse
+  loading with `AETHER_PLUGIN_ENFORCE_SIGNING=1`.
 
 Plan L shipped four new surfaces (24h autonomous run):
 
