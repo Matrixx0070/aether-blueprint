@@ -76,7 +76,7 @@ function renderHtml(): string {
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; connect-src ws: wss:;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; connect-src ws: wss: http: https:;">
 <title>aether chat</title>
 <style>
 :root {
@@ -107,6 +107,9 @@ code { font-family: var(--vscode-editor-font-family); }
 .diff .label { font-weight: 600; color: var(--muted); font-size: 10px; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.04em; }
 .diff .before .label { color: var(--vscode-errorForeground); }
 .diff .after  .label { color: var(--vscode-charts-green); }
+.actions { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+.actions button { padding: 3px 10px; font-size: 11px; }
+.astatus { color: var(--vscode-descriptionForeground); font-size: 11px; }
 #input-bar { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--vscode-input-border, transparent); background: var(--bg); }
 #prompt { flex: 1; padding: 6px 8px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, transparent); border-radius: 3px; font-family: inherit; font-size: inherit; resize: none; }
 button { padding: 6px 10px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; border-radius: 3px; cursor: pointer; font-family: inherit; font-size: inherit; }
@@ -180,15 +183,12 @@ function escapeHtml(s) {
         .replace(/>/g, '&gt;');
 }
 
-/**
- * Render a tool-use inline. For Edit / Write / NotebookEdit we draw a
- * two-pane before/after; for other tools we show name + a one-line
- * input summary so the user can see what the agent is doing without
- * scrolling the JSON.
- *
- * READ-ONLY in v0.20 — no Accept/Reject (deferred to v0.21).
- */
-function appendToolUse(name, input) {
+// Render a tool-use inline. For Edit / Write we draw a two-pane
+// before/after AND show Accept / Reject buttons. Reject POSTs to
+// /v1/rollback to restore the file's pre-state; Accept is a no-op
+// (the file is already in the new state). For any other tool we
+// show name + a one-line input summary.
+function appendToolUse(name, input, originalContents, didNotExist) {
     input = input || {};
     const div = document.createElement('div');
     div.className = 'toolcall';
@@ -197,7 +197,10 @@ function appendToolUse(name, input) {
     head.textContent = '🔧 ' + name;
     div.appendChild(head);
 
-    if (name === 'Edit' && typeof input.file_path === 'string') {
+    const isEdit = name === 'Edit' && typeof input.file_path === 'string';
+    const isWrite = name === 'Write' && typeof input.file_path === 'string';
+
+    if (isEdit) {
         const meta = document.createElement('div');
         meta.className = 'meta';
         meta.textContent = input.file_path;
@@ -211,10 +214,10 @@ function appendToolUse(name, input) {
             escapeHtml(input.new_string) +
             '</pre></div>';
         div.appendChild(diff);
-    } else if (name === 'Write' && typeof input.file_path === 'string') {
+    } else if (isWrite) {
         const meta = document.createElement('div');
         meta.className = 'meta';
-        meta.textContent = input.file_path + ' (new contents)';
+        meta.textContent = input.file_path + (didNotExist ? ' (created)' : ' (overwritten)');
         div.appendChild(meta);
         const diff = document.createElement('div');
         diff.className = 'diff';
@@ -224,7 +227,6 @@ function appendToolUse(name, input) {
             '</pre></div>';
         div.appendChild(diff);
     } else {
-        // Generic tool — print a short input summary so the user has signal.
         const meta = document.createElement('div');
         meta.className = 'meta';
         let summary = '';
@@ -238,8 +240,76 @@ function appendToolUse(name, input) {
         div.appendChild(meta);
     }
 
+    if (isEdit || isWrite) {
+        const actions = document.createElement('div');
+        actions.className = 'actions';
+        const status = document.createElement('span');
+        status.className = 'astatus';
+        const acceptBtn = document.createElement('button');
+        acceptBtn.textContent = 'Accept';
+        acceptBtn.title = 'Keep the agent\\'s change';
+        const rejectBtn = document.createElement('button');
+        rejectBtn.textContent = 'Reject';
+        rejectBtn.title = 'Roll back to the pre-change state';
+        acceptBtn.addEventListener('click', () => {
+            acceptBtn.disabled = true;
+            rejectBtn.disabled = true;
+            status.textContent = '✓ accepted';
+            status.style.color = 'var(--vscode-charts-green)';
+        });
+        rejectBtn.addEventListener('click', async () => {
+            acceptBtn.disabled = true;
+            rejectBtn.disabled = true;
+            status.textContent = 'rolling back…';
+            try {
+                const r = await postRollback({
+                    file_path: input.file_path,
+                    original_contents: originalContents == null ? null : originalContents,
+                    did_not_exist: !!didNotExist,
+                });
+                status.textContent = '⟲ ' + (r.status || 'rolled back');
+                status.style.color = 'var(--vscode-errorForeground)';
+            } catch (e) {
+                status.textContent = 'rollback failed: ' + (e && e.message ? e.message : e);
+                status.style.color = 'var(--vscode-errorForeground)';
+                acceptBtn.disabled = false;
+                rejectBtn.disabled = false;
+            }
+        });
+        actions.appendChild(acceptBtn);
+        actions.appendChild(rejectBtn);
+        actions.appendChild(status);
+        div.appendChild(actions);
+    }
+
     history.appendChild(div);
     history.scrollTop = history.scrollHeight;
+}
+
+/** POST /v1/rollback. Derives the HTTP base from cfg.serveUrl
+ *  (ws:// → http://) and reuses the same bearer token. */
+async function postRollback(payload) {
+    const base = (cfg && cfg.serveUrl ? cfg.serveUrl : '')
+        .replace(/^ws:\\/\\//, 'http://')
+        .replace(/^wss:\\/\\//, 'https://');
+    const u = new URL(base);
+    u.pathname = '/v1/rollback';
+    u.search = '';
+    u.hash = '';
+    const headers = { 'Content-Type': 'application/json' };
+    if (cfg && cfg.serveToken) headers['Authorization'] = 'Bearer ' + cfg.serveToken;
+    const resp = await fetch(u.toString(), {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+    });
+    const text = await resp.text();
+    if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + text);
+    try {
+        return JSON.parse(text);
+    } catch {
+        return { status: 'ok' };
+    }
 }
 
 function connect() {
@@ -295,7 +365,7 @@ function connect() {
                 // Close out any in-flight agent bubble so the tool block
                 // renders BELOW the text the model emitted before it.
                 currentAgentDiv = null;
-                appendToolUse(msg.name, msg.input);
+                appendToolUse(msg.name, msg.input, msg.original_contents, msg.did_not_exist);
             } else if (msg.type === 'error') {
                 appendSystem('error: ' + msg.message);
                 inFlight = false;

@@ -2026,6 +2026,7 @@ async fn run_serve(
                 .post(trust_add_handler)
                 .delete(trust_remove_handler),
         )
+        .route("/v1/rollback", post(rollback_handler))
         .route("/healthz", axum::routing::get(|| async { "ok" }))
         .with_state(state.clone());
     let listener = tokio::net::TcpListener::bind(bind)
@@ -2048,6 +2049,7 @@ async fn run_serve(
     eprintln!("  GET  /v1/trust     list trusted plugin keys (bearer-protected; same token as /ws/chat)");
     eprintln!("  POST /v1/trust     add a key (body: {{\"public_key\":\"<hex>\"}})");
     eprintln!("  DEL  /v1/trust     remove a key (body: {{\"prefix\":\"<hex>\"}})");
+    eprintln!("  POST /v1/rollback  roll a file back to a captured pre-state (body: {{\"file_path\":\"<p>\",\"original_contents\":\"<s>\",\"did_not_exist\":bool}})");
     eprintln!("  GET  /healthz");
     eprintln!(
         "  [rate-limit: {} rpm/IP, max-sessions: {}]",
@@ -2391,6 +2393,78 @@ async fn trust_remove_handler(
         .header("content-type", "application/json")
         .body(axum::body::Body::from(body))
         .unwrap_or_default()
+}
+
+#[derive(Deserialize)]
+struct RollbackRequest {
+    file_path: String,
+    #[serde(default)]
+    original_contents: Option<String>,
+    #[serde(default)]
+    did_not_exist: bool,
+}
+
+/// `POST /v1/rollback` — restore a file to its pre-tool-use state.
+/// Body shape mirrors the `tool_use` WS frame's pre-state fields:
+///   - file_path: required, must be absolute
+///   - did_not_exist=true → delete the file (Reject on a Write that
+///     created a new file)
+///   - did_not_exist=false → write original_contents back over the file
+///     (Reject on an Edit / overwriting Write)
+async fn rollback_handler(
+    axum::extract::State(state): axum::extract::State<ServeState>,
+    headers: axum::http::HeaderMap,
+    body: axum::Json<RollbackRequest>,
+) -> axum::response::Response {
+    let ip = extract_client_ip(&headers);
+    if let Err(resp) = rate_check(&state, &ip) {
+        return resp;
+    }
+    if let Err(resp) = check_bearer(&headers) {
+        return resp;
+    }
+    let req = body.0;
+    let path = std::path::PathBuf::from(&req.file_path);
+    if !path.is_absolute() {
+        return trust_error_response(400, "file_path must be absolute");
+    }
+    if req.did_not_exist {
+        match std::fs::remove_file(&path) {
+            Ok(_) => axum::response::Response::builder()
+                .status(axum::http::StatusCode::OK)
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(r#"{"status":"removed"}"#))
+                .unwrap_or_default(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Already absent — treat as no-op success so the client
+                // can replay the request safely.
+                axum::response::Response::builder()
+                    .status(axum::http::StatusCode::OK)
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(r#"{"status":"already_absent"}"#))
+                    .unwrap_or_default()
+            }
+            Err(e) => trust_error_response(500, &format!("remove {}: {e}", path.display())),
+        }
+    } else {
+        let Some(contents) = req.original_contents else {
+            return trust_error_response(
+                400,
+                "original_contents required when did_not_exist=false",
+            );
+        };
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::fs::write(&path, contents) {
+            Ok(_) => axum::response::Response::builder()
+                .status(axum::http::StatusCode::OK)
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(r#"{"status":"restored"}"#))
+                .unwrap_or_default(),
+            Err(e) => trust_error_response(500, &format!("write {}: {e}", path.display())),
+        }
+    }
 }
 
 fn trust_error_response(code: u16, msg: &str) -> axum::response::Response {
