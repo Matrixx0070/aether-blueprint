@@ -251,6 +251,14 @@ enum Cmd {
         by_tool: bool,
         #[arg(long)]
         json: bool,
+        /// Emit RFC4180-style CSV (mutually exclusive with --json).
+        #[arg(long, conflicts_with = "json")]
+        csv: bool,
+        /// Stream new turn rows as they land. Uses the same notify-based
+        /// follow as `aether audit tail --follow`. Mutually exclusive
+        /// with --json / --csv.
+        #[arg(long, conflicts_with_all = ["json", "csv"])]
+        tail: bool,
     },
 }
 
@@ -501,8 +509,8 @@ async fn main() -> Result<()> {
         Some(Cmd::Plugin { sub }) => {
             return plugin_cmd(sub);
         }
-        Some(Cmd::Usage { days, by_model, by_tool, json }) => {
-            return run_usage_cmd(days, by_model, by_tool, json).await;
+        Some(Cmd::Usage { days, by_model, by_tool, json, csv, tail }) => {
+            return run_usage_cmd(days, by_model, by_tool, json, csv, tail).await;
         }
         Some(Cmd::Config { sub }) => {
             match sub {
@@ -3692,6 +3700,38 @@ fn record_turn_usage(
             cost_usd,
         ],
     );
+    check_cost_ceiling(&conn);
+}
+
+/// Warn-once when the cumulative cost over the last 24h crosses
+/// $AETHER_COST_CEILING_USD. Uses a process-local flag so we don't
+/// spam every turn; intentionally NOT persisted across runs — every
+/// new process gets the first warning, which is what an operator
+/// usually wants when starting a long-running session.
+fn check_cost_ceiling(conn: &rusqlite::Connection) {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let Ok(threshold_s) = std::env::var("AETHER_COST_CEILING_USD") else {
+        return;
+    };
+    let Ok(threshold) = threshold_s.parse::<f64>() else {
+        return;
+    };
+    if threshold <= 0.0 {
+        return;
+    }
+    let cutoff = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+    let total: f64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(cost_usd), 0.0) FROM turns WHERE ts >= ?1",
+            [cutoff.as_str()],
+            |r| r.get(0),
+        )
+        .unwrap_or(0.0);
+    if total >= threshold && !WARNED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        eprintln!(
+            "\n[aether cost ceiling] last 24h spend ${total:.4} crossed ceiling ${threshold:.4} (AETHER_COST_CEILING_USD)"
+        );
+    }
 }
 
 #[derive(Debug)]
@@ -3703,7 +3743,123 @@ struct UsageRow {
     cost_usd: f64,
 }
 
-async fn run_usage_cmd(days: u32, by_model: bool, by_tool: bool, json_out: bool) -> Result<()> {
+/// RFC4180 minimal escape: wrap in quotes + double inner quotes when the
+/// value contains a comma, quote, CR, or LF. Otherwise pass through.
+fn csv_field(s: &str) -> String {
+    if s.contains(['"', ',', '\n', '\r']) {
+        let escaped = s.replace('"', "\"\"");
+        format!("\"{escaped}\"")
+    } else {
+        s.to_string()
+    }
+}
+
+/// `aether usage --tail` — stream new turn rows as they land. The
+/// `turns` table is append-only; we track the max `id` seen and poll
+/// for rows past it. SQLite under sqlite3-bundled doesn't expose
+/// inotify directly, so we hand-roll a watcher on the underlying file
+/// using the same `notify` crate the audit-tail uses.
+fn run_usage_tail() -> Result<()> {
+    use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+    let path = usage_db_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    // Touch the db so we can watch it from the start.
+    let _ = open_usage_db()?;
+
+    let mut last_id: i64 = {
+        let conn = open_usage_db()?;
+        conn.query_row("SELECT COALESCE(MAX(id), 0) FROM turns", [], |r| r.get(0))
+            .unwrap_or(0)
+    };
+
+    let (tx, rx) = std::sync::mpsc::channel::<notify::Result<notify::Event>>();
+    let mut watcher: RecommendedWatcher =
+        RecommendedWatcher::new(tx, Config::default()).map_err(|e| anyhow!("watcher: {e}"))?;
+    let watch_target = path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    watcher
+        .watch(watch_target, RecursiveMode::NonRecursive)
+        .map_err(|e| anyhow!("watch {}: {e}", watch_target.display()))?;
+
+    println!("# tailing {} — press Ctrl-C to stop", path.display());
+    println!("ts,session_id,model,input_tokens,output_tokens,cost_usd");
+
+    let drain = |last_id: &mut i64| -> Result<()> {
+        let conn = open_usage_db()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, ts, session_id, model, input_tokens, output_tokens, cost_usd \
+             FROM turns WHERE id > ?1 ORDER BY id ASC",
+        )?;
+        let rows: Vec<(i64, String, Option<String>, String, i64, i64, f64)> = stmt
+            .query_map([*last_id], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                ))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        for (id, ts, sess, model, in_t, out_t, cost) in rows {
+            let session_field = sess.unwrap_or_default();
+            println!(
+                "{},{},{},{},{},{:.4}",
+                csv_field(&ts),
+                csv_field(&session_field),
+                csv_field(&model),
+                in_t,
+                out_t,
+                cost
+            );
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+            *last_id = id;
+        }
+        Ok(())
+    };
+
+    loop {
+        match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+            Ok(Ok(ev)) => {
+                if !ev.paths.iter().any(|p| p == &path) {
+                    continue;
+                }
+                if matches!(
+                    ev.kind,
+                    EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
+                ) {
+                    let _ = drain(&mut last_id);
+                }
+            }
+            Ok(Err(_)) => { let _ = drain(&mut last_id); }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                let _ = drain(&mut last_id);
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(anyhow!("usage-tail watcher disconnected"));
+            }
+        }
+    }
+}
+
+async fn run_usage_cmd(
+    days: u32,
+    by_model: bool,
+    by_tool: bool,
+    json_out: bool,
+    csv_out: bool,
+    tail_mode: bool,
+) -> Result<()> {
+    if tail_mode {
+        return run_usage_tail();
+    }
     let conn = open_usage_db()?;
     let cutoff = (chrono::Utc::now() - chrono::Duration::days(days as i64)).to_rfc3339();
 
@@ -3736,6 +3892,11 @@ async fn run_usage_cmd(days: u32, by_model: bool, by_tool: bool, json_out: bool)
                 })
                 .collect();
             println!("{}", serde_json::to_string_pretty(&v)?);
+        } else if csv_out {
+            println!("tool,calls,total_duration_ms,error_count");
+            for (t, n, dur, err) in &rows {
+                println!("{},{},{},{}", csv_field(t), n, dur, err);
+            }
         } else {
             println!(
                 "\n=== TOOL USAGE (last {} days, {} tools) ===",
@@ -3788,6 +3949,19 @@ async fn run_usage_cmd(days: u32, by_model: bool, by_tool: bool, json_out: bool)
             })
             .collect();
         println!("{}", serde_json::to_string_pretty(&v)?);
+    } else if csv_out {
+        let label_col = if by_model { "model" } else { "scope" };
+        println!("{label_col},turns,input_tokens,output_tokens,cost_usd");
+        for r in &rows {
+            println!(
+                "{},{},{},{},{:.4}",
+                csv_field(&r.label),
+                r.turns,
+                r.in_tokens,
+                r.out_tokens,
+                r.cost_usd
+            );
+        }
     } else {
         let label_col = if by_model { "model" } else { "scope" };
         println!("\n=== USAGE (last {} days) ===", days);
