@@ -857,6 +857,7 @@ mod tests {
             cwd: None,
             signature: None,
             algorithm: None,
+            commit_sha: None,
         };
         let tool = PluginTool::new(manifest, plugin_dir);
         let out = tool

@@ -419,14 +419,43 @@ extensibility.
   via Sigstore + GitHub OIDC; `.sig` + `.pem` ride the release.
   INSTALL.md documents the verifier recipe.
 
-## v0.22 — next (draft)
+## v0.22 — enterprise hardening — shipped 2026-06-26
 
-- JetBrains marketplace publish (deferred from P then Q)
-- Bedrock streaming live verify (close v0.8 UNVERIFIED label)
-- Mantle cross-provider security-eval matrix
-- Enterprise SSO scaffolding (SAML / OIDC discovery)
-- Signed-commit verification on plugin manifests
-- Multi-tenant `aether serve`
+- **R4 SSO scaffolding** — `aether sso configure / status / login /
+  logout`. Configure does OIDC discovery against `{issuer}/.well-
+  known/openid-configuration` and writes `~/.aether/sso.json`
+  (0600). Login binds 127.0.0.1:0, runs a PKCE-protected auth-code
+  flow with S256 challenge + 16-byte state, exchanges the code at
+  token_endpoint, persists id_token (or access_token fallback) to
+  `~/.aether/sso.token` (0600). `AETHER_REQUIRE_SSO=1` blocks
+  REPL/print mode at entry unless a token is present.
+- **R5 plugin manifest commit_sha + --enforce-commit-pinned** —
+  optional `commit_sha` field, automatically covered by the
+  existing canonical-bytes signature (HMAC + ed25519 both).
+  `aether plugin verify --enforce-commit-pinned` refuses manifests
+  without the field. Tamper-after-sign verified to fail the
+  signature math.
+- **R6 multi-tenant aether serve + usage.db schema v2** — optional
+  `X-Aether-Tenant: <slug>` header on `/v1/trust` (per-tenant
+  keychain at `~/.aether/tenants/<slug>/plugin-trust.txt`). Slug
+  validation [A-Za-z0-9_-]+ blocks path traversal. usage.db
+  migrates v1 → v2 in place at first open (adds `tenant` column +
+  index on `turns` and `tool_calls`).
+- R1 / R2 / R3 — the cred-blocked verifiers (Bedrock streaming,
+  JetBrains build, Mantle sweep) remain DONE/UNVERIFIED — they
+  close the moment the operator supplies AWS creds, JDK 21 +
+  Gradle, or a Mantle endpoint respectively.
+
+## v0.23 — next (draft)
+
+- Token-binding for tenants (bearer ↔ allowed-tenants mapping)
+- JWT signature validation against issuer's jwks_uri (R4 follow-up)
+- Plugin manifest commit_sha → verify the SHA actually exists in
+  a repo the user controls (R5 follow-up)
+- Per-tool tool_call telemetry (latency + error categories) into
+  usage.db `tool_calls` table
+- Code-completion API endpoint
+- Team-shared trust keychain (git-backed)
 
 ## v0.9 — enterprise
 

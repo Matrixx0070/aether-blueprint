@@ -110,4 +110,11 @@ format: `[slice] [status] [commit] [verifier] [live-check] note`
 | Q4 | DONE/UNVERIFIED | n/a | scaffold structurally complete (P1); no JDK21+gradle in env | JetBrains build UNVERIFIED; live-verify pending JDK21+gradle host |
 | Q5 | DONE/UNVERIFIED | n/a | smoke OK: no-creds → "MANTLE_API_KEY not set" (no panic) | Mantle cross-provider sweep UNVERIFIED; live-verify pending operator Mantle creds |
 | Q6 | DONE | 853685c | n/a | YAML valid; OIDC sign-blob path runs only on GHA — live-verify pending tag push | cosign-keyless sign SHA256SUMS in release workflow |
+| Q7 | DONE | 89bf565 | n/a | v0.21.0 release LIVE on 4 platforms; cosign verify-blob → "Verified OK" against published SHA256SUMS | v0.21.0 ship + Plan R draft + cosign live-proof |
+| R4 | DONE | eb57ae7 | n/a | live: discovery against Google → sso.json mode 0600; AETHER_REQUIRE_SSO=1 blocks print mode | SSO scaffolding (OIDC discovery + PKCE auth-code login) |
+| R5 | DONE | de2a60f | n/a | live: --enforce-commit-pinned rejects missing field; tamper-after-sign → ed25519 verify fail | plugin manifest commit_sha + --enforce-commit-pinned |
+| R6 | DONE | d5b1273 | n/a | live: tenant=acme/beta keychains isolated; path traversal 400'd; v1→v2 ALTER TABLE migration confirmed | multi-tenant aether serve + usage.db schema v2 |
+| R1 | DONE/UNVERIFIED | n/a | smoke OK from Q3; full live verify still pending operator AWS creds | Bedrock streaming live verify (carried from Q3) |
+| R2 | DONE/UNVERIFIED | n/a | scaffold validated from P1; build still pending JDK21+gradle host | JetBrains build live verify (carried from Q4) |
+| R3 | DONE/UNVERIFIED | n/a | smoke OK from Q5; full live sweep still pending operator Mantle creds | Mantle cross-provider security-eval matrix (carried from Q5) |
 

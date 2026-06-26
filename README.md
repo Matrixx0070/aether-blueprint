@@ -23,7 +23,28 @@ Each tarball ships with a SHA256 the script verifies before extraction. See
 `INSTALL.md` for the manual download + verify path and the source-build
 fallback.
 
-## Status: v0.21.0
+## Status: v0.22.0
+
+Plan R shipped three enterprise-hardening features + carried Q3/Q4/Q5 UNVERIFIEDs (24h autonomous run):
+
+- **R4 SSO scaffolding** — `aether sso configure | status | login |
+  logout`. OIDC well-known discovery; PKCE auth-code login binds
+  127.0.0.1:0, opens the browser, persists id_token (0600).
+  `AETHER_REQUIRE_SSO=1` blocks REPL/print mode at entry.
+- **R5 plugin manifest commit_sha** — new optional field on plugin
+  manifests, automatically covered by the existing signature.
+  `aether plugin verify --enforce-commit-pinned` refuses
+  manifests without the field. Tamper-after-sign breaks the
+  signature math (verified live).
+- **R6 multi-tenant aether serve + schema v2 migration** — optional
+  `X-Aether-Tenant: <slug>` header on `/v1/trust` selects a
+  per-tenant keychain at `~/.aether/tenants/<slug>/plugin-trust.txt`.
+  Slug validation blocks path traversal. usage.db migrates v1 → v2
+  in place at first open (adds `tenant` column on `turns` and
+  `tool_calls`).
+- R1 / R2 / R3 — Bedrock streaming, JetBrains build, Mantle sweep
+  remain DONE/UNVERIFIED; close the moment operator supplies
+  AWS creds / JDK 21 + Gradle / Mantle endpoint.
 
 Plan Q shipped six finish-what-P-deferred features + cosign signing (24h autonomous run):
 
