@@ -6972,13 +6972,18 @@ fn run_hooks_sync(hooks: &[HookConfig], event: &str, payload: serde_json::Value)
 /// runs PreToolUse hooks before each Allowed tool call and PostToolUse
 /// hooks after every attempt (including refused). Hook stdout becomes a
 /// kernel reminder injected before the next LLM call.
+///
+/// S3: ALSO captures (name, duration_ms, is_error) on Post phase and
+/// records into the usage.db `tool_calls` table — populating the
+/// schema row that's been waiting since v0.19 for a real writer.
 fn install_tool_hook(session: &mut Session, hooks: &HooksFile) {
     use aether_core::executor::ToolHookPhase;
     let pre = hooks.pre_tool_use.clone();
     let post = hooks.post_tool_use.clone();
-    if pre.is_empty() && post.is_empty() {
-        return;
-    }
+    let pre_has_hooks = !pre.is_empty();
+    let post_has_hooks = !post.is_empty();
+    // Even when there are no user-configured hooks, we still install
+    // the closure so the S3 telemetry writers fire.
     session.executor.set_tool_hook(Box::new(
         move |phase: ToolHookPhase,
               tool_name: &str,
@@ -6987,27 +6992,96 @@ fn install_tool_hook(session: &mut Session, hooks: &HooksFile) {
               is_error: bool|
               -> Vec<String> {
             match phase {
-                ToolHookPhase::Pre => run_hooks_sync(
-                    &pre,
-                    "PreToolUse",
-                    serde_json::json!({
-                        "tool": tool_name,
-                        "input": input,
-                    }),
-                ),
-                ToolHookPhase::Post => run_hooks_sync(
-                    &post,
-                    "PostToolUse",
-                    serde_json::json!({
-                        "tool": tool_name,
-                        "input": input,
-                        "output": output,
-                        "is_error": is_error,
-                    }),
-                ),
+                ToolHookPhase::Pre => {
+                    tool_call_start(tool_name);
+                    if pre_has_hooks {
+                        run_hooks_sync(
+                            &pre,
+                            "PreToolUse",
+                            serde_json::json!({
+                                "tool": tool_name,
+                                "input": input,
+                            }),
+                        )
+                    } else {
+                        Vec::new()
+                    }
+                }
+                ToolHookPhase::Post => {
+                    let dur_ms = tool_call_finish(tool_name);
+                    record_tool_call(None, tool_name, dur_ms, is_error, None);
+                    if post_has_hooks {
+                        run_hooks_sync(
+                            &post,
+                            "PostToolUse",
+                            serde_json::json!({
+                                "tool": tool_name,
+                                "input": input,
+                                "output": output,
+                                "is_error": is_error,
+                            }),
+                        )
+                    } else {
+                        Vec::new()
+                    }
+                }
             }
         },
     ));
+}
+
+/// Process-wide map of tool_name → Pre-phase start instant. Concurrent
+/// same-name calls will lose precision (Post pops whichever finished
+/// first), which is acceptable for the v0.23 measurement floor —
+/// per-call uniqueness via tool_use_id arrives in a future slice.
+static TOOL_CALL_STARTS: once_cell::sync::Lazy<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+fn tool_call_start(name: &str) {
+    if let Ok(mut g) = TOOL_CALL_STARTS.lock() {
+        g.insert(name.to_string(), std::time::Instant::now());
+    }
+}
+
+/// Returns ms since the matching Pre, or 0 when no Pre was recorded.
+fn tool_call_finish(name: &str) -> u64 {
+    if let Ok(mut g) = TOOL_CALL_STARTS.lock() {
+        if let Some(start) = g.remove(name) {
+            return start.elapsed().as_millis() as u64;
+        }
+    }
+    0
+}
+
+/// Append a row to `tool_calls`. Silently swallows DB errors —
+/// observability, not load-bearing. Honours AETHER_NO_USAGE_DB.
+fn record_tool_call(
+    session_id: Option<&str>,
+    tool_name: &str,
+    duration_ms: u64,
+    is_error: bool,
+    tenant: Option<&str>,
+) {
+    if std::env::var("AETHER_NO_USAGE_DB").ok().as_deref() == Some("1") {
+        return;
+    }
+    let ts = chrono::Utc::now().to_rfc3339();
+    let conn = match open_usage_db() {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let _ = conn.execute(
+        "INSERT INTO tool_calls (ts, session_id, tool_name, duration_ms, is_error, tenant) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![
+            ts,
+            session_id,
+            tool_name,
+            duration_ms as i64,
+            if is_error { 1i64 } else { 0i64 },
+            tenant,
+        ],
+    );
 }
 
 fn push_hook_reminders(session: &mut Session, outputs: Vec<String>, event: &str) {
