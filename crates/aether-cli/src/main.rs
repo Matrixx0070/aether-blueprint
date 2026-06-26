@@ -6681,11 +6681,11 @@ async fn validate_id_token(
         jsonwebtoken::decode_header(jwt).context("id_token: cannot decode JWT header")?;
     let kid = header.kid.ok_or_else(|| anyhow!("id_token header missing `kid`"))?;
     let alg = header.alg;
-    // Restrict accepted algorithms to the two we'll actually verify;
+    // Restrict accepted algorithms to the three we'll actually verify;
     // anything else is rejected even if the JWK matches.
-    if !matches!(alg, Algorithm::RS256 | Algorithm::ES256) {
+    if !matches!(alg, Algorithm::RS256 | Algorithm::ES256 | Algorithm::EdDSA) {
         anyhow::bail!(
-            "id_token alg `{:?}` not in accepted set (RS256, ES256)",
+            "id_token alg `{:?}` not in accepted set (RS256, ES256, EdDSA)",
             alg
         );
     }
@@ -6730,6 +6730,22 @@ async fn validate_id_token(
                 .ok_or_else(|| anyhow!("ES256 JWK missing `y`"))?;
             DecodingKey::from_ec_components(x, y)
                 .context("DecodingKey::from_ec_components")?
+        }
+        Algorithm::EdDSA => {
+            // OKP/Ed25519 JWK: { kty: "OKP", crv: "Ed25519", x: "<base64url>" }
+            let kty = jwk.get("kty").and_then(|v| v.as_str()).unwrap_or("");
+            let crv = jwk.get("crv").and_then(|v| v.as_str()).unwrap_or("");
+            if kty != "OKP" || crv != "Ed25519" {
+                anyhow::bail!(
+                    "EdDSA JWK must have kty=OKP, crv=Ed25519 (got kty={kty}, crv={crv})"
+                );
+            }
+            let x = jwk
+                .get("x")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("EdDSA JWK missing `x`"))?;
+            DecodingKey::from_ed_components(x)
+                .context("DecodingKey::from_ed_components")?
         }
         _ => unreachable!("alg restricted above"),
     };
