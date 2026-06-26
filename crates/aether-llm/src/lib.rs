@@ -8,6 +8,7 @@
 pub mod anthropic;
 pub mod azure;
 pub mod bedrock;
+pub mod mantle;
 pub mod retry;
 pub mod vertex;
 

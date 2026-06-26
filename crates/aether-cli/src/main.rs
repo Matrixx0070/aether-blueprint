@@ -3279,8 +3279,13 @@ async fn build_named_provider(name: &str) -> Result<Arc<dyn aether_llm::LlmProvi
                 .context("no auth source for anthropic provider")?;
             Ok(with_retry(Arc::new(p)))
         }
+        "mantle" => {
+            let p = aether_llm::mantle::MantleProvider::from_env()
+                .map_err(|e| anyhow!("mantle provider: {e}"))?;
+            Ok(with_retry(Arc::new(p)))
+        }
         other => anyhow::bail!(
-            "unknown provider '{other}' — valid: anthropic, bedrock, vertex, azure"
+            "unknown provider '{other}' — valid: anthropic, bedrock, vertex, azure, mantle"
         ),
     }
 }
