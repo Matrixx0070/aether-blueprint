@@ -121,29 +121,46 @@ pub async fn maybe_compact(session: &mut Session) -> Result<bool, AgentError> {
 
     // Keep the final third of history verbatim; summarize the head.
     let keep_count = std::cmp::max(2, session.history.len() / 3);
-    let mut to_summarize_count = session.history.len() - keep_count;
+    let initial_cut = session.history.len() - keep_count;
 
-    // The first item of the tail (index to_summarize_count) must be a User
-    // message. Two failure modes if it is not:
-    //   - ToolResults: the tail's tool_use_ids reference an Assistant that was
-    //     drained into the head; Anthropic rejects the next API call with 400
-    //     "unexpected tool_use_id found in tool_result blocks".
-    //   - Assistant: produces consecutive assistant messages (also invalid).
-    // Fix: walk the cut-point back toward the head until we land on a User item.
-    while to_summarize_count > 1
-        && !matches!(&session.history[to_summarize_count], ConversationItem::User(_))
-    {
-        to_summarize_count -= 1;
-    }
+    // Two-strategy cut-point selection. The first item of the tail must form
+    // a valid continuation after whichever synthetic prefix we insert.
+    //
+    // Strategy 1 — snap to the nearest ConversationItem::User.
+    //   Insert a synthetic User+Assistant pair. The tail starts with an
+    //   original User message, producing:
+    //   User(summary) → Assistant(summary) → User(tail) → ...  (valid)
+    //
+    // Strategy 2 — snap to the nearest ConversationItem::Assistant (fallback
+    //   for sessions with a single User turn, e.g. long `--print` audits).
+    //   Insert only a synthetic User(summary). The tail starts with an
+    //   existing Assistant whose tool_use_ids are owned by the ToolResults
+    //   immediately following it in the tail — no orphaned ids:
+    //   User(summary) → Assistant(tail) → ToolResults(tail) → ... (valid)
+    //
+    // If neither strategy finds a boundary, skip this compaction turn.
+    let (cut, use_synthetic_assistant) = {
+        let mut c = initial_cut;
+        while c > 1 && !matches!(&session.history[c], ConversationItem::User(_)) {
+            c -= 1;
+        }
+        if matches!(&session.history[c], ConversationItem::User(_)) {
+            (c, true)
+        } else {
+            let mut c2 = initial_cut;
+            while c2 > 1 && !matches!(&session.history[c2], ConversationItem::Assistant { .. }) {
+                c2 -= 1;
+            }
+            if matches!(&session.history[c2], ConversationItem::Assistant { .. }) {
+                (c2, false)
+            } else {
+                eprintln!("[compaction] skipped: no safe boundary found");
+                return Ok(false);
+            }
+        }
+    };
 
-    // If we still couldn't find a User item to snap to, skip this compaction
-    // turn rather than emit an invalid message sequence.
-    if !matches!(&session.history[to_summarize_count], ConversationItem::User(_)) {
-        eprintln!("[compaction] skipped: no User boundary found for safe cut");
-        return Ok(false);
-    }
-
-    let head: Vec<ConversationItem> = session.history.drain(0..to_summarize_count).collect();
+    let head: Vec<ConversationItem> = session.history.drain(0..cut).collect();
     let history_text = serialize_history(&head);
 
     let req = MessagesRequest {
@@ -164,22 +181,32 @@ pub async fn maybe_compact(session: &mut Session) -> Result<bool, AgentError> {
         })
         .collect();
 
-    // Prepend a synthetic exchange: the user "asks for" context, the
-    // assistant "provides" the summary. Putting it at index 0 keeps it
-    // ahead of whatever tail we preserved.
-    session.history.insert(
-        0,
-        ConversationItem::User(
-            "[CONTEXT SUMMARY OF EARLIER TURNS — refer to this when answering]".into(),
-        ),
-    );
-    session.history.insert(
-        1,
-        ConversationItem::Assistant {
-            text: Some(summary),
-            tool_uses: Vec::new(),
-        },
-    );
+    if use_synthetic_assistant {
+        // Strategy 1: tail starts with User → insert User+Assistant pair.
+        session.history.insert(
+            0,
+            ConversationItem::User(
+                "[CONTEXT SUMMARY OF EARLIER TURNS — refer to this when answering]".into(),
+            ),
+        );
+        session.history.insert(
+            1,
+            ConversationItem::Assistant {
+                text: Some(summary),
+                tool_uses: Vec::new(),
+            },
+        );
+    } else {
+        // Strategy 2: tail starts with existing Assistant → insert only User.
+        // Embedding the summary text in the User message avoids an orphaned
+        // Assistant-with-no-tool-results at the splice point.
+        session.history.insert(
+            0,
+            ConversationItem::User(format!(
+                "[CONTEXT SUMMARY OF EARLIER TURNS — refer to this when answering]\n\n{summary}"
+            )),
+        );
+    }
 
     // Reset running totals: the next compaction can only fire once the
     // session accumulates threshold tokens again.
@@ -432,11 +459,82 @@ mod tests {
         }
     }
 
-    /// If no User boundary exists in the snapback range, compaction is skipped
-    /// rather than producing an invalid message sequence.
+    /// Strategy 2: when no User snap point exists, compact using the nearest
+    /// Assistant boundary. Single-turn --print sessions (one User at index 0,
+    /// many tool rounds) hit this path. The tail starts with an existing
+    /// Assistant so its tool_use_ids are self-referential; the synthetic prefix
+    /// is a single User(summary) item.
     #[tokio::test]
-    async fn maybe_compact_skips_when_no_user_snap_point() {
+    async fn maybe_compact_falls_back_to_assistant_boundary() {
         use crate::context::{ConversationItem, RecordedToolResult, RecordedToolUse};
+        use crate::mock::{MockLlmProvider, ENV_TEST_LOCK};
+        use crate::{Session, SessionConfig};
+        use aether_llm::{ContentBlock, MessagesResponse, StopReason};
+        use aether_overlay::{Fable5Overlay, OverlayConfig};
+        use aether_selfcheck::Gate;
+        use aether_tools::ToolRegistry;
+        use std::sync::Arc;
+
+        let _guard = ENV_TEST_LOCK.lock().expect("env lock");
+        let llm = Arc::new(MockLlmProvider::new());
+        llm.push(MessagesResponse {
+            content: vec![ContentBlock::Text { text: "Discussed widget refactor.".into() }],
+            stop_reason: StopReason::EndTurn,
+            usage: Some(Usage { input_tokens: 1_000, output_tokens: 50,
+                cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }),
+        });
+
+        let session_config = SessionConfig { model: "claude-sonnet-4-6".into(), ..SessionConfig::default() };
+        let overlay = Fable5Overlay::new(OverlayConfig::default());
+        let gate = Gate::new(Vec::new()).expect("gate");
+        let tools = ToolRegistry::new();
+        let mut session = Session::new(session_config, overlay, llm.clone(), gate, tools);
+        session.usage_total.input_tokens = 180_000;
+
+        // Single-turn session: only one User message (at index 0).
+        // No intermediate User messages → Strategy 1 snap-back finds nothing.
+        // Strategy 2 fallback should fire, cutting before the nearest Assistant.
+        session.history = vec![
+            ConversationItem::User("only user msg".into()),
+            ConversationItem::Assistant {
+                text: Some("reply".into()),
+                tool_uses: vec![RecordedToolUse { id: "t1".into(), name: "Read".into(), input: serde_json::json!({}) }],
+            },
+            ConversationItem::ToolResults(vec![RecordedToolResult { tool_use_id: "t1".into(), content: "r1".into(), is_error: false }]),
+            ConversationItem::Assistant {
+                text: Some("reply2".into()),
+                tool_uses: vec![RecordedToolUse { id: "t2".into(), name: "Read".into(), input: serde_json::json!({}) }],
+            },
+            ConversationItem::ToolResults(vec![RecordedToolResult { tool_use_id: "t2".into(), content: "r2".into(), is_error: false }]),
+            ConversationItem::Assistant { text: Some("reply3".into()), tool_uses: Vec::new() },
+        ];
+
+        let compacted = maybe_compact(&mut session).await.expect("compact");
+        assert!(compacted, "Strategy 2 should compact (no User boundary, but Assistant boundary exists)");
+        assert_eq!(llm.calls().len(), 1, "one summarization LLM call");
+
+        // Tail starts at the Assistant that was found as the Strategy 2 boundary.
+        // Synthetic prefix is a single User(summary) item embedding the summary text.
+        match &session.history[0] {
+            ConversationItem::User(s) => {
+                assert!(s.contains("CONTEXT SUMMARY"), "synthetic User must carry summary header");
+                assert!(s.contains("widget refactor"), "synthetic User must contain summary body");
+            }
+            other => panic!("expected User(summary) as index 0, got {:?}", other),
+        }
+        // Index 1 must be the original Assistant from the tail (Strategy 2: no synthetic Assistant).
+        match &session.history[1] {
+            ConversationItem::Assistant { .. } => {}
+            other => panic!("Strategy 2 tail must start with original Assistant, got {:?}", other),
+        }
+    }
+
+    /// If neither User nor Assistant boundaries exist in the search range,
+    /// compaction is skipped rather than producing an invalid message sequence.
+    /// (Pathological case — would not occur in normal conversation flow.)
+    #[tokio::test]
+    async fn maybe_compact_skips_when_no_boundary_at_all() {
+        use crate::context::{ConversationItem, RecordedToolResult};
         use crate::mock::{MockLlmProvider, ENV_TEST_LOCK};
         use crate::{Session, SessionConfig};
         use aether_overlay::{Fable5Overlay, OverlayConfig};
@@ -454,25 +552,25 @@ mod tests {
         let mut session = Session::new(session_config, overlay, llm.clone(), gate, tools);
         session.usage_total.input_tokens = 180_000;
 
-        // History where only index 0 is User — snapback cannot find a User at
-        // index > 0, so compaction must be skipped entirely.
+        // Pathological: history contains only User and ToolResults items —
+        // no intermediate User items > index 0 (Strategy 1 fails at index 1)
+        // and no Assistant items anywhere in the search range (Strategy 2 fails).
+        // Strategy 1 WOULD find User at index 0, but index 0 means cut=0 which
+        // drains nothing — so this case is handled by the fact that the walk
+        // stops at c>1, i.e. minimum c is 1. history[1] here is ToolResults,
+        // not User, so Strategy 1 fails. Then Strategy 2 walks and finds no
+        // Assistant either.
         session.history = vec![
-            ConversationItem::User("only user msg".into()),
-            ConversationItem::Assistant {
-                text: Some("reply".into()),
-                tool_uses: vec![RecordedToolUse { id: "t1".into(), name: "Read".into(), input: serde_json::json!({}) }],
-            },
+            ConversationItem::User("msg".into()),
             ConversationItem::ToolResults(vec![RecordedToolResult { tool_use_id: "t1".into(), content: "r1".into(), is_error: false }]),
-            ConversationItem::Assistant {
-                text: Some("reply2".into()),
-                tool_uses: vec![RecordedToolUse { id: "t2".into(), name: "Read".into(), input: serde_json::json!({}) }],
-            },
             ConversationItem::ToolResults(vec![RecordedToolResult { tool_use_id: "t2".into(), content: "r2".into(), is_error: false }]),
-            ConversationItem::Assistant { text: Some("reply3".into()), tool_uses: Vec::new() },
+            ConversationItem::ToolResults(vec![RecordedToolResult { tool_use_id: "t3".into(), content: "r3".into(), is_error: false }]),
+            ConversationItem::ToolResults(vec![RecordedToolResult { tool_use_id: "t4".into(), content: "r4".into(), is_error: false }]),
+            ConversationItem::ToolResults(vec![RecordedToolResult { tool_use_id: "t5".into(), content: "r5".into(), is_error: false }]),
         ];
 
         let compacted = maybe_compact(&mut session).await.expect("compact");
-        assert!(!compacted, "must skip compaction when no safe User snap point exists");
+        assert!(!compacted, "must skip when neither User nor Assistant boundary exists");
         assert_eq!(llm.calls().len(), 0, "no LLM call when compaction skipped");
     }
 
