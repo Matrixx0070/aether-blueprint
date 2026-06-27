@@ -2679,6 +2679,16 @@ async fn trust_add_handler(
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     }
+    let key_for_event = key.to_string();
+    let tenant_for_event = tenant.clone();
+    tokio::spawn(fire_webhook(
+        "trust-add",
+        serde_json::json!({
+            "key": key_for_event,
+            "tenant": tenant_for_event,
+            "path": path.display().to_string(),
+        }),
+    ));
     axum::response::Response::builder()
         .status(axum::http::StatusCode::OK)
         .header("content-type", "application/json")
@@ -2734,6 +2744,15 @@ async fn trust_remove_handler(
     if let Err(e) = std::fs::write(&path, out) {
         return trust_error_response(500, &format!("write {}: {e}", path.display()));
     }
+    tokio::spawn(fire_webhook(
+        "trust-remove",
+        serde_json::json!({
+            "prefix": prefix,
+            "tenant": tenant,
+            "removed": removed,
+            "remaining": kept.len(),
+        }),
+    ));
     let body = format!(r#"{{"status":"removed","removed":{removed},"remaining":{}}}"#, kept.len());
     axum::response::Response::builder()
         .status(axum::http::StatusCode::OK)
@@ -6813,7 +6832,16 @@ async fn sso_cmd(sub: SsoCmd) -> Result<()> {
         SsoCmd::Logout => {
             let path = sso_token_path()?;
             match std::fs::remove_file(&path) {
-                Ok(_) => eprintln!("[sso logout] removed {}", path.display()),
+                Ok(_) => {
+                    eprintln!("[sso logout] removed {}", path.display());
+                    fire_webhook(
+                        "sso-token-rotate",
+                        serde_json::json!({
+                            "action": "logout",
+                            "path": path.display().to_string(),
+                        }),
+                    ).await;
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     eprintln!("[sso logout] no token at {} (already logged out)", path.display());
                 }
@@ -7027,6 +7055,16 @@ async fn sso_login() -> Result<()> {
         token_value.len(),
         tok_path.display()
     );
+    fire_webhook(
+        "sso-token-rotate",
+        serde_json::json!({
+            "issuer": cfg.issuer,
+            "client_id": cfg.client_id,
+            "token_bytes": token_value.len(),
+            "action": "login",
+        }),
+    )
+    .await;
     Ok(())
 }
 
