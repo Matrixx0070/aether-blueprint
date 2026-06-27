@@ -1,71 +1,92 @@
-# Next 24-hour autonomous plan — Plan Z
+# Next 24-hour autonomous plan — Plan AA
 
-Drafted at end of Plan Y (v0.28 → v0.29). Plan Y shipped the full SAML
-2.0 SSO pipeline; Plan Z closes the remaining cred-blocked UNVERIFIEDs
-and adds OIDC federation.
+Drafted at end of Plan Z (v0.29 → v0.30). Plan Z shipped OIDC hardening
+(Z1–Z3) plus fake-endpoint BYOC wire-format smokes (Z4–Z6) after the
+real BYOC paths surfaced billing / Marketplace gates outside aether's
+control. Plan AA closes the remaining cred-blocked UNVERIFIEDs when
+creds become available and extends the SAML / OIDC surface.
 
 ---
 
-## Plan Z — OIDC federation + cred-unblock
+## Plan AA — BYOC live verify + enterprise SSO breadth
 
-**MISSION**: Add PKCE-based OIDC SSO (browser round-trip → ID-token →
-session token) and live-verify the three BYOC providers that have been
-UNVERIFIED since v0.8 due to missing creds (Bedrock, Vertex, Azure).
+**MISSION**: Flip every UNVERIFIED label that Plan Z carried forward
+to LIVE-VERIFIED when creds become available, plus close the v0.29
+explicit SAML deferral (HTTP-POST binding) and add OIDC userinfo.
 
 **DONE MEANS** (6 criteria):
 
-1. v0.30.0 tag on origin/main; cosign-signed autobuild green on 4
+1. v0.31.0 tag on origin/main; cosign-signed autobuild green on 4
    platforms.
-2. `aether sso configure-oidc` + `aether sso login` complete a PKCE
-   browser round-trip against a local fake OIDC server (RS256 ID token
-   validated, `sso.token` written at 0600).
-3. Bedrock streaming live-verified (real AWS creds, at least 1 token
-   returned from `invoke-with-response-stream`).
-4. Vertex streaming live-verified (real GCP SA JSON, at least 1 delta
-   from `:streamRawPredict`).
-5. Azure AI Foundry live-verified (real endpoint + api-key, `--probe`
-   round-trip returns `usage.input_tokens > 0`).
-6. ROADMAP / STATUS / NEXT_24H_PLAN updated. No banned vocabulary in
-   any new commit.
+2. Bedrock LIVE round-trip — real AWS creds, real
+   `bedrock-runtime.<region>.amazonaws.com`, single 1-token complete
+   call returns usage > 0.
+3. Vertex LIVE round-trip — real GCP creds on a billing-enabled
+   project with Anthropic-on-Vertex Marketplace subscription, single
+   1-token complete call returns usage > 0.
+4. Azure LIVE round-trip — real Azure AI Foundry resource +
+   deployment, single 1-token complete call returns usage > 0.
+5. SAML HTTP-POST binding for AuthnRequest accepted by
+   `aether sso login` end-to-end (smoke updated to post the
+   AuthnRequest via form-encoded body, not redirect query).
+6. STATUS slice rows AA1–AA6 with commit SHAs + live-verify output
+   excerpts (no banned vocabulary).
 
 ## Slices
 
-### Z1 — OIDC discovery + configure-oidc
+### AA1 — Bedrock live round-trip
 
-- `aether sso configure-oidc --issuer <url>` fetches
-  `<issuer>/.well-known/openid-configuration`, extracts
-  `authorization_endpoint`, `token_endpoint`, `jwks_uri`, and writes
-  `~/.aether/sso-oidc.json`.
+- User provides real AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY (+
+  optional AWS_SESSION_TOKEN) + AWS_REGION.
+- Unset AETHER_BEDROCK_ENDPOINT (so it falls back to AWS default).
+- Run `aether doctor --probe --provider bedrock` — exit 0 with
+  `bedrock responded in <ms>ms (in=X out=Y)`.
+- Record live-verify excerpt in STATUS.
 
-### Z2 — PKCE browser round-trip
+### AA2 — Vertex live round-trip
 
-- `aether sso login` (when `sso-oidc.json` present) generates
-  `code_verifier` + `code_challenge` (S256), binds `127.0.0.1:0`
-  callback, emits the authorization URL, waits for the code, POSTs
-  to `token_endpoint` for `access_token` + `id_token`.
+- Pre-req on user's side: enable billing on a GCP project +
+  subscribe to "Claude on Vertex AI" via Cloud Marketplace.
+- `VERTEX_ACCESS_TOKEN` from `gcloud auth print-access-token` +
+  `VERTEX_PROJECT=<enabled-project>` + `VERTEX_REGION=us-central1`.
+- Unset AETHER_VERTEX_ENDPOINT.
+- Run `aether doctor --probe --provider vertex` — exit 0 with
+  `vertex responded in <ms>ms (in=X out=Y)`.
 
-### Z3 — RS256 / ES256 ID-token validation
+### AA3 — Azure live round-trip
 
-- Fetch `jwks_uri`, select the matching `kid`; verify RS256 or ES256
-  `id_token` signature + `iss` / `aud` / `exp` claims. Write
-  `~/.aether/sso.token` at 0600.
+- Pre-req: Azure AI Foundry resource + Claude deployment via
+  Marketplace.
+- `AZURE_AI_ENDPOINT=https://<resource>.services.ai.azure.com` +
+  `AZURE_AI_API_KEY=<resource-scoped-key>`.
+- Run `aether doctor --probe --provider azure` — exit 0 with
+  `azure-foundry responded in <ms>ms (in=X out=Y)`.
 
-### Z4 — Bedrock live-verify
+### AA4 — SAML HTTP-POST binding for AuthnRequest
 
-- Run `aether doctor --probe --provider bedrock` against real AWS
-  creds (env vars `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`).
-  Record exit 0 + usage fields.
+- Currently `sso_login_saml()` refuses any binding other than
+  HTTP-Redirect (line 7987 in main.rs). Extend `build_authn_request_
+  xml` + AuthnRequest emission so HTTP-POST binding renders a
+  self-submitting form (per saml-bindings-2.0 §3.5.4) and posts to
+  the IdP's `SingleSignOnService Location` instead of redirecting.
+- Update `tests/y7-saml-smoke.py` to drive the POST binding path
+  end-to-end.
 
-### Z5 — Vertex live-verify
+### AA5 — Multi-cert IdP support
 
-- Run `aether doctor --probe --provider vertex` against real GCP SA
-  JSON (env `GOOGLE_APPLICATION_CREDENTIALS`). Record exit 0 + delta.
+- Replace `~/.aether/saml/idp-cert.pem` with `idp-certs/*.pem`
+  directory. `load_idp_signing_key` returns
+  `Vec<(RsaPublicKey, Vec<u8>)>`. Signature verify tries each pubkey
+  until one succeeds; first match wins. Supports IdP cert rotation
+  without bouncing aether.
 
-### Z6 — Azure live-verify + ship v0.30.0
+### AA6 — OIDC userinfo + `aether sso whoami`
 
-- Run `aether doctor --probe --provider azure` against real Azure
-  endpoint. Bump Cargo.toml. Tag, push, watch autobuild, cosign
-  verify-blob.
+- New `aether sso whoami` subcommand. Calls
+  `userinfo_endpoint` (from the cached discovery doc in sso.json)
+  with the access_token from sso.token. Prints the resolved
+  subject + email + groups. Useful for operators debugging "which
+  identity is this session bound to".
 
 ## Banned vocabulary
 
@@ -74,68 +95,104 @@ appear in commit messages, STATUS rows, or end-of-turn reports.
 
 ## Open questions (defaults picked)
 
-1. **OIDC nonce + at_hash.** Default: validate `nonce` round-trip
-   (anti-replay); skip `at_hash` (access-token hash, optional in spec).
-2. **Multi-IdP OIDC.** Default: single configured issuer per install.
-3. **Cred unblock order.** Default: Bedrock → Vertex → Azure (matches
-   ROADMAP order).
+1. **AA2 project selection.** Default: ask user before consuming
+   billing — even small Vertex Anthropic calls cost money.
+2. **AA3 Azure resource provisioning.** Default: skip if no
+   resource exists; mark UNVERIFIED again.
+3. **AA5 cert ordering.** Default: lexicographic by filename — gives
+   operators a predictable "rotate by renaming" workflow.
 
 ## Risk register
 
-- **JWKS caching** — don't cache without a TTL; stale JWKS causes
-  false-negative sig failures on key rotation. Use a 5-min in-memory
-  TTL.
-- **Live-verify creds** — if creds aren't in env, mark UNVERIFIED
-  honestly and document the exact env vars needed.
-- **OIDC scope** — Z1–Z3 is significant; don't let scope creep from
-  Z4–Z6 compress the OIDC time budget.
+- **Marketplace subscription latency** — Anthropic on Vertex
+  Marketplace activation can take hours. AA2 may have to defer
+  again if user hasn't pre-provisioned.
+- **AWS credential exposure** — never commit AWS keys to the repo;
+  use env-only.
+- **AA4 HTTP-POST signed-AuthnRequest** — POST binding optionally
+  signs the AuthnRequest. Plan AA scope is unsigned POST first;
+  signed POST in a follow-up.
 
 ---
 
-## Pre-Z context — Plan Y self-audit (v0.29.0 shipping)
+## Pre-AA context — Plan Z self-audit (v0.30.0 shipping)
 
-**Audited commits**: 5724bfb (Y1), dc1ca90 (Y2), 726b063 (Y3),
-6f223bc (Y4), 61334c3 (Y5), bb595db (Y6), 571111f (Y7), plus audit
-fix commit on this plan boundary.
+**Audited commits**: a60baad (Z1'), edebaf0 (Z2), 490a714 (Z3),
+8e10a55 (Z4), 3365e15 (Z5), 0e2dd12 (Z6), plus this version-bump
+commit.
 
-### BLOCKERs — fixed before tag
+### Honest scope re-frame mid-plan
 
-- **BLOCKER-1 (cert-pin bypass)** — `load_idp_signing_key` returned
-  only `RsaPublicKey`, causing the KeyInfo X509Certificate pin check
-  in `verify_saml_assertion_signature` to be skipped in production
-  (caller passed `&[]`). Fixed: function now returns
-  `(RsaPublicKey, Vec<u8>)` (key + cert DER); call site passes real
-  DER bytes.
-- **BLOCKER-2 (XSW first-match)** — `verify_saml_assertion_signature`
-  called `find_element_byte_range_by_id` without verifying the matched
-  element's local name is "Assertion". An XSW attacker could prefix
-  the document with `<outer ID="_assertion-id">` to redirect
-  canonicalisation to unsigned content. Fixed: after resolving the byte
-  range, the local name of the opening tag is extracted and asserted
-  equal to "Assertion".
-- **BLOCKER-3 (RelayState CSRF)** — RelayState mismatch was an
-  `eprintln!` warning, not a hard error. Fixed: elevated to
-  `anyhow::bail!`.
+Plan Z was drafted assuming OIDC discovery + PKCE + ID-token
+validation did NOT exist. Reading the codebase at Z1 revealed they
+shipped in v0.18. Re-framed Z1–Z3 as OIDC hardening of the existing
+flow, with three concrete spec gaps closed (nonce, at_hash, iat +
+require-jwks). This is documented in the v0.30 ROADMAP entry.
 
-### HIGHs — fixed before tag
+### BLOCKERs — none
 
-- **HIGH-1 (End local-name)** — `find_element_byte_range_by_id` End
-  arm compared full qnames (`saml:Assertion` vs `saml:Assertion`).
-  Harmless in practice (same prefix) but semantically wrong. Fixed:
-  extract local names from both sides before comparing.
-- **HIGH-2 (Recipient + InResponseTo)** — `SubjectConfirmationData/
-  @Recipient` and `@InResponseTo` were not validated. Fixed: generate
-  `authn_request_id` before calling `build_authn_request_xml` (passing
-  it via `Some(&id)`); after Y6 bounds check, validate Recipient ==
-  acs_url and InResponseTo == authn_request_id when present.
+All six Z slices ship with all spec gates closed at the unit-test
+level. No BLOCKER findings carried into the version bump.
+
+### HIGHs — one fixed in slice, none carried
+
+- Z2 `verify_id_token` originally called `reqwest::get()` with no
+  timeout or body cap (HIGH — DoS surface). Fixed in slice by
+  switching to a per-call `reqwest::Client::builder().timeout(10s)`
+  + `bytes()`-then-size-check before parse.
+
+### MEDs — one carried, documented
+
+- Z6 streaming dimension is wholly untested. `AzureProvider` has no
+  `complete_streamed` impl (relies on the LlmProvider default which
+  calls `complete()` once). Documented in Z6 commit; deferred to a
+  future hardening when Azure publishes a real SSE streaming surface
+  on the Anthropic-compat endpoints.
+
+### LOWs — knowingly carried
+
+- Z1' `verify_nonce_claim` accepts `Option<&str>` for the expected
+  nonce. The only caller (`sso_login`) always passes `Some`, but the
+  API allows misuse. Tightening this is a refactor, not a security
+  fix.
+- Z2 `verify_at_hash_claim` skips silently when at_hash is absent in
+  auth-code flow (spec-compliant). Z3 adds the strict-mode knob; the
+  default remains permissive for compatibility.
+- Z3 `verify_iat_claim` rejects non-integer iat values as
+  "missing iat" rather than a more accurate "non-integer iat".
+  RFC 7519 §2 permits non-integer NumericDate; every production IdP
+  emits integers.
+- Z4/Z5 fake-endpoint smokes don't exercise SigV4 signature verify
+  or OAuth token verify — only request shape. Real upstream catches
+  bad signatures; the fakes accept anything well-formed.
+- Z4/Z5 fake-endpoint smokes don't exercise retry watchdog (no 429
+  / 5xx injection). Wire-format coverage only.
 
 ### What worked
 
-- **33/33 Y-prefix unit tests** pass after all audit fixes (exit 0,
-  `cargo test --release -p aether-cli -- tests::y`).
-- **Y7 live smoke** (`tests/y7-saml-smoke.py`) passes end-to-end:
-  RSA-2048 keygen + lxml exc-c14n sign → `aether sso login` ACS →
-  `sso.token` written at 0600 with `saml.v1.` prefix.
-- **Dead-code warning** on `load_idp_signing_key` (present during Y5
-  development) cleared by the BLOCKER-1 fix that wires the return
-  value through.
+- **24 new Z-prefix unit tests** pass cleanly across both
+  aether-cli (z1*/z2*/z3* nonce + at_hash + iat + strict + env knob)
+  and aether-llm (z4*/z5* endpoint overrides). Live smokes added for
+  OIDC + Bedrock + Vertex + Azure.
+- **Real Vertex live attempt produced concrete evidence**: not a
+  hand-waved "untested", but a real 403 PERMISSION_DENIED with
+  the exact missing capability (billing) cited in the error. That
+  evidence flows into AA2's pre-reqs.
+- **Self-audit caught scope drift early** — recognising Z1–Z3 were
+  hardening, not net-new, saved redundant scaffolding.
+
+### Diff numbers (approximate)
+
+- aether-cli/src/main.rs: +180 LoC (Z1'+Z2+Z3 verify helpers + env
+  knobs + sso_login wiring)
+- aether-llm/src/bedrock.rs: +27 LoC (base_url + override + unit test)
+- aether-llm/src/vertex.rs: +50 LoC (base_url + override + unit test)
+- aether-llm/src/azure.rs: +0 LoC
+- tests/ python smokes: +800 LoC across 4 new files
+- ROADMAP / STATUS / NEXT_24H_PLAN: +200 LoC
+
+### Total binary delta
+
+- aether 0.29.0 release binary on linux-x64: ~43 MB
+- aether 0.30.0 release binary on linux-x64: ~43 MB (no new code
+  paths — just helpers + env reads)

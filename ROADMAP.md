@@ -651,17 +651,90 @@ extensibility.
   signed SAMLResponse → `aether sso login` ACS → `sso.token` at 0600).
   Exit 0 confirmed on this commit.
 
-## v0.30 — next (Plan Z draft)
+## v0.30 — OIDC hardening + BYOC wire-format smokes — shipped 2026-06-27
 
-- Close cred-blocked UNVERIFIEDs: Bedrock live round-trip (real AWS
-  creds), Vertex live round-trip (real GCP SA JSON), Azure AI Foundry
-  probe.
-- OIDC federation scaffold: `aether sso configure-oidc` + browser PKCE
-  flow + ID-token validation (RS256/ES256) + session token.
-- SAML enhancements: X509Certificate pin in smoke + multi-cert IdP
-  support + HTTP-POST binding for AuthnRequest.
-- Tenant SCIM provisioning: `/v1/scim/Users` CRUD endpoints reusing
-  tenant_acl.db, gated by a `AETHER_SCIM_BEARER` token.
+Plan Z. The shipped scope diverged from the original draft: Z1–Z3
+became OIDC hardening of the existing flow (not net-new OIDC) after
+audit revealed the v0.18 OIDC flow was already feature-complete but
+missing three real spec gates. Z4–Z6 became fake-endpoint wire-format
+smokes after the live BYOC paths surfaced billing / Marketplace
+gates outside aether's control (documented honestly in commits).
+
+- **Z1' OIDC nonce binding** (commit a60baad). 32-byte
+  URL-safe-no-pad nonce generated alongside state + PKCE verifier,
+  threaded through the authorization URL as `&nonce=…` and into
+  `validate_id_token`. New pure helper `verify_nonce_claim`. 4 unit
+  tests + fake-IdP smoke (`tests/z1-oidc-smoke.py`) live-verifies
+  nonce round-trip end-to-end. Closes OIDC core §15.5.2 replay gap.
+- **Z2 at_hash + JWKS hardening** (edebaf0). `verify_at_hash_claim`
+  computes left-most half-of-hash per OIDC core §3.1.3.6:
+  SHA-256[:16] for RS256/ES256, SHA-512[:32] for EdDSA. JWKS fetch
+  gains a 10s reqwest timeout + 256 KiB body cap (read as bytes
+  before parse so the cap fires pre-deser). 5 unit tests.
+- **Z3 require-jwks default + iat freshness + at_hash strict mode**
+  (490a714). Missing `jwks_uri` is now a hard refusal; operators
+  who genuinely need to point at a legacy issuer set
+  `AETHER_OIDC_ALLOW_UNVERIFIED=1`. `verify_iat_claim` bounds iat
+  to ±`AETHER_OIDC_CLOCK_SKEW_S` (default 60s, clamped [0, 300]).
+  `AETHER_OIDC_REQUIRE_AT_HASH=1` makes the at_hash claim
+  mandatory whenever an access_token was issued. 6 unit tests.
+  Aether log line is now `signature + nonce + iat + at_hash OK`.
+- **Z4 Bedrock fake-endpoint smoke** (8e10a55). New
+  `AETHER_BEDROCK_ENDPOINT` env override resolved through
+  `BedrockProvider::base_url()`. Python fake server
+  (`tests/z4-bedrock-smoke.py`) hand-frames AWS event-stream
+  messages for `:invoke-with-response-stream` and serves Anthropic
+  JSON for `:invoke`. Validates SigV4 prefix + body shape (no
+  top-level `model`, `anthropic_version` discriminator present).
+  Honest UNVERIFIED carried forward: real AWS Bedrock round-trip
+  not exercised — no creds in env.
+- **Z5 Vertex fake-endpoint smoke** (3365e15). New
+  `AETHER_VERTEX_ENDPOINT` env override resolved through
+  `VertexProvider::base_url()`. Python fake server
+  (`tests/z5-vertex-smoke.py`) returns Anthropic-shape JSON on
+  `:rawPredict` and SSE `data: {…}` lines on `:streamRawPredict`.
+  Validates `Authorization: Bearer` + `anthropic_version =
+  vertex-2023-10-16` + absent `model`/`stream` keys. Honest
+  UNVERIFIED: real GCP Anthropic-on-Vertex round-trip blocked at
+  Google's billing gate — `gcloud auth print-access-token` worked,
+  aether sent the right request, but billing was disabled on all
+  three projects on the active account; even with billing, Anthropic
+  on Vertex requires a Cloud Marketplace subscription.
+- **Z6 Azure fake-endpoint smoke** (0e2dd12). Zero Rust changes —
+  `AZURE_AI_ENDPOINT` already plays the env-override role.
+  `tests/z6-azure-smoke.py` validates `api-key` header (NOT
+  Bearer), `anthropic-version: 2023-06-01` header, URL query
+  `api-version=2024-08-01-preview`, plain Anthropic Messages body
+  shape (model + messages + max_tokens, no Bedrock-style stripping).
+  Honest UNVERIFIED: real Azure AI Foundry round-trip — no Azure
+  subscription in this session.
+
+24 new Z-prefix unit tests pass alongside the existing 33 Y-prefix
+SAML tests. 3 new fake-IdP smokes added to `tests/` (one each for
+OIDC / Bedrock / Vertex / Azure → 4 total including the existing
+Y7 SAML smoke).
+
+## v0.31 — next (Plan AA draft)
+
+- **AA1 Bedrock + Vertex + Azure live round-trip** when creds /
+  Marketplace / billing become available. The fake-endpoint smokes
+  already verify the wire format; this slice flips the
+  `AETHER_BEDROCK_ENDPOINT` / `AETHER_VERTEX_ENDPOINT` /
+  `AZURE_AI_ENDPOINT` to the real domains and re-runs the same
+  smokes against production.
+- **AA2 SAML HTTP-POST binding for AuthnRequest** (currently only
+  HTTP-Redirect is accepted). Closes a v0.29 explicit deferral —
+  some enterprise IdPs don't support Redirect.
+- **AA3 Multi-cert IdP support** — `~/.aether/saml/idp-certs/*.pem`
+  directory, first-match-wins on signature verify. Supports IdP
+  cert rotation without bouncing aether.
+- **AA4 OIDC mTLS client auth** (RFC 8705). Optional alternative to
+  `client_secret_basic` for high-assurance OAuth clients.
+- **AA5 Tenant SCIM provisioning** — `/v1/scim/Users` CRUD reusing
+  `tenant_acl.db`, bearer-gated via `AETHER_SCIM_BEARER`.
+- **AA6 OIDC userinfo endpoint exchange** — opt-in `aether sso
+  whoami` calls `userinfo_endpoint` (from discovery doc) with the
+  access_token to print the resolved subject + email.
 
 ## v0.9 — enterprise
 
