@@ -843,6 +843,12 @@ pub struct ToolArgFilterRow {
     pub regex: String,
     #[serde(default = "default_arg_filter_action")]
     pub action: String,
+    /// X2: optional dotted JSON path against which to match the regex.
+    /// "command", "file_path", "args.0" all valid. When omitted the
+    /// regex matches against the whole serialised input JSON (W4
+    /// behaviour preserved for backward compat).
+    #[serde(default)]
+    pub field: Option<String>,
 }
 
 fn default_arg_filter_action() -> String {
@@ -931,6 +937,7 @@ fn apply_policy_to_session(session: &mut Session) {
                         tool: row.tool.clone(),
                         regex: re,
                         action,
+                        field: row.field.clone(),
                     });
                 }
                 Err(e) => {

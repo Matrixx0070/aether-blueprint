@@ -102,13 +102,17 @@ pub type ToolHookCallback = Box<
         + Sync,
 >;
 
-/// W4: per-tool argument-filter row. Refuses any tool call whose
-/// `serde_json::to_string(input)` matches the regex. Loaded from
-/// policy.json's `tool_arg_filters` array via apply_policy_to_session.
+/// W4 + X2: per-tool argument-filter row. Matches a regex against
+/// either a specific input JSON field (dotted path) OR the whole
+/// serialised input JSON. Loaded from policy.json via
+/// apply_policy_to_session.
 pub struct ToolArgFilter {
     pub tool: String,
     pub regex: regex::Regex,
     pub action: ArgFilterAction,
+    /// X2: dotted JSON path. None ⇒ match against whole serialised
+    /// input JSON (W4 v0.27 semantics).
+    pub field: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -163,19 +167,67 @@ impl Executor {
         self.policy_blocklist.iter().any(|n| n == name)
     }
 
-    /// W4: return Some(arg_filter) if any rule matches the tool's
-    /// serialised input JSON. Refuse-action filters are returned first;
-    /// Warn-action filters are best-effort surfaced via the same path
-    /// but the caller decides whether to block.
+    /// W4 + X2: return Some(arg_filter) if any rule matches.
+    /// Matching target:
+    ///   - filter.field == None        → whole serialised input JSON
+    ///   - filter.field == Some(path)  → value at dotted JSON path,
+    ///                                    string-converted (skipped
+    ///                                    when path resolves to null
+    ///                                    or missing)
     fn match_arg_filter(&self, name: &str, input: &serde_json::Value) -> Option<&ToolArgFilter> {
         if self.arg_filters.is_empty() {
             return None;
         }
-        let body = serde_json::to_string(input).unwrap_or_default();
-        self.arg_filters
-            .iter()
-            .find(|f| f.tool == name && f.regex.is_match(&body))
+        let whole = serde_json::to_string(input).unwrap_or_default();
+        for f in &self.arg_filters {
+            if f.tool != name {
+                continue;
+            }
+            let target: std::borrow::Cow<str> = match &f.field {
+                None => std::borrow::Cow::Borrowed(whole.as_str()),
+                Some(path) => match resolve_dotted_path(input, path) {
+                    Some(v) => std::borrow::Cow::Owned(json_to_match_string(&v)),
+                    None => continue, // field absent → no match
+                },
+            };
+            if f.regex.is_match(&target) {
+                return Some(f);
+            }
+        }
+        None
     }
+}
+
+/// X2: walk a dotted JSON path. `command` → object key, `args.0` →
+/// object key then array index. Returns None when any segment is
+/// missing or a type mismatch occurs.
+fn resolve_dotted_path<'a>(v: &'a serde_json::Value, path: &str) -> Option<serde_json::Value> {
+    let mut cur: &serde_json::Value = v;
+    for seg in path.split('.') {
+        if seg.is_empty() {
+            return None;
+        }
+        if let Ok(idx) = seg.parse::<usize>() {
+            cur = cur.as_array()?.get(idx)?;
+        } else {
+            cur = cur.as_object()?.get(seg)?;
+        }
+    }
+    Some(cur.clone())
+}
+
+/// X2: convert a JSON value to the string the regex matches against.
+/// Strings are unwrapped (no JSON quotes); everything else uses the
+/// canonical JSON encoding so e.g. integers, arrays, nested objects
+/// can still be pattern-matched.
+fn json_to_match_string(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        other => serde_json::to_string(other).unwrap_or_default(),
+    }
+}
+
+impl Executor {
 
     /// Install a prompter that's consulted when running in `Default` mode
     /// before invoking a mutating tool. Without a prompter, mutating tools
