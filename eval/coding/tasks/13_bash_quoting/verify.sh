@@ -39,7 +39,10 @@ fi
 
 # Case 4: shellcheck for SC2086.
 if command -v shellcheck >/dev/null 2>&1; then
-    shellcheck -e SC1090 backup.sh 2>&1 | grep -v "^$" | tee /tmp/aether-eval-sc.txt
+    # `|| true` keeps pipefail from killing verify when shellcheck has
+    # zero warnings: empty output → grep -v "^$" exits 1 (no matches) →
+    # set -euo pipefail would otherwise abort before the SC2086 check.
+    shellcheck -e SC1090 backup.sh 2>&1 | grep -v "^$" | tee /tmp/aether-eval-sc.txt || true
     if grep -q "SC2086" /tmp/aether-eval-sc.txt; then
         echo "FAIL: shellcheck still reports SC2086 (unquoted variable)"; exit 1
     fi
