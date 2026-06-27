@@ -189,17 +189,37 @@ impl VertexProvider {
         }
     }
 
+    /// Resolve the Vertex AI base URL. `AETHER_VERTEX_ENDPOINT` overrides
+    /// the default `<region>-aiplatform.googleapis.com` for fixture /
+    /// smoke / VPC-private use. When set, the URL is used verbatim as
+    /// the scheme://host:port prefix; the rest of the path (the
+    /// `/v1/projects/.../publishers/anthropic/models/...:...` suffix)
+    /// is appended unchanged so the wire format the upstream
+    /// expects stays identical.
+    fn base_url(&self) -> String {
+        match std::env::var("AETHER_VERTEX_ENDPOINT") {
+            Ok(s) if !s.is_empty() => s.trim_end_matches('/').to_string(),
+            _ => format!("https://{}-aiplatform.googleapis.com", self.region),
+        }
+    }
+
     fn endpoint(&self, vertex_model: &str) -> String {
         format!(
-            "https://{}-aiplatform.googleapis.com/v1/projects/{}/locations/{}/publishers/anthropic/models/{}:rawPredict",
-            self.region, self.project, self.region, vertex_model
+            "{}/v1/projects/{}/locations/{}/publishers/anthropic/models/{}:rawPredict",
+            self.base_url(),
+            self.project,
+            self.region,
+            vertex_model
         )
     }
 
     fn streaming_endpoint(&self, vertex_model: &str) -> String {
         format!(
-            "https://{}-aiplatform.googleapis.com/v1/projects/{}/locations/{}/publishers/anthropic/models/{}:streamRawPredict",
-            self.region, self.project, self.region, vertex_model
+            "{}/v1/projects/{}/locations/{}/publishers/anthropic/models/{}:streamRawPredict",
+            self.base_url(),
+            self.project,
+            self.region,
+            vertex_model
         )
     }
 }
@@ -564,6 +584,43 @@ mod tests {
         assert!(url.ends_with(":streamRawPredict"));
         assert!(url.contains("my-proj"));
         assert!(url.contains("us-central1"));
+    }
+
+    /// Z5: `AETHER_VERTEX_ENDPOINT` overrides the
+    /// <region>-aiplatform.googleapis.com default. Both rawPredict
+    /// and streamRawPredict paths inherit the override; the rest of
+    /// the URL (project / region / model / verb) is preserved
+    /// verbatim so the wire format upstream expects is identical.
+    #[test]
+    fn z5_endpoint_override_via_env() {
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _g = ENV_LOCK.lock().unwrap();
+        std::env::set_var("AETHER_VERTEX_ENDPOINT", "http://127.0.0.1:9999");
+        let p = VertexProvider::with_token(
+            "tok".into(),
+            "my-proj".into(),
+            "us-central1".into(),
+        );
+        let url = p.endpoint("claude-haiku-4-5@20251001");
+        assert_eq!(
+            url,
+            "http://127.0.0.1:9999/v1/projects/my-proj/locations/us-central1/publishers/anthropic/models/claude-haiku-4-5@20251001:rawPredict"
+        );
+        let stream_url = p.streaming_endpoint("claude-haiku-4-5@20251001");
+        assert_eq!(
+            stream_url,
+            "http://127.0.0.1:9999/v1/projects/my-proj/locations/us-central1/publishers/anthropic/models/claude-haiku-4-5@20251001:streamRawPredict"
+        );
+        // Trailing-slash variant trims to canonical form.
+        std::env::set_var("AETHER_VERTEX_ENDPOINT", "http://localhost:8080/");
+        assert!(p.endpoint("x").starts_with("http://localhost:8080/v1/projects/"));
+        // Empty value falls back to the AWS default.
+        std::env::set_var("AETHER_VERTEX_ENDPOINT", "");
+        assert!(
+            p.endpoint("x").starts_with("https://us-central1-aiplatform.googleapis.com/"),
+            "empty env falls back to GCP default"
+        );
+        std::env::remove_var("AETHER_VERTEX_ENDPOINT");
     }
 
     // ── SA / JWT ─────────────────────────────────────────────────────────────
