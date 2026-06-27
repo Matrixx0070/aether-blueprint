@@ -8174,11 +8174,12 @@ async fn sso_login_saml(sso_saml_path: &Path) -> Result<()> {
     eprintln!("  SSO URL:      {sso_url}");
     eprintln!("  Binding:      HTTP-{binding}");
     eprintln!("  SP entityID:  {sp_entity_id}");
-    if binding != "Redirect" {
+    // AA4: HTTP-Redirect (Y1) and HTTP-POST bindings both supported.
+    if binding != "Redirect" && binding != "POST" {
         anyhow::bail!(
-            "HTTP-POST binding not yet supported (Y1 ships HTTP-Redirect only). \
-             Re-run `aether sso configure-saml --idp-metadata-url <url>` against \
-             an IdP that advertises HTTP-Redirect binding."
+            "Unsupported SAML binding `HTTP-{binding}` — only HTTP-Redirect \
+             and HTTP-POST are accepted. Re-run `aether sso configure-saml` \
+             against an IdP that advertises one of these."
         );
     }
 
@@ -8213,22 +8214,57 @@ async fn sso_login_saml(sso_saml_path: &Path) -> Result<()> {
         chrono::Utc::now(),
         Some(&authn_request_id),
     )?;
-    let saml_request_param = encode_saml_request_redirect(authn_request_xml.as_bytes())?;
-    let redirect_url = format!(
-        "{sso_url}?SAMLRequest={}&RelayState={}",
-        saml_request_param,
-        urlencode(&relay_state),
-    );
-
-    eprintln!("[sso login] AuthnRequest emitted. Open this URL in your browser:");
-    eprintln!("  {redirect_url}");
+    // AA4: emit the AuthnRequest via either binding. Redirect goes
+    // out as a query-string URL the operator opens in a browser;
+    // POST goes out as a self-submitting HTML form written to
+    // `~/.aether/saml/authn-request-form.html` and opened via
+    // `file://` — the browser auto-submits to the IdP.
+    let browser_target: String = if binding == "POST" {
+        let saml_request_b64 = encode_saml_request_post(authn_request_xml.as_bytes());
+        let form_html = render_saml_post_form(sso_url, &saml_request_b64, &relay_state);
+        let home = std::env::var_os("HOME")
+            .ok_or_else(|| anyhow!("HOME not set"))?;
+        let form_dir = PathBuf::from(home).join(".aether/saml");
+        std::fs::create_dir_all(&form_dir)
+            .with_context(|| format!("create {}", form_dir.display()))?;
+        let form_path = form_dir.join("authn-request-form.html");
+        std::fs::write(&form_path, form_html.as_bytes())
+            .with_context(|| format!("write {}", form_path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(
+                &form_path,
+                std::fs::Permissions::from_mode(0o600),
+            );
+        }
+        eprintln!(
+            "[sso login] AA4: HTTP-POST form written to {} (mode 0600). \
+             Open it in your browser:",
+            form_path.display()
+        );
+        let file_url = format!("file://{}", form_path.display());
+        eprintln!("  {file_url}");
+        file_url
+    } else {
+        let saml_request_param =
+            encode_saml_request_redirect(authn_request_xml.as_bytes())?;
+        let redirect_url = format!(
+            "{sso_url}?SAMLRequest={}&RelayState={}",
+            saml_request_param,
+            urlencode(&relay_state),
+        );
+        eprintln!("[sso login] AuthnRequest emitted. Open this URL in your browser:");
+        eprintln!("  {redirect_url}");
+        redirect_url
+    };
     let _ = std::process::Command::new("xdg-open")
-        .arg(&redirect_url)
+        .arg(&browser_target)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
     let _ = std::process::Command::new("open")
-        .arg(&redirect_url)
+        .arg(&browser_target)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
@@ -10152,6 +10188,47 @@ fn encode_saml_request_redirect(xml: &[u8]) -> Result<String> {
     let deflated = encoder.finish().context("deflate finish SAMLRequest")?;
     let b64 = base64::engine::general_purpose::STANDARD.encode(deflated);
     Ok(urlencode(&b64))
+}
+
+/// AA4: Encode an AuthnRequest XML body for the HTTP-POST binding
+/// per saml-bindings-2.0 §3.5.4. POST binding does NOT DEFLATE
+/// (that's Redirect-only — the spec's bandwidth-vs-URL-length
+/// tradeoff). Just standard base64 over the raw XML bytes; the
+/// receiver does the symmetric base64-decode → XML.
+fn encode_saml_request_post(xml: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(xml)
+}
+
+/// AA4: Render the self-submitting HTML form per saml-bindings-2.0
+/// §3.5.4. The form posts `SAMLRequest` (+ optional `RelayState`)
+/// to the IdP's `SingleSignOnService Location`. JS auto-submit;
+/// `<noscript>` button as the no-JS fallback the spec mandates.
+///
+/// `sso_url` is validated for XML-special chars by the caller (the
+/// same gate `build_authn_request_xml` already applies) so the
+/// hand-rolled HTML emit is safe. `saml_request_b64` is standard
+/// base64 which contains only `A-Za-z0-9+/=`; none of those are
+/// HTML-special, so no escaping is needed there either. RelayState
+/// is our own b64url-no-pad (`A-Za-z0-9-_`) — same property.
+fn render_saml_post_form(
+    sso_url: &str,
+    saml_request_b64: &str,
+    relay_state: &str,
+) -> String {
+    format!(
+        "<!DOCTYPE html>\n\
+         <html lang=\"en\">\n\
+         <head><meta charset=\"utf-8\"><title>aether sso login</title></head>\n\
+         <body onload=\"document.forms[0].submit()\">\n\
+         <noscript><p>JavaScript is required, or click Continue below.</p></noscript>\n\
+         <form method=\"POST\" action=\"{sso_url}\">\n\
+         <input type=\"hidden\" name=\"SAMLRequest\" value=\"{saml_request_b64}\"/>\n\
+         <input type=\"hidden\" name=\"RelayState\" value=\"{relay_state}\"/>\n\
+         <noscript><button type=\"submit\">Continue</button></noscript>\n\
+         </form>\n\
+         </body></html>\n"
+    )
 }
 
 fn urlencode(s: &str) -> String {
@@ -13490,6 +13567,109 @@ mod tests {
         let idx = find_double_crlf(raw).expect("double-crlf must be present");
         assert_eq!(&raw[idx..idx + 4], b"\r\n\r\n", "idx points to \\r\\n\\r\\n");
         assert_eq!(&raw[idx + 4..], b"body-bytes", "body bytes after idx+4");
+    }
+
+    /// AA4: the HTTP-POST encode is standard base64 over the raw
+    /// AuthnRequest XML — no DEFLATE (that's Redirect-only). Receiver
+    /// does the symmetric base64-decode → XML.
+    #[test]
+    fn aa4_post_encode_is_base64_standard() {
+        use base64::Engine as _;
+        let xml = r#"<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="_aa4-rt" Version="2.0" IssueInstant="2026-06-27T00:00:00Z" Destination="https://idp.example/sso"></samlp:AuthnRequest>"#;
+        let b64 = encode_saml_request_post(xml.as_bytes());
+        // Must be standard base64 alphabet only (no URL-safe `-`, `_`).
+        for c in b64.chars() {
+            assert!(
+                c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=',
+                "non-standard b64 char `{c}` in: {b64}"
+            );
+        }
+        // Round-trip: decode recovers the original XML BYTE-FOR-BYTE
+        // (no DEFLATE = no entropy loss).
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(b64.as_bytes())
+            .expect("standard b64 decode");
+        assert_eq!(
+            std::str::from_utf8(&decoded).unwrap(),
+            xml,
+            "POST-binding encode → decode must round-trip byte-for-byte"
+        );
+    }
+
+    /// AA4: the rendered HTML form has the spec-required shape:
+    /// method=POST, action=<sso_url>, hidden SAMLRequest + RelayState
+    /// inputs, JS auto-submit, <noscript> Continue button fallback.
+    #[test]
+    fn aa4_post_form_shape() {
+        let html = render_saml_post_form(
+            "https://idp.example/saml/sso",
+            "PD94bWwgdmVyc2lvbj0iMS4wIj8+",
+            "rs-abc-123",
+        );
+        assert!(
+            html.contains(r#"method="POST""#),
+            "form method=POST: {html}"
+        );
+        assert!(
+            html.contains(r#"action="https://idp.example/saml/sso""#),
+            "form action= sso_url: {html}"
+        );
+        assert!(
+            html.contains(
+                r#"<input type="hidden" name="SAMLRequest" value="PD94bWwgdmVyc2lvbj0iMS4wIj8+"/>"#
+            ),
+            "SAMLRequest input: {html}"
+        );
+        assert!(
+            html.contains(r#"<input type="hidden" name="RelayState" value="rs-abc-123"/>"#),
+            "RelayState input: {html}"
+        );
+        assert!(
+            html.contains("document.forms[0].submit()"),
+            "JS auto-submit: {html}"
+        );
+        assert!(
+            html.contains("<noscript>"),
+            "no-JS fallback: {html}"
+        );
+    }
+
+    /// AA4: end-to-end: build an AuthnRequest, POST-encode it, render
+    /// the form, then read back the SAMLRequest value and decode it
+    /// to recover the original XML bytes. Closes the loop on what a
+    /// real IdP would see.
+    #[test]
+    fn aa4_post_form_roundtrips_to_authn_request() {
+        use base64::Engine as _;
+        let xml = build_authn_request_xml(
+            "https://idp.example/saml/metadata",
+            "https://idp.example/saml/sso",
+            "https://sp.example/saml",
+            "http://127.0.0.1:9999/sso/saml/acs",
+            chrono::DateTime::from_timestamp(1_750_000_000, 0).unwrap(),
+            Some("_aa4-e2e"),
+        )
+        .expect("build authn");
+        let b64 = encode_saml_request_post(xml.as_bytes());
+        let html = render_saml_post_form(
+            "https://idp.example/saml/sso",
+            &b64,
+            "rs-aa4-e2e",
+        );
+        // Extract the SAMLRequest value attribute (between value=" and ").
+        let needle = r#"name="SAMLRequest" value=""#;
+        let start = html.find(needle).expect("SAMLRequest input present");
+        let after = &html[start + needle.len()..];
+        let end = after.find('"').expect("closing quote");
+        let extracted = &after[..end];
+        let recovered = base64::engine::general_purpose::STANDARD
+            .decode(extracted.as_bytes())
+            .expect("recovered b64");
+        assert_eq!(
+            std::str::from_utf8(&recovered).unwrap(),
+            xml,
+            "POST-binding form → SAMLRequest extract → b64 decode → original XML"
+        );
     }
 
     /// Y1: the HTTP-Redirect binding encoding pipeline round-trips —
