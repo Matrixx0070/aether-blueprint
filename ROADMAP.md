@@ -714,27 +714,94 @@ SAML tests. 3 new fake-IdP smokes added to `tests/` (one each for
 OIDC / Bedrock / Vertex / Azure → 4 total including the existing
 Y7 SAML smoke).
 
-## v0.31 — next (Plan AA draft)
+## v0.31 — enterprise SSO breadth — shipped 2026-06-27
 
-- **AA1 Bedrock + Vertex + Azure live round-trip** when creds /
-  Marketplace / billing become available. The fake-endpoint smokes
-  already verify the wire format; this slice flips the
-  `AETHER_BEDROCK_ENDPOINT` / `AETHER_VERTEX_ENDPOINT` /
-  `AZURE_AI_ENDPOINT` to the real domains and re-runs the same
-  smokes against production.
-- **AA2 SAML HTTP-POST binding for AuthnRequest** (currently only
-  HTTP-Redirect is accepted). Closes a v0.29 explicit deferral —
-  some enterprise IdPs don't support Redirect.
-- **AA3 Multi-cert IdP support** — `~/.aether/saml/idp-certs/*.pem`
-  directory, first-match-wins on signature verify. Supports IdP
-  cert rotation without bouncing aether.
-- **AA4 OIDC mTLS client auth** (RFC 8705). Optional alternative to
+Plan AA. Honest scope re-frame mid-plan: AA1–AA3 (Bedrock / Vertex /
+Azure real round-trips) were blocked on operator-side gates outside
+aether's control (Vertex live attempt produced concrete evidence —
+all 3 GCP projects had billing disabled, plus Anthropic-on-Vertex
+requires a Cloud Marketplace subscription). The plan pivoted to the
+non-cred-dependent slices: SAML HTTP-POST binding (closes a v0.29
+explicit deferral), multi-cert IdP support, configure-saml
+auto-discovery, and OIDC userinfo.
+
+- **AA4 SAML HTTP-POST AuthnRequest binding** (commit 79fed59). New
+  `encode_saml_request_post` (standard base64, no DEFLATE per
+  saml-bindings-2.0 §3.5.4) + `render_saml_post_form`
+  (self-submitting HTML form: method=POST, action=<sso_url>, hidden
+  SAMLRequest + RelayState, `onload` auto-submit, `<noscript>`
+  Continue button as the no-JS fallback the spec mandates).
+  `sso_login_saml` binding-dispatches between Redirect and POST;
+  POST writes the form to `~/.aether/saml/authn-request-form.html`
+  at mode 0600 and opens via `file://`. The ACS listener + Y3-Y7
+  pipeline is untouched (IdP→SP leg is identical regardless of
+  binding). 3 new unit tests + live smoke
+  `tests/aa4-saml-post-smoke.py`.
+- **AA5 multi-cert IdP support** (commit 125d2c6). Loader
+  resolution order: `AETHER_SAML_IDP_CERT_PEM` env (single-file
+  legacy override) → `~/.aether/saml/idp-certs/*.pem` (multi-cert
+  dir, lex order) → `~/.aether/saml/idp-cert.pem` (single-file
+  legacy fallback). `verify_saml_assertion_signature` takes
+  `&[(RsaPublicKey, Vec<u8>)]` and walks the slice first-match-
+  wins; KeyInfo X509Cert pin runs against the matched DER not the
+  full slice (so a confused-deputy attack swapping the KeyInfo
+  cert is still rejected even if the swapped cert happens to be
+  trusted). 5 new unit tests + live smoke
+  `tests/aa5-multi-cert-smoke.py`.
+- **AA5-followup configure-saml multi-cert discovery** (commit
+  62ed5b8). Closes the AA5 weakest-point. `configure-saml`
+  extracts ALL `<KeyDescriptor use="signing"><X509Certificate>`
+  nodes from IdP metadata, PEM-wraps each, writes to
+  `idp-certs/NN-discovered.pem` at mode 0600 with NN reflecting
+  metadata order. Re-runs clear existing `*.pem` first so stale
+  certs don't accumulate. 6 new unit tests + live smoke
+  `tests/aa5fu-configure-saml-multi-cert-smoke.py`.
+- **AA6 OIDC userinfo + `aether sso whoami`** (commit a997c48).
+  `SsoConfig.userinfo_endpoint: Option<String>` captured at
+  configure time (serde default keeps pre-AA6 sso.json compatible).
+  `sso_login` writes a `~/.aether/sso.access_token` sidecar at
+  mode 0600 — the userinfo endpoint needs the access_token as
+  Bearer, NOT the id_token JWT. New `sso whoami [--json]`
+  subcommand: 10s reqwest timeout + 256 KiB body cap (Z2
+  hardening pattern), prefers sidecar / falls back to sso.token
+  with a warn. Formatted output prints sub + email + name +
+  username + groups; `--json` emits raw userinfo for `jq`. Pure
+  `parse_whoami_claims` helper handles `groups` array-or-string-
+  or-mixed shapes. `sso logout` cleans up both files. 5 new unit
+  tests + live smoke `tests/aa6-oidc-whoami-smoke.py`.
+
+**Honest UNVERIFIEDs carried forward (all documented in commits +
+Plan BB pre-reqs):**
+- AA1 Bedrock real AWS round-trip — no creds in env.
+- AA2 Vertex real GCP round-trip — gcloud auth worked, but all 3
+  projects had billingEnabled=false; Anthropic-on-Vertex
+  Marketplace subscription also needed.
+- AA3 Azure real round-trip — no AAD subscription in this session.
+
+15 new unit tests (3 AA4 + 5 AA5 + 6 AA5-followup + 5 AA6) + 4 new
+fake-IdP Python smokes pass alongside the existing Y/Z corpora.
+67/67 Y/Z/AA-prefix unit tests green.
+
+## v0.32 — next (Plan BB draft)
+
+- **BB1 Bedrock + Vertex + Azure live round-trip** — same plan as
+  AA1–AA3, awaiting creds + Marketplace + billing.
+- **BB2 OIDC mTLS client auth (RFC 8705)** — alternative to
   `client_secret_basic` for high-assurance OAuth clients.
-- **AA5 Tenant SCIM provisioning** — `/v1/scim/Users` CRUD reusing
-  `tenant_acl.db`, bearer-gated via `AETHER_SCIM_BEARER`.
-- **AA6 OIDC userinfo endpoint exchange** — opt-in `aether sso
-  whoami` calls `userinfo_endpoint` (from discovery doc) with the
-  access_token to print the resolved subject + email.
+- **BB3 Tenant SCIM provisioning** — `/v1/scim/Users` CRUD
+  reusing `tenant_acl.db`, bearer-gated via `AETHER_SCIM_BEARER`.
+- **BB4 Signed AuthnRequest (POST binding)** — close the AA4
+  weakest-point. Some enterprise IdPs require XML Digital
+  Signature over the AuthnRequest element with the SP's private
+  key.
+- **BB5 OIDC access-token refresh** — close the AA6 weakest-point.
+  Persist `refresh_token` from the token response (when issued),
+  `aether sso whoami` auto-refreshes on 401, new `aether sso
+  refresh` subcommand for manual rotation.
+- **BB6 SAML metadata auto-refresh** — close the AA5-followup
+  weakest-point. New `aether sso refresh-saml` subcommand
+  re-fetches metadata and rotates `idp-certs/` without bouncing
+  aether. Optional cron periodicity via env knob.
 
 ## v0.9 — enterprise
 
