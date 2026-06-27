@@ -338,7 +338,17 @@ enum SsoCmd {
         /// Emit raw JSON instead of the formatted human-readable view.
         #[arg(long, default_value_t = false)]
         json: bool,
+        /// BB5: don't auto-refresh on a 401 from userinfo, even when
+        /// sso.refresh_token is present. Off by default — operators
+        /// who want a "did this token expire?" check can opt in.
+        #[arg(long, default_value_t = false)]
+        no_refresh: bool,
     },
+    /// BB5: rotate the access_token using the persisted refresh_token.
+    /// POSTs `grant_type=refresh_token` to the issuer's
+    /// `token_endpoint`. Writes the new access_token (and the new
+    /// refresh_token, when the IdP rotates) to the existing sidecars.
+    Refresh,
 }
 
 #[derive(Subcommand, Debug)]
@@ -7366,6 +7376,37 @@ fn sso_access_token_path() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".aether/sso.access_token"))
 }
 
+/// BB5: sidecar path for the OAuth refresh_token. Persisted when
+/// the IdP issued one in the token-exchange response; consumed by
+/// `aether sso refresh` and by `aether sso whoami` on a 401
+/// auto-retry path. Same 0600 protection as the other sidecars.
+fn sso_refresh_token_path() -> Result<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .ok_or_else(|| anyhow!("HOME not set"))?;
+    Ok(PathBuf::from(home).join(".aether/sso.refresh_token"))
+}
+
+/// BB5: common sidecar writer — ensures the parent dir exists, writes
+/// the value, sets mode 0600 (Unix only). Used by both AA6 access-token
+/// persistence and BB5 refresh-token persistence so the on-disk format
+/// stays uniform.
+fn write_sso_sidecar(path: &Path, value: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::write(path, value)
+        .with_context(|| format!("write {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(
+            path,
+            std::fs::Permissions::from_mode(0o600),
+        );
+    }
+    Ok(())
+}
+
 fn load_sso_config() -> Result<Option<SsoConfig>> {
     let path = sso_config_path()?;
     if !path.exists() {
@@ -7515,7 +7556,8 @@ async fn sso_cmd(sub: SsoCmd) -> Result<()> {
         SsoCmd::ConfigureSaml { idp_metadata_url, sp_entity_id } => {
             sso_configure_saml(&idp_metadata_url, &sp_entity_id).await
         }
-        SsoCmd::Whoami { json } => sso_whoami(json).await,
+        SsoCmd::Whoami { json, no_refresh } => sso_whoami(json, no_refresh).await,
+        SsoCmd::Refresh => sso_refresh().await,
         SsoCmd::Logout => {
             let path = sso_token_path()?;
             match std::fs::remove_file(&path) {
@@ -7534,11 +7576,15 @@ async fn sso_cmd(sub: SsoCmd) -> Result<()> {
                 }
                 Err(e) => anyhow::bail!("remove {}: {e}", path.display()),
             }
-            // AA6: best-effort cleanup of the access_token sidecar.
-            // Missing-file is the common case (pre-AA6 logins didn't
-            // write it); ignore it silently.
+            // AA6 + BB5: best-effort cleanup of the access_token and
+            // refresh_token sidecars. Missing-file is the common case
+            // (pre-AA6 logins didn't write the access sidecar; pre-BB5
+            // didn't write the refresh sidecar); ignore silently.
             if let Ok(access_path) = sso_access_token_path() {
                 let _ = std::fs::remove_file(&access_path);
+            }
+            if let Ok(refresh_path) = sso_refresh_token_path() {
+                let _ = std::fs::remove_file(&refresh_path);
             }
             Ok(())
         }
@@ -7718,6 +7764,14 @@ async fn sso_login() -> Result<()> {
         .get("access_token")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
+    // BB5: refresh_token is OPTIONAL in the OAuth spec — issuer
+    // policy decides whether to issue one. When present, persist it
+    // as a sidecar so `sso whoami` can auto-refresh on 401 and the
+    // operator can call `sso refresh` for manual rotation.
+    let refresh_token = token_resp
+        .get("refresh_token")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
 
     // S2: when an id_token is present AND the issuer published a
     // jwks_uri, validate the JWT signature locally before persisting.
@@ -7769,20 +7823,15 @@ async fn sso_login() -> Result<()> {
     // for offline claim verification). Done BEFORE writing sso.token
     // so a failure here surfaces before the main token is persisted.
     if let Some(at) = access_token.as_deref() {
-        let access_path = sso_access_token_path()?;
-        if let Some(parent) = access_path.parent() {
-            std::fs::create_dir_all(parent).ok();
-        }
-        std::fs::write(&access_path, at)
+        write_sso_sidecar(&sso_access_token_path()?, at)
             .context("write sso.access_token sidecar")?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(
-                &access_path,
-                std::fs::Permissions::from_mode(0o600),
-            );
-        }
+    }
+    // BB5: persist the refresh_token sidecar when issued. Stale
+    // sidecars from a prior login + non-rotating IdP would persist
+    // forever otherwise.
+    if let Some(rt) = refresh_token.as_deref() {
+        write_sso_sidecar(&sso_refresh_token_path()?, rt)
+            .context("write sso.refresh_token sidecar")?;
     }
 
     let token_value = id_token
@@ -8098,6 +8147,150 @@ fn parse_whoami_claims(doc: &serde_json::Value) -> Result<WhoamiClaims> {
     })
 }
 
+/// BB5: minimal shape of the OAuth token-endpoint response we care
+/// about. `access_token` is REQUIRED per RFC 6749 §5.1; the others
+/// are optional. `refresh_token` MAY rotate (i.e. the IdP returns a
+/// fresh one alongside the access_token); when present, the caller
+/// must persist the new value over the old.
+#[derive(Debug, Clone, PartialEq)]
+struct TokenResponse {
+    access_token: String,
+    refresh_token: Option<String>,
+    id_token: Option<String>,
+    expires_in: Option<u64>,
+}
+
+/// BB5: parse an OAuth token-endpoint JSON response. Pure helper so
+/// the field-extraction logic is unit-testable without HTTP fixtures.
+/// Missing `access_token` is a hard error (RFC 6749 §5.1 makes it
+/// REQUIRED).
+fn parse_token_response(doc: &serde_json::Value) -> Result<TokenResponse> {
+    let access_token = doc
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            anyhow!("token response missing required `access_token` (RFC 6749 §5.1)")
+        })?
+        .to_string();
+    let refresh_token = doc
+        .get("refresh_token")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let id_token = doc
+        .get("id_token")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let expires_in = doc.get("expires_in").and_then(|v| v.as_u64());
+    Ok(TokenResponse {
+        access_token,
+        refresh_token,
+        id_token,
+        expires_in,
+    })
+}
+
+/// BB5: exchange a refresh_token for a fresh access_token at the
+/// issuer's token_endpoint per RFC 6749 §6. Returns the parsed
+/// response without persisting anything — the caller decides which
+/// sidecars to overwrite (the access_token always; the
+/// refresh_token only when the IdP rotated).
+async fn refresh_oauth_access_token(
+    token_endpoint: &str,
+    client_id: &str,
+    refresh_token: &str,
+) -> Result<TokenResponse> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .context("build refresh reqwest client")?;
+    let form: Vec<(&str, &str)> = vec![
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh_token),
+        ("client_id", client_id),
+    ];
+    let resp = client
+        .post(token_endpoint)
+        .form(&form)
+        .send()
+        .await
+        .with_context(|| format!("POST {token_endpoint}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!(
+            "refresh_token grant failed: HTTP {status} from {token_endpoint}: {body}"
+        );
+    }
+    // 256 KiB body cap — same Z2 hardening pattern as JWKS + userinfo.
+    const TOKEN_MAX_BYTES: usize = 256 * 1024;
+    let bytes = resp
+        .bytes()
+        .await
+        .with_context(|| format!("read token body from {token_endpoint}"))?;
+    if bytes.len() > TOKEN_MAX_BYTES {
+        anyhow::bail!(
+            "token body is {} bytes (cap {} KiB) — refusing as DoS defense",
+            bytes.len(),
+            TOKEN_MAX_BYTES / 1024
+        );
+    }
+    let doc: serde_json::Value =
+        serde_json::from_slice(&bytes).context("parse token JSON")?;
+    parse_token_response(&doc)
+}
+
+/// BB5: `aether sso refresh` — manual rotation. Reads
+/// `~/.aether/sso.refresh_token`, exchanges it for a fresh
+/// access_token, overwrites the access_token sidecar (and the
+/// refresh_token sidecar when the IdP rotated). Useful for
+/// operators who want to refresh ahead of an expiry window.
+async fn sso_refresh() -> Result<()> {
+    let cfg = load_sso_config()?.ok_or_else(|| {
+        anyhow!(
+            "no sso.json — run `aether sso configure --issuer <url> \
+             --client-id <id>` first"
+        )
+    })?;
+    let refresh_path = sso_refresh_token_path()?;
+    if !refresh_path.exists() {
+        anyhow::bail!(
+            "no refresh_token at {} — your last `aether sso login` ran \
+             against an IdP that didn't issue a refresh_token, or the \
+             sidecar was removed by `aether sso logout`",
+            refresh_path.display()
+        );
+    }
+    let refresh_token = std::fs::read_to_string(&refresh_path)
+        .with_context(|| format!("read {}", refresh_path.display()))?;
+    let refresh_token = refresh_token.trim();
+    eprintln!(
+        "[sso refresh] POST {} (grant_type=refresh_token)",
+        cfg.token_endpoint
+    );
+    let new_resp = refresh_oauth_access_token(
+        &cfg.token_endpoint,
+        &cfg.client_id,
+        refresh_token,
+    )
+    .await?;
+    write_sso_sidecar(&sso_access_token_path()?, &new_resp.access_token)?;
+    let rotated = if let Some(rt) = new_resp.refresh_token.as_deref() {
+        write_sso_sidecar(&sso_refresh_token_path()?, rt)?;
+        true
+    } else {
+        false
+    };
+    eprintln!(
+        "[sso refresh] new access_token ({}B) written; refresh_token {}",
+        new_resp.access_token.len(),
+        if rotated { "ROTATED" } else { "reused" }
+    );
+    if let Some(exp) = new_resp.expires_in {
+        eprintln!("[sso refresh] expires_in: {exp}s");
+    }
+    Ok(())
+}
+
 /// AA6: `aether sso whoami` — load sso.json + sso.access_token,
 /// call `userinfo_endpoint` with Bearer auth, print the resolved
 /// identity. `json` flag emits the raw userinfo JSON instead of the
@@ -8108,7 +8301,7 @@ fn parse_whoami_claims(doc: &serde_json::Value) -> Result<WhoamiClaims> {
 ///      since AA6 when the IdP issued an access_token).
 ///   2. `~/.aether/sso.token` (legacy fallback — works only when the
 ///      sso.token contains an access_token, NOT an id_token JWT).
-async fn sso_whoami(json: bool) -> Result<()> {
+async fn sso_whoami(json: bool, no_refresh: bool) -> Result<()> {
     let cfg = load_sso_config()?.ok_or_else(|| {
         anyhow!(
             "no sso.json — run `aether sso configure --issuer <url> \
@@ -8127,12 +8320,12 @@ async fn sso_whoami(json: bool) -> Result<()> {
     // Bearer source: prefer the AA6 sidecar, fall back to sso.token
     // (which may be an id_token JWT — the IdP will reject it with 401
     // but we surface a clear error in that case).
-    let bearer = {
+    let read_bearer = || -> Result<String> {
         let access_path = sso_access_token_path()?;
         let tok_path = sso_token_path()?;
         if access_path.exists() {
-            std::fs::read_to_string(&access_path)
-                .with_context(|| format!("read {}", access_path.display()))?
+            Ok(std::fs::read_to_string(&access_path)
+                .with_context(|| format!("read {}", access_path.display()))?)
         } else if tok_path.exists() {
             eprintln!(
                 "[sso whoami] WARN: {} not present (logged in before AA6?) — \
@@ -8141,8 +8334,8 @@ async fn sso_whoami(json: bool) -> Result<()> {
                 access_path.display(),
                 tok_path.display()
             );
-            std::fs::read_to_string(&tok_path)
-                .with_context(|| format!("read {}", tok_path.display()))?
+            Ok(std::fs::read_to_string(&tok_path)
+                .with_context(|| format!("read {}", tok_path.display()))?)
         } else {
             anyhow::bail!(
                 "no sso.token at {} — run `aether sso login` first",
@@ -8150,7 +8343,8 @@ async fn sso_whoami(json: bool) -> Result<()> {
             );
         }
     };
-    let bearer = bearer.trim();
+    let bearer = read_bearer()?;
+    let bearer = bearer.trim().to_string();
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -8158,10 +8352,44 @@ async fn sso_whoami(json: bool) -> Result<()> {
         .context("build userinfo reqwest client")?;
     let resp = client
         .get(userinfo_endpoint)
-        .bearer_auth(bearer)
+        .bearer_auth(&bearer)
         .send()
         .await
         .with_context(|| format!("GET {userinfo_endpoint}"))?;
+    // BB5: 401 + refresh_token sidecar present + !no_refresh →
+    // mint a fresh access_token, retry userinfo ONCE.
+    let resp = if resp.status().as_u16() == 401 && !no_refresh {
+        let refresh_path = sso_refresh_token_path()?;
+        if refresh_path.exists() {
+            eprintln!(
+                "[sso whoami] userinfo 401 — auto-refreshing via {} (BB5)",
+                refresh_path.display()
+            );
+            let rt_raw = std::fs::read_to_string(&refresh_path)
+                .with_context(|| format!("read {}", refresh_path.display()))?;
+            let new_resp = refresh_oauth_access_token(
+                &cfg.token_endpoint,
+                &cfg.client_id,
+                rt_raw.trim(),
+            )
+            .await?;
+            write_sso_sidecar(&sso_access_token_path()?, &new_resp.access_token)?;
+            if let Some(rt) = new_resp.refresh_token.as_deref() {
+                write_sso_sidecar(&sso_refresh_token_path()?, rt)?;
+            }
+            let retried = client
+                .get(userinfo_endpoint)
+                .bearer_auth(&new_resp.access_token)
+                .send()
+                .await
+                .with_context(|| format!("GET {userinfo_endpoint} (retry)"))?;
+            retried
+        } else {
+            resp
+        }
+    } else {
+        resp
+    };
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
@@ -13517,6 +13745,93 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "Y7 token file must be 0600 (got {:o})", mode);
+        }
+    }
+
+    /// BB5: parse_token_response extracts the OAuth fields we care
+    /// about. Full response with all four optional+required fields.
+    #[test]
+    fn bb5_parse_token_full_response_ok() {
+        let doc = serde_json::json!({
+            "access_token": "at-001",
+            "refresh_token": "rt-001",
+            "id_token": "eyJhbGciOi...",
+            "expires_in": 3600,
+            "token_type": "Bearer",
+            "scope": "openid profile email",
+        });
+        let tr = parse_token_response(&doc).expect("parse");
+        assert_eq!(tr.access_token, "at-001");
+        assert_eq!(tr.refresh_token.as_deref(), Some("rt-001"));
+        assert_eq!(tr.id_token.as_deref(), Some("eyJhbGciOi..."));
+        assert_eq!(tr.expires_in, Some(3600));
+    }
+
+    /// BB5: minimal valid response — just `access_token` (RFC 6749
+    /// §5.1 makes the others optional). The other fields are None.
+    #[test]
+    fn bb5_parse_token_minimal_access_token_only() {
+        let doc = serde_json::json!({"access_token": "at-only"});
+        let tr = parse_token_response(&doc).expect("parse");
+        assert_eq!(tr.access_token, "at-only");
+        assert_eq!(tr.refresh_token, None);
+        assert_eq!(tr.id_token, None);
+        assert_eq!(tr.expires_in, None);
+    }
+
+    /// BB5: missing `access_token` is a hard error citing the spec
+    /// requirement. Operators get told exactly why.
+    #[test]
+    fn bb5_parse_token_missing_access_token_rejects() {
+        let doc = serde_json::json!({
+            "refresh_token": "rt-only",
+            "expires_in": 60,
+        });
+        let err = parse_token_response(&doc).unwrap_err().to_string();
+        assert!(
+            err.contains("missing required `access_token`"),
+            "missing-access_token error: {err}"
+        );
+        assert!(err.contains("RFC 6749"), "error cites spec: {err}");
+    }
+
+    /// BB5: refresh-token rotation case. IdP returned a fresh
+    /// refresh_token alongside the access_token; caller must persist
+    /// the new value over the old. parse_token_response surfaces
+    /// `refresh_token` as Some(_) so the caller knows to rotate.
+    #[test]
+    fn bb5_parse_token_response_surfaces_rotated_refresh() {
+        let doc = serde_json::json!({
+            "access_token": "at-new",
+            "refresh_token": "rt-rotated",
+            "expires_in": 3600,
+        });
+        let tr = parse_token_response(&doc).expect("parse");
+        assert_eq!(tr.refresh_token.as_deref(), Some("rt-rotated"));
+        // Sanity: the rotated value is OBSERVABLY different from
+        // whatever the caller passed in (i.e. the test fixture doesn't
+        // accidentally surface the request body).
+        assert_ne!(tr.refresh_token.as_deref(), Some("rt-old"));
+    }
+
+    /// BB5: write_sso_sidecar creates the parent directory, writes
+    /// the value byte-for-byte, sets mode 0600 on Unix.
+    #[test]
+    fn bb5_write_sso_sidecar_writes_and_chmods() {
+        let dir = std::env::temp_dir().join(format!(
+            "aether-bb5-sidecar-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        let nested = dir.join("nested/dir/sso.refresh_token");
+        write_sso_sidecar(&nested, "rt-test-value").expect("write");
+        let recovered = std::fs::read_to_string(&nested).expect("read");
+        assert_eq!(recovered, "rt-test-value");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&nested).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "sidecar file MUST be 0600 (got {:o})", mode);
         }
     }
 
