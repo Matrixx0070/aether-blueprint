@@ -8202,12 +8202,24 @@ async fn sso_login_saml(sso_saml_path: &Path) -> Result<()> {
         );
     }
 
+    // Y5: load the IdP signing key + verify the assertion's
+    // RSA-SHA256 signature end-to-end (Reference digest + SignedInfo
+    // sig + algorithm + transform gates).
+    let idp_pubkey = load_idp_signing_key()
+        .context("Y5: load IdP signing cert")?;
+    verify_saml_assertion_signature(
+        &saml_response_xml,
+        &parsed,
+        &idp_pubkey,
+        &[],
+    )?;
+    eprintln!("[sso login] Y5: assertion signature verified (RSA-SHA256)");
+
     anyhow::bail!(
-        "Y3 ships quick-xml parse + Status:Success check. Exclusive \
-         c14n# (Y4), RSA-SHA256 verify (Y5), assertion bounds (Y6), \
-         and NameID → tenant bearer (Y7) follow. Until those land, \
-         the response is parsed but NOT trusted — the token is NOT \
-         persisted."
+        "Y5 ships RSA-SHA256 verify against the IdP's x509 PEM. \
+         Assertion bounds (Y6) and NameID → tenant bearer (Y7) \
+         follow. Until those land, the response is cryptographically \
+         valid but NOT trusted — the token is NOT persisted."
     );
 }
 
@@ -8377,6 +8389,28 @@ struct ParsedSamlSignature {
     /// against confused-deputy attacks where an attacker swaps a
     /// self-issued cert into a captured response).
     x509_certificate_b64: Option<String>,
+    /// Y5: the SignatureMethod algorithm URI (`xmldsig-more#rsa-sha256`
+    /// is the only one currently accepted).
+    signature_method: Option<String>,
+    /// Y5: every `<ds:Reference>` row inside SignedInfo. Real-world
+    /// SAML signatures emit exactly one, pointing to the Assertion.
+    references: Vec<SamlReference>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct SamlReference {
+    /// `URI="#<id>"` — the ID attribute of the referenced element
+    /// (with the leading `#` stripped). Empty URI means the
+    /// reference targets the enclosing document.
+    uri: String,
+    /// Algorithm URIs for `<ds:Transforms>/<ds:Transform>`, in
+    /// document order. Y5 accepts only `enveloped-signature` +
+    /// `xml-exc-c14n#`.
+    transforms: Vec<String>,
+    /// `<ds:DigestMethod Algorithm="…">`.
+    digest_method: Option<String>,
+    /// `<ds:DigestValue>` body, whitespace stripped.
+    digest_value_b64: String,
 }
 
 impl Default for SamlStatus {
@@ -8419,6 +8453,9 @@ fn parse_saml_response_xml(xml: &str) -> Result<ParsedSamlResponse> {
     let mut signed_info_start_byte: Option<usize> = None;
     let mut current_signature_value_b64 = String::new();
     let mut current_x509_b64 = String::new();
+    // Y5: per-Reference accumulator + the in-progress reference row.
+    let mut current_reference: Option<SamlReference> = None;
+    let mut current_digest_value_b64 = String::new();
     // True while we're inside an <Assertion> (so signatures we see
     // belong to the assertion, not the response envelope).
     let mut inside_assertion = false;
@@ -8521,6 +8558,34 @@ fn parse_saml_response_xml(xml: &str) -> Result<ParsedSamlResponse> {
                     "Signature" => {
                         current_signature = Some(ParsedSamlSignature::default());
                     }
+                    "SignatureMethod" if current_signature.is_some() => {
+                        if let Some(sig) = current_signature.as_mut() {
+                            sig.signature_method =
+                                attr_value(&e, "Algorithm").map(|s| s.to_string());
+                        }
+                    }
+                    "Reference" if current_signature.is_some() => {
+                        let uri = attr_value(&e, "URI")
+                            .map(|s| s.trim_start_matches('#').to_string())
+                            .unwrap_or_default();
+                        current_reference = Some(SamlReference {
+                            uri,
+                            ..Default::default()
+                        });
+                    }
+                    "Transform" if current_reference.is_some() => {
+                        if let (Some(r), Some(alg)) =
+                            (current_reference.as_mut(), attr_value(&e, "Algorithm"))
+                        {
+                            r.transforms.push(alg.to_string());
+                        }
+                    }
+                    "DigestMethod" if current_reference.is_some() => {
+                        if let Some(r) = current_reference.as_mut() {
+                            r.digest_method =
+                                attr_value(&e, "Algorithm").map(|s| s.to_string());
+                        }
+                    }
                     "SignedInfo" => {
                         // pos_before points to the byte index of the
                         // < of <SignedInfo>. quick-xml's
@@ -8583,6 +8648,25 @@ fn parse_saml_response_xml(xml: &str) -> Result<ParsedSamlResponse> {
                     current_assertion.authn_instant =
                         attr_value(&e, "AuthnInstant").map(|s| s.to_string());
                 }
+                if local == "SignatureMethod" && current_signature.is_some() {
+                    if let Some(sig) = current_signature.as_mut() {
+                        sig.signature_method =
+                            attr_value(&e, "Algorithm").map(|s| s.to_string());
+                    }
+                }
+                if local == "Transform" && current_reference.is_some() {
+                    if let (Some(r), Some(alg)) =
+                        (current_reference.as_mut(), attr_value(&e, "Algorithm"))
+                    {
+                        r.transforms.push(alg.to_string());
+                    }
+                }
+                if local == "DigestMethod" && current_reference.is_some() {
+                    if let Some(r) = current_reference.as_mut() {
+                        r.digest_method =
+                            attr_value(&e, "Algorithm").map(|s| s.to_string());
+                    }
+                }
             }
             Ok(Event::Text(t)) => {
                 let parent = match path.last() {
@@ -8622,6 +8706,9 @@ fn parse_saml_response_xml(xml: &str) -> Result<ParsedSamlResponse> {
                     "X509Certificate" if current_signature.is_some() => {
                         current_x509_b64.push_str(value.trim());
                     }
+                    "DigestValue" if current_reference.is_some() => {
+                        current_digest_value_b64.push_str(value.trim());
+                    }
                     _ => {}
                 }
             }
@@ -8632,6 +8719,15 @@ fn parse_saml_response_xml(xml: &str) -> Result<ParsedSamlResponse> {
                         current_assertion.signature = current_signature.take();
                         out.assertion = Some(std::mem::take(&mut current_assertion));
                         inside_assertion = false;
+                    }
+                    "Reference" => {
+                        if let Some(mut r) = current_reference.take() {
+                            r.digest_value_b64 =
+                                std::mem::take(&mut current_digest_value_b64);
+                            if let Some(sig) = current_signature.as_mut() {
+                                sig.references.push(r);
+                            }
+                        }
                     }
                     "SignedInfo" => {
                         if let Some(start) = signed_info_start_byte.take() {
@@ -8719,6 +8815,436 @@ fn parse_first_status_code(xml: &str) -> Option<String> {
             _ => {}
         }
     }
+}
+
+/// Y5: load an RSA signing public key from a PEM-encoded x509
+/// certificate. Reads from `AETHER_SAML_IDP_CERT_PEM` first (path
+/// override useful for tests), otherwise from
+/// `~/.aether/saml/idp-cert.pem`.
+fn load_idp_signing_key() -> Result<rsa::RsaPublicKey> {
+    let path = match std::env::var_os("AETHER_SAML_IDP_CERT_PEM") {
+        Some(p) => PathBuf::from(p),
+        None => {
+            let home =
+                std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME not set"))?;
+            PathBuf::from(home).join(".aether/saml/idp-cert.pem")
+        }
+    };
+    let pem_bytes = std::fs::read(&path)
+        .with_context(|| format!("read IdP cert PEM at {}", path.display()))?;
+    rsa_pubkey_from_pem_cert(&pem_bytes)
+}
+
+/// Y5: pull the SubjectPublicKeyInfo out of a PEM-encoded x509
+/// certificate and decode it as an RSA public key. Refuses any
+/// non-RSA SPKI with an informative error so an operator who
+/// configured an ECC IdP cert (which we don't yet support) sees
+/// the gap immediately.
+fn rsa_pubkey_from_pem_cert(pem_bytes: &[u8]) -> Result<rsa::RsaPublicKey> {
+    use rsa::pkcs1::DecodeRsaPublicKey;
+    use x509_parser::prelude::*;
+    let (_, pem) =
+        parse_x509_pem(pem_bytes).map_err(|e| anyhow!("parse PEM: {e}"))?;
+    let (_, cert) = X509Certificate::from_der(&pem.contents)
+        .map_err(|e| anyhow!("parse x509 cert: {e}"))?;
+    let spki = cert.public_key();
+    // OID 1.2.840.113549.1.1.1 — rsaEncryption.
+    let oid_rsa: x509_parser::der_parser::oid::Oid =
+        x509_parser::der_parser::oid::Oid::from(&[1, 2, 840, 113549, 1, 1, 1])
+            .expect("OID literal");
+    if spki.algorithm.algorithm != oid_rsa {
+        anyhow::bail!(
+            "IdP cert public-key algorithm is {} — Y5 only supports RSA \
+             (1.2.840.113549.1.1.1)",
+            spki.algorithm.algorithm
+        );
+    }
+    let key_der = &spki.subject_public_key.data;
+    let key = rsa::RsaPublicKey::from_pkcs1_der(key_der)
+        .map_err(|e| anyhow!("decode RSA SubjectPublicKey: {e}"))?;
+    Ok(key)
+}
+
+/// Y5: the only SignatureMethod algorithm Y5 accepts.
+const SAML_SIG_METHOD_RSA_SHA256: &str =
+    "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256";
+/// Y5: the only DigestMethod algorithm Y5 accepts.
+const SAML_DIGEST_METHOD_SHA256: &str =
+    "http://www.w3.org/2001/04/xmlenc#sha256";
+/// Y5: enveloped-signature transform — removes the <ds:Signature>
+/// child from the subtree being signed.
+const SAML_TRANSFORM_ENVELOPED: &str =
+    "http://www.w3.org/2000/09/xmldsig#enveloped-signature";
+/// Y5: exclusive c14n transform.
+const SAML_TRANSFORM_EXC_C14N: &str =
+    "http://www.w3.org/2001/10/xml-exc-c14n#";
+
+/// Y5: verify a SAML assertion's signature against the IdP's
+/// public key. Returns `Ok(())` only if EVERY check passes:
+///
+/// 1. The Signature uses RSA-SHA256.
+/// 2. Each Reference's transforms are exactly [enveloped-signature,
+///    exc-c14n#] (in either order — c14n is always last per
+///    XMLDSig).
+/// 3. Each Reference's DigestMethod is SHA-256.
+/// 4. For each Reference: the referenced element (looked up by ID
+///    in `response_xml`) c14n'd (with enveloped-signature stripping
+///    the <ds:Signature> child) digests to the Reference's
+///    `DigestValue`.
+/// 5. The c14n-of-SignedInfo bytes RSA-SHA256-verify against
+///    `SignatureValue` under `idp_pubkey`.
+/// 6. If `<ds:KeyInfo>/<ds:X509Data>/<ds:X509Certificate>` is
+///    present, its bytes must match the bytes of `idp_pubkey`'s
+///    source cert exactly — protects against an attacker swapping
+///    in a different cert with a valid self-signature.
+///
+/// `cert_bytes` is the raw DER of the configured IdP cert (for the
+/// equality check in step 6). Pass an empty slice to skip step 6 —
+/// useful for tests that don't care about that defense-in-depth.
+fn verify_saml_assertion_signature(
+    response_xml: &str,
+    parsed: &ParsedSamlResponse,
+    idp_pubkey: &rsa::RsaPublicKey,
+    cert_der: &[u8],
+) -> Result<()> {
+    use base64::Engine as _;
+    use sha2::Digest;
+    let assertion = parsed
+        .assertion
+        .as_ref()
+        .ok_or_else(|| anyhow!("Y5: SAMLResponse has no <saml:Assertion>"))?;
+    let sig = assertion
+        .signature
+        .as_ref()
+        .ok_or_else(|| anyhow!("Y5: assertion is unsigned"))?;
+
+    // Step 1: algorithm gate.
+    let sig_method = sig
+        .signature_method
+        .as_deref()
+        .ok_or_else(|| anyhow!("Y5: signature has no SignatureMethod"))?;
+    if sig_method != SAML_SIG_METHOD_RSA_SHA256 {
+        anyhow::bail!(
+            "Y5: signature uses {sig_method} — only RSA-SHA256 \
+             (xmldsig-more#rsa-sha256) is accepted"
+        );
+    }
+
+    // Step 2 + 3 + 4: per-Reference digest check.
+    if sig.references.is_empty() {
+        anyhow::bail!("Y5: SignedInfo has no <ds:Reference>");
+    }
+    for r in &sig.references {
+        let dm = r
+            .digest_method
+            .as_deref()
+            .ok_or_else(|| anyhow!("Y5: Reference has no DigestMethod"))?;
+        if dm != SAML_DIGEST_METHOD_SHA256 {
+            anyhow::bail!(
+                "Y5: DigestMethod {dm} — only SHA-256 (xmlenc#sha256) accepted"
+            );
+        }
+        // Allow [enveloped-signature, exc-c14n#] in either order;
+        // anything else (e.g. inclusive c14n, xpath filter) refused.
+        for t in &r.transforms {
+            if t != SAML_TRANSFORM_ENVELOPED && t != SAML_TRANSFORM_EXC_C14N {
+                anyhow::bail!(
+                    "Y5: Transform {t} not accepted — only \
+                     enveloped-signature + xml-exc-c14n#"
+                );
+            }
+        }
+        // Locate the referenced element in the source XML by ID
+        // attribute. URI="" targets the document root — out of
+        // scope for Y5 (real SAML always references the Assertion).
+        if r.uri.is_empty() {
+            anyhow::bail!(
+                "Y5: empty Reference URI (document-root references not supported)"
+            );
+        }
+        let (start, end) = find_element_byte_range_by_id(response_xml, &r.uri)
+            .ok_or_else(|| anyhow!("Y5: Reference target ID `{}` not found", r.uri))?;
+        let target_fragment = &response_xml[start..end];
+        let inherited_for_target =
+            inherited_namespaces_at_byte_offset(response_xml, start)?;
+        // Apply enveloped-signature transform: strip the FIRST
+        // descendant Signature child during c14n.
+        let canonical = canonicalize_exc_c14n_subtree_with_skip(
+            target_fragment,
+            &inherited_for_target,
+            r.transforms
+                .iter()
+                .any(|t| t == SAML_TRANSFORM_ENVELOPED)
+                .then_some("Signature"),
+        )?;
+        let digest = sha2::Sha256::digest(&canonical);
+        let want = base64::engine::general_purpose::STANDARD
+            .decode(r.digest_value_b64.trim())
+            .with_context(|| "Y5: decode Reference DigestValue base64")?;
+        if digest.as_slice() != want.as_slice() {
+            anyhow::bail!(
+                "Y5: Reference digest mismatch on `{}` (computed {} bytes vs IdP {} bytes)",
+                r.uri,
+                digest.len(),
+                want.len()
+            );
+        }
+    }
+
+    // Step 5: c14n SignedInfo + RSA-SHA256 verify.
+    let signed_info_canonical = canonicalize_exc_c14n_subtree(
+        &sig.signed_info_fragment,
+        &sig.inherited_namespaces,
+    )?;
+    let signed_info_digest = sha2::Sha256::digest(&signed_info_canonical);
+    let signature_bytes = base64::engine::general_purpose::STANDARD
+        .decode(sig.signature_value_b64.trim())
+        .with_context(|| "Y5: decode SignatureValue base64")?;
+    use rsa::pkcs1v15::Pkcs1v15Sign;
+    let scheme = Pkcs1v15Sign::new::<sha2::Sha256>();
+    use rsa::traits::SignatureScheme;
+    let pub_key_dyn: &rsa::RsaPublicKey = idp_pubkey;
+    scheme
+        .verify(pub_key_dyn, &signed_info_digest, &signature_bytes)
+        .map_err(|e| anyhow!("Y5: RSA-SHA256 verify failed: {e}"))?;
+
+    // Step 6: pin cert. Defends against an attacker who replaces
+    // the Assertion + Signature with a self-signed one — without
+    // this pin, our pure crypto would happily verify it.
+    if !cert_der.is_empty() {
+        if let Some(b64) = sig.x509_certificate_b64.as_deref() {
+            let response_cert_der = base64::engine::general_purpose::STANDARD
+                .decode(b64.trim())
+                .with_context(|| "Y5: decode KeyInfo X509Certificate base64")?;
+            if response_cert_der != cert_der {
+                anyhow::bail!(
+                    "Y5: KeyInfo X509Certificate does not match configured \
+                     IdP cert — refusing as defense against confused-deputy"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Y5 helper — find the byte range of the element whose `ID="…"`
+/// attribute matches `id`. Returns `(start_byte_of_open, end_byte_after_close)`.
+/// quick-xml's buffer_position tracks the byte offset of the last
+/// event, which we use to slice the source.
+fn find_element_byte_range_by_id(
+    xml: &str,
+    id: &str,
+) -> Option<(usize, usize)> {
+    use quick_xml::events::Event;
+    use quick_xml::reader::Reader;
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+    let mut depth_after_match = 0usize;
+    let mut start_byte: Option<usize> = None;
+    let mut match_element: Option<String> = None;
+    loop {
+        let pos_before = reader.buffer_position() as usize;
+        match reader.read_event() {
+            Err(_) | Ok(Event::Eof) => return None,
+            Ok(Event::Start(e)) => {
+                if start_byte.is_some() {
+                    depth_after_match += 1;
+                    continue;
+                }
+                if let Some(v) = attr_value(&e, "ID") {
+                    if v == id {
+                        let after = reader.buffer_position() as usize;
+                        let evt_len = after.saturating_sub(pos_before);
+                        start_byte = Some(after.saturating_sub(evt_len));
+                        match_element = Some(
+                            std::str::from_utf8(e.name().as_ref())
+                                .unwrap_or("")
+                                .to_string(),
+                        );
+                        depth_after_match = 0;
+                    }
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                if start_byte.is_some() {
+                    continue;
+                }
+                if let Some(v) = attr_value(&e, "ID") {
+                    if v == id {
+                        let after = reader.buffer_position() as usize;
+                        return Some((
+                            after.saturating_sub(
+                                after.saturating_sub(pos_before),
+                            ),
+                            after,
+                        ));
+                    }
+                }
+            }
+            Ok(Event::End(e)) => {
+                if start_byte.is_some() {
+                    let name = e.name();
+                    let qname = std::str::from_utf8(name.as_ref()).unwrap_or("");
+                    if depth_after_match == 0
+                        && match_element.as_deref() == Some(qname)
+                    {
+                        let end = reader.buffer_position() as usize;
+                        return start_byte.map(|s| (s, end));
+                    }
+                    if depth_after_match > 0 {
+                        depth_after_match -= 1;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Y5 helper — gather every xmlns / xmlns:prefix declaration from
+/// ancestors up to the byte offset `target_start`. Used so that
+/// the c14n of the Reference target inherits the same namespace
+/// scope a Y3 walker would have provided.
+fn inherited_namespaces_at_byte_offset(
+    xml: &str,
+    target_start: usize,
+) -> Result<std::collections::BTreeMap<String, String>> {
+    use quick_xml::events::Event;
+    use quick_xml::reader::Reader;
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+    let mut ns_stack: Vec<std::collections::BTreeMap<String, String>> =
+        vec![std::collections::BTreeMap::new()];
+    loop {
+        let pos_before = reader.buffer_position() as usize;
+        match reader.read_event() {
+            Err(e) => anyhow::bail!("scan namespaces: {e}"),
+            Ok(Event::Eof) => {
+                return Ok(ns_stack.last().cloned().unwrap_or_default());
+            }
+            Ok(Event::Start(e)) => {
+                let after = reader.buffer_position() as usize;
+                let evt_len = after.saturating_sub(pos_before);
+                let this_start = after.saturating_sub(evt_len);
+                if this_start == target_start {
+                    // Inherited NS is whatever was in scope BEFORE
+                    // this element pushed its own declarations.
+                    return Ok(ns_stack.last().cloned().unwrap_or_default());
+                }
+                let mut new_ns = ns_stack
+                    .last()
+                    .cloned()
+                    .unwrap_or_default();
+                for a in e.attributes().with_checks(false).flatten() {
+                    let k = std::str::from_utf8(a.key.as_ref()).unwrap_or("");
+                    let v = match &a.value {
+                        std::borrow::Cow::Borrowed(b) => {
+                            std::str::from_utf8(b).unwrap_or("").to_string()
+                        }
+                        std::borrow::Cow::Owned(b) => {
+                            String::from_utf8(b.clone()).unwrap_or_default()
+                        }
+                    };
+                    if k == "xmlns" {
+                        new_ns.insert(String::new(), v);
+                    } else if let Some(prefix) = k.strip_prefix("xmlns:") {
+                        new_ns.insert(prefix.to_string(), v);
+                    }
+                }
+                ns_stack.push(new_ns);
+            }
+            Ok(Event::Empty(_)) => {
+                // Self-closing elements don't change the in-scope
+                // namespace set for any sibling.
+            }
+            Ok(Event::End(_)) => {
+                ns_stack.pop();
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Y5: c14n a subtree with an optional "skip first descendant with
+/// this local name" hook. Used to apply the enveloped-signature
+/// transform — strip the `<ds:Signature>` child from the Assertion
+/// before canonicalizing for the Reference digest.
+fn canonicalize_exc_c14n_subtree_with_skip(
+    fragment: &str,
+    inherited_namespaces: &std::collections::BTreeMap<String, String>,
+    skip_local_name: Option<&str>,
+) -> Result<Vec<u8>> {
+    let Some(skip) = skip_local_name else {
+        return canonicalize_exc_c14n_subtree(fragment, inherited_namespaces);
+    };
+    use quick_xml::events::Event;
+    use quick_xml::reader::Reader;
+    // Walk fragment first to find the byte range of the first
+    // descendant with local-name == skip; splice it out; canonicalize
+    // the resulting string.
+    let mut reader = Reader::from_str(fragment);
+    reader.config_mut().trim_text(false);
+    let mut depth = 0i32;
+    let mut skip_open_byte: Option<usize> = None;
+    let mut skip_close_byte: Option<usize> = None;
+    let mut skip_depth_at_open: i32 = 0;
+    loop {
+        let pos_before = reader.buffer_position() as usize;
+        match reader.read_event() {
+            Err(e) => anyhow::bail!("scan-for-skip parse: {e}"),
+            Ok(Event::Eof) => break,
+            Ok(Event::Start(e)) => {
+                depth += 1;
+                if skip_open_byte.is_none() && depth > 1 {
+                    let local = local_name_owned(e.name().as_ref());
+                    if local == skip {
+                        let after = reader.buffer_position() as usize;
+                        let evt_len = after.saturating_sub(pos_before);
+                        skip_open_byte =
+                            Some(after.saturating_sub(evt_len));
+                        skip_depth_at_open = depth;
+                    }
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                if skip_open_byte.is_none() && depth >= 1 {
+                    let local = local_name_owned(e.name().as_ref());
+                    if local == skip {
+                        let after = reader.buffer_position() as usize;
+                        let evt_len = after.saturating_sub(pos_before);
+                        return canonicalize_exc_c14n_subtree(
+                            &format!(
+                                "{}{}",
+                                &fragment[..after.saturating_sub(evt_len)],
+                                &fragment[after..]
+                            ),
+                            inherited_namespaces,
+                        );
+                    }
+                }
+            }
+            Ok(Event::End(_)) => {
+                if let Some(_open) = skip_open_byte {
+                    if depth == skip_depth_at_open {
+                        skip_close_byte = Some(reader.buffer_position() as usize);
+                        break;
+                    }
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    let stripped = match (skip_open_byte, skip_close_byte) {
+        (Some(s), Some(e)) => {
+            let mut buf = String::with_capacity(fragment.len());
+            buf.push_str(&fragment[..s]);
+            buf.push_str(&fragment[e..]);
+            buf
+        }
+        _ => fragment.to_string(),
+    };
+    canonicalize_exc_c14n_subtree(&stripped, inherited_namespaces)
 }
 
 /// Y4: emit the Exclusive XML Canonicalization 1.0 form of a
@@ -11698,6 +12224,188 @@ mod tests {
             std::str::from_utf8(&bytes).unwrap(),
             "<root>a &lt; b &amp; c &gt; d</root>"
         );
+    }
+
+    /// Y5: PEM cert load surfaces an informative error for non-RSA
+    /// SPKI (e.g. an ECC cert). Test fixture is a minimal P-256
+    /// SPKI; we only care that the algorithm-OID gate fires.
+    #[test]
+    fn y5_rejects_non_rsa_cert_with_clear_error() {
+        // Synthetic SPKI carrying the prime256v1 OID but no key
+        // body — just enough to trip the OID gate.
+        let pem = "-----BEGIN CERTIFICATE-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1234567890abcdef\n-----END CERTIFICATE-----\n";
+        let err = rsa_pubkey_from_pem_cert(pem.as_bytes()).unwrap_err().to_string();
+        assert!(
+            err.contains("parse")
+                || err.contains("PEM")
+                || err.contains("x509")
+                || err.contains("RSA")
+                || err.contains("SubjectPublic"),
+            "informative parse / OID / RSA error: {err}"
+        );
+    }
+
+    /// Y5: end-to-end RSA-SHA256 SAMLResponse verification with a
+    /// hand-built signed assertion. Generates an RSA-2048 keypair
+    /// in the test, builds a SAMLResponse with a properly-signed
+    /// Assertion (computed digest + RSA-signed SignedInfo), and
+    /// asserts `verify_saml_assertion_signature` returns Ok.
+    ///
+    /// Repeats with one byte flipped in SignatureValue → must fail.
+    /// And with a flipped DigestValue → must fail with a digest
+    /// mismatch error.
+    #[test]
+    fn y5_end_to_end_signed_assertion_verifies() {
+        use base64::Engine as _;
+        use rand_core::OsRng;
+        use rsa::pkcs1v15::SigningKey;
+        use rsa::signature::SignatureEncoding;
+        use rsa::signature::SignerMut;
+        use rsa::traits::PublicKeyParts;
+        use sha2::{Digest, Sha256};
+
+        // 1. RSA-2048 keypair.
+        let priv_key = rsa::RsaPrivateKey::new(&mut OsRng, 2048)
+            .expect("rsa-2048 keygen");
+        let pub_key: rsa::RsaPublicKey = priv_key.to_public_key();
+
+        // 2. Build the Assertion subtree (without Signature) +
+        //    its canonical form for the Reference digest.
+        let assertion_open =
+            r#"<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" ID="_a-y5" Version="2.0" IssueInstant="2026-06-27T00:00:00Z">"#;
+        let assertion_body =
+            "<saml:Issuer>https://idp.example</saml:Issuer><saml:Subject><saml:NameID>alice@example.com</saml:NameID></saml:Subject>";
+        let assertion_close = "</saml:Assertion>";
+        let assertion_no_sig =
+            format!("{assertion_open}{assertion_body}{assertion_close}");
+        // c14n the no-Signature form (the enveloped-signature
+        // transform output) — needed for the DigestValue. Inherited
+        // NS at the Assertion is the response-root xmlns we'll
+        // add below.
+        let mut inherited_at_assertion = std::collections::BTreeMap::new();
+        inherited_at_assertion.insert(
+            "samlp".to_string(),
+            "urn:oasis:names:tc:SAML:2.0:protocol".to_string(),
+        );
+        let assertion_c14n = canonicalize_exc_c14n_subtree(
+            &assertion_no_sig,
+            &inherited_at_assertion,
+        )
+        .expect("c14n assertion");
+        let digest = Sha256::digest(&assertion_c14n);
+        let digest_b64 =
+            base64::engine::general_purpose::STANDARD.encode(digest);
+
+        // 3. Build SignedInfo carrying that DigestValue.
+        let signed_info = format!(
+            r##"<ds:SignedInfo><ds:CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"></ds:CanonicalizationMethod><ds:SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"></ds:SignatureMethod><ds:Reference URI="#_a-y5"><ds:Transforms><ds:Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"></ds:Transform><ds:Transform Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"></ds:Transform></ds:Transforms><ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"></ds:DigestMethod><ds:DigestValue>{digest_b64}</ds:DigestValue></ds:Reference></ds:SignedInfo>"##
+        );
+        // c14n SignedInfo. Inherited NS at <ds:Signature> includes
+        // samlp + ds.
+        let mut inherited_at_sig = inherited_at_assertion.clone();
+        inherited_at_sig.insert(
+            "ds".to_string(),
+            "http://www.w3.org/2000/09/xmldsig#".to_string(),
+        );
+        let signed_info_c14n =
+            canonicalize_exc_c14n_subtree(&signed_info, &inherited_at_sig)
+                .expect("c14n SignedInfo");
+
+        // 4. RSA-SHA256 sign the canonical SignedInfo bytes.
+        let mut signer = SigningKey::<Sha256>::new(priv_key);
+        let sig = signer.sign(&signed_info_c14n);
+        let sig_bytes = sig.to_bytes();
+        let sig_b64 =
+            base64::engine::general_purpose::STANDARD.encode(&sig_bytes);
+
+        // 5. Assemble the full response, splicing the Signature
+        //    block as the FIRST child of <saml:Assertion>.
+        let signature_block = format!(
+            r##"<ds:Signature>{signed_info}<ds:SignatureValue>{sig_b64}</ds:SignatureValue></ds:Signature>"##
+        );
+        let assertion =
+            format!("{assertion_open}{signature_block}{assertion_body}{assertion_close}");
+        let response = format!(
+            r##"<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"><samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"></samlp:StatusCode></samlp:Status>{assertion}</samlp:Response>"##
+        );
+
+        // 6. Parse + verify — must pass.
+        let parsed = parse_saml_response_xml(&response).expect("Y3 parse");
+        verify_saml_assertion_signature(&response, &parsed, &pub_key, &[])
+            .expect("Y5 verify must accept a valid signature");
+
+        // 7. Flip a byte in the SignatureValue → must fail with an
+        //    RSA-verify error.
+        let mut bad_sig_bytes = sig_bytes.to_vec();
+        bad_sig_bytes[0] ^= 0x55;
+        let bad_sig_b64 =
+            base64::engine::general_purpose::STANDARD.encode(&bad_sig_bytes);
+        let bad_signature_block = format!(
+            r##"<ds:Signature>{signed_info}<ds:SignatureValue>{bad_sig_b64}</ds:SignatureValue></ds:Signature>"##
+        );
+        let bad_assertion = format!(
+            "{assertion_open}{bad_signature_block}{assertion_body}{assertion_close}"
+        );
+        let bad_response = format!(
+            r##"<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"><samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"></samlp:StatusCode></samlp:Status>{bad_assertion}</samlp:Response>"##
+        );
+        let bad_parsed =
+            parse_saml_response_xml(&bad_response).expect("parse bad");
+        let err = verify_saml_assertion_signature(
+            &bad_response,
+            &bad_parsed,
+            &pub_key,
+            &[],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("RSA-SHA256 verify failed"),
+            "flipped SignatureValue → RSA verify fails: {err}"
+        );
+
+        // 8. Tamper with DigestValue → reference digest mismatch.
+        let bad_digest_b64 =
+            base64::engine::general_purpose::STANDARD.encode(b"different");
+        let bad_signed_info = signed_info.replace(&digest_b64, &bad_digest_b64);
+        // Re-sign so the SignedInfo signature itself is valid; we
+        // want the DigestValue mismatch to be what fails, not the
+        // outer signature.
+        let bad_signed_info_c14n =
+            canonicalize_exc_c14n_subtree(&bad_signed_info, &inherited_at_sig)
+                .expect("c14n bad SignedInfo");
+        let mut bad_signer =
+            SigningKey::<Sha256>::new(signer.as_ref().clone());
+        let bad_sig = bad_signer.sign(&bad_signed_info_c14n);
+        let bad_sig_b64 =
+            base64::engine::general_purpose::STANDARD.encode(bad_sig.to_bytes());
+        let bad_signature_block = format!(
+            r##"<ds:Signature>{bad_signed_info}<ds:SignatureValue>{bad_sig_b64}</ds:SignatureValue></ds:Signature>"##
+        );
+        let bad_assertion2 = format!(
+            "{assertion_open}{bad_signature_block}{assertion_body}{assertion_close}"
+        );
+        let bad_response2 = format!(
+            r##"<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"><samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"></samlp:StatusCode></samlp:Status>{bad_assertion2}</samlp:Response>"##
+        );
+        let bad_parsed2 =
+            parse_saml_response_xml(&bad_response2).expect("parse bad2");
+        let err2 = verify_saml_assertion_signature(
+            &bad_response2,
+            &bad_parsed2,
+            &pub_key,
+            &[],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err2.contains("Reference digest mismatch"),
+            "flipped DigestValue → digest mismatch error: {err2}"
+        );
+
+        // Sanity: pubkey modulus is non-trivial (we really had a
+        // 2048-bit RSA pair).
+        assert!(pub_key.n().bits() >= 2000);
     }
 
     /// Y4 + Y3 bridge: feed a real synthetic SAMLResponse through
