@@ -145,4 +145,10 @@ format: `[slice] [status] [commit] [verifier] [live-check] note`
 | V5 | DONE | 465d191 | n/a | rpm_cap=3 against 5 reqs → first 3 HTTP 200, last 2 HTTP 429 "tenant rpm_cap exceeded" | tenant quota (rpm_cap + daily_cost_usd_cap) |
 | V4 | DONE | 9270464 | n/a | vault: scheme resolved bearer "vault-resolved-bearer-XYZ"; 401 without bearer / 200 with resolved bearer; aws scheme returns informative error | secrets manager (vault path + aws stub) |
 | V1 | DONE | d10e51b | n/a | SAML scaffold present → detection + informative refusal; scaffold absent → routes to OIDC | SAML login routing (full flow deferred to Plan W) |
+| V7 | DONE | 3ab3727 | n/a | v0.26.0 release LIVE (4 platforms, run 28272975315); cosign verify-blob → "Verified OK" against published artifact | v0.26.0 ship + Plan W draft + cosign live-verify |
+| W4 | DONE | 69cf598 | n/a | 4 live cases: refuse / allow / warn / invalid-regex; agent reported policy refusal back to user | per-tool argument-filter policy on policy.json |
+| W6 | DONE | 6c0b3c0 | n/a | broken plugin manifest → discover_plugins_with_diagnostics → fire_webhook → POST /plugin-fail with reason+manifest_path | plugin-load-failure webhook (closes V2 NON-GOAL) |
+| W5 | DONE | 327e49a | n/a | 12 audit entries → 2 Loki POSTs (batch of 10 + flush of 2); body shape valid {streams:[{stream,values}]} | audit-log forwarding to SIEM (loki/splunk HEC) |
+| W3 | DONE | 87e0b03 | n/a | fake SM endpoint validated SigV4 + X-Amz-Target; resolved bearer → 401/200 round-trip via aether serve | AWS Secrets Manager backend (closes V4 MED) |
+| W1+W2 | DEFERRED | n/a | dedicated SAML plan — full pipeline is multi-week pure-Rust XML crypto, outside Plan W's 24h budget | SAML AuthnRequest + signed-response validation deferred |
 

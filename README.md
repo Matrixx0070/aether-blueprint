@@ -23,7 +23,22 @@ Each tarball ships with a SHA256 the script verifies before extraction. See
 `INSTALL.md` for the manual download + verify path and the source-build
 fallback.
 
-## Status: v0.26.0
+## Status: v0.27.0
+
+Plan W shipped 4 of 6 code slices + honestly deferred the SAML pipeline to a dedicated plan (24h autonomous run):
+
+- **W4 per-tool argument-filter policy** — `tool_arg_filters` on
+  policy.json; refuse/warn on regex match against serialised tool
+  input. Closes the "block Bash if input contains <pattern>" gap.
+- **W6 plugin-load-failure webhook** — closes V2 NON-GOAL.
+- **W5 audit-log forwarding to SIEM** — `AETHER_AUDIT_FORWARD=
+  loki:<url>` or `=splunk:<url>`; batches 10 / flush.
+- **W3 AWS Secrets Manager backend** — closes V4 MED; hand-rolled
+  SigV4 reusing the v0.8 Bedrock cred chain.
+- W1+W2 SAML pipeline — DEFERRED to a dedicated SAML plan.
+  Multi-week pure-Rust XML c14n# + RSA-SHA256 + x509 work
+  doesn't fit a 24h budget. The v0.26 SAML routing refusal
+  stays in place.
 
 Plan V shipped six follow-ups closing every U7 audit MED/LOW + adding tenant quota + secrets manager (24h autonomous run):
 

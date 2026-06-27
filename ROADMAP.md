@@ -542,13 +542,41 @@ extensibility.
   response validation pipeline is honestly deferred to Plan W (multi-
   week pure-Rust XML crypto).
 
-## v0.27 — next (draft)
+## v0.27 — enterprise gap-closes — shipped 2026-06-27
 
-- Full SAML redirect-binding flow + signed-response validation
-  (V1 follow-up; the multi-week crypto pipeline)
-- AWS Secrets Manager backend for V4 (reuses Bedrock cred chain)
-- plugin-load-failure webhook event (requires aether_plugin API change)
-- Per-tool argument-filter policy (tool_blocklist gets regex-on-input)
+- **W4 per-tool argument-filter policy** — `tool_arg_filters` on
+  policy.json; executor refuses or warns on regex matches against
+  the serialised tool input. Live-verified across refuse / allow /
+  warn / invalid-regex.
+- **W6 plugin-load-failure webhook** — closes V2 NON-GOAL.
+  `aether_plugin::discover_plugins_with_diagnostics` surfaces
+  failure diagnostics; CLI fires `fire_webhook("plugin-load-failure",
+  {manifest_path, reason})`. Live-verified with a broken manifest.
+- **W5 audit-log forwarding to SIEM** — `AETHER_AUDIT_FORWARD=
+  loki:<url>` or `=splunk:<url>` activates HTTP-POST forwarding
+  with a 10-line batch buffer. Live-verified against a fake Loki
+  receiver — 12 audit entries → 2 batched POSTs.
+- **W3 AWS Secrets Manager backend** — closes V4 MED. Hand-rolled
+  SigV4 reusing the v0.8 Bedrock cred chain; `aws:<id>` resolves
+  the secret and stuffs it into AETHER_SERVE_TOKEN. Live-verified
+  against a fake SM endpoint.
+- W1 (SAML AuthnRequest + redirect-binding) and W2 (signed-
+  response validation) — DEFERRED to a dedicated SAML plan. The
+  full pure-Rust XML c14n# + RSA-SHA256 + x509 pipeline is multi-
+  week work that doesn't fit a 24h plan budget honestly. The v0.26
+  SAML routing refusal stays in place — operators don't silently
+  fall into an unvalidated flow.
+
+## v0.28 — next (draft)
+
+- Dedicated SAML plan: AuthnRequest emission + redirect-binding
+  + pure-Rust XML c14n# + RSA-SHA256 signature verify + x509
+  cert chain + assertion bounds + NameID persistence
+- WASM plugin-load-failure diagnostics (sister to W6 in
+  aether-plugin-wasm)
+- Per-field arg-filter policy (regex against specific input
+  JSON fields, not the whole serialised body)
+- Distributed tracing hooks (OpenTelemetry)
 - Closing R1/R2/R3 cred-blocked verifiers
 
 ## v0.9 — enterprise
