@@ -6636,7 +6636,22 @@ async fn run_doctor(probe: bool, json_out: bool) -> Result<()> {
 /// `$AETHER_PLUGIN_DIR`) and register each as a tool. Prints a brief
 /// stderr line summarising what was loaded.
 fn register_subprocess_plugins(tools: &mut ToolRegistry) {
-    let plugins = aether_plugin::discover_plugins();
+    let (plugins, failures) = aether_plugin::discover_plugins_with_diagnostics();
+    // W6: fire plugin-load-failure webhook for each failure. Done
+    // first so even a fully-failed load surfaces externally.
+    for f in &failures {
+        let payload = serde_json::json!({
+            "manifest_path": f.manifest_path.display().to_string(),
+            "reason": f.reason,
+        });
+        // tokio::spawn isn't valid here (we're called from sync
+        // bootstrap before the runtime is entered). Block via the
+        // current handle when one exists; fall back to a no-op when
+        // not in a runtime (e.g. coding-eval CLI path).
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(fire_webhook("plugin-load-failure", payload));
+        }
+    }
     if plugins.is_empty() {
         return;
     }

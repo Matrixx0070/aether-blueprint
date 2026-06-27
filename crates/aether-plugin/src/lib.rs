@@ -518,13 +518,30 @@ pub fn plugin_dir() -> Option<PathBuf> {
 ///     SKIPS the plugin and logs to stderr.
 ///   - If `$AETHER_PLUGIN_ENFORCE_SIGNING=1`, unsigned plugins are
 ///     ALSO skipped (default: load with warning).
+/// W6: failure diagnostic emitted by `discover_plugins_with_diagnostics`.
+/// Backward-compat: `discover_plugins()` discards these.
+#[derive(Debug, Clone)]
+pub struct PluginLoadFailure {
+    pub manifest_path: PathBuf,
+    pub reason: String,
+}
+
 pub fn discover_plugins() -> Vec<PluginTool> {
+    discover_plugins_with_diagnostics().0
+}
+
+/// W6: like `discover_plugins`, but also returns the list of failure
+/// diagnostics (manifest parse error, signature verification fail,
+/// enforce-signing rejection). The CLI uses this to fire a
+/// `plugin-load-failure` webhook.
+pub fn discover_plugins_with_diagnostics() -> (Vec<PluginTool>, Vec<PluginLoadFailure>) {
     let Some(root) = plugin_dir() else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
     let Ok(entries) = std::fs::read_dir(&root) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
+    let mut failures: Vec<PluginLoadFailure> = Vec::new();
     let hmac_key = std::env::var(HMAC_KEY_ENV).ok().filter(|s| !s.is_empty());
     let ed_pubkey_env = std::env::var("AETHER_PLUGIN_ED25519_PUBKEY")
         .ok()
@@ -556,6 +573,10 @@ pub fn discover_plugins() -> Vec<PluginTool> {
                     "[aether-plugin] {}: bad manifest: {e}",
                     manifest_path.display()
                 );
+                failures.push(PluginLoadFailure {
+                    manifest_path: manifest_path.clone(),
+                    reason: format!("bad manifest: {e}"),
+                });
                 continue;
             }
         };
@@ -632,6 +653,13 @@ pub fn discover_plugins() -> Vec<PluginTool> {
                             "[aether-plugin] {}: unsigned manifest rejected ({}=1)",
                             manifest.name, ENFORCE_SIGNING_ENV
                         );
+                        failures.push(PluginLoadFailure {
+                            manifest_path: manifest_path.clone(),
+                            reason: format!(
+                                "{}: unsigned manifest rejected ({}=1)",
+                                manifest.name, ENFORCE_SIGNING_ENV
+                            ),
+                        });
                         continue;
                     } else {
                         eprintln!(
@@ -645,6 +673,13 @@ pub fn discover_plugins() -> Vec<PluginTool> {
                         "[aether-plugin] {}: signature verification FAILED — refusing to load: {e}",
                         manifest.name
                     );
+                    failures.push(PluginLoadFailure {
+                        manifest_path: manifest_path.clone(),
+                        reason: format!(
+                            "{}: signature verification FAILED: {e}",
+                            manifest.name
+                        ),
+                    });
                     continue;
                 }
             }
@@ -652,7 +687,7 @@ pub fn discover_plugins() -> Vec<PluginTool> {
 
         out.push(PluginTool::new(manifest, dir));
     }
-    out
+    (out, failures)
 }
 
 /// Parse a single manifest by path — exposed for unit tests + ad-hoc tooling.
