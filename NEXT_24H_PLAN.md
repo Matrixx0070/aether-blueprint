@@ -1,55 +1,61 @@
-# Next 24-hour autonomous plan — Plan BB
+# Next 24-hour autonomous plan — Plan CC
 
-Drafted at end of Plan AA (v0.30 → v0.31). Plan AA shipped 4 of 6
-drafted slices honestly: AA1–AA3 (real Bedrock / Vertex / Azure
-round-trips) were blocked at billing + Marketplace + subscription
-gates outside aether's control, so the plan pivoted to AA4 SAML
-HTTP-POST + AA5 multi-cert IdP support + AA5-followup configure-saml
-auto-discovery + AA6 OIDC userinfo + sso whoami.
+Drafted at end of Plan BB (v0.31 → v0.32). Plan BB shipped 3 of 6
+drafted slices honestly: BB1–BB3 (real Bedrock / Vertex / Azure
+round-trips) remained cred-blocked exactly as in Plan AA — billing
++ Marketplace + subscription gates outside aether's control. The
+plan delivered the three non-cred-dependent slices that closed every
+Plan AA documented weakest-point:
 
-Plan BB carries forward the cred-blocked AA1–AA3 work and closes
-each of Plan AA's documented weakest-points.
+  - BB4 closed AA4 (signed AuthnRequest).
+  - BB5 closed AA6 (OIDC access-token refresh).
+  - BB6 closed AA5-followup (SAML metadata auto-refresh).
+
+Plan CC continues to carry forward CC1–CC3 (the cred-blocked work)
+until creds become available, and adds CC4–CC6 to close each of
+Plan BB's documented weakest-points.
 
 ---
 
-## Plan BB — close AA weakest-points + cred-unblock when ready
+## Plan CC — close every BB weakest-point + cred-unblock when ready
 
-**MISSION**: Flip Plan AA's UNVERIFIED labels to LIVE-VERIFIED when
-creds become available; close every weakest-point Plan AA explicitly
-documented (signed AuthnRequest, access-token refresh, metadata
-auto-refresh).
+**MISSION**: Flip Plan BB's UNVERIFIED labels to LIVE-VERIFIED when
+creds become available; close every weakest-point Plan BB explicitly
+documented (metadata drift detection, proactive token refresh,
+EdDSA AuthnRequest signing).
 
 **DONE MEANS** (7 criteria):
 
-1. v0.32.0 tag on origin/main; cosign-signed autobuild green on 4
+1. v0.33.0 tag on origin/main; cosign-signed autobuild green on 4
    platforms.
-2. AA1 Bedrock LIVE round-trip — real AWS creds, real
+2. CC1 Bedrock LIVE round-trip — real AWS creds, real
    `bedrock-runtime.<region>.amazonaws.com`, single 1-token call
    returns `usage > 0`.
-3. AA2 Vertex LIVE round-trip — billing-enabled GCP project +
+3. CC2 Vertex LIVE round-trip — billing-enabled GCP project +
    Anthropic-on-Vertex Marketplace subscription + access token,
    single 1-token call returns `usage > 0`.
-4. AA3 Azure LIVE round-trip — Azure AI Foundry resource + Claude
+4. CC3 Azure LIVE round-trip — Azure AI Foundry resource + Claude
    deployment + api-key, single 1-token call returns `usage > 0`.
-5. BB4 Signed AuthnRequest (POST binding) accepted by `aether sso
-   login` end-to-end (smoke updated to verify the
-   `<ds:Signature>` element on the AuthnRequest).
-6. BB5 OIDC access-token refresh wired into `aether sso whoami`
-   (401 → use refresh_token → retry).
-7. BB6 SAML metadata auto-refresh subcommand documented.
-8. STATUS slice rows BB1–BB6 with commit SHAs + live-verify
+5. CC4 SAML metadata drift detection: refresh-saml --watch skips
+   the rewrite when the metadata response hash matches the
+   previous tick.
+6. CC5 OIDC proactive refresh: aether refreshes the access_token
+   ahead of `expires_in` (e.g. 5 min before) rather than on 401.
+7. CC6 EdDSA AuthnRequest signing accepted by `aether sso login`
+   with an Ed25519 SP key.
+8. STATUS slice rows CC1–CC6 with commit SHAs + live-verify
    excerpts. No banned vocabulary.
 
 ## Slices
 
-### BB1 — Bedrock live round-trip (cred-blocked)
+### CC1 — Bedrock live round-trip (cred-blocked)
 
 - User provides real `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`
   (+ optional `AWS_SESSION_TOKEN`) + `AWS_REGION`.
 - Unset `AETHER_BEDROCK_ENDPOINT` (so it falls back to AWS default).
 - Run `aether doctor --probe --provider bedrock`.
 
-### BB2 — Vertex live round-trip (cred-blocked + Marketplace)
+### CC2 — Vertex live round-trip (cred-blocked + Marketplace)
 
 - Pre-req on user's side: enable billing on a GCP project +
   subscribe to "Claude on Vertex AI" via Cloud Marketplace.
@@ -58,51 +64,48 @@ auto-refresh).
 - Unset `AETHER_VERTEX_ENDPOINT`.
 - Run `aether doctor --probe --provider vertex`.
 
-### BB3 — Azure live round-trip (cred-blocked)
+### CC3 — Azure live round-trip (cred-blocked)
 
 - Pre-req: Azure AI Foundry resource + Claude deployment.
 - `AZURE_AI_ENDPOINT=https://<resource>.services.ai.azure.com` +
   `AZURE_AI_API_KEY=<resource-scoped-key>`.
 - Run `aether doctor --probe --provider azure`.
 
-### BB4 — Signed AuthnRequest (POST binding)
+### CC4 — SAML metadata drift detection
 
-- Closes AA4 weakest-point. Some enterprise IdPs require XML
-  Digital Signature over the AuthnRequest with the SP's private
-  key (rsa-sha256, enveloped, exc-c14n#).
-- New helper `sign_authn_request_xml(xml, sp_priv_key) ->
-  signed_xml` that splices a `<ds:Signature>` block into the
-  AuthnRequest. Reuses the Y4 exc-c14n machinery.
-- New env knob `AETHER_SAML_SP_PRIVATE_KEY_PEM=path` switches
-  AuthnRequest emission to signed mode when set.
-- Unit tests: build → sign → c14n SignedInfo → RSA verify with
-  the public key recovered from the keypair.
-- Live smoke extension: drive the fake IdP through a signed POST
-  AuthnRequest path; assert the IdP receives a verifiable
-  `<ds:Signature>` element.
+- Closes BB6 weakest-point. Hash the metadata response (sha256
+  of bytes); persist the hash in sso-saml.json as
+  `metadata_xml_sha256`.
+- On refresh-saml tick: if response hash matches the persisted
+  value, skip the layout rewrite + log "no drift, skipping
+  rewrite"; bump a `last_checked_at` timestamp regardless.
+- Unit tests for the hash equality + persistence path; live smoke
+  extension on the BB6 mutable metadata server.
 
-### BB5 — OIDC access-token refresh
+### CC5 — OIDC proactive refresh
 
-- Closes AA6 weakest-point. When the token response includes
-  `refresh_token`, persist it at `~/.aether/sso.refresh_token`
-  (mode 0600).
-- `sso whoami` on userinfo 401: use the refresh_token to mint a
-  fresh access_token (POST to token_endpoint with
-  `grant_type=refresh_token`), rewrite the sidecar, retry the
-  userinfo call once.
-- New `aether sso refresh` subcommand for manual rotation.
-- Unit tests for the refresh response parser; live smoke
-  extension on the fake IdP.
+- Closes BB5 weakest-point. Read `expires_in` from the token
+  response; persist `~/.aether/sso.access_token.expires_at`
+  alongside the sidecar.
+- `sso whoami` computes `now < expires_at - 5 minutes`; refresh
+  preemptively when the window has been crossed, BEFORE calling
+  userinfo. Falls back to the existing reactive 401 path on
+  refresh failure.
+- New env knob `AETHER_OIDC_REFRESH_LEAD_SECS` (default 300,
+  clamped [60, 3600]) for the lead-time window.
+- Unit tests for the expiry math; live smoke extension on the
+  BB5 fake IdP.
 
-### BB6 — SAML metadata auto-refresh
+### CC6 — EdDSA AuthnRequest signing
 
-- Closes AA5-followup weakest-point. New `aether sso refresh-saml`
-  subcommand re-fetches the metadata URL persisted at
-  configure-saml time and re-runs the multi-cert layout.
-- New optional env `AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS`
-  spawns a background tokio task that runs the refresh on the
-  given cadence — useful for IdP cert rotation without bouncing
-  aether.
+- Closes BB4 weakest-point. BB4 supports only RSA-SHA256; some
+  modern IdPs (FIDO2-adjacent, Auth0 paths using Ed25519 keys)
+  advertise EdDSA on the AuthnRequest binding.
+- `load_sp_signing_key_from_pem` already accepts Ed25519 PKCS#8.
+- `sign_authn_request_xml` dispatches on key type: RSA → existing
+  RSA-SHA256; Ed25519 → eddsa-2022 SignatureMethod URI.
+- Unit tests for the Ed25519 round-trip; live smoke extension on
+  BB4's fake IdP with an Ed25519 SP key.
 
 ## Banned vocabulary
 
@@ -111,103 +114,110 @@ appear in commit messages, STATUS rows, or end-of-turn reports.
 
 ## Open questions (defaults picked)
 
-1. **BB1 model id.** Default: `anthropic.claude-haiku-4-5-v1:0` —
-   cheapest live Bedrock Anthropic call.
-2. **BB2 region.** Default: `us-central1` — matches Plan Z evidence
-   the user's account is provisioned there.
-3. **BB4 signed-AuthnRequest scope.** Default: rsa-sha256 only
-   (the Y5 verifier already understands this algorithm); RSA-PSS
-   and EdDSA in a follow-up.
-4. **BB5 refresh-on-401 retries.** Default: ONE retry. Repeated
-   401 → bail (avoid loops on stale refresh tokens).
+1. **CC4 hash persistence location.** Default: as a new field
+   `metadata_xml_sha256` in sso-saml.json. Backward-compat: pre-CC4
+   files just trigger a "first refresh" rewrite on the next tick.
+2. **CC5 lead-time default.** Default: 300 seconds (5 minutes).
+   Same window the Z2 JWKS timeout + AA6 reqwest timeout use.
+3. **CC6 EdDSA SignatureMethod URI.** Default:
+   `http://www.w3.org/2021/04/xmldsig-more#eddsa-2022` per the
+   XML-DSig EdDSA registration. Verifiable against the existing Y5
+   verifier when extended.
 
 ## Risk register
 
 - **Marketplace activation latency** — Vertex Marketplace
-  subscription can take hours; BB2 may have to defer.
+  subscription can take hours; CC2 may have to defer again.
 - **AWS cred exposure** — never commit AWS keys to the repo;
   env-only.
-- **BB5 refresh-token theft scope** — refresh tokens live longer
-  than access tokens; the sidecar at mode 0600 is the same
-  defense as the existing token sidecars.
+- **CC4 hash false positive** — some IdPs include a timestamp
+  attribute in the metadata document that changes per-fetch even
+  when the certs / endpoints don't. May need to hash a normalized
+  subset of the document rather than the raw bytes. Investigate
+  before shipping.
+- **CC6 EdDSA verifier impact** — Y5 currently rejects EdDSA in
+  `verify_saml_assertion_signature` (Algorithm gate). Extending
+  the sender doesn't require extending the verifier, but operators
+  with a self-loop test would need both. Plan CC scope is sender-
+  side only; verifier extension in a follow-up.
 
 ---
 
-## Pre-BB context — Plan AA self-audit (v0.31.0 shipping)
+## Pre-CC context — Plan BB self-audit (v0.32.0 shipping)
 
-**Audited commits**: 79fed59 (AA4), 125d2c6 (AA5), a997c48 (AA6),
-62ed5b8 (AA5-followup), plus this version-bump commit.
+**Audited commits**: 25301f0 (BB4), 49b0b1a (BB5), edc7328 (BB6),
+plus this version-bump commit.
 
 ### Honest scope re-frame mid-plan
 
-Plan AA was drafted assuming AA1–AA3 (real Bedrock / Vertex / Azure
-round-trips) would be runnable as the first three slices. The user
-provided their gcloud auth in good faith; live attempt revealed all
-3 GCP projects had billing disabled and Anthropic-on-Vertex requires
-a Cloud Marketplace subscription. Plan pivoted to the non-cred-
-dependent slices. AA1–AA3 carry forward to Plan BB1–BB3.
+Plan BB was drafted with the same shape as Plan AA: 3 cred-
+dependent slices (BB1–BB3) + 3 non-cred-dependent slices (BB4–BB6
+closing AA weakest-points). The cred-blocked slices remained
+cred-blocked exactly as in Plan AA — no GCP billing came on, no AWS
+creds arrived, no Azure Foundry resource was provisioned. The
+non-cred-dependent slices shipped 100%.
 
 ### BLOCKERs — none
 
-All four shipped Plan AA slices ship with all spec gates closed at
-the unit-test level. No BLOCKER findings carried into the version
-bump.
+All three shipped Plan BB slices have all spec gates closed at the
+unit-test level. No BLOCKER findings carried into the version bump.
 
 ### HIGHs — one caught + fixed mid-slice
 
-- AA5-followup mid-development bug: refactor briefly moved
-  `sso-saml.json` from `~/.aether/sso-saml.json` to
-  `~/.aether/saml/sso-saml.json`, breaking the SAML routing branch
-  (`sso_cmd::Login` looks for the legacy path). Caught by the live
-  smoke when login fell through to OIDC. Fixed by separating the
-  config path (kept at legacy) from the certs dir (new location).
+- BB6 mid-development bug: refactor extracted
+  `apply_saml_idp_metadata` from `sso_configure_saml`, accidentally
+  changed the stderr line from "discovered, written to" to "laid
+  out under". AA5fu live smoke greps the old string; the regression
+  surfaced immediately during regression-sweep. Fixed by restoring
+  the original wording (BB6 doesn't need to change it). The smoke
+  is what protected the production message contract.
 
 ### MEDs — documented and carried
 
-- AA6 streaming dimension untouched. `validate_id_token` runs once
-  at login; userinfo runs synchronously. No streaming protocols
-  involved.
-- AA5 verifier reconstructs `Pkcs1v15Sign` per iteration because
-  it takes `self` by value. Zero-size marker struct so the cost is
-  nil — documented in code.
+- BB5 auto-refresh attempts ONCE per `whoami` invocation. A
+  rotated refresh_token that also fails would not loop. Documented
+  in Plan BB risk register.
+- BB6 `--watch` is a foreground daemon, not a tokio::spawn from
+  `aether serve`. Operators that want systemd-style supervision
+  wrap it themselves.
 
 ### LOWs — knowingly carried
 
-- AA4 POST binding emits an UNSIGNED AuthnRequest. Some enterprise
-  IdPs require XML-signed AuthnRequest; deferred to BB4.
-- AA5-followup: metadata re-fetch isn't automated. Operators must
-  re-run `configure-saml` to pick up rotated certs. Deferred to
-  BB6.
-- AA6: access-token expiry isn't refreshed. `sso whoami` 401s
-  silently when the token expires. Deferred to BB5.
-- AA6: groups normalisation drops non-string entries silently —
-  IdP-specific extension shapes vary too widely to be strict.
+- BB4 signature algorithm is RSA-SHA256 only. EdDSA AuthnRequest
+  signing deferred to CC6.
+- BB5 no proactive refresh based on `expires_in`. Deferred to CC5.
+- BB6 no drift detection — refresh-saml rewrites unconditionally.
+  Wasteful in --watch mode against a stable IdP. Deferred to CC4.
+- BB6 `parse_token_response` was named after the OAuth concept
+  but used by BB5; could rename to `parse_token_endpoint_response`
+  for clarity. Cosmetic.
 
 ### What worked
 
-- **All 4 shipped Plan AA slices live-verified end-to-end** in
-  this session. Each has a dedicated Python fake-IdP smoke that
-  drives the new code path through `aether sso login` /
-  `configure-saml` / `whoami` to the success-case stdout assertion.
-- **Self-audit caught the routing bug** during AA5-followup live
-  smoke — the unit tests passed but the integration revealed the
-  path mismatch. The smoke is what protected the production code.
-- **Real Vertex live attempt produced actionable evidence**: not
-  a hand-waved "untested", but a concrete 403 PERMISSION_DENIED
-  with the exact missing capability (project billing). That
-  evidence is carried into BB2's pre-reqs verbatim.
+- **All 3 shipped Plan BB slices live-verified end-to-end** in
+  this session, each with a dedicated Python fake-IdP smoke that
+  walks the new code path 5-7 steps deep.
+- **The regression sweep caught the BB6 wording change**
+  immediately — without the AA5fu smoke, a working code change
+  would have broken a downstream test that nobody re-ran.
+- **The wrap-up commit-message convention captured the
+  cred-blocked carry-forward honestly** — operators reading the
+  ROADMAP can see the exact gate that's blocking each slice and the
+  env vars they'd need to unblock it.
 
 ### Diff numbers (approximate)
 
-- aether-cli/src/main.rs: +600 LoC across AA4 + AA5 + AA5-followup
-  + AA6 (helpers, refactored verify, new subcommand, sidecar
-  writes, metadata multi-cert extraction)
-- aether-llm/: 0 LoC (no changes — Plan AA scope is SAML+OIDC)
-- tests/ python smokes: +1100 LoC across 4 new files
-- ROADMAP / STATUS / NEXT_24H_PLAN: +250 LoC
+- aether-cli/src/main.rs: +600 LoC across BB4 + BB5 + BB6 (helpers,
+  new subcommands, sidecar persistence, metadata helpers,
+  binding-aware SP signing).
+- aether-llm/: 0 LoC (no changes — Plan BB scope is SAML + OIDC).
+- Cargo.toml: +1 word (rsa `pem` feature enabled for BB4 PEM
+  loading).
+- tests/ python smokes: +1100 LoC across 3 new files.
+- ROADMAP / STATUS / NEXT_24H_PLAN: +250 LoC.
 
 ### Total binary delta
 
-- aether 0.30.0 release binary on linux-x64: ~43 MB
-- aether 0.31.0 release binary on linux-x64: ~43 MB (no new code
-  paths — just helpers + new subcommand entry)
+- aether 0.31.0 release binary on linux-x64: ~43 MB
+- aether 0.32.0 release binary on linux-x64: ~43 MB (no new code
+  paths — just helpers + new subcommand entries)

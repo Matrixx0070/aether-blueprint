@@ -782,26 +782,96 @@ Plan BB pre-reqs):**
 fake-IdP Python smokes pass alongside the existing Y/Z corpora.
 67/67 Y/Z/AA-prefix unit tests green.
 
-## v0.32 — next (Plan BB draft)
+## v0.32 — close every AA weakest-point — shipped 2026-06-27
 
-- **BB1 Bedrock + Vertex + Azure live round-trip** — same plan as
-  AA1–AA3, awaiting creds + Marketplace + billing.
-- **BB2 OIDC mTLS client auth (RFC 8705)** — alternative to
-  `client_secret_basic` for high-assurance OAuth clients.
-- **BB3 Tenant SCIM provisioning** — `/v1/scim/Users` CRUD
+Plan BB. 3 shipped + 3 cred-blocked carried forward to Plan CC.
+The shipped trio specifically closes the three weakest-points Plan
+AA's self-audit documented — each was queued with a concrete
+remediation, and each got delivered without operator-side gates.
+
+- **BB4 Signed AuthnRequest (POST binding)** (commit 25301f0).
+  Closes AA4 weakest-point. `AETHER_SAML_SP_PRIVATE_KEY_PEM=path`
+  makes aether splice a `<ds:Signature>` block into the
+  AuthnRequest right after `</saml:Issuer>` (schema-mandated
+  position per saml-core-2.0 §3.2.1), using the same algorithm
+  pipeline the Y5 verifier accepts on the IdP→SP side: RSA-SHA256
+  + SHA-256 digest + [enveloped-signature, exc-c14n#] transforms.
+  `load_sp_signing_key_from_pem` accepts both PKCS#8 + PKCS#1 PEM
+  (openssl-3 default + legacy fallback). `sign_authn_request_xml`
+  reuses Y4 `canonicalize_exc_c14n_subtree` + Y5 algorithm
+  constants. Cargo: enabled `pem` feature on the rsa crate. 3
+  unit tests + live smoke `tests/bb4-signed-authn-request-smoke.py`
+  drives full spec-path verify with lxml (Signature placement /
+  Reference URI / DigestValue against c14n-of-unsigned / RSA
+  SignatureValue verify).
+- **BB5 OIDC access-token refresh** (commit 49b0b1a). Closes AA6
+  weakest-point. `sso_login` persists the `refresh_token` to
+  `~/.aether/sso.refresh_token` (mode 0600, write_sso_sidecar
+  helper extracted). New `aether sso refresh` subcommand for
+  manual rotation. `sso_whoami` auto-refreshes ONCE on userinfo
+  401 when the refresh sidecar exists; `--no-refresh` opts out.
+  Pure `parse_token_response` helper (RFC 6749 §5.1: access_token
+  REQUIRED; refresh/id/expires optional) + async
+  `refresh_oauth_access_token` helper used by both manual and
+  auto-refresh paths. Handles refresh-token rotation per RFC 6749
+  §6 (when IdP returns a new RT alongside the new AT, both
+  sidecars overwritten). `sso_logout` cleans up all three files.
+  5 unit tests + live smoke `tests/bb5-oidc-refresh-smoke.py`
+  (six-step chain: login → whoami → invalidate AT → auto-refresh
+  + retry → manual refresh → --no-refresh opt-out → logout cleanup).
+- **BB6 SAML metadata auto-refresh** (commit edc7328). Closes
+  AA5-followup weakest-point. configure-saml persists
+  `idp_metadata_url` in sso-saml.json. New `aether sso
+  refresh-saml [--watch]` subcommand: one-shot re-runs the AA5-
+  followup multi-cert layout against the persisted URL; `--watch`
+  runs a foreground daemon refreshing every
+  `AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS` (default 3600s,
+  clamped [60, 86400]). Refactor extracted
+  `fetch_saml_metadata_xml` (HTTP + XXE/size validation) and
+  `apply_saml_idp_metadata` (pure layout) helpers shared between
+  configure-saml and refresh-saml. Tick errors logged + swallowed
+  in watch mode so a transient IdP 5xx doesn't kill the daemon.
+  3 unit tests + live smoke
+  `tests/bb6-saml-refresh-metadata-smoke.py` (seven-step chain:
+  configure-saml v1 → flip server to v2 → refresh-saml rotates
+  idp-certs/ → SAML login signed with v2-only key verifies via
+  AA5 first-match-wins → --watch banner emission). Caught
+  mid-development: refactor accidentally changed configure-saml
+  stderr wording and broke the AA5fu smoke's grep; original
+  wording restored.
+
+**Honest UNVERIFIEDs carried forward to Plan CC:**
+- BB1 Bedrock real AWS round-trip — no creds in env.
+- BB2 Vertex real GCP round-trip — billing + Marketplace gates
+  outside aether's control.
+- BB3 Azure real round-trip — no Foundry resource in this session.
+
+11 new BB-prefix unit tests (3 BB4 + 5 BB5 + 3 BB6) + 3 new Python
+fake-IdP smokes. 78/78 Y/Z/AA/BB-prefix unit tests pass.
+
+## v0.33 — next (Plan CC draft)
+
+- **CC1 Bedrock + Vertex + Azure live round-trip** — same plan as
+  BB1–BB3 + AA1–AA3, awaiting creds + Marketplace + billing.
+  Increasingly stale carry-forward; flips to LIVE-VERIFIED when
+  the operator provides the gates.
+- **CC2 OIDC mTLS client auth (RFC 8705)** — alternative to
+  `client_secret_basic` for high-assurance OAuth clients. Carries
+  over from Plan BB.
+- **CC3 Tenant SCIM provisioning** — `/v1/scim/Users` CRUD
   reusing `tenant_acl.db`, bearer-gated via `AETHER_SCIM_BEARER`.
-- **BB4 Signed AuthnRequest (POST binding)** — close the AA4
-  weakest-point. Some enterprise IdPs require XML Digital
-  Signature over the AuthnRequest element with the SP's private
-  key.
-- **BB5 OIDC access-token refresh** — close the AA6 weakest-point.
-  Persist `refresh_token` from the token response (when issued),
-  `aether sso whoami` auto-refreshes on 401, new `aether sso
-  refresh` subcommand for manual rotation.
-- **BB6 SAML metadata auto-refresh** — close the AA5-followup
-  weakest-point. New `aether sso refresh-saml` subcommand
-  re-fetches metadata and rotates `idp-certs/` without bouncing
-  aether. Optional cron periodicity via env knob.
+  Carries over from Plan BB.
+- **CC4 SAML metadata drift detection** — close the BB6
+  weakest-point. Hash the metadata response and skip the
+  `idp-certs/` rewrite when unchanged. Useful in --watch mode
+  against an IdP that hasn't rotated.
+- **CC5 OIDC proactive refresh** — close the BB5 weakest-point.
+  Use the `expires_in` field stored at login to refresh
+  preemptively (e.g. 5 minutes before expiry) rather than
+  reactively on 401.
+- **CC6 EdDSA AuthnRequest signing** — close the BB4 weakest-
+  point. RSA-SHA256 is the only algorithm BB4 supports; extend
+  to RFC 8419 EdDSA for FIDO2-adjacent IdPs.
 
 ## v0.9 — enterprise
 
