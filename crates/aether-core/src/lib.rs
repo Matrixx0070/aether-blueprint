@@ -362,6 +362,15 @@ async fn agent_turn_inner(
 
     // ── decide next outcome ──────────────────────────────────────────
     if blocked {
+        // History now ends with the blocked Assistant sentinel. Without a
+        // following User message the next API call would send assistant-prefill
+        // and Anthropic returns 400. Push a synthetic User acknowledgment so
+        // the alternation is restored before ContinueImmediately fires.
+        session.history.push(ConversationItem::User(
+            "[SYSTEM] Your previous response was blocked by the content-safety \
+             verifier. Please revise your answer without repeating the blocked content."
+                .into(),
+        ));
         return Ok(TurnOutcome::ContinueImmediately);
     }
     Ok(match resp.stop_reason {
