@@ -924,32 +924,120 @@ and Plan BB has now landed. The AA→BB→CC remediation chain:
   - AA5-followup discovery → BB6 refresh-saml → CC4 drift detection
   - AA6 no userinfo → BB5 reactive refresh → CC5 proactive refresh
 
-## v0.34 — next (Plan DD draft)
+## v0.34 — close every CC weakest-point — shipped 2026-06-27
 
-- **DD1 Bedrock + Vertex + Azure live round-trip** — same plan as
-  CC1–CC3 + BB1–BB3 + AA1–AA3. Carries forward until creds become
-  available.
-- **DD2 OIDC mTLS client auth (RFC 8705)** — alternative to
-  `client_secret_basic` for high-assurance OAuth clients. Carries
-  over from BB / CC.
-- **DD3 Tenant SCIM provisioning** — `/v1/scim/Users` CRUD reusing
-  `tenant_acl.db`, bearer-gated via `AETHER_SCIM_BEARER`. Carries
-  over from BB / CC.
-- **DD4 EdDSA SAML assertion verifier (Y5 extension)** — close the
-  CC6 weakest-point. CC6 sender-signs EdDSA; the Y5 verifier still
-  gates on RSA-SHA256. Extend the algorithm gate + Ed25519 verify
-  primitive so aether can also CONSUME EdDSA-signed
-  SAMLResponses end-to-end.
-- **DD5 SAML metadata validUntil staleness check** — close a CC4
-  follow-up gap. CC4's fingerprint covers trust fields but not the
-  metadata's `validUntil` attribute. An IdP that bumps the validity
-  window without rotating certs would still trigger "no drift" —
-  add a separate timer check.
-- **DD6 OIDC system-clock-skew detection** — close the CC5
-  weakest-point. The proactive-refresh path trusts the local clock.
-  Read the `Date:` header from the token endpoint response and
-  warn if the skew exceeds a threshold; operators with broken NTP
-  get a clear signal.
+Plan DD. 3 shipped + 3 cred-blocked carried forward. The shipped
+trio closed the LAST documented weakest-points from Plan CC, which
+themselves closed every Plan BB weakest-point, which closed every
+Plan AA weakest-point. The full AA→BB→CC→DD remediation chain for
+the enterprise SSO surface is now complete on three orthogonal
+lanes (AuthnRequest signing + algorithm verification, SAML
+metadata lifecycle, OIDC token refresh).
+
+- **DD4 Y5 EdDSA assertion verifier** (commit d9b95b5). Closes
+  CC6 weakest-point. CC6 made the SP signer Ed25519-aware on the
+  AuthnRequest leg; DD4 makes the inbound Y5 verifier accept
+  Ed25519-signed SAMLResponses on the IdP→SP leg. New `enum
+  IdpVerifyingKey { Rsa, Ed25519 }`. `rsa_pubkey_from_pem_cert`
+  renamed to `idp_verifying_key_from_pem_cert` with SPKI OID
+  dispatch (1.2.840.113549.1.1.1 → RSA, 1.3.101.112 → Ed25519 per
+  RFC 8410). `verify_saml_assertion_signature` algorithm gate
+  accepts both URIs; per-key dispatch SKIPS wrong-algorithm keys
+  to defend against confused-deputy where cert and sig
+  algorithms diverge (risk-register requirement). 5 unit tests
+  (happy path + 2 algorithm-mismatch defenses + algorithm-gate
+  reject + SPKI byte round-trip) + live smoke
+  `tests/dd4-ed25519-assertion-verify-smoke.py` runs the IdP→SP
+  leg with an Ed25519-signed SAMLResponse through Y3-Y7
+  end-to-end.
+- **DD5 SAML metadata validUntil staleness check** (commit
+  4a25cac). Closes CC4 follow-up gap. CC4's fingerprint covered
+  the trust fields but not the metadata's `validUntil` attribute;
+  an IdP that let metadata officially expire without rotating
+  certs would still trigger "no drift". `ParsedSamlMetadata`
+  gains `valid_until: Option<DateTime<Utc>>`. `parse_saml_metadata`
+  extracts the attribute via regex + RFC 3339 parse. New env
+  helper `saml_metadata_staleness_warn_secs` (default 86400s = 24h,
+  clamped [3600, 2592000]) and pure helpers
+  `is_metadata_expired` + `is_metadata_near_expiry`. `apply_saml_
+  idp_metadata` bails on expired metadata BEFORE any filesystem
+  mutation (defense-in-depth for configure-saml + refresh-saml
+  rewrite paths). `sso_refresh_saml` tick: past → bail; near-
+  expiry → WARN with remaining seconds; absent → advisory. 6
+  unit tests + live smoke `tests/dd5-saml-validuntil-staleness-
+  smoke.py` six-step chain covering far-future + near-expiry +
+  past-expiry + no-validUntil + custom env knob.
+- **DD6 OIDC system-clock-skew detection** (commit 9b29306).
+  Closes CC5 weakest-point. CC5's proactive refresh trusted the
+  local clock — broken NTP would defeat the window math. After
+  every successful POST to /token, aether reads the HTTP `Date:`
+  header, computes `local_now - server_date`, persists signed
+  seconds to `~/.aether/sso.clock_skew_secs`. `sso whoami` reads
+  the sidecar at the top and emits a WARN line when |skew|
+  exceeds `AETHER_OIDC_CLOCK_SKEW_WARN_SECS` (default 60s,
+  clamped [10, 3600]). Advisory only — whoami doesn't refuse.
+  Pure helpers `parse_http_date` (RFC 7231 IMF-fixdate via
+  chrono's RFC 2822 parser) + `compute_clock_skew_secs`. Recorder
+  wired into both `sso_login` and `refresh_oauth_access_token`
+  so every successful token exchange refreshes the skew. 3 unit
+  tests + live smoke `tests/dd6-oidc-clock-skew-smoke.py`
+  five-step chain (in-sync + server-past + server-future via
+  manual refresh + custom env knob + logout cleanup). Caught
+  mid-development: Python's http.server auto-adds its own `Date:`
+  header in `send_response` which shadowed the fake's offset
+  injection; fixed by overriding `date_time_string()` on the
+  smoke's handler so the framework's emission carries the
+  configured offset.
+
+**Honest UNVERIFIEDs carried forward to Plan EE:**
+- DD1 Bedrock real AWS round-trip — no creds in env. Fifth plan
+  in a row carrying this forward.
+- DD2 Vertex real GCP round-trip — billing + Marketplace gates.
+- DD3 Azure real round-trip — no Foundry resource.
+
+14 new DD-prefix unit tests (5 DD4 + 6 DD5 + 3 DD6) + 3 new
+fake-IdP Python smokes. 105/105 Y/Z/AA/BB/CC/DD-prefix unit tests
+pass. 14 SAML+OIDC live smokes all pass as regression.
+
+**Closure-chain status — ALL THREE LANES NOW COMPLETE:**
+- AA4 unsigned AuthnRequest → BB4 RSA sign → CC6 EdDSA sign →
+  **DD4 EdDSA verify** ✓
+- AA5-followup discovery → BB6 refresh-saml → CC4 drift detection →
+  **DD5 validUntil staleness** ✓
+- AA6 no userinfo → BB5 reactive refresh → CC5 proactive refresh →
+  **DD6 clock-skew detection** ✓
+
+## v0.35 — next (Plan EE draft)
+
+Plan EE recalibrates: with every documented weakest-point closed
+through DD, the chronic four-plan deferrals (OIDC mTLS + tenant
+SCIM) become the natural next scope. The cred-blocked BYOC work
+keeps carrying forward.
+
+- **EE1 Bedrock + Vertex + Azure live round-trip** — same plan
+  as DD1–DD3 + CC1–CC3 + BB1–BB3 + AA1–AA3. Sixth plan carrying
+  this forward; flips to LIVE-VERIFIED when the operator
+  provides the gates.
+- **EE2 OIDC mTLS client auth (RFC 8705)** — deferred since Plan
+  BB. Alternative to `client_secret_basic` for high-assurance
+  OAuth clients. Persist a client TLS keypair, send it on every
+  token endpoint POST.
+- **EE3 Tenant SCIM provisioning** — deferred since Plan BB.
+  `/v1/scim/Users` CRUD reusing `tenant_acl.db`, bearer-gated
+  via `AETHER_SCIM_BEARER`.
+- **EE4 Pre-tag CI placeholder check** — closes the chronic
+  STATUS-row `(this commit)` placeholder pattern (Y7 / Z7 / AA7 /
+  BB7 / CC7 / DD7 all needed a follow-up backfill commit). New
+  `tests/check-status-no-placeholders.sh` invoked from a pre-tag
+  CI step refuses the tag push when STATUS.md contains
+  `(this commit)` literals.
+- **EE5 SAML metadata cacheDuration support** — closes the DD5
+  weakest-point. Honor `<md:EntityDescriptor cacheDuration="…">`
+  as the default refresh-interval hint when present, falling
+  back to AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS.
+- **EE6 Ed448 SAML verify path** — closes the DD4 weakest-point.
+  Add OID 1.3.101.113 + 57-byte SPKI + Ed448 verify primitive
+  (likely via ed448-goldilocks crate).
 
 ## v0.9 — enterprise
 
