@@ -7547,14 +7547,24 @@ async fn sso_login() -> Result<()> {
         rand_core::OsRng.fill_bytes(&mut buf);
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
     };
+    // Z1': nonce binds this specific browser session to the eventual
+    // id_token. The IdP MUST echo it back in the id_token's `nonce`
+    // claim; mismatch / absence is a replay attempt (OIDC core §15.5.2).
+    let nonce = {
+        use rand_core::RngCore;
+        let mut buf = [0u8; 32];
+        rand_core::OsRng.fill_bytes(&mut buf);
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
+    };
 
     let auth_url = format!(
-        "{base}?response_type=code&client_id={cid}&redirect_uri={ru}&scope={sc}&state={st}&code_challenge={ch}&code_challenge_method=S256",
+        "{base}?response_type=code&client_id={cid}&redirect_uri={ru}&scope={sc}&state={st}&nonce={no}&code_challenge={ch}&code_challenge_method=S256",
         base = cfg.authorization_endpoint,
         cid = urlencode(&cfg.client_id),
         ru = urlencode(&redirect_uri),
         sc = urlencode(&cfg.scopes),
         st = urlencode(&state),
+        no = urlencode(&nonce),
         ch = challenge,
     );
 
@@ -7682,8 +7692,8 @@ async fn sso_login() -> Result<()> {
     // (no id_token), validation is also skipped.
     if let (Some(jwt), Some(jwks_uri)) = (id_token.as_deref(), cfg.jwks_uri.as_deref()) {
         eprintln!("[sso login] validating id_token against {jwks_uri}");
-        validate_id_token(jwt, jwks_uri, &cfg.client_id, &cfg.issuer).await?;
-        eprintln!("[sso login] id_token signature OK");
+        validate_id_token(jwt, jwks_uri, &cfg.client_id, &cfg.issuer, Some(&nonce)).await?;
+        eprintln!("[sso login] id_token signature + nonce OK");
     } else if id_token.is_some() && cfg.jwks_uri.is_none() {
         eprintln!(
             "[sso login] WARN id_token present but issuer published no jwks_uri — skipping signature validation"
@@ -7739,6 +7749,7 @@ async fn validate_id_token(
     jwks_uri: &str,
     expected_aud: &str,
     expected_iss: &str,
+    expected_nonce: Option<&str>,
 ) -> Result<()> {
     use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 
@@ -7821,10 +7832,46 @@ async fn validate_id_token(
     validation.set_issuer(&[expected_iss]);
     validation.set_audience(&[expected_aud]);
     // Default: exp validated, 60s leeway. Don't loosen further.
-    let _token_data: jsonwebtoken::TokenData<serde_json::Value> =
+    let token_data: jsonwebtoken::TokenData<serde_json::Value> =
         jsonwebtoken::decode(jwt, &decoding_key, &validation)
             .context("id_token signature/claims verify")?;
 
+    // 4. Z1': nonce binding. Only enforced when the caller sent a
+    // nonce in the AuthnRequest. Mismatch / absence is a replay
+    // attempt (OIDC core §15.5.2).
+    verify_nonce_claim(&token_data.claims, expected_nonce)?;
+
+    Ok(())
+}
+
+/// Z1': nonce-claim verifier. Pure helper extracted so the
+/// anti-replay logic can be unit-tested without an HTTP fixture.
+///
+/// When `expected_nonce` is `None`, this is a no-op (legacy callers
+/// that don't send a nonce remain valid). When `Some(n)`, the
+/// `nonce` claim in the id_token MUST equal `n` exactly.
+fn verify_nonce_claim(
+    claims: &serde_json::Value,
+    expected_nonce: Option<&str>,
+) -> Result<()> {
+    let Some(expected) = expected_nonce else {
+        return Ok(());
+    };
+    let got = claims
+        .get("nonce")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            anyhow!(
+                "id_token missing `nonce` claim — refusing as anti-replay defense \
+                 (sent `{expected}`)"
+            )
+        })?;
+    if got != expected {
+        anyhow::bail!(
+            "id_token nonce mismatch: sent `{expected}`, got `{got}` — \
+             refusing as anti-replay defense"
+        );
+    }
     Ok(())
 }
 
@@ -12684,6 +12731,66 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "Y7 token file must be 0600 (got {:o})", mode);
         }
+    }
+
+    /// Z1': verify_nonce_claim returns Ok when the id_token's
+    /// `nonce` claim matches the value passed to the call site.
+    #[test]
+    fn z1_verify_nonce_match_ok() {
+        let claims = serde_json::json!({
+            "sub": "alice",
+            "nonce": "deadbeef-cafe-0001",
+        });
+        verify_nonce_claim(&claims, Some("deadbeef-cafe-0001"))
+            .expect("matching nonce must pass");
+    }
+
+    /// Z1': mismatch between sent nonce and id_token nonce is a
+    /// hard error (replay attempt or attacker-substituted token).
+    #[test]
+    fn z1_verify_nonce_mismatch_rejects() {
+        let claims = serde_json::json!({
+            "sub": "alice",
+            "nonce": "attacker-nonce",
+        });
+        let err = verify_nonce_claim(&claims, Some("legit-nonce"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("nonce mismatch"),
+            "expected mismatch error, got: {err}"
+        );
+        assert!(err.contains("legit-nonce"), "error cites sent nonce: {err}");
+        assert!(err.contains("attacker-nonce"), "error cites got nonce: {err}");
+    }
+
+    /// Z1': caller sent a nonce, id_token has none. Refuse — the
+    /// IdP MUST echo it back per OIDC core §15.5.2.
+    #[test]
+    fn z1_verify_nonce_missing_rejects() {
+        let claims = serde_json::json!({
+            "sub": "alice",
+            // No `nonce` claim.
+        });
+        let err = verify_nonce_claim(&claims, Some("expected-nonce"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("missing `nonce`"),
+            "expected missing-nonce error, got: {err}"
+        );
+    }
+
+    /// Z1': legacy path — caller did NOT send a nonce. The check
+    /// is a no-op so older issuers / non-nonce-aware callers don't
+    /// break.
+    #[test]
+    fn z1_verify_nonce_none_expected_ok() {
+        let claims_with = serde_json::json!({"nonce": "any-value"});
+        let claims_without = serde_json::json!({"sub": "alice"});
+        verify_nonce_claim(&claims_with, None).expect("None expected: with-nonce → Ok");
+        verify_nonce_claim(&claims_without, None)
+            .expect("None expected: without-nonce → Ok");
     }
 
     /// Y6: helper to build a minimal parsed SAMLResponse with the
