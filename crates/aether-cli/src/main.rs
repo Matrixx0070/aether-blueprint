@@ -8436,15 +8436,14 @@ async fn sso_login_saml(sso_saml_path: &Path) -> Result<()> {
     // Y5: load the IdP signing key + verify the assertion's
     // RSA-SHA256 signature end-to-end (Reference digest + SignedInfo
     // sig + algorithm + transform gates).
-    let (idp_pubkey, idp_cert_der) = load_idp_signing_key()
-        .context("Y5: load IdP signing cert")?;
-    verify_saml_assertion_signature(
-        &saml_response_xml,
-        &parsed,
-        &idp_pubkey,
-        &idp_cert_der,
-    )?;
-    eprintln!("[sso login] Y5: assertion signature verified (RSA-SHA256)");
+    let idp_keys = load_idp_signing_keys()
+        .context("Y5/AA5: load IdP signing cert(s)")?;
+    verify_saml_assertion_signature(&saml_response_xml, &parsed, &idp_keys)?;
+    eprintln!(
+        "[sso login] Y5/AA5: assertion signature verified (RSA-SHA256) \
+         against {} configured IdP cert(s)",
+        idp_keys.len()
+    );
 
     // Y6: validate the assertion's time bounds + audience binding.
     let skew = saml_clock_skew_seconds();
@@ -9290,22 +9289,65 @@ fn verify_iat_claim(
     Ok(())
 }
 
-/// Y5: load an RSA signing public key from a PEM-encoded x509
-/// certificate. Reads from `AETHER_SAML_IDP_CERT_PEM` first (path
-/// override useful for tests), otherwise from
-/// `~/.aether/saml/idp-cert.pem`.
-fn load_idp_signing_key() -> Result<(rsa::RsaPublicKey, Vec<u8>)> {
-    let path = match std::env::var_os("AETHER_SAML_IDP_CERT_PEM") {
-        Some(p) => PathBuf::from(p),
-        None => {
-            let home =
-                std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME not set"))?;
-            PathBuf::from(home).join(".aether/saml/idp-cert.pem")
+/// AA5 helper: list candidate IdP cert paths in resolution order
+/// (env override → multi-cert dir → legacy single-file). Pure
+/// filesystem logic — no PEM parsing — so it can be unit-tested
+/// without generating real x509 certs at runtime.
+fn enumerate_idp_cert_paths(home: &Path) -> Result<Vec<PathBuf>> {
+    // 1. Explicit env override (single file).
+    if let Some(p) = std::env::var_os("AETHER_SAML_IDP_CERT_PEM") {
+        return Ok(vec![PathBuf::from(p)]);
+    }
+    // 2. Multi-cert directory.
+    let idp_certs_dir = home.join(".aether/saml/idp-certs");
+    if idp_certs_dir.is_dir() {
+        let mut entries: Vec<PathBuf> = std::fs::read_dir(&idp_certs_dir)
+            .with_context(|| format!("read_dir {}", idp_certs_dir.display()))?
+            .filter_map(|r| r.ok())
+            .filter(|e| e.file_type().ok().map(|t| t.is_file()).unwrap_or(false))
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("pem"))
+            .collect();
+        entries.sort();
+        if entries.is_empty() {
+            anyhow::bail!(
+                "{} exists but contains no *.pem files — expected at \
+                 least one IdP signing certificate",
+                idp_certs_dir.display()
+            );
         }
-    };
-    let pem_bytes = std::fs::read(&path)
-        .with_context(|| format!("read IdP cert PEM at {}", path.display()))?;
-    rsa_pubkey_from_pem_cert(&pem_bytes)
+        return Ok(entries);
+    }
+    // 3. Single-file legacy fallback.
+    Ok(vec![home.join(".aether/saml/idp-cert.pem")])
+}
+
+/// AA5: load the IdP signing pubkey(s). Resolution order:
+///
+/// 1. `AETHER_SAML_IDP_CERT_PEM` env — single-file legacy override
+///    (useful for tests pinning a specific cert).
+/// 2. `~/.aether/saml/idp-certs/*.pem` — multi-cert directory.
+///    All `.pem` files loaded in lexicographic order. Supports IdP
+///    cert rotation without bouncing aether (the operator renames /
+///    drops files; aether tries each on the next login).
+/// 3. `~/.aether/saml/idp-cert.pem` — single-file fallback (Y5 legacy).
+///
+/// Returns `Vec<(RsaPublicKey, Vec<u8>)>` where the `Vec<u8>` is the
+/// raw cert DER (passed to the KeyInfo X509Certificate pin in
+/// `verify_saml_assertion_signature`). Empty result is an error.
+fn load_idp_signing_keys() -> Result<Vec<(rsa::RsaPublicKey, Vec<u8>)>> {
+    let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME not set"))?;
+    let home = PathBuf::from(home);
+    let paths = enumerate_idp_cert_paths(&home)?;
+    let mut keys = Vec::with_capacity(paths.len());
+    for path in &paths {
+        let bytes = std::fs::read(path)
+            .with_context(|| format!("read IdP cert PEM at {}", path.display()))?;
+        let key = rsa_pubkey_from_pem_cert(&bytes)
+            .with_context(|| format!("parse {}", path.display()))?;
+        keys.push(key);
+    }
+    Ok(keys)
 }
 
 /// Y5: pull the SubjectPublicKeyInfo out of a PEM-encoded x509
@@ -9378,8 +9420,7 @@ const SAML_TRANSFORM_EXC_C14N: &str =
 fn verify_saml_assertion_signature(
     response_xml: &str,
     parsed: &ParsedSamlResponse,
-    idp_pubkey: &rsa::RsaPublicKey,
-    cert_der: &[u8],
+    idp_keys: &[(rsa::RsaPublicKey, Vec<u8>)],
 ) -> Result<()> {
     use base64::Engine as _;
     use sha2::Digest;
@@ -9490,7 +9531,10 @@ fn verify_saml_assertion_signature(
         }
     }
 
-    // Step 5: c14n SignedInfo + RSA-SHA256 verify.
+    // Step 5: c14n SignedInfo + RSA-SHA256 verify against each
+    // configured IdP key in turn. First successful verify wins; the
+    // matched cert DER is fed into the KeyInfo pin (step 6) so a
+    // confused-deputy attack with a swapped KeyInfo cert still fails.
     let signed_info_canonical = canonicalize_exc_c14n_subtree(
         &sig.signed_info_fragment,
         &sig.inherited_namespaces,
@@ -9499,26 +9543,51 @@ fn verify_saml_assertion_signature(
     let signature_bytes = base64::engine::general_purpose::STANDARD
         .decode(sig.signature_value_b64.trim())
         .with_context(|| "Y5: decode SignatureValue base64")?;
+    if idp_keys.is_empty() {
+        anyhow::bail!("Y5: no configured IdP signing keys to verify against");
+    }
     use rsa::pkcs1v15::Pkcs1v15Sign;
-    let scheme = Pkcs1v15Sign::new::<sha2::Sha256>();
     use rsa::traits::SignatureScheme;
-    let pub_key_dyn: &rsa::RsaPublicKey = idp_pubkey;
-    scheme
-        .verify(pub_key_dyn, &signed_info_digest, &signature_bytes)
-        .map_err(|e| anyhow!("Y5: RSA-SHA256 verify failed: {e}"))?;
+    let mut last_err: Option<String> = None;
+    let mut matched_cert_der: Option<&[u8]> = None;
+    for (pubkey, cert_der) in idp_keys {
+        // Pkcs1v15Sign::verify takes self; reconstruct per iteration
+        // (it's a zero-size marker struct, so the cost is nil).
+        let scheme = Pkcs1v15Sign::new::<sha2::Sha256>();
+        match scheme.verify(pubkey, &signed_info_digest, &signature_bytes) {
+            Ok(()) => {
+                matched_cert_der = Some(cert_der.as_slice());
+                break;
+            }
+            Err(e) => last_err = Some(e.to_string()),
+        }
+    }
+    let Some(matched_cert_der) = matched_cert_der else {
+        anyhow::bail!(
+            "Y5: RSA-SHA256 verify failed against all {} configured IdP cert(s) — \
+             last error: {}",
+            idp_keys.len(),
+            last_err.unwrap_or_default()
+        );
+    };
 
     // Step 6: pin cert. Defends against an attacker who replaces
     // the Assertion + Signature with a self-signed one — without
-    // this pin, our pure crypto would happily verify it.
-    if !cert_der.is_empty() {
+    // this pin, our pure crypto would happily verify it. The pin
+    // runs against the cert that ACTUALLY verified (matched_cert_der),
+    // not the full configured set, so a confused-deputy where the
+    // KeyInfo claims a different trusted cert than the one that
+    // signed is still rejected. An empty matched_cert_der (test
+    // fixture path) skips the pin.
+    if !matched_cert_der.is_empty() {
         if let Some(b64) = sig.x509_certificate_b64.as_deref() {
             let response_cert_der = base64::engine::general_purpose::STANDARD
                 .decode(b64.trim())
                 .with_context(|| "Y5: decode KeyInfo X509Certificate base64")?;
-            if response_cert_der != cert_der {
+            if response_cert_der != matched_cert_der {
                 anyhow::bail!(
-                    "Y5: KeyInfo X509Certificate does not match configured \
-                     IdP cert — refusing as defense against confused-deputy"
+                    "Y5: KeyInfo X509Certificate does not match the IdP cert \
+                     that verified the signature — refusing as confused-deputy defense"
                 );
             }
         }
@@ -12876,7 +12945,8 @@ mod tests {
 
         // 6. Parse + verify — must pass.
         let parsed = parse_saml_response_xml(&response).expect("Y3 parse");
-        verify_saml_assertion_signature(&response, &parsed, &pub_key, &[])
+        let idp_keys = vec![(pub_key.clone(), Vec::<u8>::new())];
+        verify_saml_assertion_signature(&response, &parsed, &idp_keys)
             .expect("Y5 verify must accept a valid signature");
 
         // 7. Flip a byte in the SignatureValue → must fail with an
@@ -12899,8 +12969,7 @@ mod tests {
         let err = verify_saml_assertion_signature(
             &bad_response,
             &bad_parsed,
-            &pub_key,
-            &[],
+            &idp_keys,
         )
         .unwrap_err()
         .to_string();
@@ -12938,8 +13007,7 @@ mod tests {
         let err2 = verify_saml_assertion_signature(
             &bad_response2,
             &bad_parsed2,
-            &pub_key,
-            &[],
+            &idp_keys,
         )
         .unwrap_err()
         .to_string();
@@ -12995,6 +13063,206 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "Y7 token file must be 0600 (got {:o})", mode);
         }
+    }
+
+    /// AA5: build an isolated temp HOME for IdP-cert tests.
+    fn aa5_tmp_home(suffix: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "aether-aa5-{}-{}-{}",
+            suffix,
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create tmp HOME");
+        dir
+    }
+
+    /// AA5: directory loader enumerates `*.pem` files in lex order.
+    /// Filenames intentionally constructed so alphabetical sort
+    /// differs from creation order — `10-new.pem` < `20-old.pem`
+    /// lex-wise even though `20-old.pem` was created first.
+    #[test]
+    fn aa5_enumerate_dir_lexicographic_order() {
+        let _guard = aether_core::mock::ENV_TEST_LOCK
+            .lock()
+            .expect("env lock");
+        std::env::remove_var("AETHER_SAML_IDP_CERT_PEM");
+        let home = aa5_tmp_home("enumdir");
+        let certs_dir = home.join(".aether/saml/idp-certs");
+        std::fs::create_dir_all(&certs_dir).expect("create idp-certs");
+        std::fs::write(certs_dir.join("20-old.pem"), b"older fake bytes")
+            .expect("write old");
+        std::fs::write(certs_dir.join("10-new.pem"), b"newer fake bytes")
+            .expect("write new");
+        std::fs::write(certs_dir.join("README.txt"), b"ignored").expect("readme");
+        std::fs::write(certs_dir.join(".hidden.pem"), b"still picked")
+            .expect("hidden");
+        let paths = enumerate_idp_cert_paths(&home).expect("enumerate");
+        let names: Vec<String> = paths
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            names,
+            vec![".hidden.pem", "10-new.pem", "20-old.pem"],
+            "lex sort puts `.hidden` first, then `10`, then `20`; \
+             non-pem README filtered"
+        );
+    }
+
+    /// AA5: env override wins over directory + fallback.
+    #[test]
+    fn aa5_enumerate_env_override_wins() {
+        let _guard = aether_core::mock::ENV_TEST_LOCK
+            .lock()
+            .expect("env lock");
+        let home = aa5_tmp_home("envwin");
+        let certs_dir = home.join(".aether/saml/idp-certs");
+        std::fs::create_dir_all(&certs_dir).expect("create idp-certs");
+        std::fs::write(certs_dir.join("a.pem"), b"dir cert").expect("write a");
+        std::env::set_var(
+            "AETHER_SAML_IDP_CERT_PEM",
+            "/explicit/override.pem",
+        );
+        let paths = enumerate_idp_cert_paths(&home).expect("enumerate");
+        std::env::remove_var("AETHER_SAML_IDP_CERT_PEM");
+        assert_eq!(paths.len(), 1, "env override = exactly one path");
+        assert_eq!(
+            paths[0],
+            PathBuf::from("/explicit/override.pem"),
+            "env override path returned verbatim"
+        );
+    }
+
+    /// AA5: when neither env nor dir is set, fall back to the legacy
+    /// single-file path. Returned even if the file doesn't exist —
+    /// `load_idp_signing_keys` bails on the read in that case.
+    #[test]
+    fn aa5_enumerate_falls_back_to_legacy_single_file() {
+        let _guard = aether_core::mock::ENV_TEST_LOCK
+            .lock()
+            .expect("env lock");
+        std::env::remove_var("AETHER_SAML_IDP_CERT_PEM");
+        let home = aa5_tmp_home("legacy");
+        let paths = enumerate_idp_cert_paths(&home).expect("enumerate");
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0], home.join(".aether/saml/idp-cert.pem"));
+    }
+
+    /// AA5: dir exists but contains no `*.pem` files → informative
+    /// error. Operators get told exactly which directory misconfigured.
+    #[test]
+    fn aa5_enumerate_empty_dir_errors() {
+        let _guard = aether_core::mock::ENV_TEST_LOCK
+            .lock()
+            .expect("env lock");
+        std::env::remove_var("AETHER_SAML_IDP_CERT_PEM");
+        let home = aa5_tmp_home("empty");
+        let certs_dir = home.join(".aether/saml/idp-certs");
+        std::fs::create_dir_all(&certs_dir).expect("create idp-certs");
+        std::fs::write(certs_dir.join("README.txt"), b"docs only").expect("readme");
+        let err = enumerate_idp_cert_paths(&home).unwrap_err().to_string();
+        assert!(
+            err.contains("contains no *.pem files"),
+            "error explains why: {err}"
+        );
+        assert!(
+            err.contains("idp-certs"),
+            "error cites the directory: {err}"
+        );
+    }
+
+    /// AA5: verify_saml_assertion_signature accepts a signature that
+    /// validates under ANY configured IdP key. Two RSA-2048 keypairs
+    /// are generated; the response is signed with the SECOND. Verify
+    /// succeeds because the loop hits a match before exhausting.
+    #[test]
+    fn aa5_verify_first_match_wins_against_second_key() {
+        use base64::Engine as _;
+        use rand_core::OsRng;
+        use rsa::pkcs1v15::SigningKey;
+        use rsa::signature::SignatureEncoding;
+        use rsa::signature::SignerMut;
+        use sha2::{Digest, Sha256};
+
+        let key_old = rsa::RsaPrivateKey::new(&mut OsRng, 2048).expect("keygen old");
+        let key_new = rsa::RsaPrivateKey::new(&mut OsRng, 2048).expect("keygen new");
+        let pub_old: rsa::RsaPublicKey = key_old.to_public_key();
+        let pub_new: rsa::RsaPublicKey = key_new.to_public_key();
+
+        // Build a minimal signed assertion (same shape as the Y5
+        // end-to-end test, condensed).
+        let assertion_open = r#"<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" ID="_a-aa5" Version="2.0" IssueInstant="2026-06-27T00:00:00Z">"#;
+        let assertion_body = "<saml:Issuer>https://idp.example</saml:Issuer><saml:Subject><saml:NameID>alice</saml:NameID></saml:Subject>";
+        let assertion_close = "</saml:Assertion>";
+        let assertion_no_sig =
+            format!("{assertion_open}{assertion_body}{assertion_close}");
+        let mut inh = std::collections::BTreeMap::new();
+        inh.insert(
+            "samlp".to_string(),
+            "urn:oasis:names:tc:SAML:2.0:protocol".to_string(),
+        );
+        let assertion_c14n =
+            canonicalize_exc_c14n_subtree(&assertion_no_sig, &inh).expect("c14n");
+        let digest_b64 = base64::engine::general_purpose::STANDARD
+            .encode(Sha256::digest(&assertion_c14n));
+        let signed_info = format!(
+            r##"<ds:SignedInfo><ds:CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"></ds:CanonicalizationMethod><ds:SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"></ds:SignatureMethod><ds:Reference URI="#_a-aa5"><ds:Transforms><ds:Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"></ds:Transform><ds:Transform Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"></ds:Transform></ds:Transforms><ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"></ds:DigestMethod><ds:DigestValue>{digest_b64}</ds:DigestValue></ds:Reference></ds:SignedInfo>"##
+        );
+        let mut inh_sig = inh.clone();
+        inh_sig.insert(
+            "ds".to_string(),
+            "http://www.w3.org/2000/09/xmldsig#".to_string(),
+        );
+        let signed_info_c14n =
+            canonicalize_exc_c14n_subtree(&signed_info, &inh_sig).expect("c14n SI");
+
+        // Sign with key_new only.
+        let mut signer = SigningKey::<Sha256>::new(key_new);
+        let sig = signer.sign(&signed_info_c14n);
+        let sig_b64 =
+            base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
+
+        let signature_block = format!(
+            r##"<ds:Signature>{signed_info}<ds:SignatureValue>{sig_b64}</ds:SignatureValue></ds:Signature>"##
+        );
+        let assertion =
+            format!("{assertion_open}{signature_block}{assertion_body}{assertion_close}");
+        let response = format!(
+            r##"<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"><samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"></samlp:StatusCode></samlp:Status>{assertion}</samlp:Response>"##
+        );
+        let parsed = parse_saml_response_xml(&response).expect("Y3 parse");
+
+        // Configure with [old, new] — verifier must walk to the second
+        // entry to find a match. Cert DERs intentionally empty so the
+        // pin step is skipped (the response has no KeyInfo cert).
+        let idp_keys = vec![
+            (pub_old.clone(), Vec::<u8>::new()),
+            (pub_new.clone(), Vec::<u8>::new()),
+        ];
+        verify_saml_assertion_signature(&response, &parsed, &idp_keys)
+            .expect("verify must succeed when ANY configured key matches");
+
+        // Sanity: configuring ONLY the old key must fail.
+        let only_old = vec![(pub_old, Vec::<u8>::new())];
+        let err = verify_saml_assertion_signature(&response, &parsed, &only_old)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("RSA-SHA256 verify failed against all 1"),
+            "single-wrong-key error: {err}"
+        );
+
+        // Sanity: empty configured-keys slice is a separate informative
+        // error (not "all 0 keys failed" but "no keys configured").
+        let none = Vec::<(rsa::RsaPublicKey, Vec<u8>)>::new();
+        let err2 = verify_saml_assertion_signature(&response, &parsed, &none)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err2.contains("no configured IdP signing keys"),
+            "empty-config error: {err2}"
+        );
     }
 
     /// Z1': verify_nonce_claim returns Ok when the id_token's
