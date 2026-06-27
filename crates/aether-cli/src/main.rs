@@ -8531,6 +8531,28 @@ async fn sso_login_saml(sso_saml_path: &Path) -> Result<()> {
         chrono::Utc::now(),
         Some(&authn_request_id),
     )?;
+    // BB4: when AETHER_SAML_SP_PRIVATE_KEY_PEM is set, sign the
+    // AuthnRequest with the SP's private key. Required by enterprise
+    // IdPs that gate trust on SP signature verification.
+    let authn_request_xml = match std::env::var_os("AETHER_SAML_SP_PRIVATE_KEY_PEM")
+    {
+        Some(p) => {
+            let path = PathBuf::from(p);
+            let sp_key = load_sp_signing_key_from_pem(&path)
+                .context("BB4: load SP signing key for AuthnRequest")?;
+            let signed = sign_authn_request_xml(
+                &authn_request_xml,
+                &authn_request_id,
+                &sp_key,
+            )?;
+            eprintln!(
+                "[sso login] BB4: AuthnRequest signed with SP key from {}",
+                path.display()
+            );
+            signed
+        }
+        None => authn_request_xml,
+    };
     // AA4: emit the AuthnRequest via either binding. Redirect goes
     // out as a query-string URL the operator opens in a browser;
     // POST goes out as a self-submitting HTML form written to
@@ -10558,6 +10580,122 @@ fn build_authn_request_xml(
     Ok(format!(
         r#"<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="{id}" Version="2.0" IssueInstant="{issue_instant}" Destination="{destination}" ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" AssertionConsumerServiceURL="{acs_url}"><saml:Issuer>{sp_entity_id}</saml:Issuer></samlp:AuthnRequest>"#
     ))
+}
+
+/// BB4: load an RSA private key from a PEM file at `path`. Accepts
+/// both PKCS#8 (`-----BEGIN PRIVATE KEY-----`, openssl default since
+/// 3.0) and PKCS#1 (`-----BEGIN RSA PRIVATE KEY-----`, legacy
+/// openssl). Tries PKCS#8 first; falls back to PKCS#1 on failure.
+fn load_sp_signing_key_from_pem(path: &Path) -> Result<rsa::RsaPrivateKey> {
+    use rsa::pkcs1::DecodeRsaPrivateKey;
+    use rsa::pkcs8::DecodePrivateKey;
+    let pem = std::fs::read_to_string(path)
+        .with_context(|| format!("read SP private key PEM at {}", path.display()))?;
+    if let Ok(k) = rsa::RsaPrivateKey::from_pkcs8_pem(&pem) {
+        return Ok(k);
+    }
+    rsa::RsaPrivateKey::from_pkcs1_pem(&pem).map_err(|e| {
+        anyhow!(
+            "failed to decode {} as PKCS#8 or PKCS#1 RSA private key: {e}",
+            path.display()
+        )
+    })
+}
+
+/// BB4: sign an unsigned AuthnRequest XML with the SP's RSA private
+/// key. Returns the signed AuthnRequest XML with a `<ds:Signature>`
+/// element spliced in right after `</saml:Issuer>` (the position the
+/// SAML 2.0 schema `samlp:RequestAbstractType` mandates — saml-core
+/// §3.2.1).
+///
+/// The signature pipeline mirrors what `verify_saml_assertion_
+/// signature` accepts on the IdP→SP leg:
+///   - SignatureMethod = RSA-SHA256
+///   - DigestMethod = SHA-256
+///   - Transforms = [enveloped-signature, exc-c14n#]
+///   - Reference URI = `#<request_id>`
+///
+/// `xml` MUST be the AuthnRequest produced by `build_authn_request_xml`
+/// — that template declares xmlns:samlp + xmlns:saml on the root and
+/// puts `<saml:Issuer>` as the sole pre-signature child. The signer
+/// declares xmlns:ds locally on the `<ds:Signature>` element so the
+/// SignedInfo c14n inherited NS set matches what a downstream
+/// verifier would compute when walking the byte position.
+fn sign_authn_request_xml(
+    xml: &str,
+    request_id: &str,
+    sp_priv_key: &rsa::RsaPrivateKey,
+) -> Result<String> {
+    use base64::Engine as _;
+    use sha2::Digest;
+
+    // 1. Reference digest. The enveloped-signature transform strips
+    // any descendant Signature element; we haven't added one yet, so
+    // exc-c14n of the unsigned XML is what the IdP will compute after
+    // stripping. Inherited NS at the AuthnRequest root is empty —
+    // the AuthnRequest declares its own xmlns:samlp + xmlns:saml.
+    let canonical_unsigned = canonicalize_exc_c14n_subtree(
+        xml,
+        &std::collections::BTreeMap::new(),
+    )?;
+    let digest_b64 = base64::engine::general_purpose::STANDARD
+        .encode(sha2::Sha256::digest(&canonical_unsigned));
+
+    // 2. Build SignedInfo carrying that digest.
+    let signed_info = format!(
+        r##"<ds:SignedInfo><ds:CanonicalizationMethod Algorithm="{exc_c14n}"></ds:CanonicalizationMethod><ds:SignatureMethod Algorithm="{rsa_sha256}"></ds:SignatureMethod><ds:Reference URI="#{request_id}"><ds:Transforms><ds:Transform Algorithm="{enveloped}"></ds:Transform><ds:Transform Algorithm="{exc_c14n}"></ds:Transform></ds:Transforms><ds:DigestMethod Algorithm="{sha256}"></ds:DigestMethod><ds:DigestValue>{digest_b64}</ds:DigestValue></ds:Reference></ds:SignedInfo>"##,
+        exc_c14n = SAML_TRANSFORM_EXC_C14N,
+        rsa_sha256 = SAML_SIG_METHOD_RSA_SHA256,
+        enveloped = SAML_TRANSFORM_ENVELOPED,
+        sha256 = SAML_DIGEST_METHOD_SHA256,
+    );
+
+    // 3. c14n SignedInfo. Once spliced, the Signature element will
+    // declare xmlns:ds locally + inherit xmlns:samlp + xmlns:saml from
+    // the AuthnRequest root. That's the inherited NS set we c14n with.
+    let mut inherited_at_sig = std::collections::BTreeMap::new();
+    inherited_at_sig.insert(
+        "samlp".to_string(),
+        "urn:oasis:names:tc:SAML:2.0:protocol".to_string(),
+    );
+    inherited_at_sig.insert(
+        "saml".to_string(),
+        "urn:oasis:names:tc:SAML:2.0:assertion".to_string(),
+    );
+    inherited_at_sig.insert(
+        "ds".to_string(),
+        "http://www.w3.org/2000/09/xmldsig#".to_string(),
+    );
+    let signed_info_canonical =
+        canonicalize_exc_c14n_subtree(&signed_info, &inherited_at_sig)?;
+
+    // 4. RSA-SHA256 sign the canonical SignedInfo bytes.
+    use rsa::pkcs1v15::SigningKey;
+    use rsa::signature::SignatureEncoding;
+    use rsa::signature::SignerMut;
+    let mut signer = SigningKey::<sha2::Sha256>::new(sp_priv_key.clone());
+    let sig = signer.sign(&signed_info_canonical);
+    let sig_b64 = base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
+
+    // 5. Assemble the Signature element with xmlns:ds declared locally.
+    let signature_block = format!(
+        r##"<ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#">{signed_info}<ds:SignatureValue>{sig_b64}</ds:SignatureValue></ds:Signature>"##
+    );
+
+    // 6. Splice the Signature into the AuthnRequest right after
+    // `</saml:Issuer>` — schema-mandated position per saml-core-2.0
+    // §3.2.1. Without an Issuer in the request, we'd splice after
+    // the open tag; `build_authn_request_xml` always includes Issuer.
+    const ISSUER_CLOSE: &str = "</saml:Issuer>";
+    let issuer_end = xml.find(ISSUER_CLOSE).ok_or_else(|| {
+        anyhow!("AuthnRequest XML has no </saml:Issuer> — cannot place signature")
+    })?;
+    let insert_at = issuer_end + ISSUER_CLOSE.len();
+    let mut out = String::with_capacity(xml.len() + signature_block.len());
+    out.push_str(&xml[..insert_at]);
+    out.push_str(&signature_block);
+    out.push_str(&xml[insert_at..]);
+    Ok(out)
 }
 
 /// Y1: Encode an AuthnRequest XML body for the HTTP-Redirect binding
@@ -13380,6 +13518,188 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "Y7 token file must be 0600 (got {:o})", mode);
         }
+    }
+
+    /// BB4: sign_authn_request_xml splices a structurally-valid
+    /// `<ds:Signature>` block right after `</saml:Issuer>` and the
+    /// resulting XML c14n+RSA-verifies under the public key recovered
+    /// from the signing keypair.
+    #[test]
+    fn bb4_signs_authn_request_and_verifies_against_pubkey() {
+        use base64::Engine as _;
+        use rand_core::OsRng;
+        use sha2::{Digest, Sha256};
+
+        // 1. Generate a fresh SP keypair + build an unsigned AuthnRequest.
+        let priv_key = rsa::RsaPrivateKey::new(&mut OsRng, 2048)
+            .expect("rsa-2048 keygen");
+        let pub_key: rsa::RsaPublicKey = priv_key.to_public_key();
+        let request_id = "_bb4-rt-001";
+        let unsigned = build_authn_request_xml(
+            "https://idp.test/saml/metadata",
+            "https://idp.test/saml/sso",
+            "https://sp.test/saml",
+            "http://127.0.0.1:7777/sso/saml/acs",
+            chrono::DateTime::from_timestamp(1_750_000_000, 0).unwrap(),
+            Some(request_id),
+        )
+        .expect("build unsigned");
+
+        // 2. Sign it.
+        let signed = sign_authn_request_xml(&unsigned, request_id, &priv_key)
+            .expect("sign authn request");
+        // Structural assertions: Signature after Issuer, contains the
+        // Reference URI, has SignatureValue + xmlns:ds.
+        let issuer_close = "</saml:Issuer>";
+        let sig_open = "<ds:Signature";
+        let issuer_at = signed.find(issuer_close).expect("issuer close present");
+        let sig_at = signed.find(sig_open).expect("Signature present");
+        assert!(
+            sig_at > issuer_at,
+            "Signature element MUST follow Issuer per saml-core-2.0 §3.2.1"
+        );
+        assert!(
+            signed.contains(&format!(r##"URI="#{request_id}""##)),
+            "Reference URI cites the AuthnRequest ID: {signed}"
+        );
+        assert!(
+            signed.contains(r#"xmlns:ds="http://www.w3.org/2000/09/xmldsig#""#),
+            "Signature declares xmlns:ds locally"
+        );
+        assert!(
+            signed.contains("<ds:SignatureValue>"),
+            "Signature has SignatureValue: {signed}"
+        );
+
+        // 3. Verify the signature: extract SignedInfo + SignatureValue,
+        // c14n SignedInfo with the same inherited NS the signer used,
+        // RSA-SHA256 verify.
+        let si_open = signed.find("<ds:SignedInfo>").unwrap();
+        let si_close_marker = "</ds:SignedInfo>";
+        let si_close = signed.find(si_close_marker).unwrap() + si_close_marker.len();
+        let signed_info = &signed[si_open..si_close];
+
+        let sv_open = signed.find("<ds:SignatureValue>").unwrap()
+            + "<ds:SignatureValue>".len();
+        let sv_close = signed.find("</ds:SignatureValue>").unwrap();
+        let sig_b64 = &signed[sv_open..sv_close];
+        let sig_bytes = base64::engine::general_purpose::STANDARD
+            .decode(sig_b64.trim())
+            .expect("b64 decode SignatureValue");
+
+        let mut inherited = std::collections::BTreeMap::new();
+        inherited.insert(
+            "samlp".to_string(),
+            "urn:oasis:names:tc:SAML:2.0:protocol".to_string(),
+        );
+        inherited.insert(
+            "saml".to_string(),
+            "urn:oasis:names:tc:SAML:2.0:assertion".to_string(),
+        );
+        inherited.insert(
+            "ds".to_string(),
+            "http://www.w3.org/2000/09/xmldsig#".to_string(),
+        );
+        let si_c14n = canonicalize_exc_c14n_subtree(signed_info, &inherited)
+            .expect("c14n SignedInfo");
+        let si_digest = Sha256::digest(&si_c14n);
+
+        use rsa::pkcs1v15::Pkcs1v15Sign;
+        use rsa::traits::SignatureScheme;
+        let scheme = Pkcs1v15Sign::new::<sha2::Sha256>();
+        scheme
+            .verify(&pub_key, &si_digest, &sig_bytes)
+            .expect("BB4 signature must verify under the matching pubkey");
+    }
+
+    /// BB4: verify (DigestValue) of the spliced SignedInfo matches the
+    /// SHA-256 of c14n'd unsigned AuthnRequest (enveloped-signature
+    /// strip + exc-c14n is what the IdP will compute).
+    #[test]
+    fn bb4_signed_info_digest_matches_unsigned_c14n() {
+        use base64::Engine as _;
+        use rand_core::OsRng;
+        use sha2::{Digest, Sha256};
+
+        let priv_key = rsa::RsaPrivateKey::new(&mut OsRng, 2048)
+            .expect("rsa-2048 keygen");
+        let request_id = "_bb4-dig-1";
+        let unsigned = build_authn_request_xml(
+            "https://idp.test/saml/metadata",
+            "https://idp.test/saml/sso",
+            "https://sp.test/saml",
+            "http://127.0.0.1:7777/sso/saml/acs",
+            chrono::DateTime::from_timestamp(1_750_000_000, 0).unwrap(),
+            Some(request_id),
+        )
+        .expect("build unsigned");
+        // Compute the digest the signer used: c14n unsigned XML + sha256.
+        let c14n_unsigned = canonicalize_exc_c14n_subtree(
+            &unsigned,
+            &std::collections::BTreeMap::new(),
+        )
+        .expect("c14n");
+        let expected_digest_b64 = base64::engine::general_purpose::STANDARD
+            .encode(Sha256::digest(&c14n_unsigned));
+
+        // Sign + assert the DigestValue in the produced SignedInfo
+        // matches what we computed.
+        let signed = sign_authn_request_xml(&unsigned, request_id, &priv_key)
+            .expect("sign");
+        assert!(
+            signed.contains(&format!("<ds:DigestValue>{expected_digest_b64}</ds:DigestValue>")),
+            "DigestValue must equal sha256(c14n(unsigned)) — \
+             expected {expected_digest_b64}, signed XML: {signed}"
+        );
+    }
+
+    /// BB4: load_sp_signing_key_from_pem accepts both PKCS#8 and PKCS#1
+    /// PEM encodings. Generates a key, exports both formats, asserts
+    /// each round-trips to the same modulus.
+    #[test]
+    fn bb4_loads_pkcs8_and_pkcs1_pem() {
+        use rand_core::OsRng;
+        use rsa::pkcs1::EncodeRsaPrivateKey;
+        use rsa::pkcs8::EncodePrivateKey;
+        use rsa::pkcs8::LineEnding;
+        use rsa::traits::PublicKeyParts;
+
+        let key = rsa::RsaPrivateKey::new(&mut OsRng, 2048).expect("keygen");
+        let pub_modulus = key.to_public_key().n().clone();
+        let dir = std::env::temp_dir().join(format!(
+            "aether-bb4-pem-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("tmp");
+
+        let p8 = key
+            .to_pkcs8_pem(LineEnding::LF)
+            .expect("to_pkcs8_pem");
+        let p8_path = dir.join("sp.pkcs8.pem");
+        std::fs::write(&p8_path, p8.as_bytes()).expect("write p8");
+        let loaded_p8 = load_sp_signing_key_from_pem(&p8_path).expect("load p8");
+        assert_eq!(loaded_p8.to_public_key().n(), &pub_modulus, "PKCS#8 modulus");
+
+        let p1 = key
+            .to_pkcs1_pem(LineEnding::LF)
+            .expect("to_pkcs1_pem");
+        let p1_path = dir.join("sp.pkcs1.pem");
+        std::fs::write(&p1_path, p1.as_bytes()).expect("write p1");
+        let loaded_p1 = load_sp_signing_key_from_pem(&p1_path).expect("load p1");
+        assert_eq!(loaded_p1.to_public_key().n(), &pub_modulus, "PKCS#1 modulus");
+
+        // Garbage PEM → informative error citing both attempted formats.
+        let bad_path = dir.join("garbage.pem");
+        std::fs::write(&bad_path, b"-----BEGIN NOT A KEY-----\nzzzz\n-----END NOT A KEY-----")
+            .expect("write garbage");
+        let err = load_sp_signing_key_from_pem(&bad_path)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("PKCS#8 or PKCS#1"),
+            "error cites both formats: {err}"
+        );
     }
 
     /// AA5-followup: extract ALL signing certs from metadata XML.
