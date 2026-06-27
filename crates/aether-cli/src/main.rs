@@ -929,6 +929,83 @@ fn enforce_model_policy(model: &str) -> Result<()> {
 /// Cache miss → real build → insert. Cache hit → Arc::clone. Errors
 /// are NOT cached (an env-var change later in the process can fix
 /// the next call).
+/// V4: resolve AETHER_SERVE_TOKEN from a secrets manager. Schemes:
+///   vault:<path>       → GET $VAULT_ADDR/v1/<path>; reads data.data.token
+///                        Authorization: X-Vault-Token: $VAULT_TOKEN
+///   aws:<secret-id>    → AWS Secrets Manager (NOT YET IMPLEMENTED;
+///                        returns an informative error). Reuses the
+///                        Bedrock cred chain when wired (Plan W).
+///
+/// When the env is absent, this is a no-op. When set, the resolved
+/// secret is stuffed into AETHER_SERVE_TOKEN so every downstream
+/// check_bearer path sees it.
+async fn resolve_serve_token_from_secrets_manager() -> Result<()> {
+    let raw = match std::env::var("AETHER_SERVE_TOKEN_FROM_SECRETS_MANAGER") {
+        Ok(s) if !s.is_empty() => s,
+        _ => return Ok(()),
+    };
+    let (scheme, id) = match raw.split_once(':') {
+        Some((s, i)) => (s, i),
+        None => anyhow::bail!(
+            "AETHER_SERVE_TOKEN_FROM_SECRETS_MANAGER must be <scheme>:<id> (got {raw:?})"
+        ),
+    };
+    let secret = match scheme {
+        "vault" => resolve_vault_secret(id).await?,
+        "aws" => anyhow::bail!(
+            "secrets manager scheme `aws` is not yet implemented (Plan W); use vault: for now"
+        ),
+        other => anyhow::bail!(
+            "unknown secrets manager scheme `{other}` (valid: vault, aws)"
+        ),
+    };
+    if secret.is_empty() {
+        anyhow::bail!("secrets manager returned empty secret");
+    }
+    std::env::set_var("AETHER_SERVE_TOKEN", &secret);
+    eprintln!(
+        "[serve] resolved AETHER_SERVE_TOKEN from {scheme}:{id} ({} bytes)",
+        secret.len()
+    );
+    Ok(())
+}
+
+async fn resolve_vault_secret(path: &str) -> Result<String> {
+    let addr = std::env::var("VAULT_ADDR")
+        .context("VAULT_ADDR not set — required for vault: scheme")?;
+    let token = std::env::var("VAULT_TOKEN")
+        .context("VAULT_TOKEN not set — required for vault: scheme")?;
+    let url = format!("{}/v1/{}", addr.trim_end_matches('/'), path);
+    let resp = reqwest::Client::new()
+        .get(&url)
+        .header("X-Vault-Token", token)
+        .send()
+        .await
+        .with_context(|| format!("GET {url}"))?;
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("vault GET {url} returned {}: {body}", body.len());
+    }
+    let v: serde_json::Value = resp.json().await.context("parse vault response")?;
+    // KV v2 shape: { "data": { "data": { "<key>": "<value>" } } }
+    let inner = v
+        .get("data")
+        .and_then(|d| d.get("data"))
+        .ok_or_else(|| anyhow!("vault response missing data.data (KV v2 only)"))?;
+    // Prefer a `token` field; fall back to the first string value.
+    if let Some(t) = inner.get("token").and_then(|v| v.as_str()) {
+        return Ok(t.to_string());
+    }
+    if let Some(obj) = inner.as_object() {
+        for (_k, val) in obj.iter() {
+            if let Some(s) = val.as_str() {
+                return Ok(s.to_string());
+            }
+        }
+    }
+    anyhow::bail!("vault KV doc has no string fields under data.data")
+}
+
 /// V6: provider pool entries carry the instant they were built so a
 /// TTL (AETHER_PROVIDER_POOL_TTL_SECS) can evict stale entries on
 /// the next lookup.
@@ -2285,6 +2362,15 @@ async fn run_serve(
     permission_mode: aether_perm::PermissionMode,
 ) -> Result<()> {
     use axum::{routing::post, Router};
+    // V4: secrets manager. If AETHER_SERVE_TOKEN_FROM_SECRETS_MANAGER
+    // is set, resolve it BEFORE the bearer-check helpers consult the
+    // AETHER_SERVE_TOKEN env. The result is set in the process env so
+    // every subsequent check_bearer / WS auth path sees it.
+    if let Err(e) = resolve_serve_token_from_secrets_manager().await {
+        anyhow::bail!(
+            "AETHER_SERVE_TOKEN_FROM_SECRETS_MANAGER set but resolution failed: {e}"
+        );
+    }
     let max_sessions: usize = std::env::var("AETHER_SERVE_MAX_SESSIONS")
         .ok()
         .and_then(|s| s.parse().ok())
