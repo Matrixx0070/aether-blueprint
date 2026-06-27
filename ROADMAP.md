@@ -1007,37 +1007,112 @@ pass. 14 SAML+OIDC live smokes all pass as regression.
 - AA6 no userinfo → BB5 reactive refresh → CC5 proactive refresh →
   **DD6 clock-skew detection** ✓
 
-## v0.35 — next (Plan EE draft)
+## v0.35 — hygiene + close DD weakest-points — shipped 2026-06-27
 
-Plan EE recalibrates: with every documented weakest-point closed
-through DD, the chronic four-plan deferrals (OIDC mTLS + tenant
-SCIM) become the natural next scope. The cred-blocked BYOC work
-keeps carrying forward.
+Plan EE recalibrated after the AA→BB→CC→DD closure-chain landed in
+DD: the "close every documented weakest-point" phase ended at DD, so
+EE picked up the chronic four-plan deferrals (mTLS + SCIM), a CI
+hygiene gate that closes the recurring STATUS-row placeholder
+pattern, and two smaller DD weakest-point fillers. 3 shipped + 3
+cred/scope-blocked carry-forward.
 
-- **EE1 Bedrock + Vertex + Azure live round-trip** — same plan
-  as DD1–DD3 + CC1–CC3 + BB1–BB3 + AA1–AA3. Sixth plan carrying
-  this forward; flips to LIVE-VERIFIED when the operator
-  provides the gates.
-- **EE2 OIDC mTLS client auth (RFC 8705)** — deferred since Plan
-  BB. Alternative to `client_secret_basic` for high-assurance
-  OAuth clients. Persist a client TLS keypair, send it on every
-  token endpoint POST.
-- **EE3 Tenant SCIM provisioning** — deferred since Plan BB.
-  `/v1/scim/Users` CRUD reusing `tenant_acl.db`, bearer-gated
-  via `AETHER_SCIM_BEARER`.
-- **EE4 Pre-tag CI placeholder check** — closes the chronic
-  STATUS-row `(this commit)` placeholder pattern (Y7 / Z7 / AA7 /
-  BB7 / CC7 / DD7 all needed a follow-up backfill commit). New
-  `tests/check-status-no-placeholders.sh` invoked from a pre-tag
-  CI step refuses the tag push when STATUS.md contains
-  `(this commit)` literals.
-- **EE5 SAML metadata cacheDuration support** — closes the DD5
-  weakest-point. Honor `<md:EntityDescriptor cacheDuration="…">`
-  as the default refresh-interval hint when present, falling
-  back to AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS.
-- **EE6 Ed448 SAML verify path** — closes the DD4 weakest-point.
-  Add OID 1.3.101.113 + 57-byte SPKI + Ed448 verify primitive
-  (likely via ed448-goldilocks crate).
+- **EE4 (5e89e8f) pre-tag CI placeholder check** — closes the chronic
+  STATUS-row `(this commit)` pattern that hit six successive ships
+  (Y7 / Z7 / AA7 / BB7 / CC7 / DD7), each needing a follow-up
+  backfill commit. New `tests/check-status-no-placeholders.sh`:
+  `set -euo pipefail` + `grep -Fn` so parentheses are literal not
+  regex; exit 0 clean / 1 if placeholder present / 2 if STATUS.md
+  missing. Escape hatch via `AETHER_SKIP_STATUS_PLACEHOLDER_CHECK=1`
+  per risk register §EE4. Wired into release.yml as a new
+  `prerelease-checks` job with `build: needs: prerelease-checks` so
+  a tag push with a placeholder never even starts the 4-platform
+  build. The script's first run on main caught a real historical
+  Y-audit row placeholder that had never been backfilled (SHA
+  `9d474b8`) — backfilled in the same commit.
+- **EE5 (034e1f7) SAML metadata cacheDuration support** — closes the
+  DD5 weakest-point. New pure helper `parse_xsd_duration_secs`
+  accepts the subset of xsd:duration used by SAML cacheDuration
+  (`P1D`, `PT1H`, `PT30M`, `PT1H30M`, `P1Y6M`, `P1DT12H`, etc.) with
+  365d/30d year/month approximation. `ParsedSamlMetadata.
+  cache_duration_secs: Option<u64>` extracted via regex from
+  `<md:EntityDescriptor cacheDuration="…">` per saml-metadata-2.0
+  §2.3.2 and persisted in sso-saml.json.
+  `saml_metadata_refresh_interval_secs` now returns
+  `(u64, &'static str)` — interval AND source ("env" / "cacheDuration"
+  / "default"), refactored from two-decision into one so the watch
+  banner can't lie about where the interval came from (caught
+  mid-development by S5 of the smoke). Priority: env > hint > 3600s
+  default; garbage env falls through to hint, NOT silently to
+  default, so an IdP-stated value still wins over a typo.
+- **EE6 (d4ed0ef) Ed448 SAML verify path** — closes the DD4 weakest-
+  point. `IdpVerifyingKey::Ed448(ed448_goldilocks::VerifyingKey)`
+  variant + OID `1.3.101.113` (id-Ed448 per RFC 8410) dispatch in
+  `idp_verifying_key_from_pem_cert`. RFC 8410 §4 raw 57-byte BIT
+  STRING SPKI shape (same as Ed25519 just with different length).
+  New `SAML_SIG_METHOD_EDDSA_ED448` const for the xmldsig-more URI
+  `eddsa-ed448`; algorithm gate now accepts all three URIs. Per-key
+  dispatch arm verifies 114B signature via
+  `ed448_goldilocks::VerifyingKey::verify_raw` (RFC 8032 §5.2
+  PureEdDSA, same "no separate hash step" shape as Ed25519). Wrong-
+  algorithm keys still SKIP per the DD4 risk register (confused-
+  deputy defense). Crate: `ed448-goldilocks` v0.14.0-pre.15 from
+  the RustCrypto org. Trust assumption: Ed448 is far less battle-
+  tested than Ed25519 (audit gap per Plan EE risk register §EE6) —
+  documented inline at the verify call-site.
+
+**Cred/scope-blocked carry-forward to Plan FF:**
+
+- **EE1 Bedrock LIVE round-trip** — seventh-plan cred-blocked.
+  Plan FF retires this from the carry-forward and just documents
+  the env vars needed.
+- **EE2 OIDC mTLS client auth (RFC 8705)** — still deferred since
+  Plan BB. Plan FF re-frames this as its main theme (mTLS-dedicated
+  plan, mirroring Plan Y's SAML-dedicated approach).
+- **EE3 Tenant SCIM** — still deferred since Plan BB. Re-queued
+  for Plan GG or later as a similar dedicated-plan candidate.
+
+**v0.35.0 ship metadata:** see Plan FF's STATUS row backfill + tag
+v0.35.0.
+
+## v0.36 — next (Plan FF draft)
+
+Plan FF re-frames as a dedicated **OIDC mTLS plan** (mirroring Plan
+Y's dedicated-SAML approach that successfully landed the full SAML
+pipeline in one 24h budget). One main theme + small filler.
+
+- **FF1 BYOC carry-forward retirement** — six plans of Bedrock+Vertex+
+  Azure deferral is enough. Document the env vars + the
+  cred-acquisition path in `docs/byoc-setup.md` and remove from the
+  carry-forward list. The fake-endpoint smokes (Z4/Z5/Z6) stay; real
+  live-call work returns when an operator with creds arrives.
+- **FF2 `aether sso configure-mtls`** — new subcommand. `--cert <pem>
+  + --key <pem>` paths persist in sso.json under a new `mtls`
+  block. Loader reads cert+key into memory at every token POST
+  invocation time (atomic-rename convention — risk register §EE2).
+- **FF3 reqwest client mTLS wiring** — modify the shared reqwest
+  client in `sso_login` + `refresh_oauth_access_token` to load the
+  cert+key via `Identity::from_pkcs8_pem` when the `mtls` block is
+  present in sso.json. Same path for token endpoint and
+  introspection. No state-machine changes — mTLS is layered on top
+  of the existing OIDC PKCE flow.
+- **FF4 `cnf.x5t#S256` claim verification** — optional id_token
+  claim binding per RFC 8705 §3.1. When the client presented a cert
+  on the token endpoint, the issued id_token can carry a
+  `cnf.x5t#S256` claim with the SHA-256 fingerprint of the leaf
+  cert. Verify it matches the configured cert; reject if it
+  doesn't.
+- **FF5 live smoke** — fake IdP that REJECTS token endpoint calls
+  without a client cert; aether's configured cert is required for
+  success. End-to-end chain: configure-mtls → sso login → token
+  POST carries cert → id_token verifies → optional cnf claim
+  matches.
+- **FF6 Ed448 stable bump (if available)** — `ed448-goldilocks`
+  v0.14.0-pre.15 → v0.14.0 stable when the RustCrypto org cuts
+  it. Otherwise add a one-line note in the trust-assumption comment
+  pointing at the audit-gap risk register. Documentation-only if
+  no stable bump exists.
+- **FF7 wrap-up** — version bump + ROADMAP + STATUS + Plan GG draft
+  + tag + ship. The pre-tag placeholder check (EE4) gates this.
 
 ## v0.9 — enterprise
 
