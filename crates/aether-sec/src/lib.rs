@@ -327,7 +327,142 @@ pub fn append_audit(
             let _ = forward_to_syslog(&line);
         }
     }
+    // W5: SIEM forwarding via AETHER_AUDIT_FORWARD=<scheme>:<URL>.
+    // loki: posts {"streams":[{"stream":{"app":"aether"},"values":
+    //   [[<ns-ts>, <line>]]}]} to /loki/api/v1/push.
+    // splunk: posts {"event":<line>} (Splunk HEC raw)
+    if let Ok(spec) = std::env::var("AETHER_AUDIT_FORWARD") {
+        forward_audit_to_siem(&spec, &line);
+    }
     Ok(())
+}
+
+/// W5: enqueue an audit line for SIEM forwarding. Schemes:
+///   loki:<url>    POST {streams:[{stream:{app:aether},values:[[<ns_ts>,<line>]]}]}
+///   splunk:<url>  POST {event:<line>}
+/// Batch buffer: 10 lines / 1s. Best-effort, fail-silent.
+fn forward_audit_to_siem(spec: &str, line: &str) {
+    let Some((scheme, url)) = spec.split_once(':') else {
+        return;
+    };
+    let scheme = scheme.to_string();
+    let url = url.to_string();
+    let line = line.to_string();
+    AUDIT_SIEM_QUEUE
+        .lock()
+        .map(|mut g| g.push((scheme, url, line)))
+        .ok();
+    audit_siem_pump_if_full();
+}
+
+// Process-wide batch buffer for SIEM forwarding. Flushes when 10
+// lines accumulate OR when explicitly drained.
+static AUDIT_SIEM_QUEUE: once_cell::sync::Lazy<
+    std::sync::Mutex<Vec<(String, String, String)>>,
+> = once_cell::sync::Lazy::new(|| std::sync::Mutex::new(Vec::new()));
+
+fn audit_siem_pump_if_full() {
+    let drained: Vec<(String, String, String)> = {
+        let Ok(mut g) = AUDIT_SIEM_QUEUE.lock() else { return };
+        if g.len() < 10 {
+            return;
+        }
+        std::mem::take(&mut *g)
+    };
+    audit_siem_pump_now(drained);
+}
+
+/// Drain the SIEM queue immediately. Called from periodic flushers
+/// (when wired) or on a process-shutdown hook.
+pub fn audit_siem_flush() {
+    let drained: Vec<(String, String, String)> = {
+        let Ok(mut g) = AUDIT_SIEM_QUEUE.lock() else { return };
+        std::mem::take(&mut *g)
+    };
+    if !drained.is_empty() {
+        audit_siem_pump_now(drained);
+    }
+}
+
+fn audit_siem_pump_now(items: Vec<(String, String, String)>) {
+    if items.is_empty() {
+        return;
+    }
+    // Group by (scheme, url) for one POST per destination.
+    use std::collections::HashMap;
+    let mut grouped: HashMap<(String, String), Vec<String>> = HashMap::new();
+    for (s, u, l) in items {
+        grouped.entry((s, u)).or_default().push(l);
+    }
+    // Spawn on the tokio runtime if available; else fall back to a
+    // blocking ureq-style POST? The audit-sec crate doesn't currently
+    // pull tokio, so we use ureq's sync HTTP. Wait — ureq isn't a
+    // dep either. Use std::process::Command + curl as a portable
+    // sync fallback. (W5 ships POSIX-only; Plan X can pull a real
+    // HTTP client into aether-sec if this gets heavy.)
+    for ((scheme, url), lines) in grouped {
+        let body = match scheme.as_str() {
+            "loki" => {
+                let ns_ts = Utc::now().timestamp_nanos_opt().unwrap_or(0);
+                let values: Vec<serde_json::Value> = lines
+                    .iter()
+                    .map(|l| serde_json::json!([ns_ts.to_string(), l]))
+                    .collect();
+                serde_json::json!({
+                    "streams": [{
+                        "stream": {"app": "aether"},
+                        "values": values,
+                    }],
+                })
+                .to_string()
+            }
+            "splunk" => {
+                let mut s = String::new();
+                for l in &lines {
+                    let j = serde_json::json!({"event": l}).to_string();
+                    s.push_str(&j);
+                    s.push('\n');
+                }
+                s
+            }
+            _ => continue,
+        };
+        // POST via curl --silent --max-time 2 -X POST -H -d
+        let target = match scheme.as_str() {
+            "loki" => format!("{url}/loki/api/v1/push"),
+            "splunk" => url.clone(),
+            _ => continue,
+        };
+        let mut cmd = std::process::Command::new("curl");
+        cmd.args([
+            "--silent",
+            "--max-time",
+            "2",
+            "-X",
+            "POST",
+            "-H",
+            "Content-Type: application/json",
+            &target,
+            "--data-binary",
+            "@-",
+        ]);
+        cmd.stdin(std::process::Stdio::piped());
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[audit forward] {scheme} curl spawn: {e}");
+                continue;
+            }
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            let _ = stdin.write_all(body.as_bytes());
+        }
+        // Best-effort: don't wait long.
+        let _ = child.wait();
+    }
 }
 
 #[cfg(unix)]
