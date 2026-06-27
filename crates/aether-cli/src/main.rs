@@ -2669,30 +2669,70 @@ async fn post_messages_handler(
     headers: axum::http::HeaderMap,
     body: axum::Json<ServeRequest>,
 ) -> axum::response::Response {
+    let otel_start_unix_nano = unix_nanos_now();
+    let otel_start = std::time::Instant::now();
+    let otel_tenant = extract_tenant(&headers).ok().flatten();
     let ip = extract_client_ip(&headers);
     if let Err(resp) = rate_check(&state, &ip) {
+        let status = resp.status().as_u16();
+        otel_emit_span(OtelSpan {
+            name: "POST /v1/messages".into(),
+            route: "/v1/messages".into(),
+            method: "POST".into(),
+            status_code: status,
+            model: None,
+            tenant: otel_tenant,
+            start_unix_nano: otel_start_unix_nano,
+            duration_ms: otel_start.elapsed().as_millis() as u64,
+        });
         return resp;
     }
     let _guard = match session_acquire(&state) {
         Ok(g) => g,
-        Err(resp) => return resp,
+        Err(resp) => {
+            let status = resp.status().as_u16();
+            otel_emit_span(OtelSpan {
+                name: "POST /v1/messages".into(),
+                route: "/v1/messages".into(),
+                method: "POST".into(),
+                status_code: status,
+                model: None,
+                tenant: otel_tenant,
+                start_unix_nano: otel_start_unix_nano,
+                duration_ms: otel_start.elapsed().as_millis() as u64,
+            });
+            return resp;
+        }
     };
     let req = body.0;
     let model = req.model.unwrap_or(state.default_model.clone());
     let res = serve_one_turn(&model, state.permission_mode, &req.prompt).await;
-    let body = match res {
-        Ok(r) => r,
-        Err(e) => ServeResponse {
-            text: String::new(),
-            tokens_in: 0,
-            tokens_out: 0,
-            cost_usd: 0.0,
-            error: Some(e.to_string()),
-        },
+    let (body, status_code) = match res {
+        Ok(r) => (r, 200u16),
+        Err(e) => (
+            ServeResponse {
+                text: String::new(),
+                tokens_in: 0,
+                tokens_out: 0,
+                cost_usd: 0.0,
+                error: Some(e.to_string()),
+            },
+            500u16,
+        ),
     };
     let json = serde_json::to_string(&body).unwrap_or_else(|_| "{}".into());
+    otel_emit_span(OtelSpan {
+        name: "POST /v1/messages".into(),
+        route: "/v1/messages".into(),
+        method: "POST".into(),
+        status_code,
+        model: Some(model),
+        tenant: otel_tenant,
+        start_unix_nano: otel_start_unix_nano,
+        duration_ms: otel_start.elapsed().as_millis() as u64,
+    });
     axum::response::Response::builder()
-        .status(axum::http::StatusCode::OK)
+        .status(axum::http::StatusCode::from_u16(status_code).unwrap_or(axum::http::StatusCode::OK))
         .header("content-type", "application/json")
         .body(axum::body::Body::from(json))
         .unwrap_or_default()
@@ -2709,13 +2749,40 @@ async fn ws_chat_handler(
     headers: axum::http::HeaderMap,
     ws: axum::extract::WebSocketUpgrade,
 ) -> axum::response::Response {
+    let otel_start_unix_nano = unix_nanos_now();
+    let otel_start = std::time::Instant::now();
+    let otel_tenant = extract_tenant(&headers).ok().flatten();
     let ip = extract_client_ip(&headers);
     if let Err(resp) = rate_check(&state, &ip) {
+        let status = resp.status().as_u16();
+        otel_emit_span(OtelSpan {
+            name: "GET /ws/chat".into(),
+            route: "/ws/chat".into(),
+            method: "GET".into(),
+            status_code: status,
+            model: None,
+            tenant: otel_tenant,
+            start_unix_nano: otel_start_unix_nano,
+            duration_ms: otel_start.elapsed().as_millis() as u64,
+        });
         return resp;
     }
     let guard = match session_acquire(&state) {
         Ok(g) => g,
-        Err(resp) => return resp,
+        Err(resp) => {
+            let status = resp.status().as_u16();
+            otel_emit_span(OtelSpan {
+                name: "GET /ws/chat".into(),
+                route: "/ws/chat".into(),
+                method: "GET".into(),
+                status_code: status,
+                model: None,
+                tenant: otel_tenant,
+                start_unix_nano: otel_start_unix_nano,
+                duration_ms: otel_start.elapsed().as_millis() as u64,
+            });
+            return resp;
+        }
     };
     // Optional bearer auth: when AETHER_SERVE_TOKEN is set, the client
     // must send `Authorization: Bearer <that_token>` on the upgrade
@@ -2734,6 +2801,16 @@ async fn ws_chat_handler(
                     .map(|s| s.trim())
                     .unwrap_or("");
                 if !constant_time_eq(presented.as_bytes(), expected.as_bytes()) {
+                    otel_emit_span(OtelSpan {
+                        name: "GET /ws/chat".into(),
+                        route: "/ws/chat".into(),
+                        method: "GET".into(),
+                        status_code: 401,
+                        model: None,
+                        tenant: otel_tenant,
+                        start_unix_nano: otel_start_unix_nano,
+                        duration_ms: otel_start.elapsed().as_millis() as u64,
+                    });
                     return axum::response::Response::builder()
                         .status(axum::http::StatusCode::UNAUTHORIZED)
                         .body(axum::body::Body::from(
@@ -2744,6 +2821,16 @@ async fn ws_chat_handler(
             }
         }
     }
+    otel_emit_span(OtelSpan {
+        name: "GET /ws/chat".into(),
+        route: "/ws/chat".into(),
+        method: "GET".into(),
+        status_code: 101,
+        model: None,
+        tenant: otel_tenant,
+        start_unix_nano: otel_start_unix_nano,
+        duration_ms: otel_start.elapsed().as_millis() as u64,
+    });
     ws.on_upgrade(move |socket| {
         let _guard = guard; // keep session counted for the WS lifetime
         async move {
@@ -3308,22 +3395,71 @@ async fn complete_handler(
 ) -> axum::response::Response {
     bump(&METRIC_COMPLETE_TOTAL);
     let _v3_complete_start = std::time::Instant::now();
+    let otel_start_unix_nano = unix_nanos_now();
+    let otel_start = std::time::Instant::now();
     let ip = extract_client_ip(&headers);
     if let Err(resp) = rate_check(&state, &ip) {
+        let status = resp.status().as_u16();
+        otel_emit_span(OtelSpan {
+            name: "POST /v1/complete".into(),
+            route: "/v1/complete".into(),
+            method: "POST".into(),
+            status_code: status,
+            model: None,
+            tenant: None,
+            start_unix_nano: otel_start_unix_nano,
+            duration_ms: otel_start.elapsed().as_millis() as u64,
+        });
         return resp;
     }
     if let Err(resp) = check_bearer(&headers) {
+        let status = resp.status().as_u16();
+        otel_emit_span(OtelSpan {
+            name: "POST /v1/complete".into(),
+            route: "/v1/complete".into(),
+            method: "POST".into(),
+            status_code: status,
+            model: None,
+            tenant: None,
+            start_unix_nano: otel_start_unix_nano,
+            duration_ms: otel_start.elapsed().as_millis() as u64,
+        });
         return resp;
     }
     let tenant = match extract_tenant(&headers) {
         Ok(t) => t,
-        Err(resp) => return resp,
+        Err(resp) => {
+            let status = resp.status().as_u16();
+            otel_emit_span(OtelSpan {
+                name: "POST /v1/complete".into(),
+                route: "/v1/complete".into(),
+                method: "POST".into(),
+                status_code: status,
+                model: None,
+                tenant: None,
+                start_unix_nano: otel_start_unix_nano,
+                duration_ms: otel_start.elapsed().as_millis() as u64,
+            });
+            return resp;
+        }
     };
     if let Err(resp) = check_tenant_acl(&headers, tenant.as_deref()) {
+        let status = resp.status().as_u16();
+        otel_emit_span(OtelSpan {
+            name: "POST /v1/complete".into(),
+            route: "/v1/complete".into(),
+            method: "POST".into(),
+            status_code: status,
+            model: None,
+            tenant: tenant.clone(),
+            start_unix_nano: otel_start_unix_nano,
+            duration_ms: otel_start.elapsed().as_millis() as u64,
+        });
         return resp;
     }
     let req = body.0;
     let model = req.model.unwrap_or(state.default_model.clone());
+    let model_for_otel = model.clone();
     let language = req
         .language
         .as_deref()
@@ -3349,22 +3485,43 @@ async fn complete_handler(
         ),
     );
     let v3_start = _v3_complete_start;
+    let otel_model = model_for_otel;
+    let otel_tenant_terminal = tenant.clone();
     let terminal = async move {
         let outcome = task.await;
-        let terminal_json = match outcome {
-            Ok(Ok(r)) => serde_json::json!({
-                "type": "done",
-                "tokens_in": r.tokens_in,
-                "tokens_out": r.tokens_out,
-                "cost_usd": r.cost_usd,
-                "error": r.error,
-            }),
-            Ok(Err(e)) => serde_json::json!({"type":"error","message": e.to_string()}),
-            Err(e) => serde_json::json!({"type":"error","message": format!("agent task: {e}")}),
+        let (terminal_json, otel_status): (serde_json::Value, u16) = match outcome {
+            Ok(Ok(r)) => (
+                serde_json::json!({
+                    "type": "done",
+                    "tokens_in": r.tokens_in,
+                    "tokens_out": r.tokens_out,
+                    "cost_usd": r.cost_usd,
+                    "error": r.error,
+                }),
+                200,
+            ),
+            Ok(Err(e)) => (
+                serde_json::json!({"type":"error","message": e.to_string()}),
+                500,
+            ),
+            Err(e) => (
+                serde_json::json!({"type":"error","message": format!("agent task: {e}")}),
+                500,
+            ),
         };
         // V3: record /v1/complete latency when the terminal frame is
         // about to ship (this is the agent-task wall-clock cost).
         observe_complete_latency_ms(v3_start.elapsed().as_millis() as u64);
+        otel_emit_span(OtelSpan {
+            name: "POST /v1/complete".into(),
+            route: "/v1/complete".into(),
+            method: "POST".into(),
+            status_code: otel_status,
+            model: Some(otel_model),
+            tenant: otel_tenant_terminal,
+            start_unix_nano: otel_start_unix_nano,
+            duration_ms: otel_start.elapsed().as_millis() as u64,
+        });
         Ok::<_, std::convert::Infallible>(
             axum::response::sse::Event::default().data(terminal_json.to_string()),
         )
@@ -8225,6 +8382,101 @@ fn hmac_sha256_hex(key: &[u8], msg: &[u8]) -> String {
     let mut mac = HmacSha256::new_from_slice(key).expect("hmac accepts any key length");
     mac.update(msg);
     hex::encode(mac.finalize().into_bytes())
+}
+
+/// X1: Snapshot of a finished serve span. The serve hot path builds
+/// one of these per request and hands it to `otel_emit_span`, which
+/// fires off the OTLP/HTTP JSON POST as a tokio task so the request
+/// latency is unaffected by the exporter.
+#[derive(Debug, Clone)]
+struct OtelSpan {
+    name: String,
+    route: String,
+    method: String,
+    status_code: u16,
+    model: Option<String>,
+    tenant: Option<String>,
+    start_unix_nano: u128,
+    duration_ms: u64,
+}
+
+/// X1: Fire one OTLP/HTTP JSON span at `${AETHER_OTEL_ENDPOINT}/v1/traces`.
+/// No-op when the env var is unset, so the serve hot path pays nothing
+/// in the default config. Errors are best-effort: they land on stderr
+/// and never propagate back to the request.
+fn otel_emit_span(span: OtelSpan) {
+    let endpoint = match std::env::var("AETHER_OTEL_ENDPOINT") {
+        Ok(v) if !v.is_empty() => v,
+        _ => return,
+    };
+    tokio::spawn(async move {
+        let mut trace_id = [0u8; 16];
+        let mut span_id = [0u8; 8];
+        use rand_core::RngCore;
+        rand_core::OsRng.fill_bytes(&mut trace_id);
+        rand_core::OsRng.fill_bytes(&mut span_id);
+        let end_unix_nano = span
+            .start_unix_nano
+            .saturating_add((span.duration_ms as u128).saturating_mul(1_000_000));
+        let mut attrs = vec![
+            serde_json::json!({"key":"http.method","value":{"stringValue": span.method}}),
+            serde_json::json!({"key":"http.route","value":{"stringValue": span.route}}),
+            serde_json::json!({"key":"http.status_code","value":{"intValue": span.status_code.to_string()}}),
+            serde_json::json!({"key":"duration_ms","value":{"intValue": span.duration_ms.to_string()}}),
+        ];
+        if let Some(m) = &span.model {
+            attrs.push(serde_json::json!({"key":"aether.model","value":{"stringValue": m}}));
+        }
+        if let Some(t) = &span.tenant {
+            attrs.push(serde_json::json!({"key":"aether.tenant","value":{"stringValue": t}}));
+        }
+        let payload = serde_json::json!({
+            "resourceSpans": [{
+                "resource": {
+                    "attributes": [
+                        {"key":"service.name","value":{"stringValue":"aether-serve"}},
+                    ],
+                },
+                "scopeSpans": [{
+                    "scope": {"name":"aether"},
+                    "spans": [{
+                        "traceId": hex::encode(trace_id),
+                        "spanId": hex::encode(span_id),
+                        "name": span.name,
+                        "kind": 2,
+                        "startTimeUnixNano": span.start_unix_nano.to_string(),
+                        "endTimeUnixNano": end_unix_nano.to_string(),
+                        "attributes": attrs,
+                        "status": {"code": if span.status_code < 500 { 1 } else { 2 }},
+                    }],
+                }],
+            }],
+        });
+        let url = format!("{}/v1/traces", endpoint.trim_end_matches('/'));
+        let client = reqwest::Client::new();
+        let res = client
+            .post(&url)
+            .header("content-type", "application/json")
+            .body(payload.to_string())
+            .send()
+            .await;
+        match res {
+            Ok(r) if r.status().is_success() => {}
+            Ok(r) => eprintln!("[otel] {} HTTP {}", url, r.status()),
+            Err(e) => eprintln!("[otel] {} send failed: {e}", url),
+        }
+    });
+}
+
+/// X1: Convert the current wall-clock to a Unix-epoch nanosecond
+/// count for OTLP `startTimeUnixNano`. u128 is wide enough to hold
+/// the value comfortably past year 2554.
+fn unix_nanos_now() -> u128 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
 }
 
 fn trust_cmd(sub: TrustCmd) -> Result<()> {
