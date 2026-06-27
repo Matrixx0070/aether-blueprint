@@ -1,111 +1,109 @@
-# Next 24-hour autonomous plan — Plan CC
+# Next 24-hour autonomous plan — Plan DD
 
-Drafted at end of Plan BB (v0.31 → v0.32). Plan BB shipped 3 of 6
-drafted slices honestly: BB1–BB3 (real Bedrock / Vertex / Azure
-round-trips) remained cred-blocked exactly as in Plan AA — billing
-+ Marketplace + subscription gates outside aether's control. The
-plan delivered the three non-cred-dependent slices that closed every
-Plan AA documented weakest-point:
+Drafted at end of Plan CC (v0.32 → v0.33). Plan CC shipped 3 of 6
+drafted slices honestly: CC1–CC3 (real BYOC round-trips) carried
+forward exactly as in BB1–BB3 and AA1–AA3 — billing + Marketplace
++ subscription gates outside aether's control. The non-cred-
+dependent trio closed every last documented weakest-point from
+Plan AA and Plan BB:
 
-  - BB4 closed AA4 (signed AuthnRequest).
-  - BB5 closed AA6 (OIDC access-token refresh).
-  - BB6 closed AA5-followup (SAML metadata auto-refresh).
+  - CC4 closed BB6 (SAML metadata drift detection).
+  - CC5 closed BB5 (OIDC proactive refresh).
+  - CC6 closed BB4 (EdDSA AuthnRequest signing).
 
-Plan CC continues to carry forward CC1–CC3 (the cred-blocked work)
-until creds become available, and adds CC4–CC6 to close each of
-Plan BB's documented weakest-points.
+This is the closure milestone for the enterprise SSO surface
+audited under Plans AA + BB. Plan DD carries forward the cred-
+blocked work (DD1–DD3 = CC1–CC3 = BB1–BB3 = AA1–AA3) and adds
+DD4–DD6 to close each of Plan CC's documented weakest-points.
 
 ---
 
-## Plan CC — close every BB weakest-point + cred-unblock when ready
+## Plan DD — close every CC weakest-point + cred-unblock when ready
 
-**MISSION**: Flip Plan BB's UNVERIFIED labels to LIVE-VERIFIED when
-creds become available; close every weakest-point Plan BB explicitly
-documented (metadata drift detection, proactive token refresh,
-EdDSA AuthnRequest signing).
+**MISSION**: Flip Plan CC's UNVERIFIED labels to LIVE-VERIFIED when
+creds become available; close every weakest-point Plan CC explicitly
+documented (EdDSA SAML verifier extension, metadata validUntil
+staleness, OIDC system-clock-skew detection).
 
 **DONE MEANS** (7 criteria):
 
-1. v0.33.0 tag on origin/main; cosign-signed autobuild green on 4
+1. v0.34.0 tag on origin/main; cosign-signed autobuild green on 4
    platforms.
-2. CC1 Bedrock LIVE round-trip — real AWS creds, real
-   `bedrock-runtime.<region>.amazonaws.com`, single 1-token call
-   returns `usage > 0`.
-3. CC2 Vertex LIVE round-trip — billing-enabled GCP project +
-   Anthropic-on-Vertex Marketplace subscription + access token,
-   single 1-token call returns `usage > 0`.
-4. CC3 Azure LIVE round-trip — Azure AI Foundry resource + Claude
+2. DD1 Bedrock LIVE round-trip — real AWS creds, single 1-token
+   call returns `usage > 0`.
+3. DD2 Vertex LIVE round-trip — billing-enabled GCP project +
+   Anthropic-on-Vertex Marketplace + access token, single
+   1-token call returns `usage > 0`.
+4. DD3 Azure LIVE round-trip — Azure AI Foundry + Claude
    deployment + api-key, single 1-token call returns `usage > 0`.
-5. CC4 SAML metadata drift detection: refresh-saml --watch skips
-   the rewrite when the metadata response hash matches the
-   previous tick.
-6. CC5 OIDC proactive refresh: aether refreshes the access_token
-   ahead of `expires_in` (e.g. 5 min before) rather than on 401.
-7. CC6 EdDSA AuthnRequest signing accepted by `aether sso login`
-   with an Ed25519 SP key.
-8. STATUS slice rows CC1–CC6 with commit SHAs + live-verify
+5. DD4 Y5 verifier accepts EdDSA SAMLResponses end-to-end.
+6. DD5 SAML metadata staleness check warns when `validUntil` is
+   approaching expiry.
+7. DD6 OIDC system-clock-skew detection warns when local-vs-IdP
+   time delta exceeds threshold.
+8. STATUS slice rows DD1–DD6 with commit SHAs + live-verify
    excerpts. No banned vocabulary.
 
 ## Slices
 
-### CC1 — Bedrock live round-trip (cred-blocked)
+### DD1 — Bedrock live round-trip (cred-blocked)
 
 - User provides real `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`
   (+ optional `AWS_SESSION_TOKEN`) + `AWS_REGION`.
-- Unset `AETHER_BEDROCK_ENDPOINT` (so it falls back to AWS default).
+- Unset `AETHER_BEDROCK_ENDPOINT`.
 - Run `aether doctor --probe --provider bedrock`.
 
-### CC2 — Vertex live round-trip (cred-blocked + Marketplace)
+### DD2 — Vertex live round-trip (cred-blocked + Marketplace)
 
-- Pre-req on user's side: enable billing on a GCP project +
-  subscribe to "Claude on Vertex AI" via Cloud Marketplace.
+- Enable billing on a GCP project + subscribe to "Claude on
+  Vertex AI" via Cloud Marketplace.
 - `VERTEX_ACCESS_TOKEN=$(gcloud auth print-access-token)` +
   `VERTEX_PROJECT=<enabled-project>`.
 - Unset `AETHER_VERTEX_ENDPOINT`.
 - Run `aether doctor --probe --provider vertex`.
 
-### CC3 — Azure live round-trip (cred-blocked)
+### DD3 — Azure live round-trip (cred-blocked)
 
-- Pre-req: Azure AI Foundry resource + Claude deployment.
+- Provision Azure AI Foundry resource + Claude deployment.
 - `AZURE_AI_ENDPOINT=https://<resource>.services.ai.azure.com` +
   `AZURE_AI_API_KEY=<resource-scoped-key>`.
 - Run `aether doctor --probe --provider azure`.
 
-### CC4 — SAML metadata drift detection
+### DD4 — Y5 EdDSA verifier extension
 
-- Closes BB6 weakest-point. Hash the metadata response (sha256
-  of bytes); persist the hash in sso-saml.json as
-  `metadata_xml_sha256`.
-- On refresh-saml tick: if response hash matches the persisted
-  value, skip the layout rewrite + log "no drift, skipping
-  rewrite"; bump a `last_checked_at` timestamp regardless.
-- Unit tests for the hash equality + persistence path; live smoke
-  extension on the BB6 mutable metadata server.
+- Closes CC6 weakest-point. CC6 made the SP signer EdDSA-aware;
+  the Y5 verifier still gates on RSA-SHA256.
+- Extend `verify_saml_assertion_signature` algorithm gate to
+  accept SAML_SIG_METHOD_EDDSA_ED25519 alongside
+  SAML_SIG_METHOD_RSA_SHA256. The cert-pin defense already
+  generalises (cert DER is algorithm-independent).
+- Add Ed25519 verify primitive — extract the Ed25519 pubkey from
+  the IdP cert SPKI, call `ed25519_dalek::Verifier::verify` on
+  the c14n SignedInfo bytes (no separate hash).
+- Live smoke extension: round-trip an Ed25519-signed SAMLResponse
+  through aether's verifier.
 
-### CC5 — OIDC proactive refresh
+### DD5 — SAML metadata validUntil staleness check
 
-- Closes BB5 weakest-point. Read `expires_in` from the token
-  response; persist `~/.aether/sso.access_token.expires_at`
-  alongside the sidecar.
-- `sso whoami` computes `now < expires_at - 5 minutes`; refresh
-  preemptively when the window has been crossed, BEFORE calling
-  userinfo. Falls back to the existing reactive 401 path on
-  refresh failure.
-- New env knob `AETHER_OIDC_REFRESH_LEAD_SECS` (default 300,
-  clamped [60, 3600]) for the lead-time window.
-- Unit tests for the expiry math; live smoke extension on the
-  BB5 fake IdP.
+- Closes CC4 follow-up gap. CC4's fingerprint covers trust
+  fields but not the metadata's `validUntil` attribute. An IdP
+  that bumps `validUntil` without rotating certs would still
+  trigger "no drift".
+- Parse `validUntil` (XML schema xsd:dateTime) from
+  `<md:EntityDescriptor>`; persist in sso-saml.json.
+- `refresh-saml` warns when `validUntil` is within
+  `AETHER_SAML_METADATA_STALENESS_WARN_SECS` (default 86400 = 24h)
+  of expiry; bails with a clear error when ALREADY expired.
 
-### CC6 — EdDSA AuthnRequest signing
+### DD6 — OIDC system-clock-skew detection
 
-- Closes BB4 weakest-point. BB4 supports only RSA-SHA256; some
-  modern IdPs (FIDO2-adjacent, Auth0 paths using Ed25519 keys)
-  advertise EdDSA on the AuthnRequest binding.
-- `load_sp_signing_key_from_pem` already accepts Ed25519 PKCS#8.
-- `sign_authn_request_xml` dispatches on key type: RSA → existing
-  RSA-SHA256; Ed25519 → eddsa-2022 SignatureMethod URI.
-- Unit tests for the Ed25519 round-trip; live smoke extension on
-  BB4's fake IdP with an Ed25519 SP key.
+- Closes CC5 weakest-point. CC5 trusts the local clock for the
+  expiry math — broken NTP would defeat proactive refresh.
+- After every successful POST to the token_endpoint, read the
+  HTTP `Date:` header and compute `local_now - server_date`.
+- Persist the latest delta in sso.json metadata or a sidecar.
+- `sso whoami` warns when `|delta| > AETHER_OIDC_CLOCK_SKEW_WARN_SECS`
+  (default 60s). Doesn't refuse — just surfaces the problem.
 
 ## Banned vocabulary
 
@@ -114,110 +112,98 @@ appear in commit messages, STATUS rows, or end-of-turn reports.
 
 ## Open questions (defaults picked)
 
-1. **CC4 hash persistence location.** Default: as a new field
-   `metadata_xml_sha256` in sso-saml.json. Backward-compat: pre-CC4
-   files just trigger a "first refresh" rewrite on the next tick.
-2. **CC5 lead-time default.** Default: 300 seconds (5 minutes).
-   Same window the Z2 JWKS timeout + AA6 reqwest timeout use.
-3. **CC6 EdDSA SignatureMethod URI.** Default:
-   `http://www.w3.org/2021/04/xmldsig-more#eddsa-2022` per the
-   XML-DSig EdDSA registration. Verifiable against the existing Y5
-   verifier when extended.
+1. **DD4 EdDSA cert key extraction.** Default: x509-parser's
+   `SubjectPublicKeyInfo` decoder reads the Ed25519 SPKI
+   (OID 1.3.101.112). Verifying-key bytes are 32 bytes after the
+   SPKI prefix.
+2. **DD5 validUntil parser.** Default: chrono's
+   `DateTime::parse_from_rfc3339` (xsd:dateTime is an RFC 3339
+   superset in practice).
+3. **DD6 warn threshold.** Default: 60s. Real-world NTP drift is
+   sub-second; 60s catches obviously broken setups without
+   false-positive on normal datacentre-vs-laptop skew.
 
 ## Risk register
 
-- **Marketplace activation latency** — Vertex Marketplace
-  subscription can take hours; CC2 may have to defer again.
-- **AWS cred exposure** — never commit AWS keys to the repo;
-  env-only.
-- **CC4 hash false positive** — some IdPs include a timestamp
-  attribute in the metadata document that changes per-fetch even
-  when the certs / endpoints don't. May need to hash a normalized
-  subset of the document rather than the raw bytes. Investigate
-  before shipping.
-- **CC6 EdDSA verifier impact** — Y5 currently rejects EdDSA in
-  `verify_saml_assertion_signature` (Algorithm gate). Extending
-  the sender doesn't require extending the verifier, but operators
-  with a self-loop test would need both. Plan CC scope is sender-
-  side only; verifier extension in a follow-up.
+- **Marketplace activation latency** — DD2 may have to defer.
+- **AWS cred exposure** — env-only, never committed.
+- **DD4 verifier regression** — adding an algorithm to the gate
+  is the kind of change that silently widens trust. Audit the
+  EdDSA verify path before tag-push: confirm the algorithm URI
+  in SignedInfo matches what the cert pubkey actually supports
+  (don't allow RSA cert + EdDSA SignedInfo).
 
 ---
 
-## Pre-CC context — Plan BB self-audit (v0.32.0 shipping)
+## Pre-DD context — Plan CC self-audit (v0.33.0 shipping)
 
-**Audited commits**: 25301f0 (BB4), 49b0b1a (BB5), edc7328 (BB6),
+**Audited commits**: b3e334b (CC4), 6e73b97 (CC5), 963a0f5 (CC6),
 plus this version-bump commit.
 
-### Honest scope re-frame mid-plan
+### Closure milestone
 
-Plan BB was drafted with the same shape as Plan AA: 3 cred-
-dependent slices (BB1–BB3) + 3 non-cred-dependent slices (BB4–BB6
-closing AA weakest-points). The cred-blocked slices remained
-cred-blocked exactly as in Plan AA — no GCP billing came on, no AWS
-creds arrived, no Azure Foundry resource was provisioned. The
-non-cred-dependent slices shipped 100%.
+This is the version where every documented Plan AA + Plan BB
+weakest-point has landed remediation. The chain:
+  - AA4 unsigned AuthnRequest → BB4 RSA signing → CC6 EdDSA signing
+  - AA5-followup discovery → BB6 refresh-saml → CC4 drift detection
+  - AA6 no userinfo → BB5 reactive refresh → CC5 proactive refresh
+
+The remaining Plan-AA / BB / CC carry-forward is the cred-blocked
+DD1-DD3 = CC1-CC3 = BB1-BB3 = AA1-AA3 BYOC live round-trips.
 
 ### BLOCKERs — none
 
-All three shipped Plan BB slices have all spec gates closed at the
-unit-test level. No BLOCKER findings carried into the version bump.
+All three shipped Plan CC slices ship with all spec gates closed.
 
-### HIGHs — one caught + fixed mid-slice
-
-- BB6 mid-development bug: refactor extracted
-  `apply_saml_idp_metadata` from `sso_configure_saml`, accidentally
-  changed the stderr line from "discovered, written to" to "laid
-  out under". AA5fu live smoke greps the old string; the regression
-  surfaced immediately during regression-sweep. Fixed by restoring
-  the original wording (BB6 doesn't need to change it). The smoke
-  is what protected the production message contract.
+### HIGHs — none
 
 ### MEDs — documented and carried
 
-- BB5 auto-refresh attempts ONCE per `whoami` invocation. A
-  rotated refresh_token that also fails would not loop. Documented
-  in Plan BB risk register.
-- BB6 `--watch` is a foreground daemon, not a tokio::spawn from
-  `aether serve`. Operators that want systemd-style supervision
-  wrap it themselves.
+- CC4 fingerprint covers the EXTRACTED trust fields, not the raw
+  XML. Necessary to defeat timestamp/contact-info false positives,
+  but means a metadata that changes `validUntil` without rotating
+  certs is reported as "no drift". Plan DD5 closes this.
+- CC5 proactive refresh trusts the local system clock. Plan DD6
+  closes this via Date-header skew detection.
+- CC6 SP signer is EdDSA-aware but Y5 verifier still gates on
+  RSA-SHA256. Plan DD4 closes this with a symmetric extension.
 
 ### LOWs — knowingly carried
 
-- BB4 signature algorithm is RSA-SHA256 only. EdDSA AuthnRequest
-  signing deferred to CC6.
-- BB5 no proactive refresh based on `expires_in`. Deferred to CC5.
-- BB6 no drift detection — refresh-saml rewrites unconditionally.
-  Wasteful in --watch mode against a stable IdP. Deferred to CC4.
-- BB6 `parse_token_response` was named after the OAuth concept
-  but used by BB5; could rename to `parse_token_endpoint_response`
-  for clarity. Cosmetic.
+- CC4 fingerprint algorithm is hard-coded sha256. If the operator
+  needs collision-resistance against a stronger adversary, they
+  re-implement. Sha256 is the right default for trust-set hashing
+  in 2026.
+- CC5 sidecar uses RFC 3339 with timezone offset. Could store
+  unix-seconds for slightly smaller / faster parsing. Cosmetic.
+- CC6 only Ed25519 EdDSA variant. Ed448 not supported. No real
+  IdP advertises Ed448 today.
 
 ### What worked
 
-- **All 3 shipped Plan BB slices live-verified end-to-end** in
-  this session, each with a dedicated Python fake-IdP smoke that
-  walks the new code path 5-7 steps deep.
-- **The regression sweep caught the BB6 wording change**
-  immediately — without the AA5fu smoke, a working code change
-  would have broken a downstream test that nobody re-ran.
-- **The wrap-up commit-message convention captured the
-  cred-blocked carry-forward honestly** — operators reading the
-  ROADMAP can see the exact gate that's blocking each slice and the
-  env vars they'd need to unblock it.
+- **All 3 shipped Plan CC slices live-verified end-to-end** in
+  this session, each with a dedicated fake-IdP smoke that drives
+  the new path 4-7 steps deep.
+- **The regression sweep caught the BB6 stderr wording change**
+  (CC4) and the BB5 lead-window interference (CC5) immediately —
+  without the smokes, those would have been silent breakages.
+- **The closure milestone is real**. The AA → BB → CC chain is
+  not coincidence; every weakest-point in plan N got remediated
+  in plan N+1, on schedule.
 
 ### Diff numbers (approximate)
 
-- aether-cli/src/main.rs: +600 LoC across BB4 + BB5 + BB6 (helpers,
-  new subcommands, sidecar persistence, metadata helpers,
-  binding-aware SP signing).
-- aether-llm/: 0 LoC (no changes — Plan BB scope is SAML + OIDC).
-- Cargo.toml: +1 word (rsa `pem` feature enabled for BB4 PEM
-  loading).
-- tests/ python smokes: +1100 LoC across 3 new files.
+- aether-cli/src/main.rs: +500 LoC across CC4 + CC5 + CC6 (parser
+  + fingerprint + drift dispatch + expires_at sidecar + proactive
+  refresh + SpSigningKey enum + EdDSA signing path).
+- Cargo.toml: +1 word (ed25519-dalek `pkcs8` + `pem` features).
+- crates/aether-cli/Cargo.toml: +1 line (direct ed25519-dalek dep).
+- tests/ python smokes: +1500 LoC across 3 new files.
 - ROADMAP / STATUS / NEXT_24H_PLAN: +250 LoC.
 
 ### Total binary delta
 
-- aether 0.31.0 release binary on linux-x64: ~43 MB
-- aether 0.32.0 release binary on linux-x64: ~43 MB (no new code
-  paths — just helpers + new subcommand entries)
+- aether 0.32.0 release binary on linux-x64: ~43 MB
+- aether 0.33.0 release binary on linux-x64: ~44 MB (Ed25519
+  signing primitive + PKCS#8 PEM decoder pulled in by
+  ed25519-dalek with new features)

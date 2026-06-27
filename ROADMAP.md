@@ -849,29 +849,107 @@ remediation, and each got delivered without operator-side gates.
 11 new BB-prefix unit tests (3 BB4 + 5 BB5 + 3 BB6) + 3 new Python
 fake-IdP smokes. 78/78 Y/Z/AA/BB-prefix unit tests pass.
 
-## v0.33 — next (Plan CC draft)
+## v0.33 — every AA + BB weakest-point closed — shipped 2026-06-27
 
-- **CC1 Bedrock + Vertex + Azure live round-trip** — same plan as
-  BB1–BB3 + AA1–AA3, awaiting creds + Marketplace + billing.
-  Increasingly stale carry-forward; flips to LIVE-VERIFIED when
-  the operator provides the gates.
-- **CC2 OIDC mTLS client auth (RFC 8705)** — alternative to
+Plan CC. 3 shipped + 3 cred-blocked carried forward. The shipped
+trio closed the LAST documented weakest-points across both Plan AA
+and Plan BB — every gap the self-audits flagged across the enterprise
+SSO surface (SAML + OIDC) now has a delivered remediation.
+
+- **CC4 SAML metadata drift detection** (commit b3e334b). Closes
+  BB6 weakest-point. `apply_saml_idp_metadata` now extracts the
+  trust-relevant fields (`idp_entity_id` + `sso_url` + `binding` +
+  sorted signing-cert set) into a new `ParsedSamlMetadata` struct
+  and persists a sha256 fingerprint over them in sso-saml.json.
+  `sso refresh-saml` ticks compare the new fingerprint to the
+  persisted one and skip the layout rewrite when they match. Sorted
+  certs make the hash order-insensitive against IdPs that
+  rearrange `<KeyDescriptor>` blocks; NUL separators between
+  fields defeat concatenation collisions. Hash covers the EXTRACTED
+  trust fields, not the raw XML — defeats timestamp / contact-info
+  attribute churn some IdPs include on every fetch. 6 unit tests
+  + live smoke `tests/cc4-saml-drift-detection-smoke.py` (five-step
+  chain: configure-v1 → fingerprint persisted → refresh-on-v1 →
+  "no drift, skipping layout rewrite" + pem mtime unchanged → flip
+  to v2 → drift-triggered rewrite + post-rewrite fingerprint
+  stable).
+- **CC5 OIDC proactive access-token refresh** (commit 6e73b97).
+  Closes BB5 weakest-point. `sso_login` + `sso_refresh` persist
+  `expires_at = now + expires_in` to a new sidecar
+  (`~/.aether/sso.access_token.expires_at`, mode 0600, RFC 3339
+  UTC). `sso whoami` reads the sidecar before the userinfo call;
+  if inside the AETHER_OIDC_REFRESH_LEAD_SECS window (default 300s,
+  clamped [60, 3600]) AND the refresh sidecar exists AND
+  `!no_refresh`, refreshes BEFORE the userinfo call. Pure
+  `is_access_token_expiring(expires_at, now, lead)` helper +
+  `oidc_refresh_lead_secs` env helper. `--no-refresh` opts out of
+  BOTH proactive (CC5) and reactive (BB5). Malformed sidecar
+  logged + skipped (falls through to BB5 reactive path). 4 unit
+  tests + live smoke `tests/cc5-oidc-proactive-refresh-smoke.py`
+  (four-step chain: expires_at sidecar at 0600 → outside-window
+  skip → inside-window proactive refresh hits /token BEFORE
+  /userinfo → --no-refresh opt-out). BB5 smoke pinned to lead=60s
+  so its 300s expires_in stays outside the window and the BB5
+  reactive path is exercised, not bypassed.
+- **CC6 EdDSA AuthnRequest signing** (commit 963a0f5). Closes BB4
+  weakest-point. New `SpSigningKey { Rsa, Ed25519 }` enum.
+  `load_sp_signing_key_from_pem` tries Ed25519 PKCS#8 first
+  (tightest discriminator — OID 1.3.101.112), then RSA PKCS#8,
+  then RSA PKCS#1; garbage PEM bails citing all three formats.
+  `sign_authn_request_xml` dispatches on the variant: RSA path
+  unchanged (RSA-SHA256), Ed25519 path uses SignatureMethod URI
+  `http://www.w3.org/2021/04/xmldsig-more#eddsa-ed25519` (per
+  draft-jones-eddsa-xml-signature) and signs the canonical
+  SignedInfo BYTES directly — no separate hash. ed25519-dalek
+  features bumped (`pkcs8` + `pem`) and added as a direct
+  aether-cli dep (previously workspace-only). 3 BB4 tests
+  migrated to wrap RSA keys in `SpSigningKey::Rsa(_)`; 3 new CC6
+  tests (Ed25519 PEM load + EdDSA URI dispatch + end-to-end
+  round-trip with `ed25519_dalek::Verifier`). Live smoke
+  `tests/cc6-eddsa-authn-request-smoke.py` (five-step chain
+  mirroring BB4 with Ed25519 key + Python `cryptography` Ed25519
+  verify + Y3-Y7 IdP→SP regression).
+
+**Honest UNVERIFIEDs carried forward to Plan DD:**
+- CC1 Bedrock real AWS round-trip — no creds in env.
+- CC2 Vertex real GCP round-trip — billing + Marketplace gates.
+- CC3 Azure real round-trip — no Foundry resource.
+
+13 new CC-prefix unit tests (6 CC4 + 4 CC5 + 3 CC6) + 3 new Python
+fake-IdP smokes. 91/91 Y/Z/AA/BB/CC-prefix unit tests pass.
+
+**Closure milestone:** every documented weakest-point from Plan AA
+and Plan BB has now landed. The AA→BB→CC remediation chain:
+  - AA4 unsigned AuthnRequest → BB4 RSA signing → CC6 EdDSA signing
+  - AA5-followup discovery → BB6 refresh-saml → CC4 drift detection
+  - AA6 no userinfo → BB5 reactive refresh → CC5 proactive refresh
+
+## v0.34 — next (Plan DD draft)
+
+- **DD1 Bedrock + Vertex + Azure live round-trip** — same plan as
+  CC1–CC3 + BB1–BB3 + AA1–AA3. Carries forward until creds become
+  available.
+- **DD2 OIDC mTLS client auth (RFC 8705)** — alternative to
   `client_secret_basic` for high-assurance OAuth clients. Carries
-  over from Plan BB.
-- **CC3 Tenant SCIM provisioning** — `/v1/scim/Users` CRUD
-  reusing `tenant_acl.db`, bearer-gated via `AETHER_SCIM_BEARER`.
-  Carries over from Plan BB.
-- **CC4 SAML metadata drift detection** — close the BB6
-  weakest-point. Hash the metadata response and skip the
-  `idp-certs/` rewrite when unchanged. Useful in --watch mode
-  against an IdP that hasn't rotated.
-- **CC5 OIDC proactive refresh** — close the BB5 weakest-point.
-  Use the `expires_in` field stored at login to refresh
-  preemptively (e.g. 5 minutes before expiry) rather than
-  reactively on 401.
-- **CC6 EdDSA AuthnRequest signing** — close the BB4 weakest-
-  point. RSA-SHA256 is the only algorithm BB4 supports; extend
-  to RFC 8419 EdDSA for FIDO2-adjacent IdPs.
+  over from BB / CC.
+- **DD3 Tenant SCIM provisioning** — `/v1/scim/Users` CRUD reusing
+  `tenant_acl.db`, bearer-gated via `AETHER_SCIM_BEARER`. Carries
+  over from BB / CC.
+- **DD4 EdDSA SAML assertion verifier (Y5 extension)** — close the
+  CC6 weakest-point. CC6 sender-signs EdDSA; the Y5 verifier still
+  gates on RSA-SHA256. Extend the algorithm gate + Ed25519 verify
+  primitive so aether can also CONSUME EdDSA-signed
+  SAMLResponses end-to-end.
+- **DD5 SAML metadata validUntil staleness check** — close a CC4
+  follow-up gap. CC4's fingerprint covers trust fields but not the
+  metadata's `validUntil` attribute. An IdP that bumps the validity
+  window without rotating certs would still trigger "no drift" —
+  add a separate timer check.
+- **DD6 OIDC system-clock-skew detection** — close the CC5
+  weakest-point. The proactive-refresh path trusts the local clock.
+  Read the `Date:` header from the token endpoint response and
+  warn if the skew exceeds a threshold; operators with broken NTP
+  get a clear signal.
 
 ## v0.9 — enterprise
 
