@@ -121,7 +121,28 @@ pub async fn maybe_compact(session: &mut Session) -> Result<bool, AgentError> {
 
     // Keep the final third of history verbatim; summarize the head.
     let keep_count = std::cmp::max(2, session.history.len() / 3);
-    let to_summarize_count = session.history.len() - keep_count;
+    let mut to_summarize_count = session.history.len() - keep_count;
+
+    // The first item of the tail (index to_summarize_count) must be a User
+    // message. Two failure modes if it is not:
+    //   - ToolResults: the tail's tool_use_ids reference an Assistant that was
+    //     drained into the head; Anthropic rejects the next API call with 400
+    //     "unexpected tool_use_id found in tool_result blocks".
+    //   - Assistant: produces consecutive assistant messages (also invalid).
+    // Fix: walk the cut-point back toward the head until we land on a User item.
+    while to_summarize_count > 1
+        && !matches!(&session.history[to_summarize_count], ConversationItem::User(_))
+    {
+        to_summarize_count -= 1;
+    }
+
+    // If we still couldn't find a User item to snap to, skip this compaction
+    // turn rather than emit an invalid message sequence.
+    if !matches!(&session.history[to_summarize_count], ConversationItem::User(_)) {
+        eprintln!("[compaction] skipped: no User boundary found for safe cut");
+        return Ok(false);
+    }
+
     let head: Vec<ConversationItem> = session.history.drain(0..to_summarize_count).collect();
     let history_text = serialize_history(&head);
 
@@ -322,8 +343,10 @@ mod tests {
         assert!(compacted, "should compact above threshold");
 
         // History shrunk: head replaced by synthetic User+Assistant pair.
-        // Original len was 6; keep_count = 6/3 = 2; drain 4; insert 2 → 4.
-        assert_eq!(session.history.len(), 4);
+        // Original len was 6; keep_count = 6/3 = 2; initial to_summarize = 4.
+        // history[4] = Assistant → snap back → history[3] = User → cut at 3.
+        // drain 3 items; insert 2 synthetic → 5 items total.
+        assert_eq!(session.history.len(), 5);
         match &session.history[0] {
             ConversationItem::User(s) => assert!(s.contains("CONTEXT SUMMARY")),
             other => panic!("expected User summary marker, got {:?}", other),
@@ -334,10 +357,14 @@ mod tests {
             }
             other => panic!("expected Assistant summary, got {:?}", other),
         }
-        // Tail preserved (last 2 items from original history).
+        // Snap-back ensures tail[0] is User, not Assistant or ToolResults.
         match &session.history[2] {
+            ConversationItem::User(s) => assert_eq!(s, "second message"),
+            other => panic!("expected User as first tail item, got {:?}", other),
+        }
+        match &session.history[3] {
             ConversationItem::Assistant { text: Some(t), .. } => assert_eq!(t, "second reply"),
-            other => panic!("expected preserved tail, got {:?}", other),
+            other => panic!("expected preserved Assistant tail item, got {:?}", other),
         }
 
         // Usage reset to just the summarization call's own cost.
@@ -346,6 +373,107 @@ mod tests {
 
         // Exactly one provider call was made.
         assert_eq!(llm.calls().len(), 1);
+    }
+
+    /// Regression test: tail must not start with ToolResults.
+    /// Before the snap-back fix, `to_summarize_count` could land on a ToolResults
+    /// item, producing orphaned tool_use_ids → Anthropic 400.
+    #[tokio::test]
+    async fn maybe_compact_tail_never_starts_with_tool_results() {
+        use crate::context::{ConversationItem, RecordedToolResult, RecordedToolUse};
+        use crate::mock::{MockLlmProvider, ENV_TEST_LOCK};
+        use crate::{Session, SessionConfig};
+        use aether_llm::{ContentBlock, MessagesResponse, StopReason};
+        use aether_overlay::{Fable5Overlay, OverlayConfig};
+        use aether_selfcheck::Gate;
+        use aether_tools::ToolRegistry;
+        use std::sync::Arc;
+
+        let _guard = ENV_TEST_LOCK.lock().expect("env lock");
+        let llm = Arc::new(MockLlmProvider::new());
+        llm.push(MessagesResponse {
+            content: vec![ContentBlock::Text { text: "summary".into() }],
+            stop_reason: StopReason::EndTurn,
+            usage: Some(Usage { input_tokens: 1_000, output_tokens: 50,
+                cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }),
+        });
+
+        let session_config = SessionConfig { model: "claude-sonnet-4-6".into(), ..SessionConfig::default() };
+        let overlay = Fable5Overlay::new(OverlayConfig::default());
+        let gate = Gate::new(Vec::new()).expect("gate");
+        let tools = ToolRegistry::new();
+        let mut session = Session::new(session_config, overlay, llm.clone(), gate, tools);
+        session.usage_total.input_tokens = 180_000;
+
+        // 6 items where the naive cut (index 4) would land on ToolResults.
+        // Pattern: User, Assistant{t1}, ToolResults{t1}, User, Assistant{t2}, ToolResults{t2}
+        session.history = vec![
+            ConversationItem::User("msg1".into()),
+            ConversationItem::Assistant {
+                text: Some("reply1".into()),
+                tool_uses: vec![RecordedToolUse { id: "t1".into(), name: "Read".into(), input: serde_json::json!({}) }],
+            },
+            ConversationItem::ToolResults(vec![RecordedToolResult { tool_use_id: "t1".into(), content: "r1".into(), is_error: false }]),
+            ConversationItem::User("msg2".into()),
+            ConversationItem::Assistant {
+                text: Some("reply2".into()),
+                tool_uses: vec![RecordedToolUse { id: "t2".into(), name: "Read".into(), input: serde_json::json!({}) }],
+            },
+            ConversationItem::ToolResults(vec![RecordedToolResult { tool_use_id: "t2".into(), content: "r2".into(), is_error: false }]),
+        ];
+
+        let compacted = maybe_compact(&mut session).await.expect("compact");
+        assert!(compacted, "should compact above threshold");
+
+        // Tail first item (index 2 after synthetic pair insert) must be User.
+        match &session.history[2] {
+            ConversationItem::User(_) => {}
+            other => panic!("tail must start with User after snap-back, got {:?}", other),
+        }
+    }
+
+    /// If no User boundary exists in the snapback range, compaction is skipped
+    /// rather than producing an invalid message sequence.
+    #[tokio::test]
+    async fn maybe_compact_skips_when_no_user_snap_point() {
+        use crate::context::{ConversationItem, RecordedToolResult, RecordedToolUse};
+        use crate::mock::{MockLlmProvider, ENV_TEST_LOCK};
+        use crate::{Session, SessionConfig};
+        use aether_overlay::{Fable5Overlay, OverlayConfig};
+        use aether_selfcheck::Gate;
+        use aether_tools::ToolRegistry;
+        use std::sync::Arc;
+
+        let _guard = ENV_TEST_LOCK.lock().expect("env lock");
+        let llm = Arc::new(MockLlmProvider::new());
+
+        let session_config = SessionConfig { model: "claude-sonnet-4-6".into(), ..SessionConfig::default() };
+        let overlay = Fable5Overlay::new(OverlayConfig::default());
+        let gate = Gate::new(Vec::new()).expect("gate");
+        let tools = ToolRegistry::new();
+        let mut session = Session::new(session_config, overlay, llm.clone(), gate, tools);
+        session.usage_total.input_tokens = 180_000;
+
+        // History where only index 0 is User — snapback cannot find a User at
+        // index > 0, so compaction must be skipped entirely.
+        session.history = vec![
+            ConversationItem::User("only user msg".into()),
+            ConversationItem::Assistant {
+                text: Some("reply".into()),
+                tool_uses: vec![RecordedToolUse { id: "t1".into(), name: "Read".into(), input: serde_json::json!({}) }],
+            },
+            ConversationItem::ToolResults(vec![RecordedToolResult { tool_use_id: "t1".into(), content: "r1".into(), is_error: false }]),
+            ConversationItem::Assistant {
+                text: Some("reply2".into()),
+                tool_uses: vec![RecordedToolUse { id: "t2".into(), name: "Read".into(), input: serde_json::json!({}) }],
+            },
+            ConversationItem::ToolResults(vec![RecordedToolResult { tool_use_id: "t2".into(), content: "r2".into(), is_error: false }]),
+            ConversationItem::Assistant { text: Some("reply3".into()), tool_uses: Vec::new() },
+        ];
+
+        let compacted = maybe_compact(&mut session).await.expect("compact");
+        assert!(!compacted, "must skip compaction when no safe User snap point exists");
+        assert_eq!(llm.calls().len(), 0, "no LLM call when compaction skipped");
     }
 
     #[tokio::test]
