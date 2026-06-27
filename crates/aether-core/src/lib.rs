@@ -376,7 +376,20 @@ async fn agent_turn_inner(
     Ok(match resp.stop_reason {
         StopReason::EndTurn => TurnOutcome::AwaitUser,
         StopReason::ToolUse => TurnOutcome::ContinueImmediately,
-        StopReason::MaxTokens => TurnOutcome::ContinueImmediately,
+        StopReason::MaxTokens => {
+            // When there were no tool_uses, history ends with a partial
+            // Assistant turn and no ToolResults follow. The next API call
+            // would send assistant-prefill → Anthropic 400. Insert a
+            // synthetic User continuation so the U/A/U alternation holds.
+            if tool_uses.is_empty() {
+                session.history.push(ConversationItem::User(
+                    "[SYSTEM] Your response was cut off by the token limit. \
+                     Please continue seamlessly from where you left off."
+                        .into(),
+                ));
+            }
+            TurnOutcome::ContinueImmediately
+        }
         StopReason::Refusal => TurnOutcome::AwaitUser,
         // A configured stop sequence hit — model's "natural" end.
         StopReason::StopSequence => TurnOutcome::AwaitUser,
