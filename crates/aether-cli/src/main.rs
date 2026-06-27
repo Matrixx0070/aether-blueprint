@@ -10294,6 +10294,11 @@ fn rsa_pubkey_from_pem_cert(pem_bytes: &[u8]) -> Result<(rsa::RsaPublicKey, Vec<
 /// Y5: the only SignatureMethod algorithm Y5 accepts.
 const SAML_SIG_METHOD_RSA_SHA256: &str =
     "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256";
+/// CC6: EdDSA SignatureMethod for Ed25519 keys. Per the W3C
+/// xmldsig-more draft (draft-jones-eddsa-xml-signature) and the
+/// XML-DSig algorithm registry update at /TR/xmlsec-algorithms.
+const SAML_SIG_METHOD_EDDSA_ED25519: &str =
+    "http://www.w3.org/2021/04/xmldsig-more#eddsa-ed25519";
 /// Y5: the only DigestMethod algorithm Y5 accepts.
 const SAML_DIGEST_METHOD_SHA256: &str =
     "http://www.w3.org/2001/04/xmlenc#sha256";
@@ -11153,24 +11158,50 @@ fn build_authn_request_xml(
     ))
 }
 
-/// BB4: load an RSA private key from a PEM file at `path`. Accepts
-/// both PKCS#8 (`-----BEGIN PRIVATE KEY-----`, openssl default since
-/// 3.0) and PKCS#1 (`-----BEGIN RSA PRIVATE KEY-----`, legacy
-/// openssl). Tries PKCS#8 first; falls back to PKCS#1 on failure.
-fn load_sp_signing_key_from_pem(path: &Path) -> Result<rsa::RsaPrivateKey> {
+/// CC6: SP signing key — RSA (BB4) or Ed25519 (CC6). The signer
+/// dispatches on the variant to pick the algorithm URI and the
+/// signature primitive. Generated keys live in memory ONLY as long
+/// as the signer holds a reference; the on-disk PEM is the operator's
+/// source of truth.
+#[derive(Debug)]
+enum SpSigningKey {
+    Rsa(rsa::RsaPrivateKey),
+    Ed25519(ed25519_dalek::SigningKey),
+}
+
+/// BB4 + CC6: load an SP signing key from a PEM file at `path`.
+/// Accepts:
+///   - Ed25519 PKCS#8 PEM (`-----BEGIN PRIVATE KEY-----` carrying an
+///     OKP/Ed25519 SPKI) — CC6 path.
+///   - RSA PKCS#8 PEM (`-----BEGIN PRIVATE KEY-----` carrying an
+///     RSA SPKI) — BB4 default since openssl 3.
+///   - RSA PKCS#1 PEM (`-----BEGIN RSA PRIVATE KEY-----`) — BB4
+///     legacy openssl < 3.
+///
+/// Resolution order: Ed25519 PKCS#8 first (lightest decode that's
+/// also the most-restrictive), then RSA PKCS#8, then RSA PKCS#1.
+/// Garbage PEM bails with an informative error citing all three.
+fn load_sp_signing_key_from_pem(path: &Path) -> Result<SpSigningKey> {
+    use ed25519_dalek::pkcs8::DecodePrivateKey as Ed25519DecodePrivateKey;
     use rsa::pkcs1::DecodeRsaPrivateKey;
     use rsa::pkcs8::DecodePrivateKey;
     let pem = std::fs::read_to_string(path)
         .with_context(|| format!("read SP private key PEM at {}", path.display()))?;
-    if let Ok(k) = rsa::RsaPrivateKey::from_pkcs8_pem(&pem) {
-        return Ok(k);
+    if let Ok(k) = ed25519_dalek::SigningKey::from_pkcs8_pem(&pem) {
+        return Ok(SpSigningKey::Ed25519(k));
     }
-    rsa::RsaPrivateKey::from_pkcs1_pem(&pem).map_err(|e| {
-        anyhow!(
-            "failed to decode {} as PKCS#8 or PKCS#1 RSA private key: {e}",
-            path.display()
-        )
-    })
+    if let Ok(k) = rsa::RsaPrivateKey::from_pkcs8_pem(&pem) {
+        return Ok(SpSigningKey::Rsa(k));
+    }
+    rsa::RsaPrivateKey::from_pkcs1_pem(&pem)
+        .map(SpSigningKey::Rsa)
+        .map_err(|e| {
+            anyhow!(
+                "failed to decode {} as Ed25519 PKCS#8, RSA PKCS#8, or RSA \
+                 PKCS#1 private key: {e}",
+                path.display()
+            )
+        })
 }
 
 /// BB4: sign an unsigned AuthnRequest XML with the SP's RSA private
@@ -11195,10 +11226,19 @@ fn load_sp_signing_key_from_pem(path: &Path) -> Result<rsa::RsaPrivateKey> {
 fn sign_authn_request_xml(
     xml: &str,
     request_id: &str,
-    sp_priv_key: &rsa::RsaPrivateKey,
+    sp_priv_key: &SpSigningKey,
 ) -> Result<String> {
     use base64::Engine as _;
     use sha2::Digest;
+
+    // CC6: pick the SignatureMethod URI based on the key variant.
+    // The signed-info / reference / digest pipeline is unchanged
+    // between RSA and EdDSA — only the SignatureMethod algorithm
+    // attribute and the actual signing primitive differ.
+    let sig_method = match sp_priv_key {
+        SpSigningKey::Rsa(_) => SAML_SIG_METHOD_RSA_SHA256,
+        SpSigningKey::Ed25519(_) => SAML_SIG_METHOD_EDDSA_ED25519,
+    };
 
     // 1. Reference digest. The enveloped-signature transform strips
     // any descendant Signature element; we haven't added one yet, so
@@ -11214,9 +11254,8 @@ fn sign_authn_request_xml(
 
     // 2. Build SignedInfo carrying that digest.
     let signed_info = format!(
-        r##"<ds:SignedInfo><ds:CanonicalizationMethod Algorithm="{exc_c14n}"></ds:CanonicalizationMethod><ds:SignatureMethod Algorithm="{rsa_sha256}"></ds:SignatureMethod><ds:Reference URI="#{request_id}"><ds:Transforms><ds:Transform Algorithm="{enveloped}"></ds:Transform><ds:Transform Algorithm="{exc_c14n}"></ds:Transform></ds:Transforms><ds:DigestMethod Algorithm="{sha256}"></ds:DigestMethod><ds:DigestValue>{digest_b64}</ds:DigestValue></ds:Reference></ds:SignedInfo>"##,
+        r##"<ds:SignedInfo><ds:CanonicalizationMethod Algorithm="{exc_c14n}"></ds:CanonicalizationMethod><ds:SignatureMethod Algorithm="{sig_method}"></ds:SignatureMethod><ds:Reference URI="#{request_id}"><ds:Transforms><ds:Transform Algorithm="{enveloped}"></ds:Transform><ds:Transform Algorithm="{exc_c14n}"></ds:Transform></ds:Transforms><ds:DigestMethod Algorithm="{sha256}"></ds:DigestMethod><ds:DigestValue>{digest_b64}</ds:DigestValue></ds:Reference></ds:SignedInfo>"##,
         exc_c14n = SAML_TRANSFORM_EXC_C14N,
-        rsa_sha256 = SAML_SIG_METHOD_RSA_SHA256,
         enveloped = SAML_TRANSFORM_ENVELOPED,
         sha256 = SAML_DIGEST_METHOD_SHA256,
     );
@@ -11240,13 +11279,24 @@ fn sign_authn_request_xml(
     let signed_info_canonical =
         canonicalize_exc_c14n_subtree(&signed_info, &inherited_at_sig)?;
 
-    // 4. RSA-SHA256 sign the canonical SignedInfo bytes.
-    use rsa::pkcs1v15::SigningKey;
-    use rsa::signature::SignatureEncoding;
-    use rsa::signature::SignerMut;
-    let mut signer = SigningKey::<sha2::Sha256>::new(sp_priv_key.clone());
-    let sig = signer.sign(&signed_info_canonical);
-    let sig_b64 = base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
+    // 4. Sign the canonical SignedInfo bytes per the key variant.
+    let sig_b64 = match sp_priv_key {
+        SpSigningKey::Rsa(rsa_key) => {
+            use rsa::pkcs1v15::SigningKey;
+            use rsa::signature::SignatureEncoding;
+            use rsa::signature::SignerMut;
+            let mut signer = SigningKey::<sha2::Sha256>::new(rsa_key.clone());
+            let sig = signer.sign(&signed_info_canonical);
+            base64::engine::general_purpose::STANDARD.encode(sig.to_bytes())
+        }
+        SpSigningKey::Ed25519(ed_key) => {
+            // CC6: Ed25519 signs the raw bytes directly — no separate
+            // hash like RSA-SHA256. The signature is 64 bytes.
+            use ed25519_dalek::Signer;
+            let sig: ed25519_dalek::Signature = ed_key.sign(&signed_info_canonical);
+            base64::engine::general_purpose::STANDARD.encode(sig.to_bytes())
+        }
+    };
 
     // 5. Assemble the Signature element with xmlns:ds declared locally.
     let signature_block = format!(
@@ -14593,8 +14643,10 @@ mod tests {
         )
         .expect("build unsigned");
 
-        // 2. Sign it.
-        let signed = sign_authn_request_xml(&unsigned, request_id, &priv_key)
+        // 2. Sign it. CC6 wraps the key in SpSigningKey::Rsa so the
+        // signer dispatches to the RSA-SHA256 branch.
+        let sp_key = SpSigningKey::Rsa(priv_key);
+        let signed = sign_authn_request_xml(&unsigned, request_id, &sp_key)
             .expect("sign authn request");
         // Structural assertions: Signature after Issuer, contains the
         // Reference URI, has SignatureValue + xmlns:ds.
@@ -14692,7 +14744,8 @@ mod tests {
 
         // Sign + assert the DigestValue in the produced SignedInfo
         // matches what we computed.
-        let signed = sign_authn_request_xml(&unsigned, request_id, &priv_key)
+        let sp_key = SpSigningKey::Rsa(priv_key);
+        let signed = sign_authn_request_xml(&unsigned, request_id, &sp_key)
             .expect("sign");
         assert!(
             signed.contains(&format!("<ds:DigestValue>{expected_digest_b64}</ds:DigestValue>")),
@@ -14727,7 +14780,14 @@ mod tests {
         let p8_path = dir.join("sp.pkcs8.pem");
         std::fs::write(&p8_path, p8.as_bytes()).expect("write p8");
         let loaded_p8 = load_sp_signing_key_from_pem(&p8_path).expect("load p8");
-        assert_eq!(loaded_p8.to_public_key().n(), &pub_modulus, "PKCS#8 modulus");
+        match loaded_p8 {
+            SpSigningKey::Rsa(k) => assert_eq!(
+                k.to_public_key().n(),
+                &pub_modulus,
+                "PKCS#8 modulus"
+            ),
+            SpSigningKey::Ed25519(_) => panic!("RSA PKCS#8 must decode to Rsa variant"),
+        }
 
         let p1 = key
             .to_pkcs1_pem(LineEnding::LF)
@@ -14735,9 +14795,17 @@ mod tests {
         let p1_path = dir.join("sp.pkcs1.pem");
         std::fs::write(&p1_path, p1.as_bytes()).expect("write p1");
         let loaded_p1 = load_sp_signing_key_from_pem(&p1_path).expect("load p1");
-        assert_eq!(loaded_p1.to_public_key().n(), &pub_modulus, "PKCS#1 modulus");
+        match loaded_p1 {
+            SpSigningKey::Rsa(k) => assert_eq!(
+                k.to_public_key().n(),
+                &pub_modulus,
+                "PKCS#1 modulus"
+            ),
+            SpSigningKey::Ed25519(_) => panic!("RSA PKCS#1 must decode to Rsa variant"),
+        }
 
-        // Garbage PEM → informative error citing both attempted formats.
+        // Garbage PEM → informative error citing all three attempted
+        // formats (Ed25519 PKCS#8, RSA PKCS#8, RSA PKCS#1).
         let bad_path = dir.join("garbage.pem");
         std::fs::write(&bad_path, b"-----BEGIN NOT A KEY-----\nzzzz\n-----END NOT A KEY-----")
             .expect("write garbage");
@@ -14745,9 +14813,141 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("PKCS#8 or PKCS#1"),
-            "error cites both formats: {err}"
+            err.contains("Ed25519 PKCS#8") && err.contains("RSA PKCS#8")
+                && err.contains("RSA PKCS#1"),
+            "error cites all three formats: {err}"
         );
+    }
+
+    /// CC6: load_sp_signing_key_from_pem accepts Ed25519 PKCS#8 PEM
+    /// and surfaces it as the Ed25519 variant.
+    #[test]
+    fn cc6_loads_ed25519_pkcs8_pem() {
+        use ed25519_dalek::pkcs8::EncodePrivateKey;
+        use rand_core::OsRng;
+        let mut csprng = OsRng;
+        let signing_key = ed25519_dalek::SigningKey::generate(&mut csprng);
+        let expected_pub = signing_key.verifying_key();
+        let pem = signing_key
+            .to_pkcs8_pem(ed25519_dalek::pkcs8::spki::der::pem::LineEnding::LF)
+            .expect("to_pkcs8_pem");
+        let dir = std::env::temp_dir().join(format!(
+            "aether-cc6-ed-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("tmp");
+        let p = dir.join("sp-ed25519.pem");
+        std::fs::write(&p, pem.as_bytes()).expect("write");
+        let loaded = load_sp_signing_key_from_pem(&p).expect("load Ed25519 PKCS#8");
+        match loaded {
+            SpSigningKey::Ed25519(k) => assert_eq!(
+                k.verifying_key().to_bytes(),
+                expected_pub.to_bytes(),
+                "Ed25519 verifying-key bytes must round-trip"
+            ),
+            SpSigningKey::Rsa(_) => panic!("Ed25519 PKCS#8 must decode to Ed25519 variant"),
+        }
+    }
+
+    /// CC6: signing with an Ed25519 key produces a SignedInfo carrying
+    /// the eddsa-ed25519 SignatureMethod URI (not the RSA-SHA256 one).
+    /// Dispatch shape captured here so a future refactor that drops
+    /// EdDSA selection fails loudly.
+    #[test]
+    fn cc6_eddsa_signature_method_uri_in_signed_info() {
+        use rand_core::OsRng;
+        let mut csprng = OsRng;
+        let signing_key = ed25519_dalek::SigningKey::generate(&mut csprng);
+        let sp_key = SpSigningKey::Ed25519(signing_key);
+        let request_id = "_cc6-uri-1";
+        let unsigned = build_authn_request_xml(
+            "https://idp.test/saml/metadata",
+            "https://idp.test/saml/sso",
+            "https://sp.test/saml",
+            "http://127.0.0.1:7777/sso/saml/acs",
+            chrono::DateTime::from_timestamp(1_750_000_000, 0).unwrap(),
+            Some(request_id),
+        )
+        .expect("build unsigned");
+        let signed = sign_authn_request_xml(&unsigned, request_id, &sp_key)
+            .expect("Ed25519 sign");
+        assert!(
+            signed.contains(SAML_SIG_METHOD_EDDSA_ED25519),
+            "Ed25519 SignedInfo MUST cite eddsa-ed25519 URI: {signed}"
+        );
+        assert!(
+            !signed.contains(SAML_SIG_METHOD_RSA_SHA256),
+            "Ed25519 SignedInfo MUST NOT cite RSA-SHA256 URI: {signed}"
+        );
+    }
+
+    /// CC6: end-to-end Ed25519 round-trip. Generate key, sign,
+    /// extract SignedInfo + SignatureValue from the output, c14n
+    /// SignedInfo, verify against the matching verifying key.
+    #[test]
+    fn cc6_ed25519_signature_verifies_against_verifying_key() {
+        use base64::Engine as _;
+        use ed25519_dalek::Verifier;
+        use rand_core::OsRng;
+
+        let mut csprng = OsRng;
+        let signing_key = ed25519_dalek::SigningKey::generate(&mut csprng);
+        let verifying_key = signing_key.verifying_key();
+        let sp_key = SpSigningKey::Ed25519(signing_key);
+        let request_id = "_cc6-rt-1";
+        let unsigned = build_authn_request_xml(
+            "https://idp.test/saml/metadata",
+            "https://idp.test/saml/sso",
+            "https://sp.test/saml",
+            "http://127.0.0.1:7777/sso/saml/acs",
+            chrono::DateTime::from_timestamp(1_750_000_000, 0).unwrap(),
+            Some(request_id),
+        )
+        .expect("build unsigned");
+        let signed = sign_authn_request_xml(&unsigned, request_id, &sp_key)
+            .expect("Ed25519 sign");
+
+        // Extract SignedInfo + SignatureValue from the output.
+        let si_open = signed.find("<ds:SignedInfo>").unwrap();
+        let si_close_marker = "</ds:SignedInfo>";
+        let si_close =
+            signed.find(si_close_marker).unwrap() + si_close_marker.len();
+        let signed_info = &signed[si_open..si_close];
+        let sv_open = signed.find("<ds:SignatureValue>").unwrap()
+            + "<ds:SignatureValue>".len();
+        let sv_close = signed.find("</ds:SignatureValue>").unwrap();
+        let sig_bytes = base64::engine::general_purpose::STANDARD
+            .decode(signed[sv_open..sv_close].trim().as_bytes())
+            .expect("b64 SignatureValue");
+        let sig_array: [u8; 64] = sig_bytes
+            .as_slice()
+            .try_into()
+            .expect("Ed25519 sig is 64 bytes");
+        let sig: ed25519_dalek::Signature = ed25519_dalek::Signature::from_bytes(&sig_array);
+
+        // c14n SignedInfo with the same inherited NS the signer used.
+        let mut inherited = std::collections::BTreeMap::new();
+        inherited.insert(
+            "samlp".to_string(),
+            "urn:oasis:names:tc:SAML:2.0:protocol".to_string(),
+        );
+        inherited.insert(
+            "saml".to_string(),
+            "urn:oasis:names:tc:SAML:2.0:assertion".to_string(),
+        );
+        inherited.insert(
+            "ds".to_string(),
+            "http://www.w3.org/2000/09/xmldsig#".to_string(),
+        );
+        let si_c14n = canonicalize_exc_c14n_subtree(signed_info, &inherited)
+            .expect("c14n SignedInfo");
+
+        // Ed25519 signs the raw bytes (no separate hash) — verify
+        // matches that primitive.
+        verifying_key
+            .verify(&si_c14n, &sig)
+            .expect("CC6 Ed25519 signature must verify under verifying_key");
     }
 
     /// AA5-followup: extract ALL signing certs from metadata XML.

@@ -31,7 +31,7 @@ bytes = "1"
 hex = "0.4"
 sha2 = "0.10"
 hmac = "0.12"
-ed25519-dalek = { version = "2", features = ["rand_core"] }
+ed25519-dalek = { version = "2", features = ["rand_core", "pkcs8", "pem"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 notify = { version = "6", default-features = false, features = ["macos_kqueue"] }

@@ -46,6 +46,7 @@ redis.workspace = true
 flate2.workspace = true
 quick-xml.workspace = true
 rsa.workspace = true
+ed25519-dalek.workspace = true
 x509-parser.workspace = true
 once_cell.workspace = true
 chrono.workspace = true
