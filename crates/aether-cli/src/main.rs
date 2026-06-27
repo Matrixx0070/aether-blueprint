@@ -2850,6 +2850,7 @@ async fn complete_handler(
     body: axum::Json<CompleteRequest>,
 ) -> axum::response::Response {
     bump(&METRIC_COMPLETE_TOTAL);
+    let _v3_complete_start = std::time::Instant::now();
     let ip = extract_client_ip(&headers);
     if let Err(resp) = rate_check(&state, &ip) {
         return resp;
@@ -2890,6 +2891,7 @@ async fn complete_handler(
             axum::response::sse::Event::default().data(json)
         ),
     );
+    let v3_start = _v3_complete_start;
     let terminal = async move {
         let outcome = task.await;
         let terminal_json = match outcome {
@@ -2903,6 +2905,9 @@ async fn complete_handler(
             Ok(Err(e)) => serde_json::json!({"type":"error","message": e.to_string()}),
             Err(e) => serde_json::json!({"type":"error","message": format!("agent task: {e}")}),
         };
+        // V3: record /v1/complete latency when the terminal frame is
+        // about to ship (this is the agent-task wall-clock cost).
+        observe_complete_latency_ms(v3_start.elapsed().as_millis() as u64);
         Ok::<_, std::convert::Infallible>(
             axum::response::sse::Event::default().data(terminal_json.to_string()),
         )
@@ -3110,7 +3115,7 @@ impl FenceStripper {
     }
 }
 
-// ── U1: Prometheus metrics ───────────────────────────────────────────────
+// ── U1+V3: Prometheus metrics ────────────────────────────────────────────
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -3121,13 +3126,67 @@ static METRIC_COMPLETE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static METRIC_ROLLBACK_TOTAL: AtomicU64 = AtomicU64::new(0);
 static METRIC_429_TOTAL: AtomicU64 = AtomicU64::new(0);
 static METRIC_4XX_TOTAL: AtomicU64 = AtomicU64::new(0);
-static METRIC_TURN_DURATION_MS_SUM: AtomicU64 = AtomicU64::new(0);
+/// V3 rename: this counter tracks TOOL-CALL duration, not turn
+/// duration. The v0.25 name (METRIC_TURN_DURATION_MS_SUM) was wrong
+/// and the exported metric followed; v0.26 renames both. Scrapers
+/// that point at the old name need to update.
+static METRIC_TOOL_CALL_DURATION_MS_SUM: AtomicU64 = AtomicU64::new(0);
+
+/// V3 labelled `tool_calls_total{tool=…,is_error=…}` — per
+/// (tool_name, is_error) AtomicU64. Read-lock-free fast path on
+/// the existing counter; write-locked only when adding a new
+/// label-set (rare after warm-up).
+static METRIC_TOOL_CALLS_LABELLED: once_cell::sync::Lazy<
+    std::sync::RwLock<std::collections::HashMap<(String, bool), AtomicU64>>,
+> = once_cell::sync::Lazy::new(|| std::sync::RwLock::new(std::collections::HashMap::new()));
+
+/// V3 histogram for `/v1/complete` latency. Buckets are cumulative
+/// le="100" / le="500" / le="1000" / le="5000" / le="+Inf" in ms.
+/// `count` is total observations; `sum` is millisecond aggregate.
+static METRIC_COMPLETE_LATENCY_COUNT: AtomicU64 = AtomicU64::new(0);
+static METRIC_COMPLETE_LATENCY_SUM_MS: AtomicU64 = AtomicU64::new(0);
+static METRIC_COMPLETE_LATENCY_BUCKETS: [AtomicU64; 4] = [
+    AtomicU64::new(0), // le=100
+    AtomicU64::new(0), // le=500
+    AtomicU64::new(0), // le=1000
+    AtomicU64::new(0), // le=5000
+];
+const COMPLETE_LATENCY_THRESHOLDS_MS: [u64; 4] = [100, 500, 1000, 5000];
 
 fn bump(c: &AtomicU64) {
     c.fetch_add(1, Ordering::Relaxed);
 }
 fn bump_by(c: &AtomicU64, n: u64) {
     c.fetch_add(n, Ordering::Relaxed);
+}
+
+/// V3: bump the labelled tool_calls_total. Fast path: read-lock,
+/// counter exists, increment. Slow path: write-lock, insert new
+/// `{tool, is_error}` row.
+fn bump_tool_calls_labelled(tool: &str, is_error: bool) {
+    {
+        let g = METRIC_TOOL_CALLS_LABELLED.read().expect("metrics rwlock");
+        if let Some(c) = g.get(&(tool.to_string(), is_error)) {
+            c.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+    }
+    let mut g = METRIC_TOOL_CALLS_LABELLED.write().expect("metrics rwlock (write)");
+    g.entry((tool.to_string(), is_error))
+        .or_insert_with(|| AtomicU64::new(0))
+        .fetch_add(1, Ordering::Relaxed);
+}
+
+/// V3: record a /v1/complete request's wall-clock latency in ms.
+/// Updates the histogram count / sum / cumulative buckets.
+fn observe_complete_latency_ms(latency_ms: u64) {
+    bump(&METRIC_COMPLETE_LATENCY_COUNT);
+    bump_by(&METRIC_COMPLETE_LATENCY_SUM_MS, latency_ms);
+    for (i, &threshold) in COMPLETE_LATENCY_THRESHOLDS_MS.iter().enumerate() {
+        if latency_ms <= threshold {
+            bump(&METRIC_COMPLETE_LATENCY_BUCKETS[i]);
+        }
+    }
 }
 
 /// `GET /metrics` — Prometheus exposition format. Honours bearer
@@ -3138,11 +3197,14 @@ async fn metrics_handler(headers: axum::http::HeaderMap) -> axum::response::Resp
     if let Err(resp) = check_bearer(&headers) {
         return resp;
     }
-    let body = format!(
+    let mut body = String::new();
+    use std::fmt::Write as _;
+    let _ = writeln!(
+        body,
         "# HELP aether_turns_total Agent turns completed across all routes.\n\
          # TYPE aether_turns_total counter\n\
          aether_turns_total {}\n\
-         # HELP aether_tool_calls_total Tool dispatches recorded.\n\
+         # HELP aether_tool_calls_total Tool dispatches recorded (unlabelled view; see labelled variant below).\n\
          # TYPE aether_tool_calls_total counter\n\
          aether_tool_calls_total {}\n\
          # HELP aether_tool_calls_errors_total Tool dispatches with is_error=true.\n\
@@ -3160,9 +3222,9 @@ async fn metrics_handler(headers: axum::http::HeaderMap) -> axum::response::Resp
          # HELP aether_4xx_total Non-429 client errors emitted.\n\
          # TYPE aether_4xx_total counter\n\
          aether_4xx_total {}\n\
-         # HELP aether_turn_duration_ms_sum Cumulative sum of turn durations (ms).\n\
-         # TYPE aether_turn_duration_ms_sum counter\n\
-         aether_turn_duration_ms_sum {}\n",
+         # HELP aether_tool_call_duration_ms_sum Cumulative tool-call duration (ms).\n\
+         # TYPE aether_tool_call_duration_ms_sum counter\n\
+         aether_tool_call_duration_ms_sum {}",
         METRIC_TURNS_TOTAL.load(Ordering::Relaxed),
         METRIC_TOOL_CALLS_TOTAL.load(Ordering::Relaxed),
         METRIC_TOOL_CALLS_ERRORS.load(Ordering::Relaxed),
@@ -3170,13 +3232,67 @@ async fn metrics_handler(headers: axum::http::HeaderMap) -> axum::response::Resp
         METRIC_ROLLBACK_TOTAL.load(Ordering::Relaxed),
         METRIC_429_TOTAL.load(Ordering::Relaxed),
         METRIC_4XX_TOTAL.load(Ordering::Relaxed),
-        METRIC_TURN_DURATION_MS_SUM.load(Ordering::Relaxed),
+        METRIC_TOOL_CALL_DURATION_MS_SUM.load(Ordering::Relaxed),
+    );
+    // V3: labelled tool_calls_total{tool=…,is_error=…}.
+    body.push_str("# HELP aether_tool_calls_labelled_total Tool dispatches by (tool, is_error).\n");
+    body.push_str("# TYPE aether_tool_calls_labelled_total counter\n");
+    if let Ok(g) = METRIC_TOOL_CALLS_LABELLED.read() {
+        for ((tool, is_error), c) in g.iter() {
+            let _ = writeln!(
+                body,
+                r#"aether_tool_calls_labelled_total{{tool="{}",is_error="{}"}} {}"#,
+                escape_label(tool),
+                is_error,
+                c.load(Ordering::Relaxed),
+            );
+        }
+    }
+    // V3: histogram for /v1/complete latency.
+    body.push_str("# HELP aether_complete_latency_ms /v1/complete wall-clock latency (ms).\n");
+    body.push_str("# TYPE aether_complete_latency_ms histogram\n");
+    for (i, &threshold) in COMPLETE_LATENCY_THRESHOLDS_MS.iter().enumerate() {
+        let _ = writeln!(
+            body,
+            r#"aether_complete_latency_ms_bucket{{le="{}"}} {}"#,
+            threshold,
+            METRIC_COMPLETE_LATENCY_BUCKETS[i].load(Ordering::Relaxed),
+        );
+    }
+    let _ = writeln!(
+        body,
+        r#"aether_complete_latency_ms_bucket{{le="+Inf"}} {}"#,
+        METRIC_COMPLETE_LATENCY_COUNT.load(Ordering::Relaxed),
+    );
+    let _ = writeln!(
+        body,
+        "aether_complete_latency_ms_count {}",
+        METRIC_COMPLETE_LATENCY_COUNT.load(Ordering::Relaxed),
+    );
+    let _ = writeln!(
+        body,
+        "aether_complete_latency_ms_sum {}",
+        METRIC_COMPLETE_LATENCY_SUM_MS.load(Ordering::Relaxed),
     );
     axum::response::Response::builder()
         .status(axum::http::StatusCode::OK)
         .header("content-type", "text/plain; version=0.0.4")
         .body(axum::body::Body::from(body))
         .unwrap_or_default()
+}
+
+/// Prometheus label value escaping: backslash, quote, newline.
+fn escape_label(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 fn trust_error_response(code: u16, msg: &str) -> axum::response::Response {
@@ -8414,10 +8530,11 @@ fn record_tool_call(
     tenant: Option<&str>,
 ) {
     bump(&METRIC_TOOL_CALLS_TOTAL);
-    bump_by(&METRIC_TURN_DURATION_MS_SUM, duration_ms);
+    bump_by(&METRIC_TOOL_CALL_DURATION_MS_SUM, duration_ms);
     if is_error {
         bump(&METRIC_TOOL_CALLS_ERRORS);
     }
+    bump_tool_calls_labelled(tool_name, is_error);
     if std::env::var("AETHER_NO_USAGE_DB").ok().as_deref() == Some("1") {
         return;
     }
