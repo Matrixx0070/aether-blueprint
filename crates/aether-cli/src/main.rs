@@ -2527,6 +2527,24 @@ async fn run_serve(
             "AETHER_SERVE_TOKEN_FROM_SECRETS_MANAGER set but resolution failed: {e}"
         );
     }
+    // X6: periodic 1-second SIEM flusher. Runs whenever
+    // AETHER_AUDIT_FORWARD is set; the v0.27 W5 ship only flushed at
+    // the 10-line threshold + explicit audit_siem_flush(), so a
+    // low-volume server could leave entries buffered indefinitely.
+    if std::env::var("AETHER_AUDIT_FORWARD").is_ok() {
+        tokio::spawn(async {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tick.tick().await;
+                // Block-in-place isn't needed: audit_siem_flush uses
+                // std::process::Command synchronously and we're fine
+                // with the brief pause on the runtime.
+                aether_sec::audit_siem_flush();
+            }
+        });
+        eprintln!("[serve] SIEM flusher: AETHER_AUDIT_FORWARD set; 1s periodic flush enabled");
+    }
     let max_sessions: usize = std::env::var("AETHER_SERVE_MAX_SESSIONS")
         .ok()
         .and_then(|s| s.parse().ok())
