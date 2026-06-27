@@ -152,3 +152,9 @@ format: `[slice] [status] [commit] [verifier] [live-check] note`
 | W3 | DONE | 87e0b03 | n/a | fake SM endpoint validated SigV4 + X-Amz-Target; resolved bearer → 401/200 round-trip via aether serve | AWS Secrets Manager backend (closes V4 MED) |
 | W1+W2 | DEFERRED | n/a | dedicated SAML plan — full pipeline is multi-week pure-Rust XML crypto, outside Plan W's 24h budget | SAML AuthnRequest + signed-response validation deferred |
 
+| X2 | DONE | 1d48646 | n/a | tool_arg_filter with field:"command" → matches `bash -lc "rm -rf /tmp/x"` (denied), passes benign body content with same regex literal in non-command field | per-field arg-filter (dotted JSON path) |
+| X3 | DONE | d7ae0dd | n/a | broken WASM manifest → discover_wasm_plugins_with_diagnostics → fire_webhook("plugin-load-failure",{runtime:"wasm"}) hit Python receiver | WASM plugin-load-failure diagnostics (closes W6 LOW) |
+| X5 | DONE | 80e17c6 | n/a | synthesized 3-transition local repo: trust audit --history showed `added/removed/added` rows with the 3 expected SHAs + dates | trust audit --history (full key timeline) |
+| X6 | DONE | 7956cc4 | n/a | AETHER_AUDIT_FORWARD=loki + audit_emit() of 1 row → flusher posted within ~1s (under 10-line batch threshold) | periodic SIEM flusher (1s tokio interval task) |
+| X4 | DONE | 7a1359b | n/a | redis-server :6399, rpm_cap=3, 5 reqs → 200/200/200/429/429; AETHER_RATE_BACKEND=redis://:9999 (down) → 3×200 fail-open | tenant rpm Redis backend (AETHER_RATE_BACKEND) |
+| X1 | DONE | 520e5b4 | n/a | python OTLP sink :4318: /v1/messages span status=500 model=haiku, /ws/chat span status=101, /v1/complete span status=500 tenant=acme duration_ms=761 | OpenTelemetry tracing on serve hot path |

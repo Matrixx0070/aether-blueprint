@@ -567,16 +567,48 @@ extensibility.
   SAML routing refusal stays in place — operators don't silently
   fall into an unvalidated flow.
 
-## v0.28 — next (draft)
+## v0.28 — distributed tracing + per-field policy + WASM diagnostics — shipped 2026-06-27
+
+- **X1 OpenTelemetry tracing on serve hot path** —
+  `AETHER_OTEL_ENDPOINT=<otlp-http-base>` enables OTLP/HTTP JSON
+  span export from /v1/messages, /v1/complete, /ws/chat. Span
+  attributes: http.method, http.route, http.status_code,
+  duration_ms, aether.model, aether.tenant. Process-wide
+  `reqwest::Client` reuse; fire-and-forget tokio task per span;
+  no overhead when env var unset.
+- **X2 per-field arg-filter policy** — `tool_arg_filters` rows
+  gain `field: <dotted-json-path>`; the regex matches against
+  that field instead of the whole serialised body. Closes W4
+  LOW. Rows without `field` retain v0.27 whole-body semantics.
+- **X3 WASM plugin-load-failure diagnostics** — sister to W6.
+  `aether_plugin_wasm::discover_wasm_plugins_with_diagnostics`
+  surfaces WASM-loader failures; CLI fires
+  `fire_webhook("plugin-load-failure", {runtime:"wasm",
+  manifest_path, reason})`. Subprocess loader gets a runtime-tag
+  filter so WASM manifests aren't double-dispatched.
+- **X4 tenant rpm Redis backend** — `AETHER_RATE_BACKEND=
+  redis://host:6379` switches the V5 per-bearer rpm bucket from
+  process-local Mutex<HashMap> to Redis INCR+EXPIRE so the cap is
+  correct across a horizontally scaled fleet. Closes V5 LOW.
+  Falls back to in-process bucket on single-thread tokio runtime
+  or on Redis errors (fail-open with stderr warning).
+- **X5 plugin trust audit --history** — extends U3.
+  `aether plugin trust audit --history <hex-prefix> --remote
+  <url>` shows every add/remove transition for that key.
+- **X6 periodic SIEM flusher** — 1-second tokio interval task
+  drains the W5 batch buffer so low-volume operators don't lose
+  audit rows. Closes W5 LOW. Runs on `tokio::task::spawn_blocking`
+  so it doesn't pin a worker for the `curl --max-time 2` syscall.
+- **X7 self-audit + Plan Y draft** — pre-tag audit caught the
+  block_in_place flavor guard + the spawn_blocking wrap; both
+  fixed in-band. Plan Y drafted as the standalone SAML plan.
+- W1+W2 SAML pipeline — still DEFERRED to Plan Y.
+
+## v0.29 — next (draft)
 
 - Dedicated SAML plan: AuthnRequest emission + redirect-binding
   + pure-Rust XML c14n# + RSA-SHA256 signature verify + x509
   cert chain + assertion bounds + NameID persistence
-- WASM plugin-load-failure diagnostics (sister to W6 in
-  aether-plugin-wasm)
-- Per-field arg-filter policy (regex against specific input
-  JSON fields, not the whole serialised body)
-- Distributed tracing hooks (OpenTelemetry)
 - Closing R1/R2/R3 cred-blocked verifiers
 
 ## v0.9 — enterprise
