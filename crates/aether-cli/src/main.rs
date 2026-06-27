@@ -8604,7 +8604,20 @@ fn parse_keychain_lines(content: &str) -> Vec<String> {
 /// Discover WASM-sandboxed plugins (sister loader to the subprocess
 /// one). Same dir layout; manifest must declare `"runtime": "wasm"`.
 fn register_wasm_plugins(tools: &mut ToolRegistry) {
-    let plugins = aether_plugin_wasm::discover_wasm_plugins();
+    let (plugins, failures) =
+        aether_plugin_wasm::discover_wasm_plugins_with_diagnostics();
+    // X3: fire plugin-load-failure webhook for each WASM failure —
+    // sister event to the W6 subprocess loader path.
+    for f in &failures {
+        let payload = serde_json::json!({
+            "manifest_path": f.manifest_path.display().to_string(),
+            "reason": f.reason,
+            "runtime": "wasm",
+        });
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(fire_webhook("plugin-load-failure", payload));
+        }
+    }
     if plugins.is_empty() {
         return;
     }

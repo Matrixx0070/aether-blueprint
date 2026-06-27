@@ -566,6 +566,15 @@ pub fn discover_plugins_with_diagnostics() -> (Vec<PluginTool>, Vec<PluginLoadFa
         let Ok(bytes) = std::fs::read(&manifest_path) else {
             continue;
         };
+        // X3: skip manifests whose runtime field declares "wasm" —
+        // those belong to the sister aether-plugin-wasm loader. The
+        // subprocess loader only owns manifests with runtime absent
+        // or runtime == "subprocess".
+        if let Ok(probe) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+            if probe.get("runtime").and_then(|v| v.as_str()) == Some("wasm") {
+                continue;
+            }
+        }
         let manifest: PluginManifest = match serde_json::from_slice(&bytes) {
             Ok(m) => m,
             Err(e) => {

@@ -280,13 +280,38 @@ pub fn plugin_dir() -> Option<PathBuf> {
 /// Subprocess plugins (different runtime tag) are skipped silently —
 /// they belong to the sister `aether-plugin` crate.
 pub fn discover_wasm_plugins() -> Vec<WasmPluginTool> {
+    discover_wasm_plugins_with_diagnostics().0
+}
+
+/// X3: failure diagnostic emitted by `discover_wasm_plugins_with_
+/// diagnostics`. Sister to aether-plugin's PluginLoadFailure
+/// (W6) — same shape so the cli can fire a single
+/// `plugin-load-failure` webhook for either loader.
+#[derive(Debug, Clone)]
+pub struct WasmPluginLoadFailure {
+    pub manifest_path: PathBuf,
+    pub reason: String,
+}
+
+/// X3: like discover_wasm_plugins, plus a per-manifest failure list.
+/// Failure categories captured:
+///   - WasmPluginTool::new failed (e.g. .wasm binary missing or
+///     fails to compile)
+/// Skipped (intentionally NOT a failure):
+///   - manifest with runtime != "wasm" (belongs to subprocess loader)
+///   - bytes that don't parse as WasmPluginManifest (likely a
+///     subprocess manifest sitting in the same dir tree)
+pub fn discover_wasm_plugins_with_diagnostics()
+    -> (Vec<WasmPluginTool>, Vec<WasmPluginLoadFailure>)
+{
     let Some(root) = plugin_dir() else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
     let Ok(entries) = std::fs::read_dir(&root) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
     let mut out = Vec::new();
+    let mut failures: Vec<WasmPluginLoadFailure> = Vec::new();
     for entry in entries.flatten() {
         if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
             continue;
@@ -303,12 +328,16 @@ pub fn discover_wasm_plugins() -> Vec<WasmPluginTool> {
         if manifest.runtime != "wasm" {
             continue;
         }
-        match WasmPluginTool::new(manifest, dir) {
+        match WasmPluginTool::new(manifest, dir.clone()) {
             Ok(tool) => out.push(tool),
             Err(e) => {
                 eprintln!("[aether-plugin-wasm] failed to load: {e}");
+                failures.push(WasmPluginLoadFailure {
+                    manifest_path: manifest_path.clone(),
+                    reason: format!("wasm load failed: {e}"),
+                });
             }
         }
     }
-    out
+    (out, failures)
 }
