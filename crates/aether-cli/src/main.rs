@@ -8215,11 +8215,18 @@ async fn sso_login_saml(sso_saml_path: &Path) -> Result<()> {
     )?;
     eprintln!("[sso login] Y5: assertion signature verified (RSA-SHA256)");
 
+    // Y6: validate the assertion's time bounds + audience binding.
+    let skew = saml_clock_skew_seconds();
+    verify_saml_assertion_bounds(&parsed, sp_entity_id, chrono::Utc::now(), skew)?;
+    eprintln!(
+        "[sso login] Y6: assertion bounds + audience verified (clock skew {skew}s)"
+    );
+
     anyhow::bail!(
-        "Y5 ships RSA-SHA256 verify against the IdP's x509 PEM. \
-         Assertion bounds (Y6) and NameID → tenant bearer (Y7) \
-         follow. Until those land, the response is cryptographically \
-         valid but NOT trusted — the token is NOT persisted."
+        "Y6 ships Conditions + AudienceRestriction validation. \
+         NameID → tenant bearer (Y7) follows. Until Y7 lands, the \
+         response is cryptographically valid AND within bounds but \
+         the token is NOT persisted."
     );
 }
 
@@ -8815,6 +8822,116 @@ fn parse_first_status_code(xml: &str) -> Option<String> {
             _ => {}
         }
     }
+}
+
+/// Y6: validate a parsed SAML assertion's time-window + audience
+/// bindings. Returns Ok(()) only if EVERY check passes:
+///
+/// 1. `Conditions/@NotBefore <= now + skew` (clock-skew slack on
+///    the not-yet-valid side).
+/// 2. `now < Conditions/@NotOnOrAfter + skew` (clock-skew slack on
+///    the just-expired side).
+/// 3. `now < SubjectConfirmationData/@NotOnOrAfter + skew` when
+///    present — the bearer subject-confirmation window.
+/// 4. When `<AudienceRestriction>` is present, the configured SP
+///    entity ID must appear verbatim in at least one `<Audience>`.
+///    When absent we trust the IdP's lack of restriction (the
+///    spec makes AudienceRestriction optional).
+///
+/// `now` is injected so tests can pin the clock. `clock_skew_secs`
+/// comes from `AETHER_SAML_CLOCK_SKEW_S` (default 30 in callers).
+fn verify_saml_assertion_bounds(
+    parsed: &ParsedSamlResponse,
+    sp_entity_id: &str,
+    now: chrono::DateTime<chrono::Utc>,
+    clock_skew_secs: i64,
+) -> Result<()> {
+    let assertion = parsed
+        .assertion
+        .as_ref()
+        .ok_or_else(|| anyhow!("Y6: SAMLResponse has no <saml:Assertion>"))?;
+    let skew = chrono::Duration::seconds(clock_skew_secs);
+
+    if let Some(cond) = &assertion.conditions {
+        if let Some(nb) = &cond.not_before {
+            let nb_t = parse_saml_datetime(nb)
+                .with_context(|| format!("parse Conditions/@NotBefore {nb}"))?;
+            if now + skew < nb_t {
+                anyhow::bail!(
+                    "Y6: assertion NotBefore {nb} is in the future (now={}, skew={}s)",
+                    now.to_rfc3339(),
+                    clock_skew_secs
+                );
+            }
+        }
+        if let Some(na) = &cond.not_on_or_after {
+            let na_t = parse_saml_datetime(na).with_context(|| {
+                format!("parse Conditions/@NotOnOrAfter {na}")
+            })?;
+            if now >= na_t + skew {
+                anyhow::bail!(
+                    "Y6: assertion NotOnOrAfter {na} has passed (now={}, skew={}s)",
+                    now.to_rfc3339(),
+                    clock_skew_secs
+                );
+            }
+        }
+    }
+
+    if let Some(scd) = &assertion.subject_confirmation_data {
+        if let Some(na) = &scd.not_on_or_after {
+            let na_t = parse_saml_datetime(na).with_context(|| {
+                format!("parse SubjectConfirmationData/@NotOnOrAfter {na}")
+            })?;
+            if now >= na_t + skew {
+                anyhow::bail!(
+                    "Y6: SubjectConfirmation NotOnOrAfter {na} has passed (now={}, skew={}s)",
+                    now.to_rfc3339(),
+                    clock_skew_secs
+                );
+            }
+        }
+    }
+
+    // Audience binding: when AudienceRestriction is present, our
+    // SP entity ID MUST appear. Spec §2.5.1.4 says any single
+    // matching <Audience> grants the assertion to that SP.
+    if !assertion.audiences.is_empty()
+        && !assertion.audiences.iter().any(|a| a == sp_entity_id)
+    {
+        anyhow::bail!(
+            "Y6: SP entity ID `{sp_entity_id}` is not in the assertion's \
+             AudienceRestriction (audiences = {:?})",
+            assertion.audiences
+        );
+    }
+    Ok(())
+}
+
+/// Y6: SAML date-time format is XML schema xsd:dateTime with the
+/// UTC `Z` suffix in practice — every real IdP I have seen emits
+/// this form. Accept the RFC-3339 superset because chrono's parser
+/// handles trailing fractional seconds and offset notation.
+fn parse_saml_datetime(s: &str) -> Result<chrono::DateTime<chrono::Utc>> {
+    let dt = chrono::DateTime::parse_from_rfc3339(s)
+        .with_context(|| format!("RFC-3339 datetime: {s}"))?;
+    Ok(dt.with_timezone(&chrono::Utc))
+}
+
+/// Y6: read the operator's `AETHER_SAML_CLOCK_SKEW_S` knob with a
+/// default of 30s when unset / invalid. Clamped to [0, 300] to
+/// avoid pathological inputs (a 1-hour skew on a 5-minute assertion
+/// would defeat the bounds check).
+fn saml_clock_skew_seconds() -> i64 {
+    let raw = match std::env::var("AETHER_SAML_CLOCK_SKEW_S") {
+        Ok(v) => v,
+        Err(_) => return 30,
+    };
+    let parsed: i64 = match raw.parse() {
+        Ok(n) => n,
+        Err(_) => return 30,
+    };
+    parsed.clamp(0, 300)
 }
 
 /// Y5: load an RSA signing public key from a PEM-encoded x509
@@ -12406,6 +12523,237 @@ mod tests {
         // Sanity: pubkey modulus is non-trivial (we really had a
         // 2048-bit RSA pair).
         assert!(pub_key.n().bits() >= 2000);
+    }
+
+    /// Y6: helper to build a minimal parsed SAMLResponse with the
+    /// time + audience fields the bounds check inspects. Bypasses
+    /// the XML round-trip — Y6 takes the parsed model directly.
+    fn y6_fake_parsed(
+        nb: Option<&str>,
+        na: Option<&str>,
+        scd_na: Option<&str>,
+        audiences: Vec<String>,
+    ) -> ParsedSamlResponse {
+        let assertion = ParsedSamlAssertion {
+            id: Some("_a".into()),
+            issue_instant: None,
+            issuer: Some("https://idp.example".into()),
+            subject_name_id: Some("alice@example.com".into()),
+            subject_confirmation_data: scd_na.map(|s| {
+                SubjectConfirmationData {
+                    not_on_or_after: Some(s.into()),
+                    recipient: None,
+                    in_response_to: None,
+                }
+            }),
+            conditions: (nb.is_some() || na.is_some()).then(|| SamlConditions {
+                not_before: nb.map(|s| s.into()),
+                not_on_or_after: na.map(|s| s.into()),
+            }),
+            audiences,
+            authn_instant: None,
+            signature: None,
+        };
+        ParsedSamlResponse {
+            status: SamlStatus {
+                code: "urn:oasis:names:tc:SAML:2.0:status:Success".into(),
+                message: None,
+            },
+            response_issuer: Some("https://idp.example".into()),
+            assertion: Some(assertion),
+            response_signature: None,
+        }
+    }
+
+    fn y6_now_at(s: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(s)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    /// Y6: an assertion firmly inside its Conditions window with a
+    /// matching audience is accepted.
+    #[test]
+    fn y6_accepts_in_window_matching_audience() {
+        let parsed = y6_fake_parsed(
+            Some("2026-06-27T00:00:00Z"),
+            Some("2026-06-27T00:05:00Z"),
+            Some("2026-06-27T00:05:00Z"),
+            vec!["https://sp.example/saml".into()],
+        );
+        let now = y6_now_at("2026-06-27T00:02:30Z");
+        verify_saml_assertion_bounds(&parsed, "https://sp.example/saml", now, 30)
+            .expect("in-window + matching audience must verify");
+    }
+
+    /// Y6: now < NotBefore - skew → reject with a clear "in the
+    /// future" message; an explicit `now=` field tells the operator
+    /// what their clock said.
+    #[test]
+    fn y6_rejects_before_not_before() {
+        let parsed = y6_fake_parsed(
+            Some("2026-06-27T00:05:00Z"),
+            Some("2026-06-27T00:10:00Z"),
+            None,
+            vec![],
+        );
+        let now = y6_now_at("2026-06-27T00:00:00Z");
+        let err = verify_saml_assertion_bounds(
+            &parsed,
+            "https://sp.example/saml",
+            now,
+            30,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("NotBefore") && err.contains("future"),
+            "informative future-NotBefore error: {err}"
+        );
+    }
+
+    /// Y6: now > NotOnOrAfter + skew → "has passed" message.
+    #[test]
+    fn y6_rejects_after_not_on_or_after() {
+        let parsed = y6_fake_parsed(
+            Some("2026-06-27T00:00:00Z"),
+            Some("2026-06-27T00:05:00Z"),
+            None,
+            vec![],
+        );
+        let now = y6_now_at("2026-06-27T00:10:00Z");
+        let err = verify_saml_assertion_bounds(
+            &parsed,
+            "https://sp.example/saml",
+            now,
+            30,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("NotOnOrAfter") && err.contains("passed"),
+            "informative expired-NotOnOrAfter error: {err}"
+        );
+    }
+
+    /// Y6: clock skew slack on both sides — an assertion that is
+    /// 20s "before" valid is accepted with skew=30s; one that is
+    /// 40s before valid is rejected.
+    #[test]
+    fn y6_skew_slack_on_both_sides() {
+        let parsed = y6_fake_parsed(
+            Some("2026-06-27T00:00:00Z"),
+            Some("2026-06-27T00:05:00Z"),
+            None,
+            vec![],
+        );
+        // 20s before NotBefore, skew=30s → ok.
+        let now_within = y6_now_at("2026-06-26T23:59:40Z");
+        verify_saml_assertion_bounds(
+            &parsed,
+            "https://sp.example/saml",
+            now_within,
+            30,
+        )
+        .expect("within-skew is accepted");
+        // 40s before NotBefore, skew=30s → reject.
+        let now_outside = y6_now_at("2026-06-26T23:59:20Z");
+        let err = verify_saml_assertion_bounds(
+            &parsed,
+            "https://sp.example/saml",
+            now_outside,
+            30,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("NotBefore"), "outside-skew rejected: {err}");
+    }
+
+    /// Y6: SubjectConfirmationData/@NotOnOrAfter is a separate
+    /// (and usually tighter) window — when it's already passed,
+    /// reject even if Conditions is still valid.
+    #[test]
+    fn y6_rejects_expired_subject_confirmation() {
+        let parsed = y6_fake_parsed(
+            Some("2026-06-27T00:00:00Z"),
+            Some("2026-06-27T00:10:00Z"),
+            Some("2026-06-27T00:02:00Z"),
+            vec![],
+        );
+        let now = y6_now_at("2026-06-27T00:05:00Z");
+        let err = verify_saml_assertion_bounds(
+            &parsed,
+            "https://sp.example/saml",
+            now,
+            30,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("SubjectConfirmation") && err.contains("passed"),
+            "SubjectConfirmation expiry caught: {err}"
+        );
+    }
+
+    /// Y6: an AudienceRestriction that doesn't include our SP entity
+    /// ID rejects, regardless of time bounds.
+    #[test]
+    fn y6_rejects_audience_mismatch() {
+        let parsed = y6_fake_parsed(
+            Some("2026-06-27T00:00:00Z"),
+            Some("2026-06-27T00:05:00Z"),
+            None,
+            vec!["https://other-sp.example/".into()],
+        );
+        let now = y6_now_at("2026-06-27T00:02:30Z");
+        let err = verify_saml_assertion_bounds(
+            &parsed,
+            "https://sp.example/saml",
+            now,
+            30,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("AudienceRestriction"),
+            "audience mismatch caught: {err}"
+        );
+    }
+
+    /// Y6: no AudienceRestriction at all → audience binding skipped
+    /// (the spec makes it optional). Bounds still apply.
+    #[test]
+    fn y6_accepts_no_audience_restriction() {
+        let parsed = y6_fake_parsed(
+            Some("2026-06-27T00:00:00Z"),
+            Some("2026-06-27T00:05:00Z"),
+            None,
+            vec![],
+        );
+        let now = y6_now_at("2026-06-27T00:02:30Z");
+        verify_saml_assertion_bounds(
+            &parsed,
+            "https://sp.example/saml",
+            now,
+            30,
+        )
+        .expect("no AudienceRestriction → audience binding skipped");
+    }
+
+    /// Y6: the clock-skew env knob clamps to [0, 300] so an
+    /// operator can't pass a 3600s value and disable the bounds.
+    #[test]
+    fn y6_clock_skew_clamped_and_defaulted() {
+        let key = "AETHER_SAML_CLOCK_SKEW_S";
+        std::env::remove_var(key);
+        assert_eq!(saml_clock_skew_seconds(), 30, "unset → default 30s");
+        std::env::set_var(key, "0");
+        assert_eq!(saml_clock_skew_seconds(), 0, "0 → 0");
+        std::env::set_var(key, "9999");
+        assert_eq!(saml_clock_skew_seconds(), 300, "clamped to 300");
+        std::env::set_var(key, "not-a-number");
+        assert_eq!(saml_clock_skew_seconds(), 30, "invalid → default 30s");
+        std::env::remove_var(key);
     }
 
     /// Y4 + Y3 bridge: feed a real synthetic SAMLResponse through
