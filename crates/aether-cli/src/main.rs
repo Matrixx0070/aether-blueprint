@@ -8257,6 +8257,57 @@ fn verify_nonce_claim(
 ///
 /// Plan V's SAML login flow will swap to quick-xml when it lands.
 /// For now, an IdP that publishes spec-conforming metadata works.
+/// AA5-followup: extract ALL signing X509 certs from an IdP federation
+/// metadata XML, in document order. Prefers
+/// `<KeyDescriptor use="signing">` matches; falls back to all
+/// `<X509Certificate>` when no signing-typed descriptors exist (some
+/// older IdPs omit the `use` attribute entirely). Returned strings
+/// are whitespace-stripped b64 (no PEM armor).
+///
+/// Pure function — no I/O — so the extraction logic can be unit-tested
+/// against fixture XML without standing up an HTTP server.
+fn extract_signing_certs_from_metadata(xml: &str) -> Vec<String> {
+    let signing_re = regex::Regex::new(
+        r#"(?s)<(?:md:)?KeyDescriptor[^>]*use="signing".*?<(?:ds:)?X509Certificate>([\s\S]*?)</(?:ds:)?X509Certificate>"#,
+    )
+    .expect("regex");
+    let any_re = regex::Regex::new(
+        r#"(?s)<(?:ds:)?X509Certificate>([\s\S]*?)</(?:ds:)?X509Certificate>"#,
+    )
+    .expect("regex");
+    let strip_ws = |b64: &str| -> String {
+        b64.split_whitespace().collect::<Vec<_>>().join("")
+    };
+    let signing: Vec<String> = signing_re
+        .captures_iter(xml)
+        .filter_map(|c| c.get(1).map(|m| strip_ws(m.as_str())))
+        .filter(|s| !s.is_empty())
+        .collect();
+    if !signing.is_empty() {
+        return signing;
+    }
+    any_re
+        .captures_iter(xml)
+        .filter_map(|c| c.get(1).map(|m| strip_ws(m.as_str())))
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// AA5-followup: wrap a raw b64 cert body in PEM armor with 64-char
+/// line breaks (standard OpenSSL convention). The b64 SHOULD already
+/// be whitespace-stripped — `extract_signing_certs_from_metadata`
+/// guarantees that.
+fn pem_wrap_b64_cert(b64: &str) -> String {
+    let mut out = String::with_capacity(b64.len() + 80);
+    out.push_str("-----BEGIN CERTIFICATE-----\n");
+    for chunk in b64.as_bytes().chunks(64) {
+        out.push_str(std::str::from_utf8(chunk).unwrap_or(""));
+        out.push('\n');
+    }
+    out.push_str("-----END CERTIFICATE-----\n");
+    out
+}
+
 async fn sso_configure_saml(idp_metadata_url: &str, sp_entity_id: &str) -> Result<()> {
     eprintln!("[sso configure-saml] GET {idp_metadata_url}");
     let resp = reqwest::get(idp_metadata_url)
@@ -8292,23 +8343,12 @@ async fn sso_configure_saml(idp_metadata_url: &str, sp_entity_id: &str) -> Resul
         .as_str()
         .to_string();
 
-    // First X509Certificate inside KeyDescriptor[use="signing"]; falls
-    // back to any X509Certificate if `use=signing` isn't tagged.
-    let cert_signing_re = regex::Regex::new(
-        r#"(?s)<(?:md:)?KeyDescriptor[^>]*use="signing".*?<(?:ds:)?X509Certificate>([\s\S]*?)</(?:ds:)?X509Certificate>"#,
-    ).expect("regex");
-    let cert_any_re = regex::Regex::new(
-        r#"(?s)<(?:ds:)?X509Certificate>([\s\S]*?)</(?:ds:)?X509Certificate>"#,
-    ).expect("regex");
-    let cert_b64 = cert_signing_re
-        .captures(&xml)
-        .and_then(|c| c.get(1))
-        .or_else(|| cert_any_re.captures(&xml).and_then(|c| c.get(1)))
-        .ok_or_else(|| anyhow!("no X509Certificate in IdP metadata"))?
-        .as_str()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join("");
+    // AA5-followup: extract ALL signing certs (was: first match only).
+    let signing_certs = extract_signing_certs_from_metadata(&xml);
+    if signing_certs.is_empty() {
+        anyhow::bail!("no X509Certificate in IdP metadata");
+    }
+    let first_cert_b64 = signing_certs[0].clone();
 
     // IdP entityID
     let entity_re = regex::Regex::new(
@@ -8320,19 +8360,71 @@ async fn sso_configure_saml(idp_metadata_url: &str, sp_entity_id: &str) -> Resul
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| "<missing>".to_string());
 
-    let path = std::env::var_os("HOME")
-        .map(|h| PathBuf::from(h).join(".aether/sso-saml.json"))
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
         .ok_or_else(|| anyhow!("HOME not set"))?;
+    // sso-saml.json lives at the legacy `~/.aether/sso-saml.json`
+    // path — the `sso login` router locates the SAML scaffold there,
+    // not inside the saml/ subdirectory.
+    let path = home.join(".aether/sso-saml.json");
+    let saml_dir = home.join(".aether/saml");
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok();
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create {}", parent.display()))?;
     }
+    std::fs::create_dir_all(&saml_dir)
+        .with_context(|| format!("create {}", saml_dir.display()))?;
+
+    // AA5-followup: lay out every discovered cert as a PEM file in
+    // ~/.aether/saml/idp-certs/. AA5's load_idp_signing_keys picks
+    // the directory when present and tries each on verify. Filenames
+    // are `NN-discovered.pem` with NN reflecting metadata-document
+    // order so the lex sort matches discovery order.
+    //
+    // Re-runs of configure-saml CLEAR the directory first so stale
+    // certs from a prior rotation aren't silently retained.
+    let idp_certs_dir = saml_dir.join("idp-certs");
+    if idp_certs_dir.exists() {
+        for entry in std::fs::read_dir(&idp_certs_dir)
+            .with_context(|| format!("read_dir {}", idp_certs_dir.display()))?
+        {
+            let entry = entry?;
+            let p = entry.path();
+            if p.extension().and_then(|s| s.to_str()) == Some("pem") {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+    } else {
+        std::fs::create_dir_all(&idp_certs_dir)
+            .with_context(|| format!("create {}", idp_certs_dir.display()))?;
+    }
+    let mut written_paths: Vec<PathBuf> = Vec::with_capacity(signing_certs.len());
+    for (idx, b64) in signing_certs.iter().enumerate() {
+        let filename = format!("{:02}-discovered.pem", idx);
+        let cert_path = idp_certs_dir.join(&filename);
+        let pem = pem_wrap_b64_cert(b64);
+        std::fs::write(&cert_path, pem.as_bytes())
+            .with_context(|| format!("write {}", cert_path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(
+                &cert_path,
+                std::fs::Permissions::from_mode(0o600),
+            );
+        }
+        written_paths.push(cert_path);
+    }
+
     let cfg = serde_json::json!({
         "version": 1,
         "idp_entity_id": idp_entity,
         "sp_entity_id": sp_entity_id,
         "sso_url": sso_url,
         "sso_binding": binding,
-        "x509_signing_cert_b64": cert_b64,
+        // First discovered cert kept here for backward-compat / display.
+        // The authoritative trust set is the idp-certs/ directory.
+        "x509_signing_cert_b64": first_cert_b64,
         "discovered_at": chrono::Utc::now().to_rfc3339(),
     });
     let json = serde_json::to_string_pretty(&cfg)?;
@@ -8348,13 +8440,13 @@ async fn sso_configure_saml(idp_metadata_url: &str, sp_entity_id: &str) -> Resul
     eprintln!("  sso_url:       {sso_url}");
     eprintln!("  sso_binding:   HTTP-{binding}");
     eprintln!(
-        "  x509 signing cert: {} bytes b64",
-        cfg.get("x509_signing_cert_b64")
-            .and_then(|v| v.as_str())
-            .map(str::len)
-            .unwrap_or(0)
+        "  signing certs: {} discovered, written to {}",
+        signing_certs.len(),
+        idp_certs_dir.display()
     );
-    eprintln!("[sso configure-saml] scaffold only — login flow lands in Plan V");
+    for p in &written_paths {
+        eprintln!("    - {}", p.display());
+    }
     Ok(())
 }
 
@@ -13288,6 +13380,110 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "Y7 token file must be 0600 (got {:o})", mode);
         }
+    }
+
+    /// AA5-followup: extract ALL signing certs from metadata XML.
+    /// 2 `<KeyDescriptor use="signing">` entries, each carrying one
+    /// `<X509Certificate>`. Order preserved; whitespace stripped.
+    #[test]
+    fn aa5fu_extract_two_signing_certs_preserves_order() {
+        let xml = r#"<?xml version="1.0"?>
+<EntityDescriptor entityID="https://idp.test">
+  <IDPSSODescriptor>
+    <KeyDescriptor use="signing">
+      <KeyInfo><X509Data><X509Certificate>
+        AAAA-FIRST-CERT
+      </X509Certificate></X509Data></KeyInfo>
+    </KeyDescriptor>
+    <KeyDescriptor use="signing">
+      <KeyInfo><X509Data><X509Certificate>
+BBBB-SECOND-CERT
+      </X509Certificate></X509Data></KeyInfo>
+    </KeyDescriptor>
+  </IDPSSODescriptor>
+</EntityDescriptor>"#;
+        let certs = extract_signing_certs_from_metadata(xml);
+        assert_eq!(certs, vec!["AAAA-FIRST-CERT", "BBBB-SECOND-CERT"]);
+    }
+
+    /// AA5-followup: when only ONE KeyDescriptor is tagged
+    /// `use="signing"` (the other is `use="encryption"`), only the
+    /// signing one is returned.
+    #[test]
+    fn aa5fu_extract_filters_out_encryption_descriptors() {
+        let xml = r#"<EntityDescriptor>
+  <KeyDescriptor use="signing">
+    <X509Certificate>SIGN-ME</X509Certificate>
+  </KeyDescriptor>
+  <KeyDescriptor use="encryption">
+    <X509Certificate>ENCRYPT-ME</X509Certificate>
+  </KeyDescriptor>
+</EntityDescriptor>"#;
+        let certs = extract_signing_certs_from_metadata(xml);
+        assert_eq!(certs, vec!["SIGN-ME"]);
+    }
+
+    /// AA5-followup: NO `use="signing"` attribute anywhere → fall
+    /// back to ALL `<X509Certificate>` matches (older IdPs that
+    /// don't tag).
+    #[test]
+    fn aa5fu_extract_falls_back_to_all_when_no_signing_use() {
+        let xml = r#"<EntityDescriptor>
+  <KeyDescriptor>
+    <X509Certificate>CERT-A</X509Certificate>
+  </KeyDescriptor>
+  <KeyDescriptor>
+    <X509Certificate>CERT-B</X509Certificate>
+  </KeyDescriptor>
+</EntityDescriptor>"#;
+        let certs = extract_signing_certs_from_metadata(xml);
+        assert_eq!(certs, vec!["CERT-A", "CERT-B"]);
+    }
+
+    /// AA5-followup: metadata with the `md:` + `ds:` prefixes (the
+    /// canonical SAML metadata namespacing) is handled.
+    #[test]
+    fn aa5fu_extract_handles_md_and_ds_prefixes() {
+        let xml = r#"<md:EntityDescriptor>
+  <md:KeyDescriptor use="signing">
+    <ds:X509Certificate>PREFIXED-CERT</ds:X509Certificate>
+  </md:KeyDescriptor>
+</md:EntityDescriptor>"#;
+        let certs = extract_signing_certs_from_metadata(xml);
+        assert_eq!(certs, vec!["PREFIXED-CERT"]);
+    }
+
+    /// AA5-followup: empty / no-cert metadata → empty Vec (caller
+    /// bails with an informative error).
+    #[test]
+    fn aa5fu_extract_empty_returns_empty_vec() {
+        let xml = r#"<EntityDescriptor>
+  <IDPSSODescriptor>
+    <SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+                         Location="https://idp/sso"/>
+  </IDPSSODescriptor>
+</EntityDescriptor>"#;
+        let certs = extract_signing_certs_from_metadata(xml);
+        assert!(certs.is_empty(), "got: {certs:?}");
+    }
+
+    /// AA5-followup: pem_wrap_b64_cert produces standard 64-char-line
+    /// PEM armor.
+    #[test]
+    fn aa5fu_pem_wrap_64_char_lines() {
+        // 130 chars → 64 + 64 + 2 → 3 lines of body.
+        let b64 = "A".repeat(130);
+        let pem = pem_wrap_b64_cert(&b64);
+        assert!(pem.starts_with("-----BEGIN CERTIFICATE-----\n"));
+        assert!(pem.ends_with("-----END CERTIFICATE-----\n"));
+        let body_lines: Vec<&str> = pem
+            .lines()
+            .filter(|l| !l.starts_with("-----"))
+            .collect();
+        assert_eq!(body_lines.len(), 3);
+        assert_eq!(body_lines[0].len(), 64);
+        assert_eq!(body_lines[1].len(), 64);
+        assert_eq!(body_lines[2].len(), 2);
     }
 
     /// AA6: parse_whoami_claims pulls the standard OIDC core §5.3.2
