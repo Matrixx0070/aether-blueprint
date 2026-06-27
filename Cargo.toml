@@ -36,6 +36,7 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 notify = { version = "6", default-features = false, features = ["macos_kqueue"] }
 tokio-stream = "0.1"
+redis = { version = "0.27", default-features = false, features = ["tokio-comp"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 
 # CLI

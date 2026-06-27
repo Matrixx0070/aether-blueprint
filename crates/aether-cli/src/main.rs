@@ -2897,11 +2897,12 @@ fn check_tenant_acl(
             }
         }
     }
-    // V5: per-bearer quota — rpm_cap (per-minute fixed window via
-    // BEARER_RPM_BUCKETS) + daily_cost_usd_cap (against the last 24h
-    // sum from usage.db).
+    // V5+X4: per-bearer quota — rpm_cap. When AETHER_RATE_BACKEND
+    // points at a Redis URL the bucket lives in Redis (works across
+    // multiple aether serve replicas); otherwise the v0.27 in-process
+    // bucket is used.
     if let Some(rpm) = row.rpm_cap {
-        if !bearer_rpm_admit(&hash, rpm) {
+        if !bearer_rpm_admit_dispatch(&hash, rpm) {
             return Err(quota_response(
                 429,
                 "tenant rpm_cap exceeded — slow down",
@@ -2920,6 +2921,49 @@ fn check_tenant_acl(
         }
     }
     Ok(())
+}
+
+/// X4: dispatch between the V5 process-local bucket and a Redis
+/// backend based on AETHER_RATE_BACKEND. The Redis URL is read on
+/// each call (cheap; env_var). On Redis transport error, fail OPEN
+/// — refusing requests because the rate backend is down is worse
+/// than letting traffic through.
+fn bearer_rpm_admit_dispatch(bearer_hash: &str, rpm_cap: u32) -> bool {
+    match std::env::var("AETHER_RATE_BACKEND") {
+        Ok(url) if url.starts_with("redis://") || url.starts_with("rediss://") => {
+            let res = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current()
+                    .block_on(redis_rpm_admit(&url, bearer_hash, rpm_cap))
+            });
+            match res {
+                Ok(allowed) => allowed,
+                Err(e) => {
+                    eprintln!("[rate] redis backend error (fail-open): {e}");
+                    true
+                }
+            }
+        }
+        _ => bearer_rpm_admit(bearer_hash, rpm_cap),
+    }
+}
+
+/// X4: Redis-backed per-bearer rpm window. Key = "aether:rpm:<hash-prefix>".
+/// Atomic INCR; SET EX 60 on first observation. Caller is admitted iff
+/// the counter is ≤ rpm_cap after increment.
+async fn redis_rpm_admit(url: &str, bearer_hash: &str, rpm_cap: u32) -> Result<bool> {
+    use redis::AsyncCommands;
+    let client = redis::Client::open(url).context("redis client")?;
+    let mut conn = client
+        .get_multiplexed_async_connection()
+        .await
+        .context("redis connect")?;
+    let key = format!("aether:rpm:{}", &bearer_hash[..16.min(bearer_hash.len())]);
+    let n: i64 = conn.incr(&key, 1i64).await.context("redis INCR")?;
+    if n == 1 {
+        // First request in this window — set TTL.
+        let _: () = conn.expire(&key, 60i64).await.context("redis EXPIRE")?;
+    }
+    Ok(n as u64 <= rpm_cap as u64)
 }
 
 /// V5: per-bearer per-minute fixed-window admission counter. The
