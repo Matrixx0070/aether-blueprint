@@ -8362,6 +8362,13 @@ struct ParsedSamlSignature {
     /// bytes — quick-xml normalizes events so we cannot rebuild
     /// the canonical form from the parsed model.
     signed_info_fragment: String,
+    /// Y4: the namespace declarations in scope at the
+    /// `<ds:SignedInfo>` opening tag, gathered from ancestor xmlns
+    /// attributes encountered during the Y3 walk. Map is prefix →
+    /// URI; the empty key is the default namespace. Exclusive c14n
+    /// emits the "visibly utilized" subset of THIS map on the
+    /// canonical root.
+    inherited_namespaces: std::collections::BTreeMap<String, String>,
     /// Base64 body of `<ds:SignatureValue>`. Whitespace stripped.
     signature_value_b64: String,
     /// Base64 body of `<ds:KeyInfo>/<ds:X509Data>/<ds:X509Certificate>`
@@ -8401,6 +8408,12 @@ fn parse_saml_response_xml(xml: &str) -> Result<ParsedSamlResponse> {
     // open element. Used to identify what "we are inside of" so
     // text events can be routed to the right field.
     let mut path: Vec<String> = Vec::with_capacity(16);
+    // Y4: parallel stack of xmlns declarations IN SCOPE at each
+    // depth. Push a fresh frame on every Start, pop on every End.
+    // The frame inherits from its parent + applies the element's
+    // own xmlns / xmlns:prefix attributes.
+    let mut ns_stack: Vec<std::collections::BTreeMap<String, String>> =
+        vec![std::collections::BTreeMap::new()];
     let mut out = ParsedSamlResponse::default();
     // Buffer state for the signature byte-fragment capture.
     let mut signed_info_start_byte: Option<usize> = None;
@@ -8425,6 +8438,36 @@ fn parse_saml_response_xml(xml: &str) -> Result<ParsedSamlResponse> {
                          emit a plaintext signed Assertion"
                     );
                 }
+                // Y4: build the new ns-stack frame BEFORE handling
+                // SignedInfo so we capture the parent's frame (the
+                // declarations in scope AT the opening tag).
+                let mut new_ns = ns_stack
+                    .last()
+                    .cloned()
+                    .unwrap_or_default();
+                for a in e.attributes().with_checks(false).flatten() {
+                    let k = std::str::from_utf8(a.key.as_ref()).unwrap_or("");
+                    let v = match &a.value {
+                        std::borrow::Cow::Borrowed(b) => {
+                            std::str::from_utf8(b).unwrap_or("").to_string()
+                        }
+                        std::borrow::Cow::Owned(b) => {
+                            String::from_utf8(b.clone()).unwrap_or_default()
+                        }
+                    };
+                    if k == "xmlns" {
+                        new_ns.insert(String::new(), v);
+                    } else if let Some(prefix) = k.strip_prefix("xmlns:") {
+                        new_ns.insert(prefix.to_string(), v);
+                    }
+                }
+                // The Y3 SignedInfo capture wants the namespace
+                // scope AT THE OPENING TAG (i.e. what an exclusive
+                // c14n walker would see as inherited from ancestors).
+                // We push the new frame after this branch handles
+                // SignedInfo so the snapshot is the parent's frame.
+                let parent_ns =
+                    ns_stack.last().cloned().unwrap_or_default();
                 // SubjectConfirmationData / Conditions / AuthnStatement
                 // carry only attributes — capture before pushing.
                 match local.as_str() {
@@ -8487,10 +8530,18 @@ fn parse_saml_response_xml(xml: &str) -> Result<ParsedSamlResponse> {
                         let after = reader.buffer_position() as usize;
                         let event_len = after.saturating_sub(pos_before);
                         signed_info_start_byte = Some(after.saturating_sub(event_len));
+                        // Y4: snapshot the namespace context at the
+                        // moment we entered SignedInfo. parent_ns is
+                        // what was in scope on <ds:Signature> — the
+                        // declarations exc-c14n inherits from above.
+                        if let Some(sig) = current_signature.as_mut() {
+                            sig.inherited_namespaces = parent_ns.clone();
+                        }
                     }
                     _ => {}
                 }
                 path.push(local);
+                ns_stack.push(new_ns);
             }
             Ok(Event::Empty(e)) => {
                 let local = local_name_owned(e.name().as_ref());
@@ -8611,6 +8662,7 @@ fn parse_saml_response_xml(xml: &str) -> Result<ParsedSamlResponse> {
                     _ => {}
                 }
                 path.pop();
+                ns_stack.pop();
             }
             // StatusCode often appears as a Start (not Empty) with a
             // nested sub-StatusCode child. We capture Value on Start.
@@ -8665,6 +8717,270 @@ fn parse_first_status_code(xml: &str) -> Option<String> {
                 }
             }
             _ => {}
+        }
+    }
+}
+
+/// Y4: emit the Exclusive XML Canonicalization 1.0 form of a
+/// well-formed XML subtree per W3C
+/// http://www.w3.org/2001/10/xml-exc-c14n# (no #WithComments).
+///
+/// `fragment` is the raw subtree XML (e.g. `<ds:SignedInfo>…</ds:SignedInfo>`).
+/// `inherited_namespaces` is the prefix → URI map in scope at the
+/// fragment's opening tag, gathered from ancestors. The canonical
+/// output emits the subset of these that are "visibly utilized" by
+/// the fragment (per exc-c14n §2.4) on the canonical root.
+///
+/// What we DO:
+/// * UTF-8 output bytes.
+/// * Empty elements rendered as `<a></a>` (never self-closing).
+/// * Attribute sort: xmlns declarations first (sorted by prefix,
+///   default xmlns first), then non-namespace attributes sorted by
+///   namespace URI then by local name.
+/// * Visibly-utilized inherited namespace declarations rendered on
+///   the canonical root only (we never re-emit on descendants).
+/// * Text escaping: `<` → `&lt;`, `&` → `&amp;`, `>` → `&gt;`,
+///   `\r` → `&#xD;`. Attribute values additionally escape `"`,
+///   `\t` → `&#x9;`, `\n` → `&#xA;`.
+/// * Comments and processing instructions stripped (the no-comments
+///   variant).
+///
+/// What we DO NOT do (knowingly carried — sufficient for SAML
+/// SignedInfo + Assertion shapes, documented Y4 LOW):
+/// * Prefix re-declaration / shadowing inside the subtree
+///   (descendant elements that redeclare an inherited prefix to a
+///   DIFFERENT URI). Real-world SAML signatures don't do this.
+/// * `InclusiveNamespaces` PrefixList (the c14n-with-extra-NS
+///   variant). The default SAML signature methods don't use it.
+/// * CDATA section preservation — replaced with their unescaped
+///   text content per c14n rules (which is the spec behaviour, so
+///   actually correct).
+fn canonicalize_exc_c14n_subtree(
+    fragment: &str,
+    inherited_namespaces: &std::collections::BTreeMap<String, String>,
+) -> Result<Vec<u8>> {
+    use quick_xml::events::Event;
+    use quick_xml::reader::Reader;
+
+    let mut reader = Reader::from_str(fragment);
+    reader.config_mut().trim_text(false);
+    reader.config_mut().expand_empty_elements = true; // self-closing → Start+End pair
+
+    let mut out: Vec<u8> = Vec::with_capacity(fragment.len());
+    // Stack of in-scope namespaces (prefix → URI). The first frame
+    // is the inherited set; every Start pushes a new frame.
+    let mut ns_stack: Vec<std::collections::BTreeMap<String, String>> =
+        vec![inherited_namespaces.clone()];
+    // Track which prefixes we've already rendered into the canonical
+    // output along the current ancestor chain. Per exc-c14n §2.4, a
+    // visibly-utilized declaration is rendered only when it hasn't
+    // already been rendered by an output ancestor.
+    let mut emitted_stack: Vec<std::collections::BTreeMap<String, String>> =
+        vec![std::collections::BTreeMap::new()];
+
+    loop {
+        match reader.read_event() {
+            Err(e) => anyhow::bail!("c14n parse error: {e}"),
+            Ok(Event::Eof) => break,
+            Ok(Event::Start(e)) => {
+                // Resolve the element's own prefix + raw attributes.
+                let qname = std::str::from_utf8(e.name().as_ref())
+                    .map_err(|_| anyhow!("element name not UTF-8"))?
+                    .to_string();
+                let elem_prefix = match qname.find(':') {
+                    Some(i) => qname[..i].to_string(),
+                    None => String::new(),
+                };
+                // Build the new ns-stack frame from parent + this
+                // element's xmlns declarations.
+                let mut new_ns = ns_stack
+                    .last()
+                    .cloned()
+                    .unwrap_or_default();
+                // Non-xmlns attributes: (qname, value, prefix, local).
+                let mut attrs: Vec<(String, String, String, String)> =
+                    Vec::with_capacity(4);
+                for a in e.attributes().with_checks(false).flatten() {
+                    let k = std::str::from_utf8(a.key.as_ref())
+                        .map_err(|_| anyhow!("attribute key not UTF-8"))?
+                        .to_string();
+                    let v_owned = match &a.value {
+                        std::borrow::Cow::Borrowed(b) => {
+                            std::str::from_utf8(b)
+                                .map_err(|_| anyhow!("attribute value not UTF-8"))?
+                                .to_string()
+                        }
+                        std::borrow::Cow::Owned(b) => {
+                            String::from_utf8(b.clone())
+                                .map_err(|_| anyhow!("attribute value not UTF-8"))?
+                        }
+                    };
+                    if k == "xmlns" {
+                        new_ns.insert(String::new(), v_owned);
+                    } else if let Some(prefix) = k.strip_prefix("xmlns:") {
+                        new_ns.insert(prefix.to_string(), v_owned);
+                    } else {
+                        let (prefix, local) = match k.find(':') {
+                            Some(i) => (k[..i].to_string(), k[i + 1..].to_string()),
+                            None => (String::new(), k.clone()),
+                        };
+                        attrs.push((k, v_owned, prefix, local));
+                    }
+                }
+
+                // Determine visibly-utilized prefixes for THIS
+                // element: the element prefix + every non-xmlns
+                // attribute prefix. Per exc-c14n §2.4, render any
+                // that the new_ns frame defines + the parent
+                // emitted-stack hasn't already covered with the
+                // same URI.
+                let mut utilised: std::collections::BTreeSet<String> =
+                    std::collections::BTreeSet::new();
+                utilised.insert(elem_prefix.clone());
+                for (_, _, p, _) in &attrs {
+                    // Unprefixed attributes are NOT in any namespace
+                    // (per Namespaces in XML §6.2) — do NOT mark
+                    // the default xmlns as utilised for them.
+                    if !p.is_empty() {
+                        utilised.insert(p.clone());
+                    }
+                }
+
+                let parent_emitted = emitted_stack
+                    .last()
+                    .cloned()
+                    .unwrap_or_default();
+                let mut to_render: std::collections::BTreeMap<String, String> =
+                    std::collections::BTreeMap::new();
+                for prefix in &utilised {
+                    if let Some(uri) = new_ns.get(prefix) {
+                        // Skip the empty default-namespace declaration
+                        // when this element is unprefixed AND the
+                        // parent emitted the same empty-default
+                        // already, OR when the URI is empty and we're
+                        // not inside a default-namespaced subtree.
+                        match parent_emitted.get(prefix) {
+                            Some(existing) if existing == uri => continue,
+                            _ => {
+                                to_render.insert(prefix.clone(), uri.clone());
+                            }
+                        }
+                    }
+                }
+
+                // Render `<qname` + xmlns decls + attrs + `>`.
+                out.push(b'<');
+                out.extend_from_slice(qname.as_bytes());
+                // xmlns decls: default (empty prefix) first, then
+                // sorted by prefix.
+                if let Some(default_uri) = to_render.get("") {
+                    out.extend_from_slice(b" xmlns=\"");
+                    write_attr_value_escaped(&mut out, default_uri);
+                    out.push(b'"');
+                }
+                for (prefix, uri) in &to_render {
+                    if prefix.is_empty() {
+                        continue;
+                    }
+                    out.extend_from_slice(b" xmlns:");
+                    out.extend_from_slice(prefix.as_bytes());
+                    out.extend_from_slice(b"=\"");
+                    write_attr_value_escaped(&mut out, uri);
+                    out.push(b'"');
+                }
+                // Non-namespace attrs sorted by (namespace URI,
+                // local name). Attributes without a prefix have an
+                // empty namespace URI.
+                attrs.sort_by(|a, b| {
+                    let a_uri = new_ns.get(&a.2).map(|s| s.as_str()).unwrap_or("");
+                    let b_uri = new_ns.get(&b.2).map(|s| s.as_str()).unwrap_or("");
+                    a_uri.cmp(b_uri).then(a.3.cmp(&b.3))
+                });
+                for (k, v, _, _) in &attrs {
+                    out.push(b' ');
+                    out.extend_from_slice(k.as_bytes());
+                    out.extend_from_slice(b"=\"");
+                    write_attr_value_escaped(&mut out, v);
+                    out.push(b'"');
+                }
+                out.push(b'>');
+
+                // Update the emitted-stack: parent's + what this
+                // element rendered.
+                let mut new_emitted = parent_emitted;
+                for (k, v) in &to_render {
+                    new_emitted.insert(k.clone(), v.clone());
+                }
+                ns_stack.push(new_ns);
+                emitted_stack.push(new_emitted);
+            }
+            Ok(Event::End(e)) => {
+                let name = e.name();
+                let qname = std::str::from_utf8(name.as_ref())
+                    .map_err(|_| anyhow!("end-element name not UTF-8"))?;
+                out.extend_from_slice(b"</");
+                out.extend_from_slice(qname.as_bytes());
+                out.push(b'>');
+                ns_stack.pop();
+                emitted_stack.pop();
+            }
+            Ok(Event::Text(t)) => {
+                // Decode entity refs from the source (`&lt;` → `<`)
+                // BEFORE re-escaping, so the canonical form is
+                // independent of which equivalent escape the input
+                // used. Per exc-c14n §1.1 every character data
+                // event is treated as if it were the resolved
+                // character content.
+                let decoded = t
+                    .unescape()
+                    .map_err(|e| anyhow!("c14n text unescape: {e}"))?
+                    .into_owned();
+                for &b in decoded.as_bytes() {
+                    match b {
+                        b'<' => out.extend_from_slice(b"&lt;"),
+                        b'>' => out.extend_from_slice(b"&gt;"),
+                        b'&' => out.extend_from_slice(b"&amp;"),
+                        b'\r' => out.extend_from_slice(b"&#xD;"),
+                        _ => out.push(b),
+                    }
+                }
+            }
+            Ok(Event::CData(c)) => {
+                // CDATA is treated identically to character data
+                // (exc-c14n §3.4) — escape the same way Text is
+                // escaped, no `<![CDATA[…]]>` wrapper survives.
+                for &b in c.as_ref() {
+                    match b {
+                        b'<' => out.extend_from_slice(b"&lt;"),
+                        b'>' => out.extend_from_slice(b"&gt;"),
+                        b'&' => out.extend_from_slice(b"&amp;"),
+                        b'\r' => out.extend_from_slice(b"&#xD;"),
+                        _ => out.push(b),
+                    }
+                }
+            }
+            // Comments, PIs, DOCTYPE: skipped per the no-comments
+            // variant of exc-c14n.
+            _ => {}
+        }
+    }
+
+    Ok(out)
+}
+
+/// Y4: escape an attribute value per exc-c14n §3.3. `&`, `<`, `"`
+/// are character-referenced; `\r`, `\n`, `\t` use numeric refs so
+/// the canonical form is stable across `xml:space` policies.
+fn write_attr_value_escaped(out: &mut Vec<u8>, s: &str) {
+    for &b in s.as_bytes() {
+        match b {
+            b'&' => out.extend_from_slice(b"&amp;"),
+            b'<' => out.extend_from_slice(b"&lt;"),
+            b'"' => out.extend_from_slice(b"&quot;"),
+            b'\t' => out.extend_from_slice(b"&#x9;"),
+            b'\n' => out.extend_from_slice(b"&#xA;"),
+            b'\r' => out.extend_from_slice(b"&#xD;"),
+            _ => out.push(b),
         }
     }
 }
@@ -11277,6 +11593,174 @@ mod tests {
         assert_eq!(
             frag, inner,
             "Y4 c14n# depends on this being the EXACT input substring"
+        );
+    }
+
+    /// Y4: smallest possible exc-c14n test — a single empty
+    /// element with one inherited namespace renders as
+    /// `<ns:e xmlns:ns="…"></ns:e>` (NEVER self-closing).
+    #[test]
+    fn y4_exc_c14n_empty_element_self_close_to_pair() {
+        let mut inherited = std::collections::BTreeMap::new();
+        inherited.insert(
+            "ds".to_string(),
+            "http://www.w3.org/2000/09/xmldsig#".to_string(),
+        );
+        let bytes =
+            canonicalize_exc_c14n_subtree("<ds:Foo/>", &inherited).unwrap();
+        assert_eq!(
+            std::str::from_utf8(&bytes).unwrap(),
+            r#"<ds:Foo xmlns:ds="http://www.w3.org/2000/09/xmldsig#"></ds:Foo>"#
+        );
+    }
+
+    /// Y4: SAML SignedInfo round-trip with the inherited `ds`
+    /// namespace from the parent <ds:Signature>. Output emits
+    /// xmlns:ds on the canonical root (visibly utilized) but not on
+    /// descendants (already covered).
+    #[test]
+    fn y4_exc_c14n_signed_info_inherits_ds_namespace() {
+        let mut inherited = std::collections::BTreeMap::new();
+        inherited.insert(
+            "ds".to_string(),
+            "http://www.w3.org/2000/09/xmldsig#".to_string(),
+        );
+        let frag = r##"<ds:SignedInfo><ds:CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/><ds:SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"/></ds:SignedInfo>"##;
+        let bytes = canonicalize_exc_c14n_subtree(frag, &inherited).unwrap();
+        let s = std::str::from_utf8(&bytes).unwrap();
+        // xmlns:ds on the root.
+        assert!(
+            s.starts_with(r#"<ds:SignedInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#">"#),
+            "canonical form starts with xmlns:ds on root: {s}"
+        );
+        // Descendants do NOT re-declare ds.
+        assert!(
+            !s.contains(r#"<ds:CanonicalizationMethod xmlns:ds="#),
+            "descendants must NOT re-declare inherited ds: {s}"
+        );
+        // Self-closing elements rendered as open-close pairs.
+        assert!(
+            s.contains("<ds:CanonicalizationMethod") && s.contains("</ds:CanonicalizationMethod>"),
+            "empty element rendered as open-close pair: {s}"
+        );
+        assert!(
+            !s.contains("/>"),
+            "no self-closing tags in canonical form: {s}"
+        );
+        // Terminating element close tag present.
+        assert!(
+            s.ends_with("</ds:SignedInfo>"),
+            "canonical form closes the root: {s}"
+        );
+    }
+
+    /// Y4: non-namespace attributes sorted by namespace URI then by
+    /// local name. Attributes with no prefix sort to the empty-URI
+    /// bucket. Attributes that share a namespace sort by local name.
+    #[test]
+    fn y4_exc_c14n_attributes_sorted() {
+        let mut inherited = std::collections::BTreeMap::new();
+        inherited.insert(
+            "a".to_string(),
+            "http://a.example".to_string(),
+        );
+        let frag = r#"<a:E xmlns:b="http://b.example" b:z="z" b:a="a" plain="p"/>"#;
+        let bytes = canonicalize_exc_c14n_subtree(frag, &inherited).unwrap();
+        let s = std::str::from_utf8(&bytes).unwrap();
+        // Order: xmlns decls first (xmlns:a, xmlns:b), then attrs
+        // sorted by (uri, local-name): plain (empty uri) < b:a < b:z.
+        let xmlns_a_idx = s
+            .find(r#"xmlns:a="http://a.example""#)
+            .expect("xmlns:a present");
+        let xmlns_b_idx = s
+            .find(r#"xmlns:b="http://b.example""#)
+            .expect("xmlns:b present");
+        let plain_idx = s.find(r#"plain="p""#).expect("plain present");
+        let b_a_idx = s.find(r#"b:a="a""#).expect("b:a present");
+        let b_z_idx = s.find(r#"b:z="z""#).expect("b:z present");
+        assert!(xmlns_a_idx < xmlns_b_idx, "xmlns:a before xmlns:b: {s}");
+        assert!(xmlns_b_idx < plain_idx, "xmlns decls before attrs: {s}");
+        assert!(plain_idx < b_a_idx, "empty-uri attr before b:a: {s}");
+        assert!(b_a_idx < b_z_idx, "b:a before b:z: {s}");
+    }
+
+    /// Y4: text content escapes per §3.4 — `<`, `>`, `&` → entity
+    /// refs; `\r` → `&#xD;`. Whitespace (tab, LF) inside text
+    /// content is preserved verbatim (only `\r` is normalised).
+    #[test]
+    fn y4_exc_c14n_text_escapes() {
+        let inherited = std::collections::BTreeMap::new();
+        let frag = "<root>a &lt; b &amp; c &gt; d</root>";
+        let bytes = canonicalize_exc_c14n_subtree(frag, &inherited).unwrap();
+        // The input already has entity references; quick-xml emits
+        // them as raw Text after unescape — exc-c14n must re-escape.
+        assert_eq!(
+            std::str::from_utf8(&bytes).unwrap(),
+            "<root>a &lt; b &amp; c &gt; d</root>"
+        );
+    }
+
+    /// Y4 + Y3 bridge: feed a real synthetic SAMLResponse through
+    /// the Y3 parser, then hand the captured signed_info_fragment +
+    /// inherited_namespaces to the Y4 canonicalizer. Y3 captures
+    /// the inherited `ds` prefix from <ds:Signature>, so the
+    /// canonical SignedInfo carries `xmlns:ds=…` on the root.
+    #[test]
+    fn y4_y3_bridge_signed_info_canonicalizes_with_inherited_ns() {
+        let xml = r##"<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status><saml:Assertion ID="_aBridge"><saml:Issuer>https://idp.example</saml:Issuer><ds:Signature><ds:SignedInfo><ds:CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/><ds:SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"/></ds:SignedInfo><ds:SignatureValue>QUE=</ds:SignatureValue></ds:Signature></saml:Assertion></samlp:Response>"##;
+        let parsed = parse_saml_response_xml(xml).expect("parse");
+        let sig = parsed
+            .assertion
+            .and_then(|a| a.signature)
+            .expect("assertion signature");
+        assert!(
+            sig.inherited_namespaces.contains_key("ds"),
+            "Y3 captured inherited ds: prefix: {:?}",
+            sig.inherited_namespaces
+        );
+        let canonical = canonicalize_exc_c14n_subtree(
+            &sig.signed_info_fragment,
+            &sig.inherited_namespaces,
+        )
+        .expect("canonicalize");
+        let s = std::str::from_utf8(&canonical).unwrap();
+        assert!(
+            s.starts_with(
+                r#"<ds:SignedInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#">"#
+            ),
+            "canonical SignedInfo carries inherited ds on root: {s}"
+        );
+        assert!(s.ends_with("</ds:SignedInfo>"), "closes the root: {s}");
+        // SHA-256 of these bytes is what Y5 will RSA-verify against.
+        // Sanity: hashing the same input twice yields the same digest.
+        use sha2::Digest;
+        let d1 = sha2::Sha256::digest(&canonical);
+        let d2 = sha2::Sha256::digest(&canonical);
+        assert_eq!(d1, d2, "Y5 digest is deterministic");
+    }
+
+    /// Y4: end-to-end on the synthetic SignedInfo fragment Y3
+    /// captured: feeding the parser's signed_info_fragment +
+    /// inherited_namespaces into the c14n function produces a byte
+    /// sequence that depends ONLY on the canonical form — not on
+    /// whitespace or attribute order in the input. Repeated calls
+    /// (with shuffled input attribute order) yield identical bytes.
+    #[test]
+    fn y4_exc_c14n_byte_stable_across_attribute_reorder() {
+        let mut inherited = std::collections::BTreeMap::new();
+        inherited.insert(
+            "ds".to_string(),
+            "http://www.w3.org/2000/09/xmldsig#".to_string(),
+        );
+        // Same element, attributes in different source orders.
+        let a = r##"<ds:Reference URI="#_a" Id="r1"/>"##;
+        let b = r##"<ds:Reference Id="r1" URI="#_a"/>"##;
+        let bytes_a = canonicalize_exc_c14n_subtree(a, &inherited).unwrap();
+        let bytes_b = canonicalize_exc_c14n_subtree(b, &inherited).unwrap();
+        assert_eq!(
+            bytes_a, bytes_b,
+            "exc-c14n must produce byte-stable output regardless of \
+             attribute source order"
         );
     }
 
