@@ -72,17 +72,27 @@ impl BedrockProvider {
         }
     }
 
+    /// Resolve the Bedrock service base URL. `AETHER_BEDROCK_ENDPOINT`
+    /// overrides the default for fixture / smoke / local-proxy use; on
+    /// override, SigV4 still signs against the supplied host (the
+    /// signature scheme doesn't care about the hostname being an AWS
+    /// one, only that `host` matches the request URL).
+    fn base_url(&self) -> String {
+        match std::env::var("AETHER_BEDROCK_ENDPOINT") {
+            Ok(s) if !s.is_empty() => s.trim_end_matches('/').to_string(),
+            _ => format!("https://bedrock-runtime.{}.amazonaws.com", self.region),
+        }
+    }
+
     fn endpoint(&self, bedrock_model: &str) -> String {
-        format!(
-            "https://bedrock-runtime.{}.amazonaws.com/model/{}/invoke",
-            self.region, bedrock_model
-        )
+        format!("{}/model/{}/invoke", self.base_url(), bedrock_model)
     }
 
     fn streaming_endpoint(&self, bedrock_model: &str) -> String {
         format!(
-            "https://bedrock-runtime.{}.amazonaws.com/model/{}/invoke-with-response-stream",
-            self.region, bedrock_model
+            "{}/model/{}/invoke-with-response-stream",
+            self.base_url(),
+            bedrock_model
         )
     }
 
@@ -768,6 +778,47 @@ mod tests {
             u,
             "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-sonnet-4-6-v1:0/invoke-with-response-stream"
         );
+    }
+
+    /// Z4: `AETHER_BEDROCK_ENDPOINT` overrides the AWS default so the
+    /// provider can be pointed at a fake / local-proxy / VPC-private
+    /// endpoint. Both invoke + invoke-with-response-stream paths
+    /// inherit the override.
+    #[test]
+    fn z4_endpoint_override_via_env() {
+        // Private mutex — aether-llm has no shared ENV_TEST_LOCK and
+        // this is the only test that mutates env, so a local guard
+        // suffices.
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _g = ENV_LOCK.lock().unwrap();
+        std::env::set_var("AETHER_BEDROCK_ENDPOINT", "http://127.0.0.1:9999");
+        let p = BedrockProvider::with_credentials(
+            "a".into(),
+            "b".into(),
+            None,
+            "us-east-1".into(),
+        );
+        assert_eq!(
+            p.endpoint("anthropic.claude-haiku-4-5-v1:0"),
+            "http://127.0.0.1:9999/model/anthropic.claude-haiku-4-5-v1:0/invoke"
+        );
+        assert_eq!(
+            p.streaming_endpoint("anthropic.claude-haiku-4-5-v1:0"),
+            "http://127.0.0.1:9999/model/anthropic.claude-haiku-4-5-v1:0/invoke-with-response-stream"
+        );
+        // Trailing-slash variant trims to canonical form.
+        std::env::set_var("AETHER_BEDROCK_ENDPOINT", "http://localhost:8080/");
+        assert_eq!(
+            p.endpoint("x"),
+            "http://localhost:8080/model/x/invoke"
+        );
+        // Empty value falls back to the AWS default.
+        std::env::set_var("AETHER_BEDROCK_ENDPOINT", "");
+        assert!(
+            p.endpoint("x").starts_with("https://bedrock-runtime.us-east-1.amazonaws.com/"),
+            "empty env falls back to AWS"
+        );
+        std::env::remove_var("AETHER_BEDROCK_ENDPOINT");
     }
 
     #[test]
