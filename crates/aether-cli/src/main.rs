@@ -349,6 +349,18 @@ enum SsoCmd {
     /// `token_endpoint`. Writes the new access_token (and the new
     /// refresh_token, when the IdP rotates) to the existing sidecars.
     Refresh,
+    /// BB6: re-fetch the SAML IdP federation metadata (persisted at
+    /// `configure-saml` time) and re-lay out
+    /// `~/.aether/saml/idp-certs/`. Without `--watch`, runs once and
+    /// exits. With `--watch`, runs as a foreground daemon refreshing
+    /// every `AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS` (default
+    /// 3600, clamped [60, 86400]).
+    RefreshSaml {
+        /// Run as a foreground daemon; refresh on the configured
+        /// cadence until ctrl-c.
+        #[arg(long, default_value_t = false)]
+        watch: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -7558,6 +7570,7 @@ async fn sso_cmd(sub: SsoCmd) -> Result<()> {
         }
         SsoCmd::Whoami { json, no_refresh } => sso_whoami(json, no_refresh).await,
         SsoCmd::Refresh => sso_refresh().await,
+        SsoCmd::RefreshSaml { watch } => sso_refresh_saml(watch).await,
         SsoCmd::Logout => {
             let path = sso_token_path()?;
             match std::fs::remove_file(&path) {
@@ -8536,8 +8549,12 @@ fn pem_wrap_b64_cert(b64: &str) -> String {
     out
 }
 
-async fn sso_configure_saml(idp_metadata_url: &str, sp_entity_id: &str) -> Result<()> {
-    eprintln!("[sso configure-saml] GET {idp_metadata_url}");
+/// BB6: fetch + validate SAML federation metadata XML. Used by both
+/// `sso configure-saml` (initial discovery) and `sso refresh-saml`
+/// (rotation). 1 MiB size cap + XXE refusal applied here so the
+/// `apply_saml_idp_metadata` layout helper only ever sees vetted XML.
+async fn fetch_saml_metadata_xml(idp_metadata_url: &str) -> Result<String> {
+    eprintln!("[sso saml] GET {idp_metadata_url}");
     let resp = reqwest::get(idp_metadata_url)
         .await
         .with_context(|| format!("GET {idp_metadata_url}"))?;
@@ -8549,20 +8566,40 @@ async fn sso_configure_saml(idp_metadata_url: &str, sp_entity_id: &str) -> Resul
     }
     let xml = resp.text().await.context("read metadata body")?;
     if xml.len() > 1_048_576 {
-        anyhow::bail!("metadata XML > 1 MiB; refusing to parse (likely not a real metadata doc)");
+        anyhow::bail!(
+            "metadata XML > 1 MiB; refusing to parse (likely not a real metadata doc)"
+        );
     }
     if xml.contains("<!DOCTYPE") || xml.contains("<!ENTITY") {
         anyhow::bail!(
             "metadata XML contains DOCTYPE or ENTITY declarations — refusing for XXE safety"
         );
     }
+    Ok(xml)
+}
 
+/// BB6: validated-XML → on-disk SAML layout. Returns the cert count
+/// it laid out. Pure of network I/O — the caller has already fetched
+/// + validated the XML — so this helper is unit-testable.
+///
+/// Writes:
+///   - `~/.aether/sso-saml.json` (atomic — full rewrite each call).
+///     `idp_metadata_url` is persisted so `sso refresh-saml` knows
+///     where to re-fetch.
+///   - `~/.aether/saml/idp-certs/NN-discovered.pem` per signing cert.
+///     The directory is CLEARED of stale `.pem` files first so a
+///     rotated metadata doesn't accumulate.
+fn apply_saml_idp_metadata(
+    xml: &str,
+    idp_metadata_url: &str,
+    sp_entity_id: &str,
+) -> Result<usize> {
     // SingleSignOnService HTTP-Redirect or HTTP-POST binding.
     let sso_re = regex::Regex::new(
         r#"(?s)<(?:md:)?SingleSignOnService[^>]*Binding="urn:oasis:names:tc:SAML:2\.0:bindings:HTTP-(Redirect|POST)"[^>]*Location="([^"]+)""#,
     ).expect("regex");
     let sso_caps = sso_re
-        .captures(&xml)
+        .captures(xml)
         .ok_or_else(|| anyhow!("no SingleSignOnService with HTTP-Redirect or HTTP-POST binding found"))?;
     let binding = sso_caps.get(1).map(|m| m.as_str()).unwrap_or("Redirect").to_string();
     let sso_url = sso_caps
@@ -8572,7 +8609,7 @@ async fn sso_configure_saml(idp_metadata_url: &str, sp_entity_id: &str) -> Resul
         .to_string();
 
     // AA5-followup: extract ALL signing certs (was: first match only).
-    let signing_certs = extract_signing_certs_from_metadata(&xml);
+    let signing_certs = extract_signing_certs_from_metadata(xml);
     if signing_certs.is_empty() {
         anyhow::bail!("no X509Certificate in IdP metadata");
     }
@@ -8583,7 +8620,7 @@ async fn sso_configure_saml(idp_metadata_url: &str, sp_entity_id: &str) -> Resul
         r#"<(?:md:)?EntityDescriptor[^>]*entityID="([^"]+)""#,
     ).expect("regex");
     let idp_entity = entity_re
-        .captures(&xml)
+        .captures(xml)
         .and_then(|c| c.get(1))
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| "<missing>".to_string());
@@ -8603,14 +8640,6 @@ async fn sso_configure_saml(idp_metadata_url: &str, sp_entity_id: &str) -> Resul
     std::fs::create_dir_all(&saml_dir)
         .with_context(|| format!("create {}", saml_dir.display()))?;
 
-    // AA5-followup: lay out every discovered cert as a PEM file in
-    // ~/.aether/saml/idp-certs/. AA5's load_idp_signing_keys picks
-    // the directory when present and tries each on verify. Filenames
-    // are `NN-discovered.pem` with NN reflecting metadata-document
-    // order so the lex sort matches discovery order.
-    //
-    // Re-runs of configure-saml CLEAR the directory first so stale
-    // certs from a prior rotation aren't silently retained.
     let idp_certs_dir = saml_dir.join("idp-certs");
     if idp_certs_dir.exists() {
         for entry in std::fs::read_dir(&idp_certs_dir)
@@ -8653,6 +8682,8 @@ async fn sso_configure_saml(idp_metadata_url: &str, sp_entity_id: &str) -> Resul
         // First discovered cert kept here for backward-compat / display.
         // The authoritative trust set is the idp-certs/ directory.
         "x509_signing_cert_b64": first_cert_b64,
+        // BB6: persisted so `sso refresh-saml` knows where to re-fetch.
+        "idp_metadata_url": idp_metadata_url,
         "discovered_at": chrono::Utc::now().to_rfc3339(),
     });
     let json = serde_json::to_string_pretty(&cfg)?;
@@ -8662,7 +8693,7 @@ async fn sso_configure_saml(idp_metadata_url: &str, sp_entity_id: &str) -> Resul
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     }
-    eprintln!("[sso configure-saml] wrote {} (0600)", path.display());
+    eprintln!("[sso saml] wrote {} (0600)", path.display());
     eprintln!("  idp_entity_id: {idp_entity}");
     eprintln!("  sp_entity_id:  {sp_entity_id}");
     eprintln!("  sso_url:       {sso_url}");
@@ -8675,7 +8706,96 @@ async fn sso_configure_saml(idp_metadata_url: &str, sp_entity_id: &str) -> Resul
     for p in &written_paths {
         eprintln!("    - {}", p.display());
     }
+    Ok(signing_certs.len())
+}
+
+async fn sso_configure_saml(idp_metadata_url: &str, sp_entity_id: &str) -> Result<()> {
+    let xml = fetch_saml_metadata_xml(idp_metadata_url).await?;
+    apply_saml_idp_metadata(&xml, idp_metadata_url, sp_entity_id)?;
     Ok(())
+}
+
+/// BB6: re-fetch the IdP federation metadata from the URL persisted at
+/// `configure-saml` time and re-lay out `idp-certs/`. One-shot when
+/// `watch == false`; when `watch == true`, runs forever sleeping
+/// `AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS` (default 3600s, clamped
+/// [60, 86400]) between ticks. Foreground daemon — operators that want
+/// systemd-style supervision wrap it themselves.
+async fn sso_refresh_saml(watch: bool) -> Result<()> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow!("HOME not set"))?;
+    let path = home.join(".aether/sso-saml.json");
+    let bytes = std::fs::read(&path).with_context(|| {
+        format!(
+            "read {} — run `aether sso configure-saml` first",
+            path.display()
+        )
+    })?;
+    let cfg: serde_json::Value =
+        serde_json::from_slice(&bytes).context("parse sso-saml.json")?;
+    let idp_metadata_url = cfg
+        .get("idp_metadata_url")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            anyhow!(
+                "sso-saml.json has no `idp_metadata_url` — your last \
+                 `aether sso configure-saml` ran before BB6 added the \
+                 field. Re-run `aether sso configure-saml --idp-metadata-url \
+                 <url>` once to capture it."
+            )
+        })?
+        .to_string();
+    let sp_entity_id = cfg
+        .get("sp_entity_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("sso-saml.json missing sp_entity_id"))?
+        .to_string();
+
+    let tick = |xml: &str| -> Result<()> {
+        let n = apply_saml_idp_metadata(xml, &idp_metadata_url, &sp_entity_id)?;
+        eprintln!("[sso refresh-saml] refreshed {n} signing cert(s)");
+        Ok(())
+    };
+
+    if !watch {
+        let xml = fetch_saml_metadata_xml(&idp_metadata_url).await?;
+        tick(&xml)?;
+        return Ok(());
+    }
+    let interval = saml_metadata_refresh_interval_secs();
+    eprintln!(
+        "[sso refresh-saml] WATCH mode: refreshing every {interval}s \
+         (ctrl-c to stop)"
+    );
+    loop {
+        // Tick errors are logged + swallowed — a transient IdP-side
+        // 5xx shouldn't kill the daemon. The OPERATOR sees the line.
+        match fetch_saml_metadata_xml(&idp_metadata_url).await {
+            Ok(xml) => match tick(&xml) {
+                Ok(()) => {}
+                Err(e) => eprintln!("[sso refresh-saml] tick FAILED apply: {e:#}"),
+            },
+            Err(e) => eprintln!("[sso refresh-saml] tick FAILED fetch: {e:#}"),
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+    }
+}
+
+/// BB6: read `AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS` with a
+/// default of 1 hour (3600s). Clamped to [60, 86400] so operators
+/// can't accidentally set a busy-loop OR a "once a year" cadence
+/// that defeats the purpose.
+fn saml_metadata_refresh_interval_secs() -> u64 {
+    let raw = match std::env::var("AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS") {
+        Ok(v) => v,
+        Err(_) => return 3600,
+    };
+    let parsed: u64 = match raw.parse() {
+        Ok(n) => n,
+        Err(_) => return 3600,
+    };
+    parsed.clamp(60, 86400)
 }
 
 /// V1: SAML login routing. Loads ~/.aether/sso-saml.json (written
@@ -13746,6 +13866,194 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "Y7 token file must be 0600 (got {:o})", mode);
         }
+    }
+
+    /// BB6: build an isolated temp HOME for refresh-saml layout tests.
+    fn bb6_tmp_home(suffix: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "aether-bb6-{}-{}-{}",
+            suffix,
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create tmp HOME");
+        dir
+    }
+
+    /// BB6: apply_saml_idp_metadata persists `idp_metadata_url` in
+    /// sso-saml.json AND lays out idp-certs/. Verifies the JSON
+    /// shape + the cert count + the directory contents.
+    #[test]
+    fn bb6_apply_metadata_persists_url_and_lays_out_certs() {
+        let _guard = aether_core::mock::ENV_TEST_LOCK
+            .lock()
+            .expect("env lock");
+        let home = bb6_tmp_home("apply-v1");
+        std::env::set_var("HOME", &home);
+
+        let xml = r#"<?xml version="1.0"?>
+<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
+                     xmlns:ds="http://www.w3.org/2000/09/xmldsig#"
+                     entityID="https://idp.test/saml/metadata">
+  <md:IDPSSODescriptor>
+    <md:KeyDescriptor use="signing">
+      <ds:KeyInfo><ds:X509Data>
+        <ds:X509Certificate>BB6-CERT-A</ds:X509Certificate>
+      </ds:X509Data></ds:KeyInfo>
+    </md:KeyDescriptor>
+    <md:KeyDescriptor use="signing">
+      <ds:KeyInfo><ds:X509Data>
+        <ds:X509Certificate>BB6-CERT-B</ds:X509Certificate>
+      </ds:X509Data></ds:KeyInfo>
+    </md:KeyDescriptor>
+    <md:SingleSignOnService
+        Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+        Location="https://idp.test/saml/sso"/>
+  </md:IDPSSODescriptor>
+</md:EntityDescriptor>"#;
+        let n = apply_saml_idp_metadata(
+            xml,
+            "https://idp.test/saml/metadata.xml",
+            "https://sp.test/saml",
+        )
+        .expect("apply metadata");
+        assert_eq!(n, 2, "two signing certs discovered");
+
+        // sso-saml.json captures idp_metadata_url.
+        let cfg_bytes = std::fs::read(home.join(".aether/sso-saml.json"))
+            .expect("read sso-saml.json");
+        let cfg: serde_json::Value = serde_json::from_slice(&cfg_bytes).unwrap();
+        assert_eq!(
+            cfg.get("idp_metadata_url").and_then(|v| v.as_str()),
+            Some("https://idp.test/saml/metadata.xml")
+        );
+        assert_eq!(
+            cfg.get("sp_entity_id").and_then(|v| v.as_str()),
+            Some("https://sp.test/saml")
+        );
+        assert_eq!(
+            cfg.get("idp_entity_id").and_then(|v| v.as_str()),
+            Some("https://idp.test/saml/metadata")
+        );
+
+        // idp-certs/ has exactly the two discovered certs.
+        let certs_dir = home.join(".aether/saml/idp-certs");
+        let pems: Vec<String> = std::fs::read_dir(&certs_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".pem"))
+            .collect::<Vec<_>>();
+        let mut sorted = pems.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec!["00-discovered.pem", "01-discovered.pem"]);
+
+        std::env::remove_var("HOME");
+    }
+
+    /// BB6: re-running apply_saml_idp_metadata CLEARS stale `.pem`
+    /// files from idp-certs/ before laying out the new ones. Simulates
+    /// the rotation use case: v1 metadata has 1 cert, v2 has a
+    /// different cert — old cert MUST NOT be retained.
+    #[test]
+    fn bb6_apply_metadata_clears_stale_certs_on_rotation() {
+        let _guard = aether_core::mock::ENV_TEST_LOCK
+            .lock()
+            .expect("env lock");
+        let home = bb6_tmp_home("rotate");
+        std::env::set_var("HOME", &home);
+
+        let v1 = r#"<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="https://idp.test">
+  <md:IDPSSODescriptor>
+    <md:KeyDescriptor use="signing">
+      <X509Certificate>V1-CERT</X509Certificate>
+    </md:KeyDescriptor>
+    <md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+                            Location="https://idp/sso"/>
+  </md:IDPSSODescriptor>
+</md:EntityDescriptor>"#;
+        let v2 = r#"<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="https://idp.test">
+  <md:IDPSSODescriptor>
+    <md:KeyDescriptor use="signing">
+      <X509Certificate>V2-CERT-A</X509Certificate>
+    </md:KeyDescriptor>
+    <md:KeyDescriptor use="signing">
+      <X509Certificate>V2-CERT-B</X509Certificate>
+    </md:KeyDescriptor>
+    <md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+                            Location="https://idp/sso"/>
+  </md:IDPSSODescriptor>
+</md:EntityDescriptor>"#;
+        let n1 = apply_saml_idp_metadata(v1, "https://meta", "https://sp.test")
+            .expect("v1 apply");
+        assert_eq!(n1, 1);
+        let v1_pem = home
+            .join(".aether/saml/idp-certs/00-discovered.pem")
+            .clone();
+        let v1_body = std::fs::read_to_string(&v1_pem).expect("v1 pem");
+        assert!(v1_body.contains("V1-CERT"));
+
+        // v2 rotation.
+        let n2 = apply_saml_idp_metadata(v2, "https://meta", "https://sp.test")
+            .expect("v2 apply");
+        assert_eq!(n2, 2);
+        let certs_dir = home.join(".aether/saml/idp-certs");
+        let pems: Vec<String> = std::fs::read_dir(&certs_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".pem"))
+            .collect();
+        let mut sorted = pems.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec!["00-discovered.pem", "01-discovered.pem"]);
+        let new_00 = std::fs::read_to_string(certs_dir.join("00-discovered.pem"))
+            .expect("read new 00");
+        assert!(
+            new_00.contains("V2-CERT-A"),
+            "00 should be V2-CERT-A after rotation, got: {new_00}"
+        );
+        assert!(
+            !new_00.contains("V1-CERT"),
+            "stale V1-CERT must be cleared, got: {new_00}"
+        );
+
+        std::env::remove_var("HOME");
+    }
+
+    /// BB6: AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS env knob —
+    /// default + clamp + invalid-input fallback. Same shape as the
+    /// Y6 SAML clock-skew + Z3 OIDC clock-skew helpers.
+    #[test]
+    fn bb6_metadata_refresh_interval_default_and_clamped() {
+        let _guard = aether_core::mock::ENV_TEST_LOCK
+            .lock()
+            .expect("env lock");
+        std::env::remove_var("AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS");
+        assert_eq!(saml_metadata_refresh_interval_secs(), 3600, "default 1h");
+        std::env::set_var("AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS", "120");
+        assert_eq!(saml_metadata_refresh_interval_secs(), 120, "120s ok");
+        std::env::set_var("AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS", "1");
+        assert_eq!(saml_metadata_refresh_interval_secs(), 60, "clamped to 60s");
+        std::env::set_var(
+            "AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS",
+            "999999",
+        );
+        assert_eq!(
+            saml_metadata_refresh_interval_secs(),
+            86400,
+            "clamped to 24h"
+        );
+        std::env::set_var(
+            "AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS",
+            "garbage",
+        );
+        assert_eq!(
+            saml_metadata_refresh_interval_secs(),
+            3600,
+            "invalid → default"
+        );
+        std::env::remove_var("AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS");
     }
 
     /// BB5: parse_token_response extracts the OAuth fields we care
