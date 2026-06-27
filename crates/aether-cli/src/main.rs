@@ -495,6 +495,12 @@ enum TrustCmd {
         /// Branch override (matches `trust sync --branch`).
         #[arg(long)]
         branch: Option<String>,
+        /// X5: show the full add/remove TRANSITION timeline for a
+        /// single key (hex prefix). Requires --remote. Useful for
+        /// the key-rotation use case ("when was the previous key
+        /// removed and the new one added?").
+        #[arg(long, value_name = "HEX_PREFIX")]
+        history: Option<String>,
     },
     /// Append a public key (hex; reads from --file PATH or stdin if
     /// omitted). Duplicates are de-duped.
@@ -8253,7 +8259,13 @@ fn trust_cmd(sub: TrustCmd) -> Result<()> {
         TrustCmd::Sync { remote, branch, push, remove_from_team } => {
             trust_sync(&path, &remote, branch, push, remove_from_team)
         }
-        TrustCmd::Audit { remote, branch } => trust_audit(&path, remote, branch),
+        TrustCmd::Audit { remote, branch, history } => {
+            if let Some(prefix) = history {
+                trust_audit_history(remote, branch, &prefix)
+            } else {
+                trust_audit(&path, remote, branch)
+            }
+        }
     }
 }
 
@@ -8353,6 +8365,103 @@ fn trust_audit(local_path: &Path, remote: Option<String>, branch: Option<String>
     println!("{}", "-".repeat(110));
     for key in &keys {
         println!("{:<12}  {mtime:<25}  {key}", "(file-mtime)");
+    }
+    Ok(())
+}
+
+/// X5: full add/remove transition timeline for a single key
+/// (hex prefix) against the team git repo. Walks commits in
+/// chronological order and reports each transition.
+fn trust_audit_history(
+    remote: Option<String>,
+    branch: Option<String>,
+    prefix: &str,
+) -> Result<()> {
+    let remote = remote
+        .ok_or_else(|| anyhow!("--history requires --remote (git provenance comes from there)"))?;
+    let pre = prefix.trim();
+    if pre.is_empty() {
+        anyhow::bail!("--history prefix is empty");
+    }
+    let tmp = tempfile_dir()?;
+    let mut clone_cmd = std::process::Command::new("git");
+    clone_cmd.args(["clone", "--quiet"]);
+    if let Some(b) = branch.as_deref() {
+        clone_cmd.args(["--branch", b]);
+    }
+    let out = clone_cmd
+        .arg(&remote)
+        .arg(&tmp)
+        .output()
+        .with_context(|| format!("git clone {remote}"))?;
+    if !out.status.success() {
+        let _ = std::fs::remove_dir_all(&tmp);
+        anyhow::bail!(
+            "git clone {remote} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    // log oldest-first: each commit that touched trusted-keys.txt.
+    let log = std::process::Command::new("git")
+        .args(["-C"])
+        .arg(&tmp)
+        .args([
+            "log",
+            "--reverse",
+            "--format=%h\t%ai\t%s",
+            "--",
+            TEAM_KEYCHAIN_FILENAME,
+        ])
+        .output()
+        .context("git log")?;
+    let stdout = String::from_utf8_lossy(&log.stdout).to_string();
+
+    let mut prev_present = false;
+    let mut transitions: Vec<(String, String, String, bool)> = Vec::new(); // sha, date, subject, present-after
+    for line in stdout.lines() {
+        let mut it = line.splitn(3, '\t');
+        let sha = it.next().unwrap_or("");
+        let date = it.next().unwrap_or("");
+        let subj = it.next().unwrap_or("");
+        if sha.is_empty() {
+            continue;
+        }
+        let cat = std::process::Command::new("git")
+            .args(["-C"])
+            .arg(&tmp)
+            .args(["show", &format!("{sha}:{TEAM_KEYCHAIN_FILENAME}")])
+            .output();
+        let body = match cat {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+            _ => String::new(),
+        };
+        let present = body
+            .lines()
+            .any(|l| l.trim().starts_with(pre));
+        if present != prev_present {
+            transitions.push((
+                sha.to_string(),
+                date.to_string(),
+                subj.to_string(),
+                present,
+            ));
+            prev_present = present;
+        }
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+    if transitions.is_empty() {
+        println!("# trust audit history — no transitions found for prefix `{pre}`");
+        return Ok(());
+    }
+    println!(
+        "# trust audit history — prefix `{pre}`, {} transition(s) in {remote}",
+        transitions.len()
+    );
+    println!("{:<12}  {:<25}  {:<10}  {}", "SHA", "DATE", "ACTION", "SUBJECT");
+    println!("{}", "-".repeat(100));
+    for (sha, date, subj, present) in &transitions {
+        let action = if *present { "added" } else { "removed" };
+        println!("{sha:<12}  {date:<25}  {action:<10}  {subj}");
     }
     Ok(())
 }
