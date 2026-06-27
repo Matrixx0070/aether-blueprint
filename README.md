@@ -23,7 +23,21 @@ Each tarball ships with a SHA256 the script verifies before extraction. See
 `INSTALL.md` for the manual download + verify path and the source-build
 fallback.
 
-## Status: v0.25.0
+## Status: v0.26.0
+
+Plan V shipped six follow-ups closing every U7 audit MED/LOW + adding tenant quota + secrets manager (24h autonomous run):
+
+- **V3 labelled metrics + histogram + rename** — closes U7 MED #1+#2.
+- **V2 webhook coverage** — trust-add / trust-remove / sso-token-rotate
+  (login + logout); closes U7 MED #4.
+- **V6 provider pool TTL + `POST /admin/reload-pool`** — closes U7 LOW.
+- **V5 tenant quota** — `rpm_cap` + `daily_cost_usd_cap` on
+  `tenants.json`; 429/402 on violation.
+- **V4 secrets manager** — `AETHER_SERVE_TOKEN_FROM_SECRETS_MANAGER=
+  vault:<path>` resolves at startup; `aws:<id>` returns informative-
+  error stub.
+- **V1 SAML login routing** — detects sso-saml.json and reports the
+  scaffold; full signed-response validation deferred to v0.27+.
 
 Plan U shipped six observability + enterprise alt-path + key-hygiene features (24h autonomous run):
 

@@ -1,94 +1,102 @@
-# Next 24-hour autonomous plan — Plan V
+# Next 24-hour autonomous plan — Plan W
 
-Drafted at end of Plan U (v0.24 → v0.25). Picks up the U-followups
-(webhook hook coverage, labelled metrics, SAML login flow) plus the
-secrets-manager + tenant-quota items the slice log has been deferring.
+Drafted at end of Plan V (v0.25 → v0.26). Picks up the V follow-ups
+(full SAML signed-response validation, AWS Secrets Manager,
+plugin-load-failure webhook) plus the per-tool argument-filter and
+SIEM-forwarding items the slice log has been deferring.
 
 ---
 
-## Plan V — SAML login flow + secrets manager + labelled metrics
+## Plan W — finish SAML, AWS secrets, argument-filter policy, SIEM
 
-**MISSION**: Cash the cheques Plan U wrote — wire the remaining
-webhook events, ship the SAML login flow that consumes U6's
-scaffold, finish the Prometheus labelling pass, and add the
-secrets-manager + tenant-quota primitives that production deploys
-have been blocked on.
+**MISSION**: Cash the cheques V1 + V4 wrote — ship the full SAML
+pipeline (the multi-week pure-Rust XML crypto work, broken across
+the 24h budget into the parts that fit) and the AWS Secrets Manager
+backend. Add per-tool argument-filter policy so an operator can block
+not just a tool by name but a specific input pattern. Forward the
+audit log to a SIEM.
 
 **DONE MEANS** (6 criteria):
 
-1. v0.26.0 tag on origin/main; cosign-signed autobuild green on 4
+1. v0.27.0 tag on origin/main; cosign-signed autobuild green on 4
    platforms.
 2. `aether sso login` against a configured SAML IdP completes the
-   redirect-binding flow + persists an asserted attribute set to
-   ~/.aether/sso.token.
-3. Webhook events fire for trust-add, trust-remove, sso-token-rotate,
-   plugin-load-failure — each live-verified via the Python receiver
-   pattern U2 introduced.
-4. `aether_tool_calls_total{tool=…,is_error=…}` labelled metrics
-   exposed; histogram for /v1/complete latency added.
-5. `AETHER_SERVE_TOKEN_FROM_SECRETS_MANAGER=aws:secret-id` or
-   `=vault:path/to/secret` reads at startup; otherwise the raw env
-   var continues to work.
-6. STATUS slice log entries V1–V7 with commit SHAs and live-check
+   AuthnRequest emission + redirect-binding + SAMLResponse capture
+   + signed-response validation (RSA-SHA256 over canonicalised
+   SignedInfo).
+3. `AETHER_SERVE_TOKEN_FROM_SECRETS_MANAGER=aws:<id>` resolves
+   against AWS Secrets Manager via the existing Bedrock cred chain.
+4. `~/.aether/policy.json` gains a `tool_arg_filters: [{tool,
+   regex}]` field; the executor refuses any tool call whose
+   `serde_json::to_string(input)` matches the regex.
+5. `AETHER_AUDIT_FORWARD=<scheme>:<url>` ships audit log lines to
+   Loki / Splunk HEC; HTTP POSTs with a small batch buffer.
+6. STATUS slice log entries W1–W7 with commit SHAs and live-check
    output (no banned vocabulary).
 
 ## Slices
 
-### V1 — SAML login flow consumes U6's sso-saml.json
+### W1 — SAML AuthnRequest + redirect-binding (V1 follow-up part 1)
 
-- `aether sso login` detects sso-saml.json (in addition to sso.json)
-  and routes to the SAML redirect-binding path.
-- Swap U6's regex parsing for quick-xml; walk the metadata
-  properly (forbid DTD/ENTITY at parser level).
-- Signed SAML response validation against x509_signing_cert_b64.
-- Persist asserted attributes (NameID, common ones) to sso.token.
+- Build the `<samlp:AuthnRequest>` XML using a hand-rolled minimal
+  XML writer (no quick-xml dep churn).
+- Deflate + base64-encode per the HTTP-Redirect binding spec.
+- Open the browser at `sso_url?SAMLRequest=…&RelayState=…`.
+- Spin up the local listener (same pattern as U7 OIDC PKCE) to
+  capture the POST'd or GET'd SAMLResponse.
 
-### V2 — Webhook hook coverage for the remaining events
+### W2 — SAML signed-response validation (V1 follow-up part 2)
 
-- trust-add        → fire from trust_add_handler + `plugin trust add`
-- trust-remove     → fire from trust_remove_handler + `plugin trust remove`
-- sso-token-rotate → fire from sso_login + sso_logout
-- plugin-load-failure → fire from discover_plugins / register_*
-- Each verified by spinning up the Python receiver pattern from U2.
+- Pure-Rust XML c14n# (exclusive canonicalisation 1.0).
+- Walk the `<ds:Signature>` element; extract `SignedInfo`,
+  `SignatureValue`, `Reference URI`, `DigestValue`.
+- Verify the digest of the canonicalised referenced element.
+- Verify RSA-SHA256 over the canonicalised `SignedInfo` against
+  the x509 cert from sso-saml.json.
+- Validate NotBefore / NotOnOrAfter on the assertion.
+- Extract NameID + claimed AudienceRestriction; persist to sso.token.
 
-### V3 — Labelled Prometheus metrics
+### W3 — AWS Secrets Manager backend (V4 follow-up)
 
-- Replace static AtomicU64 with `HashMap<label_set, AtomicU64>`
-  wrapped in `RwLock`. Helpers `bump_labelled(name, labels)`.
-- `aether_tool_calls_total{tool="Edit",is_error="false"}` shape.
-- Add histogram for /v1/complete request latency.
-- Rename `aether_turn_duration_ms_sum` → `aether_tool_call_duration_ms_sum`
-  (the v0.25 name was wrong; documented as WEAKEST POINT in U1).
+- Build a `BedrockCredChain`-style helper in aether-llm exposed as
+  `pub fn aws_signed_secrets_get(secret_id) -> Result<String>`.
+- Wire into `resolve_serve_token_from_secrets_manager` so the
+  `aws:<id>` scheme stops returning the informative-error stub.
+- Auth path: SigV4-sign a POST to `secretsmanager.<region>.amazonaws.com`
+  with body `{"SecretId": "<id>"}`.
 
-### V4 — Secrets manager integration
+### W4 — per-tool argument-filter policy
 
-- New env `AETHER_SERVE_TOKEN_FROM_SECRETS_MANAGER=<scheme>:<id>`.
-- Schemes: aws (AWS Secrets Manager), vault (HashiCorp Vault).
-- Resolved at `aether serve` startup; cached for the process lifetime
-  (provider pool semantics from U5).
-- AWS path reuses the v0.8 Bedrock cred chain; Vault path adds a
-  thin HTTP client to /v1/kv-v2/data/<id>.
+- New `tool_arg_filters: [{tool: String, regex: String, action:
+  "refuse"|"warn"}]` field on the Plan N policy.json.
+- Executor pre-dispatch: compile each regex, match against the
+  serialised input JSON, refuse if any matches at `refuse`-action.
+- Closes a gap operators have asked about: "block Bash when the
+  command contains `curl evil.com`".
 
-### V5 — Tenant quota throttling
+### W5 — Audit-log forwarding to SIEM (Loki / Splunk HEC)
 
-- Per-tenant rate-limit + cost ceiling, in addition to the per-IP
-  limit S1's ACL already informs.
-- ~/.aether/tenants.json gains optional `rpm_cap` and `daily_cost_usd_cap`
-  per row.
-- Server reads usage.db per request to assess remaining budget.
+- `AETHER_AUDIT_FORWARD=loki:<URL>` or `=splunk:<URL>` activates
+  HTTP-POST forwarding of each newly-appended audit line.
+- Small in-memory batch buffer (10 lines / 1 second) so a high-
+  volume server doesn't melt the SIEM.
+- Reuses the v0.18 N3 audit-syslog tee architecture (sister sink).
 
-### V6 — Provider pool TTL / `aether serve reload-pool`
+### W6 — plugin-load-failure webhook event
 
-- New env `AETHER_PROVIDER_POOL_TTL_SECS` (default: unbounded).
-- Plus a `POST /admin/reload-pool` endpoint (bearer-protected) that
-  clears the pool — useful after `aether sso login` rotates a token.
+- aether_plugin::discover_plugins() returns `(Vec<PluginTool>,
+  Vec<PluginError>)`.
+- aether-cli's register_subprocess_plugins fires
+  `fire_webhook("plugin-load-failure", {error, manifest_path})`
+  for each error.
+- Closes the V2 NON-GOAL.
 
-### V7 — Self-audit + Plan W draft
+### W7 — Self-audit + Plan X draft
 
-- Audit V1–V6 against the Discipline Laws kernel.
-- Draft Plan W: per-tool argument-filter policy (tool_blocklist
-  gets a regex-on-input matcher), audit-log forwarding to SIEM
-  (LokiAggregator / Splunk HEC), distributed tracing hooks.
+- Audit W1–W6 against the Discipline Laws kernel.
+- Draft Plan X: distributed tracing hooks (OpenTelemetry), tenant
+  ACL with key rotation (RFC 8555-style), MCP transport
+  improvements (HTTP/2 streaming).
 
 ## Banned vocabulary
 
@@ -97,34 +105,36 @@ appear in commit messages, STATUS rows, or end-of-turn reports.
 
 ## Open questions (default picked if no answer)
 
-1. **SAML signed-response validation library.** Default: pure-Rust
-   `x509-cert` + manual canonical XML signing path (no openssl).
-2. **Secrets manager backend.** Default: AWS Secrets Manager first;
-   Vault second; no shipped Azure Key Vault until v0.27+.
-3. **Tenant quota refresh window.** Default: rolling 24h on
-   daily_cost_usd_cap; per-minute fixed window on rpm_cap.
+1. **SAML XML c14n library.** Default: hand-rolled minimal c14n#.
+   xmlsec-c is the reference impl but it's C; Rust ports are
+   immature. Hand-roll only what the SAML AuthnResponse needs.
+2. **AWS region for Secrets Manager.** Default: read from `AWS_REGION`,
+   fall back to `us-east-1`.
+3. **Tool arg-filter action default.** Default: `refuse` (deny by
+   match). `warn` is opt-in.
 4. **R1/R2/R3 creds.** Default unchanged: carry forward if absent.
 
 ## Risk register
 
-- **SAML signed-response validation** is the highest-CVE-density
-  area in the plan. Mitigation: pin a canonical-form parser, refuse
-  external entity references, require explicit cert configuration
-  (no auto-trust on first see).
-- **Labelled metrics RwLock contention** under high QPS. Mitigation:
-  per-label-set atomic + read-lock-free fast path; benchmark
-  before/after in V3.
-- **Secrets-manager dep tree growth** — AWS SDK is heavy.
-  Mitigation: feature-gate `secrets-aws` so the binary stays small
-  when not enabled.
+- **SAML signed-response validation** — pure-Rust c14n# + x509
+  signature verification is genuinely hard. Mitigation: ship W1
+  + W2 as TWO commits so reviewers can audit each step; explicitly
+  document the algorithm choices.
+- **AWS SDK dep tree** — using the official sdk-rust would balloon
+  the binary by ~20MB. Mitigation: hand-roll SigV4 like W3
+  describes; reuses primitives already in aether-llm.
+- **Tool arg-filter regex DOS** — a malicious policy could ship a
+  catastrophic regex. Mitigation: compile-time only (the regex is
+  loaded at startup); use the `regex` crate's `regex::Regex::new`
+  which already enforces a safety bound.
 
 ---
 
-## U7 — self-audit on Plan U (v0.25.0 shipping)
+## V7 — self-audit on Plan V (v0.26.0 shipping)
 
-**Audited commits**: 4217c06 (U4), 8abb89a (U5), d251d29 (U3),
-b6cacc0 (U1), 991d854 (U2), 21ba787 (U6). 6 code commits +
-this doc commit, +900 / −40 net.
+**Audited commits**: dd21264 (V3), 1370e41 (V2), 875ba19 (V6),
+465d191 (V5), 9270464 (V4), d10e51b (V1). 6 code commits + this
+docs commit, +500 / −20 net.
 
 ### BLOCKER — none
 
@@ -132,64 +142,53 @@ this doc commit, +900 / −40 net.
 
 ### MED
 
-- **U1 metrics are unlabelled** — `aether_tool_calls_total` is a
-  single counter, not `{tool="…",is_error="…"}` broken-down.
-  Documented as WEAKEST POINT in the commit; promoted to V3.
-- **U1 `aether_turn_duration_ms_sum` misnamed** — it tracks
-  tool-call duration, not turn duration. Plan V will rename in
-  V3 alongside labelling. Misnamed metric is worse than no metric;
-  this is a real LOW-to-MED until V ships.
-- **U6 SAML scaffold doesn't yet have a LOGIN flow** — `aether sso
-  login` continues to do PKCE/OIDC. Documented inline as "scaffold
-  only"; promoted to V1.
-- **U2 webhook coverage is rollback-only** — trust-add /
-  trust-remove / sso-token-rotate / plugin-load-failure plumbing
-  is in place but not yet wired. Promoted to V2.
+- **V1 SAML login is DETECTION-ONLY** — the actual signed-response
+  validation pipeline is honestly deferred. Operators who configure
+  SAML get a clear refusal, not a silent unvalidated flow. Promoted
+  to Plan W1+W2.
+- **V4 AWS scheme is an informative-error stub** — vault path works,
+  aws path bails. Promoted to Plan W3.
 
 ### LOW
 
-- **U3 trust audit pickaxe finds FIRST add** — if the same key was
-  removed and re-added, only the original commit is reported. Plan
-  V key-rotation slice can extend.
-- **U5 provider pool retains stale auth on credential rotation** —
-  caller must restart the process to refresh. Promoted to V6.
-- **U6 regex-only metadata parsing chokes on non-canonical
-  namespaces.** quick-xml swap is V1's job.
-- **U2 secret stored RAW on disk** (mode 0600 only). Plan V or
-  Plan W can integrate OS keystore.
-- **U4 integration test requires gpg in PATH** — fine on Ubuntu
-  CI runners; macOS doesn't ship gpg by default. Skip-on-no-gpg
-  guard is a future refinement.
-- **Bash CWD reset between turns** caused 2 build-skipped false
-  positives during this run (same recurring papercut from Plan O+).
+- **V3 labelled tool_calls_total empty in serve** — install_tool_hook
+  isn't wired into the serve paths; the labelled view is currently
+  populated only by print/REPL/TUI sessions. Documented; the
+  schema + plumbing are correct; population is a 1-commit follow-up.
+- **V5 rpm bucket is process-local** — horizontal scaling needs an
+  external rate backend (Redis, etc.). Documented; not a v0.26
+  blocker for the single-machine operator model.
+- **V5 daily_cost_usd_cap reads usage.db per request** — small
+  table, single query, but on the hot path. v0.27+ can cache.
+- **V2 plugin-load-failure event NOT WIRED** — needs an
+  aether_plugin API change. Promoted to W6.
+- **V4 secret persisted via env::set_var** — inherited by forks/exec.
+  Acceptable for single-process model.
+- **V6 reload-pool endpoint has no separate admin role** — same
+  bearer as /v1/messages. Operators behind a reverse proxy.
 
 ### What worked
 
-- **All 6 slices live-verified end-to-end** with the receiver
-  pattern (Python for webhooks, http.server for SAML metadata,
-  curl matrix for /metrics, real gpg for U4, fresh-clone for U3).
-- **CAUGHT-FIX** during U3 (`--diff-filter=A` only matched the
-  first key) caught by the live verify probe itself and fixed
-  with a comment trail.
-- **Plan-then-ship cadence held**: Plan U draft from a018deb (T7)
-  matches what shipped, including the U6 scaffold-only framing.
-- **Banned-vocab discipline held** across all commits + STATUS rows.
+- **All 6 slices live-verified end-to-end** with multiple cases:
+  V3 histogram bucketing, V2 HMAC byte-perfect, V6 reload timing
+  diff, V5 5-request rpm probe, V4 vault round-trip, V1 detection
+  dispatch.
+- **Honest UNVERIFIED labelling** held through V1's "scope is
+  detection only" and V4's AWS stub — no security pretence.
+- **Plan-then-ship cadence held**: Plan V draft from 06f0669 (U7)
+  matches what shipped, with V1+V4 honestly scoped to "ship the
+  detection layer; defer the crypto/dep work".
+- **Banned-vocab discipline held** through all commits + STATUS rows.
 
 ### Diff numbers
 
-- aether-cli:           +900 LoC (metrics counters + handler,
-                                   webhook config + fire_webhook,
-                                   SAML configure-saml + XXE guards,
-                                   trust audit, provider pool,
-                                   plugin verify --require integration
-                                   test scaffolding inline)
-- aether-cli/Cargo.toml + workspace: +4 LoC (hmac, regex,
-                                              tokio-stream already there)
-- tests/u4-signed-commit.sh: +106 LoC (new shell integration test)
-- README / ROADMAP / STATUS / NEXT_24H_PLAN: +180 / -50 LoC
+- aether-cli:  +500 LoC (labelled metrics + histogram + webhook
+                         coverage + provider pool TTL + tenant
+                         quota + secrets manager + SAML dispatch)
+- README / ROADMAP / STATUS / NEXT_24H_PLAN: +160 / -40 LoC
 
 ### Total binary delta
 
-- aether 0.24.0 release binary on linux-x64: ~41 MB
-- aether 0.25.0 release binary on linux-x64: ~41 MB (no new
-  major deps; regex + hmac were already linked elsewhere).
+- aether 0.25.0 release binary on linux-x64: ~41 MB
+- aether 0.26.0 release binary on linux-x64: ~41 MB (no new
+  deps; all V slices used primitives already in the workspace).

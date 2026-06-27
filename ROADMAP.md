@@ -516,14 +516,39 @@ extensibility.
   signing cert, persists to ~/.aether/sso-saml.json. XXE-safe (DOCTYPE
   + ENTITY refused; body capped at 1 MiB).
 
-## v0.26 — next (draft)
+## v0.26 — observability + enterprise plumbing — shipped 2026-06-27
 
-- SAML login flow (consumes sso-saml.json; redirect/POST binding;
-  signed-assertion validation) — Plan V scope
-- Webhook hook coverage for the remaining events (trust-add /
-  trust-remove / sso-token-rotate / plugin-load-failure)
-- Labelled Prometheus metrics (per-tool tool_calls_total breakdown)
-- Provider pool TTL / `aether serve reload-pool` for cred rotation
+- **V3 labelled metrics + histogram + rename** — closes U7 MED #1+#2.
+  `aether_tool_calls_labelled_total{tool="…",is_error="…"}` via
+  RwLock<HashMap>. `/v1/complete` latency histogram with cumulative
+  buckets. `aether_turn_duration_ms_sum` renamed to
+  `aether_tool_call_duration_ms_sum` (breaking name change for scrapers).
+- **V2 webhook coverage** — closes U7 MED #4. trust-add, trust-remove,
+  sso-token-rotate (login + logout) all fire `fire_webhook(event, …)`.
+  Live-verified HMAC-signed POSTs against a python receiver.
+- **V6 provider pool TTL + /admin/reload-pool** — closes U7 LOW.
+  `AETHER_PROVIDER_POOL_TTL_SECS` evicts stale entries; bearer-protected
+  `POST /admin/reload-pool` clears the pool atomically.
+- **V5 tenant quota** — `rpm_cap` (per-minute fixed window) + `daily_
+  cost_usd_cap` (rolling 24h SUM(cost_usd)) on TenantAclRow. Server
+  returns 429 / 402 with informative JSON error.
+- **V4 AETHER_SERVE_TOKEN_FROM_SECRETS_MANAGER** — `vault:<path>`
+  scheme reads KV v2; `aws:<id>` returns informative-error stub
+  (full AWS Secrets Manager dep deferred). Live-verified vault path
+  resolves a bearer that the server then enforces.
+- **V1 SAML login routing** — `aether sso login` detects sso-saml.json
+  and routes to a stub that loads + reports the scaffold, then bails
+  with an informative message. The full redirect-binding + signed-
+  response validation pipeline is honestly deferred to Plan W (multi-
+  week pure-Rust XML crypto).
+
+## v0.27 — next (draft)
+
+- Full SAML redirect-binding flow + signed-response validation
+  (V1 follow-up; the multi-week crypto pipeline)
+- AWS Secrets Manager backend for V4 (reuses Bedrock cred chain)
+- plugin-load-failure webhook event (requires aether_plugin API change)
+- Per-tool argument-filter policy (tool_blocklist gets regex-on-input)
 - Closing R1/R2/R3 cred-blocked verifiers
 
 ## v0.9 — enterprise

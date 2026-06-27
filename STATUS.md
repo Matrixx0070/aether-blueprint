@@ -138,4 +138,11 @@ format: `[slice] [status] [commit] [verifier] [live-check] note`
 | U1 | DONE | b6cacc0 | n/a | /metrics exposes 8 counters; live: turns=2, complete=2, rollback=1, 4xx=1 after live traffic | Prometheus /metrics endpoint |
 | U2 | DONE | 991d854 | n/a | configure/list/test fired 2 webhooks; HMAC over body byte-perfect match (a722e89958cb...) | webhook notifications (HMAC-SHA256 signed POST) |
 | U6 | DONE | 21ba787 | n/a | configure-saml: spec-conforming metadata → sso-saml.json with IdP+SP+SSO+cert; DOCTYPE/ENTITY metadata → XXE-bait refused | SAML scaffolding (alt-path to OIDC) |
+| U7 | DONE | 06f0669 | n/a | v0.25.0 release LIVE on 4 platforms (run 28271620497); cosign verify-blob → "Verified OK" against published artifact | v0.25.0 ship + Plan V draft + cosign live-verify |
+| V3 | DONE | dd21264 | n/a | /metrics: histogram fired le="5000"=1 / count=1 / sum=3071ms; rename to aether_tool_call_duration_ms_sum confirmed | labelled Prometheus metrics + histogram + rename |
+| V2 | DONE | 1370e41 | n/a | python receiver: 3 events fired live (trust-add{key,tenant,path} / trust-remove{prefix,counts} / sso-token-rotate{action:logout}) | webhook coverage for trust-add/remove + sso-rotate |
+| V6 | DONE | 875ba19 | n/a | reload-pool: req1=3.0s build, req2=2.4s pool-hit, req3=5.3s rebuild after reload (pool cleared) | provider pool TTL + POST /admin/reload-pool |
+| V5 | DONE | 465d191 | n/a | rpm_cap=3 against 5 reqs → first 3 HTTP 200, last 2 HTTP 429 "tenant rpm_cap exceeded" | tenant quota (rpm_cap + daily_cost_usd_cap) |
+| V4 | DONE | 9270464 | n/a | vault: scheme resolved bearer "vault-resolved-bearer-XYZ"; 401 without bearer / 200 with resolved bearer; aws scheme returns informative error | secrets manager (vault path + aws stub) |
+| V1 | DONE | d10e51b | n/a | SAML scaffold present → detection + informative refusal; scaffold absent → routes to OIDC | SAML login routing (full flow deferred to Plan W) |
 
