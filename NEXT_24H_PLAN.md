@@ -25,7 +25,7 @@ the OIDC token endpoint, retire the long-running BYOC carry-forward
 to docs, and close the EE6 trust-assumption follow-through if a
 stable ed448-goldilocks ships.
 
-**DONE MEANS** (8 criteria):
+**DONE MEANS** (9 criteria):
 
 1. v0.36.0 tag on origin/main; cosign-signed autobuild green on 4
    platforms; pre-tag prerelease-checks job (EE4) passes.
@@ -47,7 +47,14 @@ stable ed448-goldilocks ships.
    success.
 7. FF6 ed448-goldilocks v0.14 stable bump if available, otherwise
    one-line trust-assumption note in the EE6 comment.
-8. STATUS slice rows FF1–FF7 with commit SHAs + live-verify
+8. FF7 parallel-sub-agent orchestration bug fixed (closes 2026-06-27
+   real-user-session HIGH — `docs/bugs/orchestration-tool-use-id-
+   mismatch.md`): pre-flight tool_use/tool_result pairing check
+   added; sub-agent termination paths (happy / budget-exhausted /
+   internal-error) all produce balanced parent message threads;
+   live smoke reruns the failing audit prompt against
+   `/root/sudo-ai-v4` in REPL mode without 400.
+9. STATUS slice rows FF1–FF8 with commit SHAs + live-verify
    excerpts. EE4's pre-tag check passes. No banned vocabulary.
 
 ## Slices
@@ -136,14 +143,66 @@ stable ed448-goldilocks ships.
   pre-release dependency state.
 - Documentation-only if no stable bump exists.
 
-### FF7 — Plan FF wrap-up
+### FF7 — Parallel sub-agent orchestration fix (HIGH — real-user bug)
+
+Filed against `docs/bugs/orchestration-tool-use-id-mismatch.md`
+after a real session (2026-06-27, Frank/CEO auditing `sudo-ai-v4`)
+wedged on Anthropic HTTP 400:
+
+```
+messages.2.content.0: unexpected `tool_use_id` found in
+`tool_result` blocks: toolu_01CeMEvJjrNqt18JA3eANNAY. Each
+`tool_result` block must have a corresponding `tool_use` block
+in the previous message.
+```
+
+When the main agent dispatches parallel sub-agents and one
+exhausts its turn budget or errors out mid-run, the orchestrator
+emits `tool_result` blocks whose `tool_use_id` references an
+INTERNAL sub-agent tool_use that never made it into the parent
+message thread. Anthropic rejects the next API call with 400; the
+REPL main loop wedges silent (CPU 0%, no surfaced error). Only
+recovery is `kill <pid>`.
+
+Three changes (full proposal + repro in `docs/bugs/orchestration-
+tool-use-id-mismatch.md`):
+
+1. **Pre-flight pairing check** — before every Anthropic API call,
+   walk the message list and assert every `tool_result.tool_use_id`
+   matches a `tool_use.id` in the previous assistant message.
+   Bail with a structured error before the wire call. Gated on
+   `AETHER_DEBUG=1` so production runs aren't taxed by the walk.
+
+2. **Sub-agent result mapping** — when a sub-agent dispatch
+   finishes (success or fail), emit exactly ONE `tool_result`
+   block whose `tool_use_id` equals the PARENT's dispatch
+   `tool_use_id`, NOT any sub-agent-internal id. The sub-agent's
+   internal tool_use/tool_result history stays inside the
+   sub-agent and never leaks to the parent thread.
+
+3. **Sub-agent failure path** — track the parent's dispatch
+   `tool_use_id` through every termination path: happy / budget-
+   exhausted / internal-error / timeout / user-cancel. ALL paths
+   emit a balanced `tool_result(tool_use_id=parent_id,
+   is_error=…, content="<reason>")` so the parent thread is
+   shape-valid for the next API call.
+
+Unit tests cover the three termination paths producing balanced
+threads. Live smoke reruns the failing audit prompt against
+`/root/sudo-ai-v4` in REPL mode (NOT `--print` — the bug only
+fires when the REPL main loop is the orchestrator); confirm
+parallel sub-agent dispatch composes without 400 and produces
+all 10 audit findings end-to-end (5 of which already exist as the
+ground-truth set in `/tmp/sudo-ai-audit-report.md`).
+
+### FF8 — Plan FF wrap-up
 
 - Version bump 0.35 → 0.36 + ROADMAP + STATUS + Plan GG draft +
   tag + ship.
 - EE4's pre-tag placeholder check gates the tag push; STATUS.md
   must not contain `(this commit)` literals.
 - Same post-ship pattern Plan EE established: ship commit lands
-  STATUS rows for FF1-FF6 only; FF7 row backfilled in a SINGLE
+  STATUS rows for FF1-FF7 only; FF8 row backfilled in a SINGLE
   follow-up commit with commit SHA + run ID + cosign result. This
   is structurally cleaner than the Y7→DD7 placeholder-then-backfill
   pattern that needed two commits to roundtrip.

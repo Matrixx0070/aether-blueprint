@@ -1111,7 +1111,19 @@ pipeline in one 24h budget). One main theme + small filler.
   it. Otherwise add a one-line note in the trust-assumption comment
   pointing at the audit-gap risk register. Documentation-only if
   no stable bump exists.
-- **FF7 wrap-up** — version bump + ROADMAP + STATUS + Plan GG draft
+- **FF7 parallel sub-agent orchestration fix** — HIGH, filed
+  against `docs/bugs/orchestration-tool-use-id-mismatch.md` from a
+  2026-06-27 real-user session (Frank/CEO auditing sudo-ai-v4). When
+  parallel sub-agents are dispatched and one exhausts turn budget /
+  errors out, the orchestrator emits `tool_result` blocks whose
+  `tool_use_id` references INTERNAL sub-agent ids that never made
+  it into the parent thread → Anthropic HTTP 400 → REPL main loop
+  wedges silently. Three changes: pre-flight pairing check before
+  every API call (debug-gated), sub-agent result mapping (parent
+  dispatch id, not internal), balanced tool_result on every
+  termination path. Live smoke reruns the failing audit in REPL
+  mode against the same codebase.
+- **FF8 wrap-up** — version bump + ROADMAP + STATUS + Plan GG draft
   + tag + ship. The pre-tag placeholder check (EE4) gates this.
 
 ## v0.9 — enterprise
