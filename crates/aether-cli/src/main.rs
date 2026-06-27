@@ -7992,10 +7992,9 @@ async fn sso_login_saml(sso_saml_path: &Path) -> Result<()> {
         );
     }
 
-    // Bind a kernel-chosen ACS port. Y2 will own the listener that
-    // reads the SAMLResponse off this socket; Y1 only needs the port
-    // so the AssertionConsumerServiceURL embedded in the AuthnRequest
-    // is well-defined.
+    // Y2: bind the ACS listener up front so the
+    // AssertionConsumerServiceURL embedded in the AuthnRequest is
+    // backed by a real socket waiting for the IdP POST callback.
     let listener = std::net::TcpListener::bind("127.0.0.1:0")
         .context("bind 127.0.0.1:0 for SAML ACS callback")?;
     let port = listener
@@ -8003,7 +8002,6 @@ async fn sso_login_saml(sso_saml_path: &Path) -> Result<()> {
         .context("local_addr on ACS listener")?
         .port();
     let acs_url = format!("http://127.0.0.1:{port}/sso/saml/acs");
-    drop(listener); // Y2 will rebind. Holding it here would race with the listener Y2 spawns.
 
     let relay_state = {
         use rand_core::RngCore;
@@ -8026,7 +8024,7 @@ async fn sso_login_saml(sso_saml_path: &Path) -> Result<()> {
         urlencode(&relay_state),
     );
 
-    eprintln!("[sso login] Y1: AuthnRequest emitted. Open this URL in your browser:");
+    eprintln!("[sso login] AuthnRequest emitted. Open this URL in your browser:");
     eprintln!("  {redirect_url}");
     let _ = std::process::Command::new("xdg-open")
         .arg(&redirect_url)
@@ -8038,13 +8036,267 @@ async fn sso_login_saml(sso_saml_path: &Path) -> Result<()> {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
-    anyhow::bail!(
-        "Y1 ships AuthnRequest emission only. The ACS callback listener \
-         (which would have bound to 127.0.0.1:{port}/sso/saml/acs) lands \
-         in Y2 alongside the SAMLResponse decode + signature verify \
-         pipeline (Y3-Y7). Until then, the redirect URL above is for \
-         manual smoke-testing the AuthnRequest against an IdP."
+    eprintln!("[sso login] Y2: waiting on 127.0.0.1:{port}/sso/saml/acs (timeout 120 s)…");
+
+    // Y2: accept-and-parse the IdP's POST callback. Same loop shape
+    // as the OIDC flow (non-blocking accept + 200ms sleep + timeout).
+    listener.set_nonblocking(true).context("set_nonblocking on ACS listener")?;
+    let timeout_at = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let (saml_response_xml, returned_relay_state) = loop {
+        if std::time::Instant::now() >= timeout_at {
+            anyhow::bail!("sso login: timeout waiting for SAML ACS POST callback");
+        }
+        match listener.accept() {
+            Ok((mut sock, _)) => {
+                sock.set_read_timeout(Some(std::time::Duration::from_secs(10))).ok();
+                use std::io::{Read, Write};
+                let mut buf = Vec::with_capacity(16384);
+                let mut tmp = [0u8; 4096];
+                // Read until either the body has arrived or the
+                // socket closes / 10s read-timeout fires. SAMLResponse
+                // form bodies routinely run 10-50 KB so we cannot
+                // assume one read() captures everything.
+                loop {
+                    match sock.read(&mut tmp) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            buf.extend_from_slice(&tmp[..n]);
+                            if buf.len() > 1_048_576 {
+                                anyhow::bail!(
+                                    "SAML ACS body > 1 MiB — refusing (likely \
+                                     misdirected POST or malicious large body)"
+                                );
+                            }
+                            // Stop reading once we've seen blank line
+                            // (end of headers) AND the declared body
+                            // bytes have arrived.
+                            if let Some(body_len) =
+                                content_length_of_request(&buf)
+                            {
+                                if let Some(hdr_end) = find_double_crlf(&buf) {
+                                    if buf.len() >= hdr_end + 4 + body_len {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        Err(e)
+                            if matches!(
+                                e.kind(),
+                                std::io::ErrorKind::WouldBlock
+                                    | std::io::ErrorKind::TimedOut
+                            ) =>
+                        {
+                            break
+                        }
+                        Err(e) => return Err(e).context("read ACS POST"),
+                    }
+                }
+                let req = String::from_utf8_lossy(&buf).to_string();
+                let body = match req.split_once("\r\n\r\n") {
+                    Some((_, b)) => b.to_string(),
+                    None => String::new(),
+                };
+                let parsed = match parse_saml_acs_form(&body) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let html = format!(
+                            "<h2>aether sso (SAML): error</h2><p>{}</p>",
+                            html_escape_minimal(&e.to_string())
+                        );
+                        let resp = format!(
+                            "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            html.len(),
+                            html
+                        );
+                        let _ = sock.write_all(resp.as_bytes());
+                        return Err(e);
+                    }
+                };
+                let html =
+                    "<h2>aether sso (SAML): response received</h2><p>You can close this tab.</p>";
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    html.len(),
+                    html
+                );
+                let _ = sock.write_all(resp.as_bytes());
+                break (parsed.saml_response_xml, parsed.relay_state);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                continue;
+            }
+            Err(e) => return Err(e).context("ACS accept"),
+        }
+    };
+
+    // RelayState round-trip is advisory in Y2 (we'll harden the
+    // anti-replay binding in Y6 when Conditions/NotBefore lands).
+    if returned_relay_state.as_deref() != Some(&relay_state) {
+        eprintln!(
+            "[sso login] WARNING: RelayState round-trip mismatch (sent={relay_state}, got={returned:?})",
+            returned = returned_relay_state
+        );
+    }
+
+    let status = extract_saml_response_status(&saml_response_xml)?;
+    if status.code != "urn:oasis:names:tc:SAML:2.0:status:Success" {
+        anyhow::bail!(
+            "IdP returned non-Success SAML status: {} {}",
+            status.code,
+            status.message.unwrap_or_default()
+        );
+    }
+    eprintln!(
+        "[sso login] Y2: SAMLResponse decoded ({} bytes XML), Status=Success",
+        saml_response_xml.len()
     );
+
+    anyhow::bail!(
+        "Y2 ships SAMLResponse decode + Status:Success check. \
+         Quick-xml extractor (Y3), exclusive c14n# (Y4), RSA-SHA256 \
+         verify (Y5), assertion bounds (Y6), and NameID → tenant \
+         bearer (Y7) follow. Until those land, the response is \
+         received but NOT trusted — the token is NOT persisted."
+    );
+}
+
+/// Y2: extract Content-Length from an HTTP request prefix. Returns
+/// the parsed length if a `Content-Length:` header is present, else
+/// `None`. Case-insensitive. Used to know when we've read enough.
+fn content_length_of_request(buf: &[u8]) -> Option<usize> {
+    let s = std::str::from_utf8(buf).ok()?;
+    let hdr_end = s.find("\r\n\r\n")?;
+    let headers = &s[..hdr_end];
+    for line in headers.split("\r\n") {
+        if let Some((k, v)) = line.split_once(':') {
+            if k.trim().eq_ignore_ascii_case("content-length") {
+                return v.trim().parse().ok();
+            }
+        }
+    }
+    None
+}
+
+/// Y2: find the byte index of the first `\r\n\r\n` (header / body
+/// separator). Returns the index of the first `\r`, so the body
+/// starts at `idx + 4`.
+fn find_double_crlf(buf: &[u8]) -> Option<usize> {
+    buf.windows(4).position(|w| w == b"\r\n\r\n")
+}
+
+/// Y2: minimal HTML escape so the ACS error page can echo an error
+/// string back into the page body without opening an XSS hole. Only
+/// `<`, `>`, `&`, `"` are escaped; the page is text/html.
+fn html_escape_minimal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '&' => out.push_str("&amp;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Y2: parsed result of a SAML ACS POST body.
+#[derive(Debug)]
+struct ParsedSamlAcs {
+    /// Base64-decoded SAMLResponse XML (UTF-8).
+    saml_response_xml: String,
+    /// URL-decoded RelayState if the IdP echoed it. None on absence.
+    relay_state: Option<String>,
+}
+
+/// Y2: parse the form-urlencoded body of the IdP's POST callback.
+/// The body MUST contain `SAMLResponse=<base64>` (standard base64
+/// per saml-bindings-2.0 §3.5.4); RelayState is optional.
+///
+/// Returns the decoded XML body + the RelayState. Returns Err if
+/// SAMLResponse is absent, mis-encoded, or not valid UTF-8.
+fn parse_saml_acs_form(body: &str) -> Result<ParsedSamlAcs> {
+    use base64::Engine as _;
+    let mut saml_response_b64: Option<String> = None;
+    let mut relay_state: Option<String> = None;
+    for pair in body.split('&') {
+        let (k, v) = match pair.split_once('=') {
+            Some(kv) => kv,
+            None => continue,
+        };
+        let decoded = urldecode(v);
+        match k {
+            "SAMLResponse" => saml_response_b64 = Some(decoded),
+            "RelayState" => relay_state = Some(decoded),
+            _ => {}
+        }
+    }
+    let b64 = saml_response_b64
+        .ok_or_else(|| anyhow!("ACS POST body missing SAMLResponse parameter"))?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64.as_bytes())
+        .context("SAMLResponse base64 decode")?;
+    if bytes.len() > 1_048_576 {
+        anyhow::bail!("SAMLResponse > 1 MiB — refusing");
+    }
+    let xml =
+        String::from_utf8(bytes).context("SAMLResponse not valid UTF-8")?;
+    Ok(ParsedSamlAcs {
+        saml_response_xml: xml,
+        relay_state,
+    })
+}
+
+/// Y2: shape of a parsed SAML Status element.
+#[derive(Debug, Clone)]
+struct SamlStatus {
+    code: String,
+    message: Option<String>,
+}
+
+/// Y2: extract `<samlp:Status><samlp:StatusCode Value="..."/>
+/// [<samlp:StatusMessage>...</samlp:StatusMessage>] </samlp:Status>`
+/// from a SAMLResponse XML body. Regex extractor lands Y2; quick-xml
+/// extractor lands Y3 alongside the rest of the assertion walker.
+///
+/// We only care about the TOP-LEVEL StatusCode here (the immediate
+/// child of Status). Nested sub-status codes (Responder/Requester
+/// chains) are kept as the parent's `message` if present.
+fn extract_saml_response_status(xml: &str) -> Result<SamlStatus> {
+    // The StatusCode element can be self-closing or have nested
+    // sub-status. We're after the FIRST Value="..." attribute that
+    // sits inside a <(?:samlp:)?StatusCode> tag inside the
+    // first <(?:samlp:)?Status> block.
+    let status_re = regex::Regex::new(
+        r#"(?s)<(?:samlp:)?Status\b[^>]*>(.*?)</(?:samlp:)?Status>"#,
+    )
+    .expect("status regex");
+    let status_inner = status_re
+        .captures(xml)
+        .and_then(|c| c.get(1))
+        .ok_or_else(|| anyhow!("SAMLResponse missing <Status> element"))?
+        .as_str();
+    let code_re =
+        regex::Regex::new(r#"(?s)<(?:samlp:)?StatusCode\b[^>]*\bValue="([^"]+)""#)
+            .expect("status code regex");
+    let code = code_re
+        .captures(status_inner)
+        .and_then(|c| c.get(1))
+        .ok_or_else(|| anyhow!("<Status> missing <StatusCode Value=…>"))?
+        .as_str()
+        .to_string();
+    let msg_re = regex::Regex::new(
+        r#"(?s)<(?:samlp:)?StatusMessage\b[^>]*>(.*?)</(?:samlp:)?StatusMessage>"#,
+    )
+    .expect("status message regex");
+    let message = msg_re
+        .captures(status_inner)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().trim().to_string());
+    Ok(SamlStatus { code, message })
 }
 
 /// Y1: Build a minimal SAML 2.0 AuthnRequest XML for HTTP-Redirect
@@ -10357,6 +10609,96 @@ mod tests {
         assert!(bad.is_err(), "must refuse XML-special in sp_entity_id");
         let msg = bad.unwrap_err().to_string();
         assert!(msg.contains("XML-special"), "informative error: {msg}");
+    }
+
+    /// Y2: the ACS form parser round-trips a base64-encoded
+    /// SAMLResponse alongside an optional RelayState.
+    #[test]
+    fn y2_acs_form_roundtrip() {
+        use base64::Engine as _;
+        let xml = r#"<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"><samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status></samlp:Response>"#;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(xml);
+        let body = format!(
+            "SAMLResponse={}&RelayState={}",
+            urlencode(&b64),
+            urlencode("rs-abc-123"),
+        );
+        let parsed = parse_saml_acs_form(&body).unwrap();
+        assert_eq!(parsed.saml_response_xml, xml, "SAMLResponse XML round-trip");
+        assert_eq!(parsed.relay_state.as_deref(), Some("rs-abc-123"));
+    }
+
+    /// Y2: missing SAMLResponse parameter is an informative error,
+    /// not a panic.
+    #[test]
+    fn y2_acs_form_rejects_missing_response() {
+        let body = "RelayState=foo";
+        let err = parse_saml_acs_form(body).unwrap_err().to_string();
+        assert!(err.contains("missing SAMLResponse"), "informative: {err}");
+    }
+
+    /// Y2: mis-encoded base64 surfaces a base64 error with context,
+    /// not garbage downstream.
+    #[test]
+    fn y2_acs_form_rejects_bad_base64() {
+        let body = "SAMLResponse=this!is!not!base64";
+        let err = parse_saml_acs_form(body).unwrap_err().to_string();
+        assert!(
+            err.to_lowercase().contains("base64"),
+            "informative: {err}"
+        );
+    }
+
+    /// Y2: extract Status:Success from a minimal SAMLResponse —
+    /// proves the regex extractor handles the namespaced form the
+    /// real IdPs use.
+    #[test]
+    fn y2_status_extracts_success() {
+        let xml = r#"<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"><samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status></samlp:Response>"#;
+        let st = extract_saml_response_status(xml).unwrap();
+        assert_eq!(st.code, "urn:oasis:names:tc:SAML:2.0:status:Success");
+        assert!(st.message.is_none(), "no message expected");
+    }
+
+    /// Y2: extract a Failure status WITH a StatusMessage and propagate
+    /// both up to the caller for a clear error path.
+    #[test]
+    fn y2_status_extracts_responder_failure_with_message() {
+        let xml = r#"<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"><samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Responder"><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:AuthnFailed"/></samlp:StatusCode><samlp:StatusMessage>bad credentials</samlp:StatusMessage></samlp:Status></samlp:Response>"#;
+        let st = extract_saml_response_status(xml).unwrap();
+        assert_eq!(st.code, "urn:oasis:names:tc:SAML:2.0:status:Responder");
+        assert_eq!(st.message.as_deref(), Some("bad credentials"));
+    }
+
+    /// Y2: the un-namespaced form (some IdPs omit the samlp: prefix
+    /// when the default namespace is samlp) is still extractable.
+    #[test]
+    fn y2_status_extracts_unnamespaced() {
+        let xml = r#"<Response xmlns="urn:oasis:names:tc:SAML:2.0:protocol"><Status><StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></Status></Response>"#;
+        let st = extract_saml_response_status(xml).unwrap();
+        assert_eq!(st.code, "urn:oasis:names:tc:SAML:2.0:status:Success");
+    }
+
+    /// Y2: a SAMLResponse with no `<Status>` block is rejected with
+    /// an informative error, not silently treated as Success.
+    #[test]
+    fn y2_status_rejects_missing_status() {
+        let xml =
+            r#"<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"></samlp:Response>"#;
+        let err = extract_saml_response_status(xml).unwrap_err().to_string();
+        assert!(err.contains("missing <Status>"), "informative: {err}");
+    }
+
+    /// Y2: content_length_of_request locates a Content-Length header
+    /// case-insensitively and ignores anything before the
+    /// header / body separator.
+    #[test]
+    fn y2_content_length_parse() {
+        let raw = b"POST /sso/saml/acs HTTP/1.1\r\nHost: 127.0.0.1\r\ncontent-length: 1234\r\n\r\nbody-bytes";
+        assert_eq!(content_length_of_request(raw), Some(1234));
+        let idx = find_double_crlf(raw).expect("double-crlf must be present");
+        assert_eq!(&raw[idx..idx + 4], b"\r\n\r\n", "idx points to \\r\\n\\r\\n");
+        assert_eq!(&raw[idx + 4..], b"body-bytes", "body bytes after idx+4");
     }
 
     /// Y1: the HTTP-Redirect binding encoding pipeline round-trips —
