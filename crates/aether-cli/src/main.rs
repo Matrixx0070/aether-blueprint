@@ -921,22 +921,58 @@ fn enforce_model_policy(model: &str) -> Result<()> {
 /// Cache miss → real build → insert. Cache hit → Arc::clone. Errors
 /// are NOT cached (an env-var change later in the process can fix
 /// the next call).
+/// V6: provider pool entries carry the instant they were built so a
+/// TTL (AETHER_PROVIDER_POOL_TTL_SECS) can evict stale entries on
+/// the next lookup.
+struct PooledProvider {
+    provider: Arc<dyn aether_llm::LlmProvider>,
+    built_at: std::time::Instant,
+}
+
 static PROVIDER_POOL: once_cell::sync::Lazy<
-    tokio::sync::Mutex<std::collections::HashMap<String, Arc<dyn aether_llm::LlmProvider>>>,
+    tokio::sync::Mutex<std::collections::HashMap<String, PooledProvider>>,
 > = once_cell::sync::Lazy::new(|| tokio::sync::Mutex::new(std::collections::HashMap::new()));
+
+fn provider_pool_ttl_secs() -> Option<u64> {
+    std::env::var("AETHER_PROVIDER_POOL_TTL_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|n| *n > 0)
+}
 
 async fn get_or_build_provider() -> Result<Arc<dyn aether_llm::LlmProvider>> {
     let key = active_provider_name();
+    let ttl = provider_pool_ttl_secs();
     {
         let g = PROVIDER_POOL.lock().await;
-        if let Some(p) = g.get(&key) {
-            return Ok(Arc::clone(p));
+        if let Some(entry) = g.get(&key) {
+            let fresh = match ttl {
+                Some(secs) => entry.built_at.elapsed().as_secs() < secs,
+                None => true,
+            };
+            if fresh {
+                return Ok(Arc::clone(&entry.provider));
+            }
         }
     }
     let p = build_provider().await?;
     let mut g = PROVIDER_POOL.lock().await;
-    g.insert(key, Arc::clone(&p));
+    g.insert(
+        key,
+        PooledProvider {
+            provider: Arc::clone(&p),
+            built_at: std::time::Instant::now(),
+        },
+    );
     Ok(p)
+}
+
+/// V6: empty the provider pool. Used by `POST /admin/reload-pool`
+/// after a credential rotation (e.g. `aether sso login` minted a new
+/// id_token). The next get_or_build_provider rebuilds from scratch.
+async fn reload_provider_pool() {
+    let mut g = PROVIDER_POOL.lock().await;
+    g.clear();
 }
 
 async fn build_provider() -> Result<Arc<dyn aether_llm::LlmProvider>> {
@@ -2266,6 +2302,7 @@ async fn run_serve(
         )
         .route("/v1/rollback", post(rollback_handler))
         .route("/v1/complete", post(complete_handler))
+        .route("/admin/reload-pool", post(admin_reload_pool_handler))
         .route("/metrics", axum::routing::get(metrics_handler))
         .route("/healthz", axum::routing::get(|| async { "ok" }))
         .with_state(state.clone());
@@ -2292,6 +2329,7 @@ async fn run_serve(
     eprintln!("  POST /v1/rollback  roll a file back to a captured pre-state (body: {{\"file_path\":\"<p>\",\"original_contents\":\"<s>\",\"did_not_exist\":bool}})");
     eprintln!("  POST /v1/complete  code-completion SSE stream (body: {{\"before\":\"<s>\",\"after\":\"<s>\",\"model\":\"<id>\",\"language\":\"<id>\"}})");
     eprintln!("  GET  /metrics      Prometheus text-format counters (turns, tool_calls, complete, 4xx, 429, rollback)");
+    eprintln!("  POST /admin/reload-pool   clear the LLM provider pool (bearer-protected; use after `aether sso login`)");
     eprintln!("  GET  /healthz");
     eprintln!(
         "  [rate-limit: {} rpm/IP, max-sessions: {}]",
@@ -3206,6 +3244,23 @@ fn observe_complete_latency_ms(latency_ms: u64) {
             bump(&METRIC_COMPLETE_LATENCY_BUCKETS[i]);
         }
     }
+}
+
+/// `POST /admin/reload-pool` — empty the provider pool. Useful after
+/// rotating credentials (`aether sso login`) so the next request
+/// rebuilds the provider with the fresh auth. Bearer-protected.
+async fn admin_reload_pool_handler(
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    if let Err(resp) = check_bearer(&headers) {
+        return resp;
+    }
+    reload_provider_pool().await;
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(r#"{"status":"reloaded"}"#))
+        .unwrap_or_default()
 }
 
 /// `GET /metrics` — Prometheus exposition format. Honours bearer
