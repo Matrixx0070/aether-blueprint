@@ -290,10 +290,16 @@ def main():
     if res.returncode != 0:
         print("FAIL [S4]: refresh-saml exit", res.returncode)
         print(res.stderr); sys.exit(1)
-    if "refreshed 2 signing cert(s)" not in res.stderr:
-        print(f"FAIL [S4]: refresh-saml did not report 2 certs:\n{res.stderr}")
+    # CC4 (post-this-commit) reports the path that triggered the
+    # rewrite: "first refresh ... rewrote N signing cert(s)" on the
+    # initial post-configure tick (pre-CC4 sso-saml.json has no
+    # metadata_fingerprint field), or "drift detected ... rewrote N"
+    # on a fingerprint mismatch.
+    if "rewrote 2 signing cert(s)" not in res.stderr:
+        print(f"FAIL [S4]: refresh-saml did not report 2 certs rewritten:\n"
+              f"{res.stderr}")
         sys.exit(1)
-    print(f"[S4] refresh-saml reported 2 certs discovered after v2 rotation")
+    print(f"[S4] refresh-saml rewrote 2 certs after v2 rotation")
 
     # S5: idp-certs/ now has both v2 certs; v1 PEM body is gone.
     pems_after = sorted(p.name for p in

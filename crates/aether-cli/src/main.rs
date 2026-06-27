@@ -8589,41 +8589,97 @@ async fn fetch_saml_metadata_xml(idp_metadata_url: &str) -> Result<String> {
 ///   - `~/.aether/saml/idp-certs/NN-discovered.pem` per signing cert.
 ///     The directory is CLEARED of stale `.pem` files first so a
 ///     rotated metadata doesn't accumulate.
-fn apply_saml_idp_metadata(
-    xml: &str,
-    idp_metadata_url: &str,
-    sp_entity_id: &str,
-) -> Result<usize> {
-    // SingleSignOnService HTTP-Redirect or HTTP-POST binding.
+/// CC4: the trust-relevant fields extracted from IdP federation
+/// metadata. The fingerprint is computed over THESE fields, not the
+/// raw XML — defeats false positives from timestamp / contact-info
+/// attributes that some IdPs include on every metadata fetch even
+/// when the signing material hasn't changed.
+#[derive(Debug, Clone)]
+struct ParsedSamlMetadata {
+    idp_entity_id: String,
+    sso_url: String,
+    binding: String,
+    signing_certs: Vec<String>,
+}
+
+/// CC4: extract the trust-relevant fields from validated metadata XML.
+/// Pure (no I/O) so the parse logic is unit-testable. Caller already
+/// applied the size cap + XXE refusal upstream
+/// (`fetch_saml_metadata_xml`).
+fn parse_saml_metadata(xml: &str) -> Result<ParsedSamlMetadata> {
     let sso_re = regex::Regex::new(
         r#"(?s)<(?:md:)?SingleSignOnService[^>]*Binding="urn:oasis:names:tc:SAML:2\.0:bindings:HTTP-(Redirect|POST)"[^>]*Location="([^"]+)""#,
     ).expect("regex");
     let sso_caps = sso_re
         .captures(xml)
         .ok_or_else(|| anyhow!("no SingleSignOnService with HTTP-Redirect or HTTP-POST binding found"))?;
-    let binding = sso_caps.get(1).map(|m| m.as_str()).unwrap_or("Redirect").to_string();
+    let binding = sso_caps
+        .get(1)
+        .map(|m| m.as_str())
+        .unwrap_or("Redirect")
+        .to_string();
     let sso_url = sso_caps
         .get(2)
         .ok_or_else(|| anyhow!("SSO Location attribute missing"))?
         .as_str()
         .to_string();
-
-    // AA5-followup: extract ALL signing certs (was: first match only).
     let signing_certs = extract_signing_certs_from_metadata(xml);
     if signing_certs.is_empty() {
         anyhow::bail!("no X509Certificate in IdP metadata");
     }
-    let first_cert_b64 = signing_certs[0].clone();
-
-    // IdP entityID
     let entity_re = regex::Regex::new(
         r#"<(?:md:)?EntityDescriptor[^>]*entityID="([^"]+)""#,
-    ).expect("regex");
-    let idp_entity = entity_re
+    )
+    .expect("regex");
+    let idp_entity_id = entity_re
         .captures(xml)
         .and_then(|c| c.get(1))
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| "<missing>".to_string());
+    Ok(ParsedSamlMetadata {
+        idp_entity_id,
+        sso_url,
+        binding,
+        signing_certs,
+    })
+}
+
+/// CC4: stable hex SHA-256 fingerprint over the trust-relevant fields
+/// in `ParsedSamlMetadata`. The cert set is sorted before hashing so
+/// the fingerprint is order-insensitive — the IdP can rearrange
+/// `<KeyDescriptor>` blocks across metadata revs and we still detect
+/// "no drift" correctly. NUL separators prevent
+/// concatenation-collision (`{a:"xy", b:""}` vs `{a:"x", b:"y"}`).
+fn compute_metadata_fingerprint(parsed: &ParsedSamlMetadata) -> String {
+    use sha2::Digest;
+    let mut sorted_certs = parsed.signing_certs.clone();
+    sorted_certs.sort();
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(parsed.idp_entity_id.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(parsed.sso_url.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(parsed.binding.as_bytes());
+    hasher.update(b"\0");
+    for cert in &sorted_certs {
+        hasher.update(cert.as_bytes());
+        hasher.update(b"\0");
+    }
+    hex::encode(hasher.finalize())
+}
+
+fn apply_saml_idp_metadata(
+    xml: &str,
+    idp_metadata_url: &str,
+    sp_entity_id: &str,
+) -> Result<usize> {
+    let parsed = parse_saml_metadata(xml)?;
+    let binding = parsed.binding.clone();
+    let sso_url = parsed.sso_url.clone();
+    let signing_certs = parsed.signing_certs.clone();
+    let first_cert_b64 = signing_certs[0].clone();
+    let idp_entity = parsed.idp_entity_id.clone();
+    let metadata_fingerprint = compute_metadata_fingerprint(&parsed);
 
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -8684,6 +8740,12 @@ fn apply_saml_idp_metadata(
         "x509_signing_cert_b64": first_cert_b64,
         // BB6: persisted so `sso refresh-saml` knows where to re-fetch.
         "idp_metadata_url": idp_metadata_url,
+        // CC4: hex SHA-256 fingerprint over (idp_entity_id, sso_url,
+        // binding, sorted signing_certs). `sso refresh-saml` compares
+        // this to the freshly-computed value on each tick and skips
+        // the layout rewrite when they match — eliminates wasted I/O
+        // against an IdP that hasn't actually rotated.
+        "metadata_fingerprint": metadata_fingerprint,
         "discovered_at": chrono::Utc::now().to_rfc3339(),
     });
     let json = serde_json::to_string_pretty(&cfg)?;
@@ -8752,15 +8814,49 @@ async fn sso_refresh_saml(watch: bool) -> Result<()> {
         .ok_or_else(|| anyhow!("sso-saml.json missing sp_entity_id"))?
         .to_string();
 
-    let tick = |xml: &str| -> Result<()> {
+    // CC4: drift state. The previous fingerprint moves forward as
+    // each tick succeeds in either a rewrite (new fingerprint) or a
+    // skip (unchanged). Initial value comes from the persisted
+    // sso-saml.json; pre-CC4 files have None which forces the first
+    // tick to rewrite (treats first-tick-after-upgrade as drift).
+    let initial_fingerprint = cfg
+        .get("metadata_fingerprint")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let mut prev_fingerprint = initial_fingerprint;
+
+    let tick = |xml: &str, prev: &mut Option<String>| -> Result<()> {
+        let parsed = parse_saml_metadata(xml)?;
+        let new_fp = compute_metadata_fingerprint(&parsed);
+        if prev.as_deref() == Some(new_fp.as_str()) {
+            eprintln!(
+                "[sso refresh-saml] no drift (fingerprint {}…) — skipping \
+                 layout rewrite",
+                &new_fp[..16]
+            );
+            return Ok(());
+        }
         let n = apply_saml_idp_metadata(xml, &idp_metadata_url, &sp_entity_id)?;
-        eprintln!("[sso refresh-saml] refreshed {n} signing cert(s)");
+        match prev.as_deref() {
+            Some(p) => eprintln!(
+                "[sso refresh-saml] drift detected (was {}…, now {}…) — \
+                 rewrote {n} signing cert(s)",
+                &p[..16],
+                &new_fp[..16]
+            ),
+            None => eprintln!(
+                "[sso refresh-saml] first refresh (fingerprint {}…) — \
+                 rewrote {n} signing cert(s)",
+                &new_fp[..16]
+            ),
+        }
+        *prev = Some(new_fp);
         Ok(())
     };
 
     if !watch {
         let xml = fetch_saml_metadata_xml(&idp_metadata_url).await?;
-        tick(&xml)?;
+        tick(&xml, &mut prev_fingerprint)?;
         return Ok(());
     }
     let interval = saml_metadata_refresh_interval_secs();
@@ -8772,7 +8868,7 @@ async fn sso_refresh_saml(watch: bool) -> Result<()> {
         // Tick errors are logged + swallowed — a transient IdP-side
         // 5xx shouldn't kill the daemon. The OPERATOR sees the line.
         match fetch_saml_metadata_xml(&idp_metadata_url).await {
-            Ok(xml) => match tick(&xml) {
+            Ok(xml) => match tick(&xml, &mut prev_fingerprint) {
                 Ok(()) => {}
                 Err(e) => eprintln!("[sso refresh-saml] tick FAILED apply: {e:#}"),
             },
@@ -13866,6 +13962,151 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "Y7 token file must be 0600 (got {:o})", mode);
         }
+    }
+
+    /// CC4: helper to construct a ParsedSamlMetadata for fingerprint
+    /// tests without going through the regex extractor.
+    fn cc4_parsed(certs: Vec<&str>) -> ParsedSamlMetadata {
+        ParsedSamlMetadata {
+            idp_entity_id: "https://idp.test/saml/metadata".to_string(),
+            sso_url: "https://idp.test/saml/sso".to_string(),
+            binding: "Redirect".to_string(),
+            signing_certs: certs.into_iter().map(String::from).collect(),
+        }
+    }
+
+    /// CC4: fingerprint is stable across calls with identical inputs.
+    /// Sha256 is deterministic so this is mechanical, but the test
+    /// catches accidental dependency on entropy / timestamps.
+    #[test]
+    fn cc4_fingerprint_stable_across_calls() {
+        let p = cc4_parsed(vec!["CERT-A", "CERT-B"]);
+        let f1 = compute_metadata_fingerprint(&p);
+        let f2 = compute_metadata_fingerprint(&p);
+        assert_eq!(f1, f2);
+        assert_eq!(f1.len(), 64, "hex sha256 = 64 chars");
+    }
+
+    /// CC4: cert list order does NOT affect the fingerprint. Some IdPs
+    /// reorder `<KeyDescriptor>` blocks across metadata revs — we sort
+    /// before hashing so semantically-equivalent metadata gives an
+    /// equivalent fingerprint.
+    #[test]
+    fn cc4_fingerprint_order_insensitive_for_certs() {
+        let a_then_b = cc4_parsed(vec!["CERT-A", "CERT-B"]);
+        let b_then_a = cc4_parsed(vec!["CERT-B", "CERT-A"]);
+        assert_eq!(
+            compute_metadata_fingerprint(&a_then_b),
+            compute_metadata_fingerprint(&b_then_a),
+            "fingerprint must be order-insensitive over the cert set"
+        );
+    }
+
+    /// CC4: any change to the cert SET (add / remove / replace) shifts
+    /// the fingerprint. Sanity: the rotation use case the whole
+    /// drift-detection feature exists for.
+    #[test]
+    fn cc4_fingerprint_changes_on_cert_rotation() {
+        let v1 = cc4_parsed(vec!["CERT-OLD"]);
+        let v2 = cc4_parsed(vec!["CERT-OLD", "CERT-NEW"]); // add a cert
+        let v3 = cc4_parsed(vec!["CERT-NEW"]); // remove old, only new
+        let f1 = compute_metadata_fingerprint(&v1);
+        let f2 = compute_metadata_fingerprint(&v2);
+        let f3 = compute_metadata_fingerprint(&v3);
+        assert_ne!(f1, f2, "adding a cert must shift the fingerprint");
+        assert_ne!(f2, f3, "removing the old cert must shift the fingerprint");
+        assert_ne!(f1, f3, "fully rotated set must shift the fingerprint");
+    }
+
+    /// CC4: changes to non-cert trust fields (sso_url, binding,
+    /// entityID) also shift the fingerprint. The fingerprint covers
+    /// the whole trust surface, not just certs.
+    #[test]
+    fn cc4_fingerprint_changes_on_non_cert_fields() {
+        let base = cc4_parsed(vec!["CERT-X"]);
+        let base_f = compute_metadata_fingerprint(&base);
+
+        let mut altered_url = base.clone();
+        altered_url.sso_url = "https://idp.test/saml/sso2".to_string();
+        assert_ne!(compute_metadata_fingerprint(&altered_url), base_f);
+
+        let mut altered_binding = base.clone();
+        altered_binding.binding = "POST".to_string();
+        assert_ne!(compute_metadata_fingerprint(&altered_binding), base_f);
+
+        let mut altered_entity = base.clone();
+        altered_entity.idp_entity_id = "https://other-idp.test".to_string();
+        assert_ne!(compute_metadata_fingerprint(&altered_entity), base_f);
+    }
+
+    /// CC4: NUL separators prevent a concatenation-collision attack
+    /// where two distinct field sets produce the same hash input.
+    /// Constructed example: ("ab", "c", []) vs ("a", "bc", []).
+    #[test]
+    fn cc4_fingerprint_nul_separator_prevents_collisions() {
+        let p1 = ParsedSamlMetadata {
+            idp_entity_id: "ab".to_string(),
+            sso_url: "c".to_string(),
+            binding: "Redirect".to_string(),
+            signing_certs: vec![],
+        };
+        let p2 = ParsedSamlMetadata {
+            idp_entity_id: "a".to_string(),
+            sso_url: "bc".to_string(),
+            binding: "Redirect".to_string(),
+            signing_certs: vec![],
+        };
+        // signing_certs is empty in both → `parse_saml_metadata` would
+        // reject these in normal flow, but compute_metadata_fingerprint
+        // is happy to hash any ParsedSamlMetadata.
+        assert_ne!(
+            compute_metadata_fingerprint(&p1),
+            compute_metadata_fingerprint(&p2),
+            "NUL separator must distinguish field-boundary placement"
+        );
+    }
+
+    /// CC4: apply_saml_idp_metadata persists `metadata_fingerprint`
+    /// in sso-saml.json. Captured here so a future refactor that drops
+    /// the field fails loudly.
+    #[test]
+    fn cc4_apply_persists_metadata_fingerprint() {
+        let _guard = aether_core::mock::ENV_TEST_LOCK
+            .lock()
+            .expect("env lock");
+        let home = bb6_tmp_home("cc4-persist");
+        std::env::set_var("HOME", &home);
+
+        let xml = r#"<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
+                                          entityID="https://idp.test">
+  <md:IDPSSODescriptor>
+    <md:KeyDescriptor use="signing">
+      <X509Certificate>CC4-CERT</X509Certificate>
+    </md:KeyDescriptor>
+    <md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+                            Location="https://idp/sso"/>
+  </md:IDPSSODescriptor>
+</md:EntityDescriptor>"#;
+        apply_saml_idp_metadata(xml, "https://meta", "https://sp.test")
+            .expect("apply");
+        let cfg_bytes = std::fs::read(home.join(".aether/sso-saml.json")).unwrap();
+        let cfg: serde_json::Value = serde_json::from_slice(&cfg_bytes).unwrap();
+        let fp = cfg
+            .get("metadata_fingerprint")
+            .and_then(|v| v.as_str())
+            .expect("metadata_fingerprint present");
+        assert_eq!(fp.len(), 64, "hex sha256");
+
+        // Re-applying with the same XML produces the SAME fingerprint.
+        apply_saml_idp_metadata(xml, "https://meta", "https://sp.test")
+            .expect("re-apply");
+        let cfg_bytes2 = std::fs::read(home.join(".aether/sso-saml.json")).unwrap();
+        let cfg2: serde_json::Value =
+            serde_json::from_slice(&cfg_bytes2).unwrap();
+        let fp2 = cfg2.get("metadata_fingerprint").and_then(|v| v.as_str()).unwrap();
+        assert_eq!(fp, fp2, "fingerprint stable on re-apply of identical XML");
+
+        std::env::remove_var("HOME");
     }
 
     /// BB6: build an isolated temp HOME for refresh-saml layout tests.
