@@ -146,6 +146,12 @@ def make_handler(state: IdpState):
                     self._send_json(400, {"error": "invalid_grant"})
                     return
                 now = int(time.time())
+                # Z2: compute at_hash per OIDC core §3.1.3.6 — left-most
+                # 16 bytes of SHA-256(access_token), b64url-no-pad.
+                access_token = "smoke-access"
+                import hashlib
+                digest = hashlib.sha256(access_token.encode()).digest()
+                at_hash = b64url(digest[:16])
                 claims = {
                     "iss": state.issuer,
                     "sub": "alice-z1@idp.test",
@@ -153,10 +159,11 @@ def make_handler(state: IdpState):
                     "iat": now,
                     "exp": now + 300,
                     "nonce": state.last_nonce,
+                    "at_hash": at_hash,
                 }
                 id_token = make_jwt(claims, state.privkey, state.kid)
                 self._send_json(200, {
-                    "access_token": "smoke-access",
+                    "access_token": access_token,
                     "id_token": id_token,
                     "token_type": "Bearer",
                     "expires_in": 300,
@@ -276,6 +283,15 @@ def main():
         sys.exit(1)
     print(f"[smoke] token nonce binding verified: {payload['nonce']}")
 
+    # Z2: the persisted id_token must carry at_hash. If aether had
+    # rejected it (mismatch / verification error), the file would
+    # not exist — but we also assert the claim shape here so a future
+    # regression in the smoke fixture is obvious.
+    if "at_hash" not in payload:
+        print("FAIL: persisted id_token has no at_hash claim")
+        sys.exit(1)
+    print(f"[smoke] token at_hash binding verified: {payload['at_hash']}")
+
     mode = sso_token.stat().st_mode & 0o777
     if mode != 0o600:
         print(f"FAIL: sso.token mode is 0{mode:o}, expected 0600")
@@ -283,7 +299,7 @@ def main():
     print(f"[smoke] sso.token mode = 0{mode:o} (expected 0600)")
 
     httpd.shutdown()
-    print("[smoke] Z1' LIVE-VERIFIED OK")
+    print("[smoke] Z1'+Z2 LIVE-VERIFIED OK (nonce + at_hash + JWKS hardening)")
 
 
 if __name__ == "__main__":

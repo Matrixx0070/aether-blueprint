@@ -7692,8 +7692,15 @@ async fn sso_login() -> Result<()> {
     // (no id_token), validation is also skipped.
     if let (Some(jwt), Some(jwks_uri)) = (id_token.as_deref(), cfg.jwks_uri.as_deref()) {
         eprintln!("[sso login] validating id_token against {jwks_uri}");
-        validate_id_token(jwt, jwks_uri, &cfg.client_id, &cfg.issuer, Some(&nonce)).await?;
-        eprintln!("[sso login] id_token signature + nonce OK");
+        validate_id_token(
+            jwt,
+            jwks_uri,
+            &cfg.client_id,
+            &cfg.issuer,
+            Some(&nonce),
+            access_token.as_deref(),
+        ).await?;
+        eprintln!("[sso login] id_token signature + nonce + at_hash OK");
     } else if id_token.is_some() && cfg.jwks_uri.is_none() {
         eprintln!(
             "[sso login] WARN id_token present but issuer published no jwks_uri — skipping signature validation"
@@ -7750,6 +7757,7 @@ async fn validate_id_token(
     expected_aud: &str,
     expected_iss: &str,
     expected_nonce: Option<&str>,
+    access_token_for_at_hash: Option<&str>,
 ) -> Result<()> {
     use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 
@@ -7768,12 +7776,38 @@ async fn validate_id_token(
     }
 
     // 2. Pull the JWKS and find the matching key.
-    let jwks: serde_json::Value = reqwest::get(jwks_uri)
+    // Z2: 10s per-request timeout + 256 KiB body cap. An attacker-
+    // controlled jwks_uri (or a slow legitimate one) would otherwise
+    // stall the login indefinitely or exhaust memory.
+    let jwks_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .context("build jwks reqwest client")?;
+    let jwks_resp = jwks_client
+        .get(jwks_uri)
+        .send()
         .await
-        .with_context(|| format!("GET {jwks_uri}"))?
-        .json()
+        .with_context(|| format!("GET {jwks_uri}"))?;
+    if !jwks_resp.status().is_success() {
+        anyhow::bail!(
+            "JWKS fetch failed: HTTP {} from {jwks_uri}",
+            jwks_resp.status()
+        );
+    }
+    const JWKS_MAX_BYTES: usize = 256 * 1024;
+    let jwks_bytes = jwks_resp
+        .bytes()
         .await
-        .context("parse JWKS JSON")?;
+        .with_context(|| format!("read JWKS body from {jwks_uri}"))?;
+    if jwks_bytes.len() > JWKS_MAX_BYTES {
+        anyhow::bail!(
+            "JWKS body is {} bytes (cap {} KiB) — refusing as DoS defense",
+            jwks_bytes.len(),
+            JWKS_MAX_BYTES / 1024
+        );
+    }
+    let jwks: serde_json::Value =
+        serde_json::from_slice(&jwks_bytes).context("parse JWKS JSON")?;
     let keys = jwks
         .get("keys")
         .and_then(|k| k.as_array())
@@ -7841,6 +7875,68 @@ async fn validate_id_token(
     // attempt (OIDC core §15.5.2).
     verify_nonce_claim(&token_data.claims, expected_nonce)?;
 
+    // 5. Z2: at_hash binding (OIDC core §3.1.3.6). When the IdP
+    // returned BOTH an id_token and an access_token AND the id_token
+    // carries an `at_hash` claim, the claim MUST equal the
+    // left-most half of the hash-of-(access_token) under the
+    // id_token's signing algorithm. Protects against an attacker
+    // swapping the access_token after the token exchange.
+    verify_at_hash_claim(&token_data.claims, alg, access_token_for_at_hash)?;
+
+    Ok(())
+}
+
+/// Z2: at_hash claim verifier per OIDC core §3.1.3.6.
+///
+/// Skips silently when:
+///   - no access_token was issued (`access_token_for_at_hash` is None), or
+///   - the id_token carries no `at_hash` claim (allowed under the
+///     auth-code flow — at_hash is REQUIRED in implicit/hybrid only).
+///
+/// When both are present, computes the left-most `half_len` bytes of
+/// the hash-of-(access_token) under the algorithm-appropriate hash
+/// (SHA-256 for RS256/ES256, SHA-512 for EdDSA per the OIDC core
+/// algorithm-binding table), b64url-no-pad-encodes them, and compares
+/// against the claim byte-for-byte.
+fn verify_at_hash_claim(
+    claims: &serde_json::Value,
+    alg: jsonwebtoken::Algorithm,
+    access_token_for_at_hash: Option<&str>,
+) -> Result<()> {
+    use base64::Engine as _;
+    use sha2::Digest;
+    let Some(access_token) = access_token_for_at_hash else {
+        return Ok(());
+    };
+    let Some(got) = claims.get("at_hash").and_then(|v| v.as_str()) else {
+        // No at_hash claim in auth-code flow → spec-compliant skip.
+        return Ok(());
+    };
+    let computed = match alg {
+        jsonwebtoken::Algorithm::RS256 | jsonwebtoken::Algorithm::ES256 => {
+            let digest = sha2::Sha256::digest(access_token.as_bytes());
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&digest[..16])
+        }
+        jsonwebtoken::Algorithm::EdDSA => {
+            // Ed25519 binds to SHA-512 in the OIDC algorithm table —
+            // left-most 32 bytes.
+            let digest = sha2::Sha512::digest(access_token.as_bytes());
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&digest[..32])
+        }
+        _ => {
+            // Other algorithms aren't accepted upstream — defensive.
+            anyhow::bail!(
+                "at_hash verification: alg `{:?}` not supported (only RS256/ES256/EdDSA)",
+                alg
+            );
+        }
+    };
+    if computed != got {
+        anyhow::bail!(
+            "id_token at_hash mismatch: computed `{computed}`, got `{got}` — \
+             refusing as access-token-substitution defense"
+        );
+    }
     Ok(())
 }
 
@@ -12779,6 +12875,89 @@ mod tests {
             err.contains("missing `nonce`"),
             "expected missing-nonce error, got: {err}"
         );
+    }
+
+    /// Z2: at_hash match for an RS256 / SHA-256 / 16-byte half token.
+    /// Hash digest pre-computed from the literal "smoke-access"
+    /// access-token string used in the OIDC smoke fixture.
+    #[test]
+    fn z2_verify_at_hash_rs256_match_ok() {
+        use base64::Engine as _;
+        use sha2::Digest;
+        let access = "smoke-access";
+        let digest = sha2::Sha256::digest(access.as_bytes());
+        let at_hash = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(&digest[..16]);
+        let claims = serde_json::json!({
+            "sub": "alice",
+            "at_hash": at_hash,
+        });
+        verify_at_hash_claim(
+            &claims,
+            jsonwebtoken::Algorithm::RS256,
+            Some(access),
+        )
+        .expect("matching at_hash must pass");
+    }
+
+    /// Z2: at_hash with wrong-length / wrong-content claim is a
+    /// hard error.
+    #[test]
+    fn z2_verify_at_hash_rs256_mismatch_rejects() {
+        let claims = serde_json::json!({
+            "sub": "alice",
+            "at_hash": "AAAAAAAAAAAAAAAAAAAAAA",
+        });
+        let err = verify_at_hash_claim(
+            &claims,
+            jsonwebtoken::Algorithm::RS256,
+            Some("smoke-access"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("at_hash mismatch"), "got: {err}");
+    }
+
+    /// Z2: at_hash claim absent → spec-compliant skip in auth-code
+    /// flow (REQUIRED only in implicit/hybrid).
+    #[test]
+    fn z2_verify_at_hash_absent_ok() {
+        let claims = serde_json::json!({"sub": "alice"});
+        verify_at_hash_claim(
+            &claims,
+            jsonwebtoken::Algorithm::RS256,
+            Some("smoke-access"),
+        )
+        .expect("absent at_hash must skip");
+    }
+
+    /// Z2: no access_token issued → check is a no-op even if the
+    /// id_token carries an at_hash claim (would be a misissue by
+    /// the IdP but we have nothing to compute against).
+    #[test]
+    fn z2_verify_at_hash_no_access_token_ok() {
+        let claims = serde_json::json!({"at_hash": "AAAAAAAAAAAAAAAAAAAAAA"});
+        verify_at_hash_claim(&claims, jsonwebtoken::Algorithm::RS256, None)
+            .expect("no access_token → skip");
+    }
+
+    /// Z2: EdDSA path uses SHA-512 / 32-byte half per OIDC algorithm
+    /// binding table.
+    #[test]
+    fn z2_verify_at_hash_eddsa_match_ok() {
+        use base64::Engine as _;
+        use sha2::Digest;
+        let access = "eddsa-access-token";
+        let digest = sha2::Sha512::digest(access.as_bytes());
+        let at_hash = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(&digest[..32]);
+        let claims = serde_json::json!({"at_hash": at_hash});
+        verify_at_hash_claim(
+            &claims,
+            jsonwebtoken::Algorithm::EdDSA,
+            Some(access),
+        )
+        .expect("EdDSA SHA-512[:32] at_hash match");
     }
 
     /// Z1': legacy path — caller did NOT send a nonce. The check
