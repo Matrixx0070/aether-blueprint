@@ -2537,10 +2537,14 @@ async fn run_serve(
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tick.tick().await;
-                // Block-in-place isn't needed: audit_siem_flush uses
-                // std::process::Command synchronously and we're fine
-                // with the brief pause on the runtime.
-                aether_sec::audit_siem_flush();
+                // `audit_siem_flush` shells out to `curl` and calls
+                // `child.wait()` synchronously. Run it on the blocking
+                // pool so it does NOT pin a tokio worker for the
+                // duration of the `curl --max-time 2` syscall. The
+                // join handle is intentionally dropped — the next tick
+                // will retry regardless of how this one resolves.
+                let _ =
+                    tokio::task::spawn_blocking(aether_sec::audit_siem_flush).await;
             }
         });
         eprintln!("[serve] SIEM flusher: AETHER_AUDIT_FORWARD set; 1s periodic flush enabled");
@@ -3018,9 +3022,21 @@ fn check_tenant_acl(
 fn bearer_rpm_admit_dispatch(bearer_hash: &str, rpm_cap: u32) -> bool {
     match std::env::var("AETHER_RATE_BACKEND") {
         Ok(url) if url.starts_with("redis://") || url.starts_with("rediss://") => {
+            // `block_in_place` panics on a single-threaded runtime. The
+            // production `aether serve` always runs on the multi-thread
+            // tokio runtime, but tests that exercise this path via
+            // `#[tokio::test]` would inherit a current-thread runtime —
+            // detect that case and fail-open with a warning so the
+            // counter remains permissive instead of crashing the task.
+            let handle = tokio::runtime::Handle::current();
+            if !matches!(handle.runtime_flavor(), tokio::runtime::RuntimeFlavor::MultiThread) {
+                eprintln!(
+                    "[rate] redis backend requires multi-threaded tokio runtime — falling back to in-process bucket"
+                );
+                return bearer_rpm_admit(bearer_hash, rpm_cap);
+            }
             let res = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current()
-                    .block_on(redis_rpm_admit(&url, bearer_hash, rpm_cap))
+                handle.block_on(redis_rpm_admit(&url, bearer_hash, rpm_cap))
             });
             match res {
                 Ok(allowed) => allowed,
@@ -8400,6 +8416,12 @@ struct OtelSpan {
     duration_ms: u64,
 }
 
+/// X1: Process-wide reused HTTP client for OTLP span emission. Built
+/// once on first span to avoid spawning a fresh connection pool per
+/// request (HIGH-3 from the Plan X verifier audit).
+static OTEL_HTTP: once_cell::sync::Lazy<reqwest::Client> =
+    once_cell::sync::Lazy::new(reqwest::Client::new);
+
 /// X1: Fire one OTLP/HTTP JSON span at `${AETHER_OTEL_ENDPOINT}/v1/traces`.
 /// No-op when the env var is unset, so the serve hot path pays nothing
 /// in the default config. Errors are best-effort: they land on stderr
@@ -8418,11 +8440,14 @@ fn otel_emit_span(span: OtelSpan) {
         let end_unix_nano = span
             .start_unix_nano
             .saturating_add((span.duration_ms as u128).saturating_mul(1_000_000));
+        // OTLP/HTTP proto-JSON requires intValue to be a JSON number,
+        // not a quoted string. Some collectors are lenient; strict
+        // proto-JSON parsers (Tempo's protobuf path) reject strings.
         let mut attrs = vec![
             serde_json::json!({"key":"http.method","value":{"stringValue": span.method}}),
             serde_json::json!({"key":"http.route","value":{"stringValue": span.route}}),
-            serde_json::json!({"key":"http.status_code","value":{"intValue": span.status_code.to_string()}}),
-            serde_json::json!({"key":"duration_ms","value":{"intValue": span.duration_ms.to_string()}}),
+            serde_json::json!({"key":"http.status_code","value":{"intValue": span.status_code}}),
+            serde_json::json!({"key":"duration_ms","value":{"intValue": span.duration_ms}}),
         ];
         if let Some(m) = &span.model {
             attrs.push(serde_json::json!({"key":"aether.model","value":{"stringValue": m}}));
@@ -8453,8 +8478,7 @@ fn otel_emit_span(span: OtelSpan) {
             }],
         });
         let url = format!("{}/v1/traces", endpoint.trim_end_matches('/'));
-        let client = reqwest::Client::new();
-        let res = client
+        let res = OTEL_HTTP
             .post(&url)
             .header("content-type", "application/json")
             .body(payload.to_string())
@@ -8697,6 +8721,9 @@ fn trust_audit_history(
     if pre.is_empty() {
         anyhow::bail!("--history prefix is empty");
     }
+    if !pre.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F')) {
+        anyhow::bail!("--history prefix must be hex ([0-9a-fA-F]+) — got `{pre}`");
+    }
     let tmp = tempfile_dir()?;
     let mut clone_cmd = std::process::Command::new("git");
     clone_cmd.args(["clone", "--quiet"]);
@@ -8738,6 +8765,17 @@ fn trust_audit_history(
         let date = it.next().unwrap_or("");
         let subj = it.next().unwrap_or("");
         if sha.is_empty() {
+            continue;
+        }
+        // Defensive: `git log --format=%h` only ever emits abbreviated
+        // hex shas, but the value is fed back into `git show` as part
+        // of an argument string, so reject anything outside [0-9a-f]
+        // before splicing to keep the surface area to "git-emitted
+        // shas only" — never the commit-author-controlled message.
+        if !sha
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F'))
+        {
             continue;
         }
         let cat = std::process::Command::new("git")
