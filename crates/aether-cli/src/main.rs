@@ -8009,13 +8009,19 @@ async fn sso_login_saml(sso_saml_path: &Path) -> Result<()> {
         rand_core::OsRng.fill_bytes(&mut buf);
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
     };
+    let authn_request_id = {
+        use rand_core::RngCore;
+        let mut buf = [0u8; 16];
+        rand_core::OsRng.fill_bytes(&mut buf);
+        format!("_{}", hex::encode(buf))
+    };
     let authn_request_xml = build_authn_request_xml(
         idp_entity_id,
         sso_url,
         sp_entity_id,
         &acs_url,
         chrono::Utc::now(),
-        None,
+        Some(&authn_request_id),
     )?;
     let saml_request_param = encode_saml_request_redirect(authn_request_xml.as_bytes())?;
     let redirect_url = format!(
@@ -8131,11 +8137,10 @@ async fn sso_login_saml(sso_saml_path: &Path) -> Result<()> {
         }
     };
 
-    // RelayState round-trip is advisory in Y2 (we'll harden the
-    // anti-replay binding in Y6 when Conditions/NotBefore lands).
     if returned_relay_state.as_deref() != Some(&relay_state) {
-        eprintln!(
-            "[sso login] WARNING: RelayState round-trip mismatch (sent={relay_state}, got={returned:?})",
+        anyhow::bail!(
+            "sso login: RelayState CSRF check failed \
+             (sent={relay_state}, got={returned:?})",
             returned = returned_relay_state
         );
     }
@@ -8205,13 +8210,13 @@ async fn sso_login_saml(sso_saml_path: &Path) -> Result<()> {
     // Y5: load the IdP signing key + verify the assertion's
     // RSA-SHA256 signature end-to-end (Reference digest + SignedInfo
     // sig + algorithm + transform gates).
-    let idp_pubkey = load_idp_signing_key()
+    let (idp_pubkey, idp_cert_der) = load_idp_signing_key()
         .context("Y5: load IdP signing cert")?;
     verify_saml_assertion_signature(
         &saml_response_xml,
         &parsed,
         &idp_pubkey,
-        &[],
+        &idp_cert_der,
     )?;
     eprintln!("[sso login] Y5: assertion signature verified (RSA-SHA256)");
 
@@ -8221,6 +8226,31 @@ async fn sso_login_saml(sso_saml_path: &Path) -> Result<()> {
     eprintln!(
         "[sso login] Y6: assertion bounds + audience verified (clock skew {skew}s)"
     );
+
+    // HIGH-2: bind SubjectConfirmationData/@Recipient to our ACS URL
+    // and @InResponseTo to the AuthnRequest ID we issued. Prevents a
+    // stolen assertion replay (wrong Recipient) or session-fixation
+    // (mismatched InResponseTo).
+    if let Some(a) = parsed.assertion.as_ref() {
+        if let Some(scd) = a.subject_confirmation_data.as_ref() {
+            if let Some(recipient) = &scd.recipient {
+                if recipient != &acs_url {
+                    anyhow::bail!(
+                        "sso login: SubjectConfirmationData/@Recipient \
+                         mismatch (expected {acs_url}, got {recipient})"
+                    );
+                }
+            }
+            if let Some(in_resp) = &scd.in_response_to {
+                if in_resp != &authn_request_id {
+                    anyhow::bail!(
+                        "sso login: SubjectConfirmationData/@InResponseTo \
+                         mismatch (expected {authn_request_id}, got {in_resp})"
+                    );
+                }
+            }
+        }
+    }
 
     // Y7: every gate (Y3 parse, Y5 signature, Y6 bounds) has now
     // passed. Mint a SAML-namespaced session token from the
@@ -8994,7 +9024,7 @@ fn saml_clock_skew_seconds() -> i64 {
 /// certificate. Reads from `AETHER_SAML_IDP_CERT_PEM` first (path
 /// override useful for tests), otherwise from
 /// `~/.aether/saml/idp-cert.pem`.
-fn load_idp_signing_key() -> Result<rsa::RsaPublicKey> {
+fn load_idp_signing_key() -> Result<(rsa::RsaPublicKey, Vec<u8>)> {
     let path = match std::env::var_os("AETHER_SAML_IDP_CERT_PEM") {
         Some(p) => PathBuf::from(p),
         None => {
@@ -9013,11 +9043,12 @@ fn load_idp_signing_key() -> Result<rsa::RsaPublicKey> {
 /// non-RSA SPKI with an informative error so an operator who
 /// configured an ECC IdP cert (which we don't yet support) sees
 /// the gap immediately.
-fn rsa_pubkey_from_pem_cert(pem_bytes: &[u8]) -> Result<rsa::RsaPublicKey> {
+fn rsa_pubkey_from_pem_cert(pem_bytes: &[u8]) -> Result<(rsa::RsaPublicKey, Vec<u8>)> {
     use rsa::pkcs1::DecodeRsaPublicKey;
     use x509_parser::prelude::*;
     let (_, pem) =
         parse_x509_pem(pem_bytes).map_err(|e| anyhow!("parse PEM: {e}"))?;
+    let cert_der = pem.contents.to_vec();
     let (_, cert) = X509Certificate::from_der(&pem.contents)
         .map_err(|e| anyhow!("parse x509 cert: {e}"))?;
     let spki = cert.public_key();
@@ -9035,7 +9066,7 @@ fn rsa_pubkey_from_pem_cert(pem_bytes: &[u8]) -> Result<rsa::RsaPublicKey> {
     let key_der = &spki.subject_public_key.data;
     let key = rsa::RsaPublicKey::from_pkcs1_der(key_der)
         .map_err(|e| anyhow!("decode RSA SubjectPublicKey: {e}"))?;
-    Ok(key)
+    Ok((key, cert_der))
 }
 
 /// Y5: the only SignatureMethod algorithm Y5 accepts.
@@ -9138,6 +9169,31 @@ fn verify_saml_assertion_signature(
         let (start, end) = find_element_byte_range_by_id(response_xml, &r.uri)
             .ok_or_else(|| anyhow!("Y5: Reference target ID `{}` not found", r.uri))?;
         let target_fragment = &response_xml[start..end];
+        // BLOCKER-2: XSW defense — reject any Reference whose
+        // target resolves to an element other than <*:Assertion>.
+        // An XSW attacker wraps the genuine signed Assertion in a
+        // new outer element that carries the same ID; without this
+        // check we would canonicalize the outer wrapper (unsigned
+        // content) and the digest/sig checks would never run on the
+        // real Assertion bytes.
+        {
+            let after_lt = target_fragment.trim_start_matches('<');
+            let tag_end = after_lt
+                .find(|c: char| c.is_ascii_whitespace() || c == '>' || c == '/')
+                .unwrap_or(after_lt.len());
+            let qname = &after_lt[..tag_end];
+            let local = match qname.rfind(':') {
+                Some(i) => &qname[i + 1..],
+                None => qname,
+            };
+            if local != "Assertion" {
+                anyhow::bail!(
+                    "Y5: Reference `{}` resolves to <{local}> not <*:Assertion> \
+                     (XSW defense — non-Assertion reference rejected)",
+                    r.uri
+                );
+            }
+        }
         let inherited_for_target =
             inherited_namespaces_at_byte_offset(response_xml, start)?;
         // Apply enveloped-signature transform: strip the FIRST
@@ -9256,10 +9312,15 @@ fn find_element_byte_range_by_id(
             }
             Ok(Event::End(e)) => {
                 if start_byte.is_some() {
-                    let name = e.name();
-                    let qname = std::str::from_utf8(name.as_ref()).unwrap_or("");
+                    let end_local = local_name_owned(e.name().as_ref());
+                    let match_local = match_element.as_deref().map(|m| {
+                        match m.rfind(':') {
+                            Some(i) => m[i + 1..].to_string(),
+                            None => m.to_string(),
+                        }
+                    });
                     if depth_after_match == 0
-                        && match_element.as_deref() == Some(qname)
+                        && match_local.as_deref() == Some(end_local.as_str())
                     {
                         let end = reader.buffer_position() as usize;
                         return start_byte.map(|s| (s, end));

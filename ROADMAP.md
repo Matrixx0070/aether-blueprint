@@ -604,12 +604,64 @@ extensibility.
   fixed in-band. Plan Y drafted as the standalone SAML plan.
 - W1+W2 SAML pipeline — still DEFERRED to Plan Y.
 
-## v0.29 — next (draft)
+## v0.29 — SAML 2.0 SSO end-to-end — shipped 2026-06-27
 
-- Dedicated SAML plan: AuthnRequest emission + redirect-binding
-  + pure-Rust XML c14n# + RSA-SHA256 signature verify + x509
-  cert chain + assertion bounds + NameID persistence
-- Closing R1/R2/R3 cred-blocked verifiers
+- **Y1 AuthnRequest emission** — SP-initiated `<samlp:AuthnRequest>` in
+  HTTP-Redirect binding (raw DEFLATE + standard base64 + URL-encode per
+  saml-bindings-2.0 §3.4.4.1). Destination / ACS URL / SP entityID
+  validated for XML-special chars before emission.
+- **Y2 SAML ACS endpoint** — non-blocking `TcpListener` on `127.0.0.1:0`
+  serves the IdP's HTTP-POST callback; full HTTP/1.1 request reader
+  (`Content-Length` framing), URL-decode → base64-decode → raw XML
+  body. RelayState parsed and hard-validated (CSRF bail, not warn).
+- **Y3 quick-xml SAMLResponse extractor** — event-walker over full
+  `<samlp:Response>` tree; extracts `Status.code`, `Assertion.ID`,
+  `Issuer`, `NameID`, `SubjectConfirmationData`, `Conditions`,
+  `AudienceRestriction`, and `<ds:Signature>` (signed-info fragment +
+  inherited NS + value + x509 cert).
+- **Y4 exclusive XML canonicalization 1.0** — hand-rolled exc-c14n#
+  (no external c14n crate): namespace inheritance from `inherited`
+  map, utf-8 attribute sorting, element/attr/text escaping; also
+  `canonicalize_exc_c14n_subtree_with_skip` for enveloped-signature
+  stripping. Byte-for-byte interoperable with lxml.
+- **Y5 RSA-SHA256 assertion signature verify** — full 6-step pipeline:
+  (1) algorithm gate, (2+3+4) per-Reference transform/digest/c14n
+  verification, (5) SignedInfo RSA-SHA256 signature check, (6)
+  KeyInfo X509Certificate pin against configured IdP cert DER;
+  `load_idp_signing_key` now returns `(RsaPublicKey, Vec<u8>)` so
+  the cert pin is active in production (BLOCKER-1 fix).
+- **Y6 assertion bounds + audience** — `Conditions/@NotBefore` /
+  `@NotOnOrAfter`, `SubjectConfirmationData/@NotOnOrAfter`, and
+  `AudienceRestriction` validated with configurable clock skew
+  (`AETHER_SAML_CLOCK_SKEW_S`, default 30 s, clamped [0, 300]).
+- **Y7 NameID → SAML session token** — `saml.v1.<b64url(nameid)>
+  .<b64url(idp)>.<b64url(32-byte-nonce)>` written to
+  `~/.aether/sso.token` at mode 0600.
+- **Audit fixes (pre-tag)**:
+  - BLOCKER-2 (XSW): `verify_saml_assertion_signature` validates that
+    the Reference target's local name is "Assertion" before
+    canonicalising.
+  - BLOCKER-3 (CSRF): RelayState mismatch elevated from `eprintln!`
+    warn to `anyhow::bail!`.
+  - HIGH-1: `find_element_byte_range_by_id` End-event comparison uses
+    local names, not raw qnames.
+  - HIGH-2: `SubjectConfirmationData/@Recipient` and `@InResponseTo`
+    validated against ACS URL and AuthnRequest ID when present.
+- **Live verify**: `tests/y7-saml-smoke.py` (RSA-2048 + lxml exc-c14n
+  signed SAMLResponse → `aether sso login` ACS → `sso.token` at 0600).
+  Exit 0 confirmed on this commit.
+
+## v0.30 — next (Plan Z draft)
+
+- Close cred-blocked UNVERIFIEDs: Bedrock live round-trip (real AWS
+  creds), Vertex live round-trip (real GCP SA JSON), Azure AI Foundry
+  probe.
+- OIDC federation scaffold: `aether sso configure-oidc` + browser PKCE
+  flow + ID-token validation (RS256/ES256) + session token.
+- SAML enhancements: X509Certificate pin in smoke + multi-cert IdP
+  support + HTTP-POST binding for AuthnRequest.
+- Tenant SCIM provisioning: `/v1/scim/Users` CRUD endpoints reusing
+  tenant_acl.db, gated by a `AETHER_SCIM_BEARER` token.
 
 ## v0.9 — enterprise
 

@@ -158,3 +158,11 @@ format: `[slice] [status] [commit] [verifier] [live-check] note`
 | X6 | DONE | 7956cc4 | n/a | AETHER_AUDIT_FORWARD=loki + audit_emit() of 1 row → flusher posted within ~1s (under 10-line batch threshold) | periodic SIEM flusher (1s tokio interval task) |
 | X4 | DONE | 7a1359b | n/a | redis-server :6399, rpm_cap=3, 5 reqs → 200/200/200/429/429; AETHER_RATE_BACKEND=redis://:9999 (down) → 3×200 fail-open | tenant rpm Redis backend (AETHER_RATE_BACKEND) |
 | X1 | DONE | 520e5b4 | n/a | python OTLP sink :4318: /v1/messages span status=500 model=haiku, /ws/chat span status=101, /v1/complete span status=500 tenant=acme duration_ms=761 | OpenTelemetry tracing on serve hot path |
+| Y1 | DONE | 5724bfb | n/a | AuthnRequest XML built + DEFLATE+b64+URL-encode roundtrip; redirect URL emits `?SAMLRequest=…&RelayState=…` | SAML AuthnRequest + HTTP-Redirect binding |
+| Y2 | DONE | dc1ca90 | n/a | ACS POST round-trip via smoke: port bound, SAMLResponse decoded, Status=Success extracted | SAML ACS endpoint + SAMLResponse decode |
+| Y3 | DONE | 726b063 | n/a | 33 quick-xml test cases (status / issuer / nameid / conditions / sig fragments / encrypted-rejection) all pass | SAMLResponse quick-xml extractor |
+| Y4 | DONE | 6f223bc | n/a | exc-c14n byte-stable across attr reorder; lxml interop confirmed in live smoke (digest byte-match) | exclusive XML canonicalization 1.0 |
+| Y5 | DONE | 61334c3 | n/a | RSA-2048 end-to-end verify passes; flipped SignatureValue → "RSA-SHA256 verify failed"; flipped DigestValue → "Reference digest mismatch" | RSA-SHA256 SAML assertion signature verify |
+| Y6 | DONE | bb595db | n/a | 8 Y6-prefix tests: NotBefore/NotOnOrAfter/SubjectConf/Audience/clock-skew all pass (exit 0) | SAML Conditions + AudienceRestriction validation |
+| Y7 | DONE | 571111f | n/a | live smoke: sso.token written (116 B, mode 0600, saml.v1. prefix); [smoke] Y7 LIVE-VERIFIED OK | NameID → SAML session token (sso_login_saml end-to-end) |
+| Y-audit | DONE | (this commit) | FIXED | 33/33 Y-tests pass after B1+B2+B3+H1+H2 audit fixes; live smoke re-run → Y7 LIVE-VERIFIED OK | pre-tag audit: cert-pin + XSW + RelayState-bail + local-name + Recipient/InResponseTo |
