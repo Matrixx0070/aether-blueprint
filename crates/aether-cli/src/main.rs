@@ -830,6 +830,23 @@ pub struct PolicyFile {
     pub tool_blocklist: Vec<String>,
     #[serde(default)]
     pub max_tokens_per_turn: Option<u32>,
+    /// W4: per-tool argument-filter rules. Each row matches against
+    /// `serde_json::to_string(input)` of the tool call and either
+    /// refuses (default) or warns.
+    #[serde(default)]
+    pub tool_arg_filters: Vec<ToolArgFilterRow>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ToolArgFilterRow {
+    pub tool: String,
+    pub regex: String,
+    #[serde(default = "default_arg_filter_action")]
+    pub action: String,
+}
+
+fn default_arg_filter_action() -> String {
+    "refuse".to_string()
 }
 
 fn policy_path() -> Option<PathBuf> {
@@ -895,6 +912,38 @@ fn apply_policy_to_session(session: &mut Session) {
     if let Some(cap) = p.max_tokens_per_turn {
         if session.config.max_tokens_per_turn > cap {
             session.config.max_tokens_per_turn = cap;
+        }
+    }
+    // W4: compile arg-filter regexes; skip rows whose regex doesn't
+    // parse (with a loud stderr warning so operators don't get a
+    // silent policy gap).
+    if !p.tool_arg_filters.is_empty() {
+        use aether_core::executor::{ArgFilterAction, ToolArgFilter};
+        let mut compiled: Vec<ToolArgFilter> = Vec::new();
+        for row in &p.tool_arg_filters {
+            match regex::Regex::new(&row.regex) {
+                Ok(re) => {
+                    let action = match row.action.as_str() {
+                        "warn" => ArgFilterAction::Warn,
+                        _ => ArgFilterAction::Refuse,
+                    };
+                    compiled.push(ToolArgFilter {
+                        tool: row.tool.clone(),
+                        regex: re,
+                        action,
+                    });
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[policy] WARN tool_arg_filter for `{}` has invalid regex {:?}: {} \
+                         (skipped — POLICY GAP for that rule)",
+                        row.tool, row.regex, e
+                    );
+                }
+            }
+        }
+        if !compiled.is_empty() {
+            session.executor.set_arg_filters(compiled);
         }
     }
 }

@@ -102,6 +102,21 @@ pub type ToolHookCallback = Box<
         + Sync,
 >;
 
+/// W4: per-tool argument-filter row. Refuses any tool call whose
+/// `serde_json::to_string(input)` matches the regex. Loaded from
+/// policy.json's `tool_arg_filters` array via apply_policy_to_session.
+pub struct ToolArgFilter {
+    pub tool: String,
+    pub regex: regex::Regex,
+    pub action: ArgFilterAction,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ArgFilterAction {
+    Refuse,
+    Warn,
+}
+
 pub struct Executor {
     pub mode: PermissionMode,
     prompter: Option<PermissionPrompter>,
@@ -115,6 +130,9 @@ pub struct Executor {
     /// permission mode. Empty list = no policy enforcement.
     /// Populated at session bootstrap from `~/.aether/policy.json`.
     policy_blocklist: Vec<String>,
+    /// W4: per-tool argument-filter rules. Evaluated AFTER the
+    /// tool_blocklist check; matches against the serialised input JSON.
+    arg_filters: Vec<ToolArgFilter>,
 }
 
 impl Executor {
@@ -126,6 +144,7 @@ impl Executor {
             pending_reminders: std::sync::Mutex::new(Vec::new()),
             always_allowed: std::sync::Mutex::new(std::collections::HashSet::new()),
             policy_blocklist: Vec::new(),
+            arg_filters: Vec::new(),
         }
     }
 
@@ -135,8 +154,27 @@ impl Executor {
         self.policy_blocklist = names;
     }
 
+    /// W4: replace the per-tool argument-filter rules.
+    pub fn set_arg_filters(&mut self, filters: Vec<ToolArgFilter>) {
+        self.arg_filters = filters;
+    }
+
     fn is_policy_blocked(&self, name: &str) -> bool {
         self.policy_blocklist.iter().any(|n| n == name)
+    }
+
+    /// W4: return Some(arg_filter) if any rule matches the tool's
+    /// serialised input JSON. Refuse-action filters are returned first;
+    /// Warn-action filters are best-effort surfaced via the same path
+    /// but the caller decides whether to block.
+    fn match_arg_filter(&self, name: &str, input: &serde_json::Value) -> Option<&ToolArgFilter> {
+        if self.arg_filters.is_empty() {
+            return None;
+        }
+        let body = serde_json::to_string(input).unwrap_or_default();
+        self.arg_filters
+            .iter()
+            .find(|f| f.tool == name && f.regex.is_match(&body))
     }
 
     /// Install a prompter that's consulted when running in `Default` mode
@@ -215,6 +253,32 @@ impl Executor {
                 ),
                 is_error: true,
             };
+        }
+        // W4: per-tool argument-filter policy. Refuse-action filters
+        // block dispatch outright; warn-action filters log to stderr
+        // and pass through.
+        if let Some(filter) = self.match_arg_filter(&tu.name, &tu.input) {
+            match filter.action {
+                ArgFilterAction::Refuse => {
+                    return RecordedToolResult {
+                        tool_use_id: tu.id.clone(),
+                        content: format!(
+                            "refused: policy: tool `{}` input matched arg-filter pattern `{}` \
+                             (see tool_arg_filters in ~/.aether/policy.json)",
+                            tu.name,
+                            filter.regex.as_str()
+                        ),
+                        is_error: true,
+                    };
+                }
+                ArgFilterAction::Warn => {
+                    eprintln!(
+                        "[policy] WARN tool `{}` input matched arg-filter `{}` (action=warn; not blocked)",
+                        tu.name,
+                        filter.regex.as_str()
+                    );
+                }
+            }
         }
         // Static policy
         let mut decision = decide(self.mode, &tu.name);
