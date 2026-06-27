@@ -353,6 +353,14 @@ enum TenantCmd {
         /// route, in addition to its allowed tenants).
         #[arg(long, default_value_t = false)]
         global: bool,
+        /// V5: per-minute rate cap on this bearer (overrides the
+        /// per-IP rate-limit when set).
+        #[arg(long)]
+        rpm_cap: Option<u32>,
+        /// V5: rolling 24h cumulative cost cap in USD. Past the cap,
+        /// requests return 402.
+        #[arg(long)]
+        daily_cost_usd_cap: Option<f64>,
     },
     /// Revoke a bearer's access to a tenant. If --tenant is omitted,
     /// removes the entire ACL row for that bearer.
@@ -2629,7 +2637,95 @@ fn check_tenant_acl(
             }
         }
     }
+    // V5: per-bearer quota — rpm_cap (per-minute fixed window via
+    // BEARER_RPM_BUCKETS) + daily_cost_usd_cap (against the last 24h
+    // sum from usage.db).
+    if let Some(rpm) = row.rpm_cap {
+        if !bearer_rpm_admit(&hash, rpm) {
+            return Err(quota_response(
+                429,
+                "tenant rpm_cap exceeded — slow down",
+            ));
+        }
+    }
+    if let Some(cap) = row.daily_cost_usd_cap {
+        let spent = bearer_daily_cost_usd(tenant);
+        if spent >= cap {
+            return Err(quota_response(
+                402,
+                &format!(
+                    "tenant daily_cost_usd_cap exceeded: spent ${spent:.4} >= cap ${cap:.4}"
+                ),
+            ));
+        }
+    }
     Ok(())
+}
+
+/// V5: per-bearer per-minute fixed-window admission counter. The
+/// key is a 16-hex prefix of the bearer's sha256 (so the same row
+/// the ACL gate found maps here). Window = 60 seconds from the
+/// first observed request in this minute.
+static BEARER_RPM_BUCKETS: once_cell::sync::Lazy<
+    std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, u32)>>,
+> = once_cell::sync::Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+fn bearer_rpm_admit(bearer_hash: &str, rpm_cap: u32) -> bool {
+    let key = bearer_hash[..16.min(bearer_hash.len())].to_string();
+    let now = std::time::Instant::now();
+    let mut g = match BEARER_RPM_BUCKETS.lock() {
+        Ok(g) => g,
+        Err(_) => return true, // fail-open on poison
+    };
+    let entry = g.entry(key).or_insert((now, 0));
+    if entry.0.elapsed().as_secs() >= 60 {
+        entry.0 = now;
+        entry.1 = 0;
+    }
+    if entry.1 >= rpm_cap {
+        return false;
+    }
+    entry.1 += 1;
+    true
+}
+
+/// V5: rolling-24h sum of cost_usd in turns table, optionally
+/// filtered to a specific tenant.
+fn bearer_daily_cost_usd(tenant: Option<&str>) -> f64 {
+    let conn = match open_usage_db() {
+        Ok(c) => c,
+        Err(_) => return 0.0,
+    };
+    let cutoff = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+    let total: f64 = match tenant {
+        Some(slug) => conn
+            .query_row(
+                "SELECT COALESCE(SUM(cost_usd), 0.0) FROM turns WHERE ts >= ?1 AND tenant = ?2",
+                rusqlite::params![cutoff.as_str(), slug],
+                |r| r.get(0),
+            )
+            .unwrap_or(0.0),
+        None => conn
+            .query_row(
+                "SELECT COALESCE(SUM(cost_usd), 0.0) FROM turns WHERE ts >= ?1",
+                [cutoff.as_str()],
+                |r| r.get(0),
+            )
+            .unwrap_or(0.0),
+    };
+    total
+}
+
+fn quota_response(code: u16, msg: &str) -> axum::response::Response {
+    bump(&METRIC_4XX_TOTAL);
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::from_u16(code).unwrap_or(axum::http::StatusCode::TOO_MANY_REQUESTS))
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(format!(
+            r#"{{"error":"quota_exceeded","detail":"{}"}}"#,
+            msg.replace('"', "\\\"")
+        )))
+        .unwrap_or_default()
 }
 
 /// `GET /v1/trust` — list trusted ed25519 plugin pubkeys for the
@@ -7407,6 +7503,14 @@ struct TenantAclRow {
     /// Whether the bearer can hit the no-tenant fallback (global keychain).
     #[serde(default)]
     global: bool,
+    /// V5: maximum requests-per-minute for this bearer. None = unlimited.
+    /// Applied as a per-minute fixed window on the server.
+    #[serde(default)]
+    rpm_cap: Option<u32>,
+    /// V5: maximum cumulative cost (USD) over the rolling 24h. None = unlimited.
+    /// Compared against `SELECT SUM(cost_usd) FROM turns WHERE …`.
+    #[serde(default)]
+    daily_cost_usd_cap: Option<f64>,
 }
 
 fn tenants_acl_path() -> Result<PathBuf> {
@@ -7486,7 +7590,7 @@ fn tenant_cmd(sub: TenantCmd) -> Result<()> {
             }
             Ok(())
         }
-        TenantCmd::Grant { bearer, from_stdin, tenant, global } => {
+        TenantCmd::Grant { bearer, from_stdin, tenant, global, rpm_cap, daily_cost_usd_cap } => {
             let bearer_raw = read_bearer_arg(bearer, from_stdin)?;
             if bearer_raw.is_empty() {
                 anyhow::bail!("bearer is empty");
@@ -7498,23 +7602,31 @@ fn tenant_cmd(sub: TenantCmd) -> Result<()> {
                     row.allowed_tenants.push(tenant.clone());
                 }
                 if global { row.global = true; }
+                if rpm_cap.is_some() { row.rpm_cap = rpm_cap; }
+                if daily_cost_usd_cap.is_some() { row.daily_cost_usd_cap = daily_cost_usd_cap; }
                 eprintln!(
-                    "[tenant] updated existing row: bearer={}… → tenants=[{}], global={}",
+                    "[tenant] updated existing row: bearer={}… → tenants=[{}], global={}, rpm_cap={:?}, daily_cost_usd_cap={:?}",
                     &bearer_hash[..16],
                     row.allowed_tenants.join(", "),
                     row.global,
+                    row.rpm_cap,
+                    row.daily_cost_usd_cap,
                 );
             } else {
                 acl.acls.push(TenantAclRow {
                     bearer_sha256: bearer_hash.clone(),
                     allowed_tenants: vec![tenant.clone()],
                     global,
+                    rpm_cap,
+                    daily_cost_usd_cap,
                 });
                 eprintln!(
-                    "[tenant] new row: bearer={}… → tenants=[{}], global={}",
+                    "[tenant] new row: bearer={}… → tenants=[{}], global={}, rpm_cap={:?}, daily_cost_usd_cap={:?}",
                     &bearer_hash[..16],
                     tenant,
                     global,
+                    rpm_cap,
+                    daily_cost_usd_cap,
                 );
             }
             save_tenant_acl(&acl)?;
