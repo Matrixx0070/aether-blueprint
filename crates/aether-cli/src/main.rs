@@ -8830,6 +8830,117 @@ struct ParsedSamlMetadata {
     /// operator catches stale state before a verify-time blowup.
     /// `None` when the IdP doesn't publish one — many in practice do.
     valid_until: Option<chrono::DateTime<chrono::Utc>>,
+    /// EE5: cacheDuration attribute on `<md:EntityDescriptor>` (xsd:
+    /// duration per saml-metadata-2.0 §2.3.2). The IdP's hint at how
+    /// often refreshers should re-fetch. Honored by the watch loop as
+    /// the default refresh interval when
+    /// `AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS` is unset. Stored
+    /// as seconds; `None` when absent or unparseable.
+    cache_duration_secs: Option<u64>,
+}
+
+/// EE5: parse the subset of xsd:duration used by SAML metadata
+/// `cacheDuration` attributes. Returns the duration in seconds.
+///
+/// Accepts `PnYnMnDTnHnMnS` with any prefix-free subset (e.g. `P1D`,
+/// `PT1H`, `PT30M`, `P1Y6M`, `P1DT12H`, `PT15S`). Year and month are
+/// approximated as 365d and 30d respectively — for refresh-interval
+/// hinting, not calendar arithmetic. Negative durations (`-P…`)
+/// reject; xsd:duration permits them but they don't make sense as
+/// refresh-interval hints. Fractional seconds reject for the same
+/// reason — refresh cadence at <1s granularity is meaningless.
+fn parse_xsd_duration_secs(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s.starts_with('-') {
+        return None;
+    }
+    let rest = s.strip_prefix('P')?;
+    if rest.is_empty() {
+        return None;
+    }
+    let (date_part, time_part) = match rest.split_once('T') {
+        Some((d, t)) => {
+            if t.is_empty() {
+                return None;
+            }
+            (d, Some(t))
+        }
+        None => (rest, None),
+    };
+    let mut total: u64 = 0;
+    let mut saw_any = false;
+
+    let date_units: &[(char, u64)] =
+        &[('Y', 31_536_000), ('M', 2_592_000), ('D', 86_400)];
+    let mut date_cursor = 0usize;
+    let mut buf = String::new();
+    for c in date_part.chars() {
+        if c.is_ascii_digit() {
+            buf.push(c);
+            continue;
+        }
+        let mut mult: Option<u64> = None;
+        while date_cursor < date_units.len() {
+            let (uc, m) = date_units[date_cursor];
+            date_cursor += 1;
+            if uc == c {
+                mult = Some(m);
+                break;
+            }
+        }
+        let mult = mult?;
+        if buf.is_empty() {
+            return None;
+        }
+        let n: u64 = buf.parse().ok()?;
+        total = total.checked_add(n.checked_mul(mult)?)?;
+        buf.clear();
+        saw_any = true;
+    }
+    if !buf.is_empty() {
+        return None;
+    }
+
+    if let Some(t) = time_part {
+        let time_units: &[(char, u64)] =
+            &[('H', 3600), ('M', 60), ('S', 1)];
+        let mut time_cursor = 0usize;
+        let mut tbuf = String::new();
+        for c in t.chars() {
+            if c.is_ascii_digit() {
+                tbuf.push(c);
+                continue;
+            }
+            if c == '.' {
+                return None;
+            }
+            let mut mult: Option<u64> = None;
+            while time_cursor < time_units.len() {
+                let (uc, m) = time_units[time_cursor];
+                time_cursor += 1;
+                if uc == c {
+                    mult = Some(m);
+                    break;
+                }
+            }
+            let mult = mult?;
+            if tbuf.is_empty() {
+                return None;
+            }
+            let n: u64 = tbuf.parse().ok()?;
+            total = total.checked_add(n.checked_mul(mult)?)?;
+            tbuf.clear();
+            saw_any = true;
+        }
+        if !tbuf.is_empty() {
+            return None;
+        }
+    }
+
+    if !saw_any {
+        return None;
+    }
+    Some(total)
 }
 
 /// CC4: extract the trust-relevant fields from validated metadata XML.
@@ -8877,12 +8988,25 @@ fn parse_saml_metadata(xml: &str) -> Result<ParsedSamlMetadata> {
         .and_then(|c| c.get(1))
         .and_then(|m| chrono::DateTime::parse_from_rfc3339(m.as_str()).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc));
+    // EE5: cacheDuration attribute (xsd:duration per saml-metadata-2.0
+    // §2.3.2). Absent on many IdPs — treat as "no hint" silently and
+    // the refresh-interval picker falls back to the env knob then
+    // the 3600s default.
+    let cache_duration_re = regex::Regex::new(
+        r#"<(?:md:)?EntityDescriptor[^>]*cacheDuration="([^"]+)""#,
+    )
+    .expect("regex");
+    let cache_duration_secs = cache_duration_re
+        .captures(xml)
+        .and_then(|c| c.get(1))
+        .and_then(|m| parse_xsd_duration_secs(m.as_str()));
     Ok(ParsedSamlMetadata {
         idp_entity_id,
         sso_url,
         binding,
         signing_certs,
         valid_until,
+        cache_duration_secs,
     })
 }
 
@@ -8977,6 +9101,7 @@ fn apply_saml_idp_metadata(
     let idp_entity = parsed.idp_entity_id.clone();
     let metadata_fingerprint = compute_metadata_fingerprint(&parsed);
     let valid_until_str = parsed.valid_until.map(|d| d.to_rfc3339());
+    let cache_duration_secs = parsed.cache_duration_secs;
 
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -9046,6 +9171,10 @@ fn apply_saml_idp_metadata(
         // DD5: persisted validUntil. None when the IdP didn't publish
         // one — `sso refresh-saml`'s staleness check skips silently.
         "valid_until": valid_until_str,
+        // EE5: persisted cacheDuration in seconds. Honored by the
+        // `sso refresh-saml --watch` interval picker when
+        // `AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS` is unset.
+        "cache_duration_secs": cache_duration_secs,
         "discovered_at": chrono::Utc::now().to_rfc3339(),
     });
     let json = serde_json::to_string_pretty(&cfg)?;
@@ -9125,6 +9254,14 @@ async fn sso_refresh_saml(watch: bool) -> Result<()> {
         .map(|s| s.to_string());
     let mut prev_fingerprint = initial_fingerprint;
 
+    // EE5: persisted cacheDuration hint. Read once at startup — even
+    // if the IdP rotates the value mid-watch, the operator restarting
+    // the daemon picks up the new value, and that's the right
+    // restart-on-config-change cadence. None on pre-EE5 files.
+    let cache_duration_hint: Option<u64> = cfg
+        .get("cache_duration_secs")
+        .and_then(|v| v.as_u64());
+
     let tick = |xml: &str, prev: &mut Option<String>| -> Result<()> {
         let parsed = parse_saml_metadata(xml)?;
         // DD5: staleness check runs BEFORE the drift compare so an
@@ -9190,10 +9327,10 @@ async fn sso_refresh_saml(watch: bool) -> Result<()> {
         tick(&xml, &mut prev_fingerprint)?;
         return Ok(());
     }
-    let interval = saml_metadata_refresh_interval_secs();
+    let (interval, source) = saml_metadata_refresh_interval_secs(cache_duration_hint);
     eprintln!(
         "[sso refresh-saml] WATCH mode: refreshing every {interval}s \
-         (ctrl-c to stop)"
+         (source: {source}; ctrl-c to stop)"
     );
     loop {
         // Tick errors are logged + swallowed — a transient IdP-side
@@ -9209,20 +9346,37 @@ async fn sso_refresh_saml(watch: bool) -> Result<()> {
     }
 }
 
-/// BB6: read `AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS` with a
-/// default of 1 hour (3600s). Clamped to [60, 86400] so operators
-/// can't accidentally set a busy-loop OR a "once a year" cadence
-/// that defeats the purpose.
-fn saml_metadata_refresh_interval_secs() -> u64 {
-    let raw = match std::env::var("AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS") {
-        Ok(v) => v,
-        Err(_) => return 3600,
-    };
-    let parsed: u64 = match raw.parse() {
-        Ok(n) => n,
-        Err(_) => return 3600,
-    };
-    parsed.clamp(60, 86400)
+/// BB6/EE5: choose the refresh-interval (seconds) and report which
+/// source was selected.
+///
+/// Priority:
+///  1. `AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS` env var (operator
+///     override — wins unconditionally so on-call can always force a
+///     known cadence) — source: "env".
+///  2. `cache_duration_hint` from the IdP's `cacheDuration` attribute
+///     (EE5 — the IdP's own statement of "re-fetch this often") —
+///     source: "cacheDuration".
+///  3. 3600s — source: "default".
+///
+/// All paths clamp to `[60, 86400]`. A garbage env value falls
+/// through to the cacheDuration hint (not silently to 3600s) so an
+/// IdP-stated value still wins over a typo — the picker reports
+/// "cacheDuration" in that case, not "env", because the env value
+/// did NOT actually influence the result.
+///
+/// Returning the source string alongside the value keeps the watch-
+/// loop banner truthful: source and interval are computed from the
+/// same decision so they can never diverge.
+fn saml_metadata_refresh_interval_secs(cache_duration_hint: Option<u64>) -> (u64, &'static str) {
+    if let Ok(raw) = std::env::var("AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS") {
+        if let Ok(parsed) = raw.parse::<u64>() {
+            return (parsed.clamp(60, 86400), "env");
+        }
+    }
+    match cache_duration_hint {
+        Some(d) => (d.clamp(60, 86400), "cacheDuration"),
+        None => (3600, "default"),
+    }
 }
 
 /// V1: SAML login routing. Loads ~/.aether/sso-saml.json (written
@@ -14507,6 +14661,7 @@ mod tests {
             binding: "Redirect".to_string(),
             signing_certs: certs.into_iter().map(String::from).collect(),
             valid_until: None,
+            cache_duration_secs: None,
         }
     }
 
@@ -14585,6 +14740,7 @@ mod tests {
             binding: "Redirect".to_string(),
             signing_certs: vec![],
             valid_until: None,
+            cache_duration_secs: None,
         };
         let p2 = ParsedSamlMetadata {
             idp_entity_id: "a".to_string(),
@@ -14592,6 +14748,7 @@ mod tests {
             binding: "Redirect".to_string(),
             signing_certs: vec![],
             valid_until: None,
+            cache_duration_secs: None,
         };
         // signing_certs is empty in both → `parse_saml_metadata` would
         // reject these in normal flow, but compute_metadata_fingerprint
@@ -14800,26 +14957,41 @@ mod tests {
     }
 
     /// BB6: AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS env knob —
-    /// default + clamp + invalid-input fallback. Same shape as the
-    /// Y6 SAML clock-skew + Z3 OIDC clock-skew helpers.
+    /// default + clamp + invalid-input fallback with NO cacheDuration
+    /// hint (None). Garbage env falls through to default 3600 because
+    /// there's no hint to fall back to. EE5 changes this signature to
+    /// `Option<u64>` returning `(u64, &'static str)`; this test pins
+    /// the None branch and the source string.
     #[test]
     fn bb6_metadata_refresh_interval_default_and_clamped() {
         let _guard = aether_core::mock::ENV_TEST_LOCK
             .lock()
             .expect("env lock");
         std::env::remove_var("AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS");
-        assert_eq!(saml_metadata_refresh_interval_secs(), 3600, "default 1h");
+        assert_eq!(
+            saml_metadata_refresh_interval_secs(None),
+            (3600, "default"),
+            "default 1h"
+        );
         std::env::set_var("AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS", "120");
-        assert_eq!(saml_metadata_refresh_interval_secs(), 120, "120s ok");
+        assert_eq!(
+            saml_metadata_refresh_interval_secs(None),
+            (120, "env"),
+            "120s ok"
+        );
         std::env::set_var("AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS", "1");
-        assert_eq!(saml_metadata_refresh_interval_secs(), 60, "clamped to 60s");
+        assert_eq!(
+            saml_metadata_refresh_interval_secs(None),
+            (60, "env"),
+            "clamped to 60s"
+        );
         std::env::set_var(
             "AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS",
             "999999",
         );
         assert_eq!(
-            saml_metadata_refresh_interval_secs(),
-            86400,
+            saml_metadata_refresh_interval_secs(None),
+            (86400, "env"),
             "clamped to 24h"
         );
         std::env::set_var(
@@ -14827,9 +14999,9 @@ mod tests {
             "garbage",
         );
         assert_eq!(
-            saml_metadata_refresh_interval_secs(),
-            3600,
-            "invalid → default"
+            saml_metadata_refresh_interval_secs(None),
+            (3600, "default"),
+            "invalid env + no hint → default"
         );
         std::env::remove_var("AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS");
     }
@@ -15865,6 +16037,207 @@ BBBB-SECOND-CERT
             .with_timezone(&chrono::Utc);
         let delta = (parsed - future).num_milliseconds().abs();
         assert!(delta < 1000, "round-trip delta {}ms", delta);
+        std::env::remove_var("HOME");
+    }
+
+    /// EE5: xsd:duration parser handles the common SAML cacheDuration
+    /// shapes. Year/month use the saml-metadata-2.0 §2.3.2
+    /// approximation (365d / 30d) since it's a refresh-interval hint,
+    /// not calendar arithmetic.
+    #[test]
+    fn ee5_parse_xsd_duration_happy_paths() {
+        assert_eq!(parse_xsd_duration_secs("P1D"), Some(86_400), "1 day");
+        assert_eq!(parse_xsd_duration_secs("P7D"), Some(604_800), "1 week");
+        assert_eq!(parse_xsd_duration_secs("PT1H"), Some(3600), "1 hour");
+        assert_eq!(parse_xsd_duration_secs("PT30M"), Some(1800), "30 min");
+        assert_eq!(parse_xsd_duration_secs("PT15S"), Some(15), "15 sec");
+        assert_eq!(
+            parse_xsd_duration_secs("PT1H30M"),
+            Some(5400),
+            "1h30m"
+        );
+        assert_eq!(
+            parse_xsd_duration_secs("P1DT12H"),
+            Some(86_400 + 43_200),
+            "1d12h"
+        );
+        assert_eq!(
+            parse_xsd_duration_secs("P1Y"),
+            Some(31_536_000),
+            "1y (365d approx)"
+        );
+        assert_eq!(
+            parse_xsd_duration_secs("P1M"),
+            Some(2_592_000),
+            "1mo (30d approx — note: date-side M, not time-side)"
+        );
+        assert_eq!(
+            parse_xsd_duration_secs("P1Y6M"),
+            Some(31_536_000 + 6 * 2_592_000),
+            "1y6mo"
+        );
+    }
+
+    /// EE5: the date-side `M` (months) and time-side `M` (minutes)
+    /// must not collide. `P1M` is one month (30d); `PT1M` is one
+    /// minute (60s). The parser disambiguates via the `T` separator.
+    #[test]
+    fn ee5_parse_xsd_duration_month_vs_minute() {
+        assert_eq!(parse_xsd_duration_secs("P1M"), Some(2_592_000), "P1M = month");
+        assert_eq!(parse_xsd_duration_secs("PT1M"), Some(60), "PT1M = minute");
+    }
+
+    /// EE5: garbage / out-of-spec inputs return None — never panic,
+    /// never silently mis-parse. The watch loop treats None as "no
+    /// hint, fall back to default".
+    #[test]
+    fn ee5_parse_xsd_duration_rejects_garbage() {
+        assert_eq!(parse_xsd_duration_secs(""), None, "empty");
+        assert_eq!(parse_xsd_duration_secs("P"), None, "P alone");
+        assert_eq!(parse_xsd_duration_secs("1D"), None, "missing P");
+        assert_eq!(parse_xsd_duration_secs("PT"), None, "T with no components");
+        assert_eq!(parse_xsd_duration_secs("PT.5S"), None, "fractional seconds");
+        assert_eq!(parse_xsd_duration_secs("P1X"), None, "unknown unit");
+        assert_eq!(parse_xsd_duration_secs("-P1D"), None, "negative duration");
+        assert_eq!(parse_xsd_duration_secs("PD"), None, "missing magnitude");
+        assert_eq!(
+            parse_xsd_duration_secs("P1H"),
+            None,
+            "H on date side (must be after T)"
+        );
+        assert_eq!(
+            parse_xsd_duration_secs("PT1D"),
+            None,
+            "D after T (must be on date side)"
+        );
+    }
+
+    /// EE5: parse_saml_metadata extracts cacheDuration from the
+    /// EntityDescriptor attribute when present. Absent → None.
+    #[test]
+    fn ee5_parse_saml_metadata_extracts_cache_duration() {
+        let xml_with = r#"<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
+                                               entityID="https://idp.test"
+                                               cacheDuration="PT1H">
+  <md:IDPSSODescriptor>
+    <md:KeyDescriptor use="signing">
+      <X509Certificate>CERT-A</X509Certificate>
+    </md:KeyDescriptor>
+    <md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+                            Location="https://idp/sso"/>
+  </md:IDPSSODescriptor>
+</md:EntityDescriptor>"#;
+        let parsed = parse_saml_metadata(xml_with).expect("parse");
+        assert_eq!(parsed.cache_duration_secs, Some(3600), "PT1H = 3600s");
+
+        let xml_without = r#"<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
+                                                  entityID="https://idp.test">
+  <md:IDPSSODescriptor>
+    <md:KeyDescriptor use="signing">
+      <X509Certificate>CERT-A</X509Certificate>
+    </md:KeyDescriptor>
+    <md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+                            Location="https://idp/sso"/>
+  </md:IDPSSODescriptor>
+</md:EntityDescriptor>"#;
+        let parsed_absent = parse_saml_metadata(xml_without).expect("parse");
+        assert_eq!(parsed_absent.cache_duration_secs, None, "no attribute → None");
+    }
+
+    /// EE5: interval picker precedence — env wins, else hint, else
+    /// 3600 default. Garbage env falls through to the hint (not
+    /// silently to default) so a typo doesn't override an IdP value.
+    /// The source string MUST match the actual decision so the watch
+    /// banner can't lie about where the interval came from.
+    #[test]
+    fn ee5_interval_picker_precedence() {
+        let _guard = aether_core::mock::ENV_TEST_LOCK
+            .lock()
+            .expect("env lock");
+        std::env::remove_var("AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS");
+
+        // No env, no hint → default 3600.
+        assert_eq!(
+            saml_metadata_refresh_interval_secs(None),
+            (3600, "default")
+        );
+
+        // No env, hint present → hint (clamped). source=cacheDuration.
+        assert_eq!(
+            saml_metadata_refresh_interval_secs(Some(7200)),
+            (7200, "cacheDuration"),
+            "hint 7200s (PT2H)"
+        );
+        assert_eq!(
+            saml_metadata_refresh_interval_secs(Some(10)),
+            (60, "cacheDuration"),
+            "hint 10s clamps up to 60s floor"
+        );
+        assert_eq!(
+            saml_metadata_refresh_interval_secs(Some(999_999)),
+            (86400, "cacheDuration"),
+            "hint 999_999s clamps down to 24h ceiling"
+        );
+
+        // Env set → env wins regardless of hint.
+        std::env::set_var("AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS", "300");
+        assert_eq!(
+            saml_metadata_refresh_interval_secs(Some(7200)),
+            (300, "env"),
+            "env wins over hint"
+        );
+
+        // Env garbage → fall through to hint (not silently default).
+        // CRITICAL: source must be cacheDuration, NOT env, because the
+        // env value did NOT actually influence the result.
+        std::env::set_var(
+            "AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS",
+            "garbage",
+        );
+        assert_eq!(
+            saml_metadata_refresh_interval_secs(Some(7200)),
+            (7200, "cacheDuration"),
+            "garbage env + hint → hint (source must NOT lie about env)"
+        );
+        assert_eq!(
+            saml_metadata_refresh_interval_secs(None),
+            (3600, "default"),
+            "garbage env + no hint → default"
+        );
+
+        std::env::remove_var("AETHER_SAML_METADATA_REFRESH_INTERVAL_SECS");
+    }
+
+    /// EE5: apply_saml_idp_metadata persists `cache_duration_secs` in
+    /// sso-saml.json when the metadata carries cacheDuration; persists
+    /// null when it doesn't.
+    #[test]
+    fn ee5_apply_persists_cache_duration_when_present() {
+        let _guard = aether_core::mock::ENV_TEST_LOCK
+            .lock()
+            .expect("env lock");
+        let home = bb6_tmp_home("ee5-persist");
+        std::env::set_var("HOME", &home);
+        let xml = r#"<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
+                                          entityID="https://idp.test"
+                                          cacheDuration="PT2H">
+  <md:IDPSSODescriptor>
+    <md:KeyDescriptor use="signing">
+      <X509Certificate>CERT-EE5</X509Certificate>
+    </md:KeyDescriptor>
+    <md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+                            Location="https://idp/sso"/>
+  </md:IDPSSODescriptor>
+</md:EntityDescriptor>"#;
+        apply_saml_idp_metadata(xml, "https://meta", "https://sp.test")
+            .expect("apply");
+        let cfg_bytes = std::fs::read(home.join(".aether/sso-saml.json")).unwrap();
+        let cfg: serde_json::Value = serde_json::from_slice(&cfg_bytes).unwrap();
+        let persisted = cfg
+            .get("cache_duration_secs")
+            .and_then(|v| v.as_u64())
+            .expect("cache_duration_secs persisted");
+        assert_eq!(persisted, 7200, "PT2H = 7200s");
         std::env::remove_var("HOME");
     }
 
