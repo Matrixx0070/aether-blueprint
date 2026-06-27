@@ -1001,9 +1001,7 @@ async fn resolve_serve_token_from_secrets_manager() -> Result<()> {
     };
     let secret = match scheme {
         "vault" => resolve_vault_secret(id).await?,
-        "aws" => anyhow::bail!(
-            "secrets manager scheme `aws` is not yet implemented (Plan W); use vault: for now"
-        ),
+        "aws" => resolve_aws_secret(id).await?,
         other => anyhow::bail!(
             "unknown secrets manager scheme `{other}` (valid: vault, aws)"
         ),
@@ -1017,6 +1015,102 @@ async fn resolve_serve_token_from_secrets_manager() -> Result<()> {
         secret.len()
     );
     Ok(())
+}
+
+/// W3: AWS Secrets Manager via hand-rolled SigV4. Reuses the v0.8
+/// Bedrock credential chain (`resolve_aws_credentials`) so the same
+/// env / file / IMDSv2 / ECS sources work.
+///
+/// Wire: POST https://secretsmanager.<region>.amazonaws.com/
+///   X-Amz-Target: secretsmanager.GetSecretValue
+///   Body: {"SecretId":"<id>"}
+/// Response: {"SecretString":"<value>"}
+async fn resolve_aws_secret(secret_id: &str) -> Result<String> {
+    use chrono::Utc;
+    use sha2::{Digest, Sha256};
+    let (access_key, secret_key, session_token, _src) =
+        aether_llm::bedrock::resolve_aws_credentials()
+            .await
+            .map_err(|e| anyhow!("aws cred chain: {e}"))?;
+    let region = std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string());
+    let endpoint = std::env::var("AETHER_AWS_SECRETSMANAGER_ENDPOINT")
+        .unwrap_or_else(|_| format!("https://secretsmanager.{region}.amazonaws.com/"));
+    let host = endpoint
+        .trim_start_matches("http://")
+        .trim_start_matches("https://")
+        .trim_end_matches('/')
+        .to_string();
+
+    let body = serde_json::json!({"SecretId": secret_id}).to_string();
+    let payload_hash = hex::encode(Sha256::digest(body.as_bytes()));
+    let amz_date = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+    let date_stamp = Utc::now().format("%Y%m%d").to_string();
+
+    let mut headers: Vec<(String, String)> = vec![
+        ("content-type".into(), "application/x-amz-json-1.1".into()),
+        ("host".into(), host.clone()),
+        ("x-amz-content-sha256".into(), payload_hash.clone()),
+        ("x-amz-date".into(), amz_date.clone()),
+        ("x-amz-target".into(), "secretsmanager.GetSecretValue".into()),
+    ];
+    if let Some(t) = &session_token {
+        headers.push(("x-amz-security-token".into(), t.clone()));
+    }
+    headers.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let canonical_headers: String = headers
+        .iter()
+        .map(|(k, v)| format!("{k}:{}\n", v.trim()))
+        .collect();
+    let signed_headers: String = headers
+        .iter()
+        .map(|(k, _)| k.as_str())
+        .collect::<Vec<_>>()
+        .join(";");
+    let canonical_request = format!(
+        "POST\n/\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
+    );
+    let credential_scope = format!("{date_stamp}/{region}/secretsmanager/aws4_request");
+    let string_to_sign = format!(
+        "AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n{}",
+        hex::encode(Sha256::digest(canonical_request.as_bytes()))
+    );
+    let signing_key = aether_llm::bedrock::derive_signing_key(
+        &secret_key,
+        &date_stamp,
+        &region,
+        "secretsmanager",
+    );
+    let signature = hex::encode(aether_llm::bedrock::hmac_sha256(
+        &signing_key,
+        string_to_sign.as_bytes(),
+    ));
+    let authorization = format!(
+        "AWS4-HMAC-SHA256 Credential={access_key}/{credential_scope}, \
+         SignedHeaders={signed_headers}, Signature={signature}"
+    );
+
+    let mut builder = reqwest::Client::new().post(&endpoint).body(body);
+    for (k, v) in &headers {
+        if k == "host" {
+            continue;
+        }
+        builder = builder.header(k.as_str(), v.as_str());
+    }
+    builder = builder.header("Authorization", authorization);
+    let resp = builder.send().await.context("POST secretsmanager")?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        anyhow::bail!("secretsmanager GetSecretValue failed: HTTP {status}: {text}");
+    }
+    let v: serde_json::Value = serde_json::from_str(&text).context("parse secretsmanager response")?;
+    let secret = v
+        .get("SecretString")
+        .and_then(|s| s.as_str())
+        .ok_or_else(|| anyhow!("secretsmanager response has no SecretString (binary secret?)"))?
+        .to_string();
+    Ok(secret)
 }
 
 async fn resolve_vault_secret(path: &str) -> Result<String> {

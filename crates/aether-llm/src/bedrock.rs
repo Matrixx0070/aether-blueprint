@@ -693,7 +693,7 @@ fn extract_string_header(header_bytes: &[u8], target: &str) -> Option<String> {
 
 // ── SigV4 ─────────────────────────────────────────────────────────────────────
 
-fn derive_signing_key(secret: &str, date: &str, region: &str, service: &str) -> Vec<u8> {
+pub fn derive_signing_key(secret: &str, date: &str, region: &str, service: &str) -> Vec<u8> {
     let k_secret = format!("AWS4{secret}");
     let k_date = hmac_sha256(k_secret.as_bytes(), date.as_bytes());
     let k_region = hmac_sha256(&k_date, region.as_bytes());
@@ -701,7 +701,7 @@ fn derive_signing_key(secret: &str, date: &str, region: &str, service: &str) -> 
     hmac_sha256(&k_service, b"aws4_request")
 }
 
-fn hmac_sha256(key: &[u8], msg: &[u8]) -> Vec<u8> {
+pub fn hmac_sha256(key: &[u8], msg: &[u8]) -> Vec<u8> {
     type HmacSha256 = Hmac<Sha256>;
     let mut mac = HmacSha256::new_from_slice(key).expect("any size");
     mac.update(msg);
