@@ -40,7 +40,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const ANTHROPIC_API_BASE: &str = "https://api.anthropic.com";
 pub const ANTHROPIC_VERSION: &str = "2023-06-01";
-pub const DEFAULT_TIMEOUT_SECS: u64 = 300;
+pub const DEFAULT_TIMEOUT_SECS: u64 = 600;
 
 /// `anthropic-beta` header value the Messages API expects when
 /// authenticating with an OAuth bearer token. INFERRED from public Claude
@@ -681,7 +681,9 @@ impl AnthropicProvider {
 
         Ok(MessagesResponse {
             content,
-            stop_reason: stop_reason.unwrap_or(StopReason::EndTurn),
+            stop_reason: stop_reason.ok_or_else(|| LlmError::Transport(
+                "SSE stream ended without stop_reason — stream was truncated".into(),
+            ))?,
             usage: Some(usage),
         })
     }
