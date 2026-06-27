@@ -10618,25 +10618,32 @@ fn load_idp_signing_keys() -> Result<Vec<(IdpVerifyingKey, Vec<u8>)>> {
     Ok(keys)
 }
 
-/// DD4: an IdP signing public key. RSA (Y5 baseline) or Ed25519
-/// (DD4 EdDSA-on-the-wire extension). Variant carries the algorithm-
-/// matched verify primitive; the cert DER goes alongside as a
-/// separate `Vec<u8>` in the loader's return tuple.
+/// DD4/EE6: an IdP signing public key. RSA (Y5 baseline), Ed25519
+/// (DD4 EdDSA-on-the-wire extension), or Ed448 (EE6 extension —
+/// closes the DD4 weakest-point, RFC 8410). Variant carries the
+/// algorithm-matched verify primitive; the cert DER goes alongside
+/// as a separate `Vec<u8>` in the loader's return tuple.
+///
+/// Trust assumption (EE6 audit gap): Ed448 verification routes
+/// through `ed448-goldilocks` v0.14 (RustCrypto org). Ed448 is far
+/// less battle-tested in production than Ed25519, but the SAML
+/// metadata ecosystem allows it; refusing it loud was the v0.34
+/// posture, accepting it is the v0.35 EE6 posture.
 #[derive(Debug, Clone)]
 enum IdpVerifyingKey {
     Rsa(rsa::RsaPublicKey),
     Ed25519(ed25519_dalek::VerifyingKey),
+    Ed448(ed448_goldilocks::VerifyingKey),
 }
 
-/// DD4: pull the SubjectPublicKeyInfo out of a PEM-encoded x509
+/// DD4/EE6: pull the SubjectPublicKeyInfo out of a PEM-encoded x509
 /// certificate and decode it as the appropriate verifying key.
 /// SPKI algorithm OID dispatch:
 ///   - 1.2.840.113549.1.1.1 (rsaEncryption) → Rsa variant
 ///   - 1.3.101.112 (id-Ed25519, RFC 8410)   → Ed25519 variant
+///   - 1.3.101.113 (id-Ed448,   RFC 8410)   → Ed448 variant (EE6)
 /// Other algorithms (ECDSA, RSA-PSS, etc.) bail with an informative
-/// error citing the unsupported OID. Renamed from
-/// `rsa_pubkey_from_pem_cert` — the function now returns the
-/// algorithm-tagged enum.
+/// error citing the unsupported OID.
 fn idp_verifying_key_from_pem_cert(
     pem_bytes: &[u8],
 ) -> Result<(IdpVerifyingKey, Vec<u8>)> {
@@ -10653,6 +10660,9 @@ fn idp_verifying_key_from_pem_cert(
             .expect("OID literal");
     let oid_ed25519: x509_parser::der_parser::oid::Oid =
         x509_parser::der_parser::oid::Oid::from(&[1, 3, 101, 112])
+            .expect("OID literal");
+    let oid_ed448: x509_parser::der_parser::oid::Oid =
+        x509_parser::der_parser::oid::Oid::from(&[1, 3, 101, 113])
             .expect("OID literal");
     if spki.algorithm.algorithm == oid_rsa {
         let key_der = &spki.subject_public_key.data;
@@ -10674,10 +10684,28 @@ fn idp_verifying_key_from_pem_cert(
         let key = ed25519_dalek::VerifyingKey::from_bytes(&bytes)
             .map_err(|e| anyhow!("decode Ed25519 SubjectPublicKey: {e}"))?;
         Ok((IdpVerifyingKey::Ed25519(key), cert_der))
+    } else if spki.algorithm.algorithm == oid_ed448 {
+        // EE6: RFC 8410 §4 (Ed448 variant): the BIT STRING is the raw
+        // 57-byte Ed448 public key, same "no further DER wrapping"
+        // shape as Ed25519 just with a different key length.
+        let raw = &spki.subject_public_key.data;
+        if raw.len() != ed448_goldilocks::PUBLIC_KEY_LENGTH {
+            anyhow::bail!(
+                "Ed448 SubjectPublicKey is {}B, expected exactly {}B per RFC 8410",
+                raw.len(),
+                ed448_goldilocks::PUBLIC_KEY_LENGTH,
+            );
+        }
+        let mut bytes = [0u8; ed448_goldilocks::PUBLIC_KEY_LENGTH];
+        bytes.copy_from_slice(raw);
+        let key = ed448_goldilocks::VerifyingKey::from_bytes(&bytes)
+            .map_err(|e| anyhow!("decode Ed448 SubjectPublicKey: {e}"))?;
+        Ok((IdpVerifyingKey::Ed448(key), cert_der))
     } else {
         anyhow::bail!(
-            "IdP cert public-key algorithm is {} — DD4 supports RSA \
-             (1.2.840.113549.1.1.1) and Ed25519 (1.3.101.112) only",
+            "IdP cert public-key algorithm is {} — supported: RSA \
+             (1.2.840.113549.1.1.1), Ed25519 (1.3.101.112), \
+             Ed448 (1.3.101.113)",
             spki.algorithm.algorithm
         )
     }
@@ -10691,6 +10719,11 @@ const SAML_SIG_METHOD_RSA_SHA256: &str =
 /// XML-DSig algorithm registry update at /TR/xmlsec-algorithms.
 const SAML_SIG_METHOD_EDDSA_ED25519: &str =
     "http://www.w3.org/2021/04/xmldsig-more#eddsa-ed25519";
+/// EE6: EdDSA SignatureMethod for Ed448 keys (RFC 8032 §5.2 / RFC
+/// 8410). Same xmldsig-more draft as Ed25519, separate URI per
+/// curve.
+const SAML_SIG_METHOD_EDDSA_ED448: &str =
+    "http://www.w3.org/2021/04/xmldsig-more#eddsa-ed448";
 /// Y5: the only DigestMethod algorithm Y5 accepts.
 const SAML_DIGEST_METHOD_SHA256: &str =
     "http://www.w3.org/2001/04/xmlenc#sha256";
@@ -10741,19 +10774,21 @@ fn verify_saml_assertion_signature(
         .ok_or_else(|| anyhow!("Y5: assertion is unsigned"))?;
 
     // Step 1: algorithm gate. Y5 accepts RSA-SHA256; DD4 extends to
-    // Ed25519 EdDSA. Anything else (RSA-PSS, ECDSA, MD5, etc.) is
-    // refused.
+    // Ed25519 EdDSA; EE6 extends to Ed448 EdDSA. Anything else
+    // (RSA-PSS, ECDSA, MD5, etc.) is refused.
     let sig_method = sig
         .signature_method
         .as_deref()
         .ok_or_else(|| anyhow!("Y5: signature has no SignatureMethod"))?;
     if sig_method != SAML_SIG_METHOD_RSA_SHA256
         && sig_method != SAML_SIG_METHOD_EDDSA_ED25519
+        && sig_method != SAML_SIG_METHOD_EDDSA_ED448
     {
         anyhow::bail!(
-            "Y5/DD4: signature uses {sig_method} — only RSA-SHA256 \
-             (xmldsig-more#rsa-sha256) or Ed25519 EdDSA \
-             (xmldsig-more#eddsa-ed25519) accepted"
+            "Y5/DD4/EE6: signature uses {sig_method} — only RSA-SHA256 \
+             (xmldsig-more#rsa-sha256), Ed25519 EdDSA \
+             (xmldsig-more#eddsa-ed25519), or Ed448 EdDSA \
+             (xmldsig-more#eddsa-ed448) accepted"
         );
     }
 
@@ -10911,6 +10946,35 @@ fn verify_saml_assertion_signature(
                 };
                 let sig_obj = ed25519_dalek::Signature::from_bytes(&sig_array);
                 match vk.verify(&signed_info_canonical, &sig_obj) {
+                    Ok(()) => {
+                        matched_cert_der = Some(cert_der.as_slice());
+                        break;
+                    }
+                    Err(e) => last_err = Some(e.to_string()),
+                }
+            }
+            (m, IdpVerifyingKey::Ed448(vk))
+                if m == SAML_SIG_METHOD_EDDSA_ED448 =>
+            {
+                // EE6: Ed448 verify primitive. Signature is exactly
+                // 114 bytes (R || S, 2 * 57). Same "feed raw c14n
+                // bytes to verify, no separate hash step" shape as
+                // Ed25519 — RFC 8032 §5.2 PureEdDSA.
+                tried += 1;
+                let sig_array: [u8; ed448_goldilocks::SIGNATURE_LENGTH] =
+                    match signature_bytes.as_slice().try_into() {
+                        Ok(arr) => arr,
+                        Err(_) => {
+                            last_err = Some(format!(
+                                "Ed448 SignatureValue is {} bytes, expected {}",
+                                signature_bytes.len(),
+                                ed448_goldilocks::SIGNATURE_LENGTH,
+                            ));
+                            continue;
+                        }
+                    };
+                let sig_obj = ed448_goldilocks::Signature::from(&sig_array);
+                match vk.verify_raw(&sig_obj, &signed_info_canonical) {
                     Ok(()) => {
                         matched_cert_der = Some(cert_der.as_slice());
                         break;
@@ -16239,6 +16303,190 @@ BBBB-SECOND-CERT
             .expect("cache_duration_secs persisted");
         assert_eq!(persisted, 7200, "PT2H = 7200s");
         std::env::remove_var("HOME");
+    }
+
+    /// EE6: helper — build an Ed448-signed SAMLResponse using the
+    /// canonical Y5/DD4 shape but with the Ed448 EdDSA URI in
+    /// SignedInfo. Returns the XML + the Ed448 verifying key for the
+    /// caller to configure. Mirrors `dd4_build_ed25519_signed_response`
+    /// — only the keypair, sign primitive, and SignatureMethod URI
+    /// differ.
+    fn ee6_build_ed448_signed_response() -> (
+        String,
+        ed448_goldilocks::VerifyingKey,
+    ) {
+        use base64::Engine as _;
+        use ed448_goldilocks::elliptic_curve::Generate;
+        use sha2::{Digest, Sha256};
+
+        let signing_key = ed448_goldilocks::SigningKey::generate();
+        let verifying_key = signing_key.verifying_key();
+
+        let assertion_open =
+            r#"<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" ID="_a-ee6" Version="2.0" IssueInstant="2026-06-27T00:00:00Z">"#;
+        let assertion_body = "<saml:Issuer>https://idp.example</saml:Issuer><saml:Subject><saml:NameID>alice@example.com</saml:NameID></saml:Subject>";
+        let assertion_close = "</saml:Assertion>";
+        let assertion_no_sig =
+            format!("{assertion_open}{assertion_body}{assertion_close}");
+
+        let mut inherited_at_assertion = std::collections::BTreeMap::new();
+        inherited_at_assertion.insert(
+            "samlp".to_string(),
+            "urn:oasis:names:tc:SAML:2.0:protocol".to_string(),
+        );
+        let assertion_c14n = canonicalize_exc_c14n_subtree(
+            &assertion_no_sig,
+            &inherited_at_assertion,
+        )
+        .expect("c14n assertion");
+        let digest_b64 = base64::engine::general_purpose::STANDARD
+            .encode(Sha256::digest(&assertion_c14n));
+
+        let signed_info = format!(
+            r##"<ds:SignedInfo><ds:CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"></ds:CanonicalizationMethod><ds:SignatureMethod Algorithm="http://www.w3.org/2021/04/xmldsig-more#eddsa-ed448"></ds:SignatureMethod><ds:Reference URI="#_a-ee6"><ds:Transforms><ds:Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"></ds:Transform><ds:Transform Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"></ds:Transform></ds:Transforms><ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"></ds:DigestMethod><ds:DigestValue>{digest_b64}</ds:DigestValue></ds:Reference></ds:SignedInfo>"##
+        );
+
+        let mut inherited_at_sig = inherited_at_assertion.clone();
+        inherited_at_sig.insert(
+            "ds".to_string(),
+            "http://www.w3.org/2000/09/xmldsig#".to_string(),
+        );
+        let signed_info_c14n =
+            canonicalize_exc_c14n_subtree(&signed_info, &inherited_at_sig)
+                .expect("c14n SignedInfo");
+        // Ed448 signs the raw bytes — same shape as Ed25519, no
+        // separate hash step (RFC 8032 §5.2 PureEdDSA).
+        let sig = signing_key.sign_raw(&signed_info_c14n);
+        let sig_b64 = base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
+
+        let signature_block = format!(
+            r##"<ds:Signature>{signed_info}<ds:SignatureValue>{sig_b64}</ds:SignatureValue></ds:Signature>"##
+        );
+        let assertion =
+            format!("{assertion_open}{signature_block}{assertion_body}{assertion_close}");
+        let response = format!(
+            r##"<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"><samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"></samlp:StatusCode></samlp:Status>{assertion}</samlp:Response>"##
+        );
+        (response, verifying_key)
+    }
+
+    /// EE6: end-to-end Ed448 SAMLResponse verification — happy path.
+    /// Closes the DD4 weakest-point: an Ed448-signed Assertion against
+    /// an Ed448 trust set verifies green.
+    #[test]
+    fn ee6_verifies_ed448_signed_assertion() {
+        let (response, vk) = ee6_build_ed448_signed_response();
+        let parsed = parse_saml_response_xml(&response).expect("Y3 parse");
+        let idp_keys = vec![(IdpVerifyingKey::Ed448(vk), Vec::<u8>::new())];
+        verify_saml_assertion_signature(&response, &parsed, &idp_keys)
+            .expect("EE6 verify must accept a valid Ed448 signature");
+    }
+
+    /// EE6 risk register: an Ed448-signed Assertion presented against
+    /// an Ed25519-only trust set MUST fail closed — the per-key
+    /// dispatch skips wrong-type keys instead of trying them. Same
+    /// confused-deputy defense as DD4.
+    #[test]
+    fn ee6_rejects_ed448_signature_against_ed25519_trust_set() {
+        use rand_core::OsRng;
+        let (response, _ee6_vk) = ee6_build_ed448_signed_response();
+        let mut csprng = OsRng;
+        let ed25519_vk =
+            ed25519_dalek::SigningKey::generate(&mut csprng).verifying_key();
+        let parsed = parse_saml_response_xml(&response).expect("Y3 parse");
+        let idp_keys =
+            vec![(IdpVerifyingKey::Ed25519(ed25519_vk), Vec::<u8>::new())];
+        let err = verify_saml_assertion_signature(&response, &parsed, &idp_keys)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("tried 0") && err.contains("skipped 1"),
+            "Ed25519 cert + Ed448 sig must skip the Ed25519 key; got: {err}"
+        );
+    }
+
+    /// EE6 risk register: an Ed448-signed Assertion presented against
+    /// an RSA-only trust set MUST fail closed. Same defense as
+    /// dd4_rejects_eddsa_signature_against_rsa_trust_set but for the
+    /// Ed448 leg.
+    #[test]
+    fn ee6_rejects_ed448_signature_against_rsa_trust_set() {
+        use rand_core::OsRng;
+        use rsa::RsaPrivateKey;
+        let (response, _ee6_vk) = ee6_build_ed448_signed_response();
+        let priv_key = RsaPrivateKey::new(&mut OsRng, 2048).expect("rsa gen");
+        let rsa_pub = priv_key.to_public_key();
+        let parsed = parse_saml_response_xml(&response).expect("Y3 parse");
+        let idp_keys = vec![(IdpVerifyingKey::Rsa(rsa_pub), Vec::<u8>::new())];
+        let err = verify_saml_assertion_signature(&response, &parsed, &idp_keys)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("tried 0") && err.contains("skipped 1"),
+            "RSA cert + Ed448 sig must skip the RSA key; got: {err}"
+        );
+    }
+
+    /// EE6: the algorithm gate must accept the Ed448 EdDSA URI
+    /// alongside RSA-SHA256 and Ed25519 EdDSA. Mutate the SignatureMethod
+    /// URI to something unaccepted (e.g. SHA-1 garbage) and assert the
+    /// gate's error message cites all three accepted URIs so the
+    /// operator can correct the IdP.
+    #[test]
+    fn ee6_algorithm_gate_rejects_unknown_uri_cites_ed448() {
+        let (response, vk) = ee6_build_ed448_signed_response();
+        let bad_response = response.replace(
+            SAML_SIG_METHOD_EDDSA_ED448,
+            "http://www.w3.org/2000/09/xmldsig#rsa-sha1",
+        );
+        let parsed = parse_saml_response_xml(&bad_response).expect("Y3 parse");
+        let idp_keys = vec![(IdpVerifyingKey::Ed448(vk), Vec::<u8>::new())];
+        let err = verify_saml_assertion_signature(&bad_response, &parsed, &idp_keys)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("only RSA-SHA256")
+                && err.contains("eddsa-ed25519")
+                && err.contains("eddsa-ed448"),
+            "error must cite all 3 accepted URIs: {err}"
+        );
+    }
+
+    /// EE6: SPKI byte round-trip — RFC 8410 says the Ed448 SPKI
+    /// SubjectPublicKey BIT STRING is the raw 57-byte public key with
+    /// no further DER wrapping. Generate a keypair, encode through
+    /// pkcs8 SPKI, verify the tail 57 bytes deserialize back to the
+    /// same VerifyingKey. Mirrors `dd4_loads_ed25519_pubkey_from_x509_cert`.
+    #[test]
+    fn ee6_spki_57_byte_round_trip() {
+        use ed448_goldilocks::elliptic_curve::Generate;
+        let signing_key = ed448_goldilocks::SigningKey::generate();
+        let expected_vk = signing_key.verifying_key();
+        let raw = expected_vk.to_bytes();
+        assert_eq!(
+            raw.len(),
+            ed448_goldilocks::PUBLIC_KEY_LENGTH,
+            "Ed448 public key length per RFC 8410"
+        );
+        assert_eq!(
+            ed448_goldilocks::PUBLIC_KEY_LENGTH, 57,
+            "pinning the crate-level constant in case it ever changes"
+        );
+        let mut bytes = [0u8; 57];
+        bytes.copy_from_slice(&raw);
+        let key_from_raw =
+            ed448_goldilocks::VerifyingKey::from_bytes(&bytes)
+                .expect("Ed448 from raw bytes");
+        assert_eq!(
+            key_from_raw.to_bytes(),
+            expected_vk.to_bytes(),
+            "raw 57B === VerifyingKey bytes (RFC 8410)"
+        );
+        // End-to-end x509 cert loading is exercised by the live smoke
+        // (tests/ee6-ed448-assertion-verify-smoke.py) which uses
+        // Python `cryptography` to build a real x509 cert with the
+        // Ed448 SPKI and feeds it to idp_verifying_key_from_pem_cert
+        // via ~/.aether/saml/idp-cert.pem.
     }
 
     /// DD4: helper — build an Ed25519-signed SAMLResponse using the

@@ -32,6 +32,11 @@ hex = "0.4"
 sha2 = "0.10"
 hmac = "0.12"
 ed25519-dalek = { version = "2", features = ["rand_core", "pkcs8", "pem"] }
+# EE6: pure-Rust Ed448 + Curve448 (RustCrypto). `signing` pulls in the
+# ed448 EdDSA scheme + Verifier trait. NB: Ed448 is far less battle-
+# tested than Ed25519 (audit gap per Plan EE risk register §EE6);
+# trust assumption documented at the verify call-site.
+ed448-goldilocks = { version = "0.14.0-pre.15", features = ["signing", "getrandom"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 notify = { version = "6", default-features = false, features = ["macos_kqueue"] }
