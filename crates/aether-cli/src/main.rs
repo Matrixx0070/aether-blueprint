@@ -7062,7 +7062,21 @@ async fn sso_cmd(sub: SsoCmd) -> Result<()> {
             );
             Ok(())
         }
-        SsoCmd::Login => sso_login().await,
+        SsoCmd::Login => {
+            // V1: route to SAML when sso-saml.json is present;
+            // fall back to OIDC otherwise. The SAML flow is a stub
+            // that loads + reports the scaffold; the full
+            // redirect-binding + signed-response validation lands
+            // in a follow-up (Plan W or later).
+            let saml_path = std::env::var_os("HOME")
+                .map(|h| PathBuf::from(h).join(".aether/sso-saml.json"));
+            if let Some(p) = saml_path {
+                if p.exists() {
+                    return sso_login_saml(&p).await;
+                }
+            }
+            sso_login().await
+        }
         SsoCmd::ConfigureSaml { idp_metadata_url, sp_entity_id } => {
             sso_configure_saml(&idp_metadata_url, &sp_entity_id).await
         }
@@ -7521,6 +7535,50 @@ async fn sso_configure_saml(idp_metadata_url: &str, sp_entity_id: &str) -> Resul
     );
     eprintln!("[sso configure-saml] scaffold only — login flow lands in Plan V");
     Ok(())
+}
+
+/// V1: SAML login routing. Loads ~/.aether/sso-saml.json (written
+/// by U6 configure-saml) and reports the discovered IdP fields.
+///
+/// HONEST SCOPE: this slice ships the DETECTION + DISPATCH path
+/// (sso_login now consults sso-saml.json when present and routes
+/// here). The actual redirect-binding AuthnRequest emission +
+/// SAMLResponse capture + signed-response validation lands in a
+/// follow-up — pure-Rust SAML signature validation is a multi-week
+/// pipeline (XML c14n#, signed-info digest, x509 cert chain,
+/// NotBefore/NotOnOrAfter assertion bounds) and v0.26's 24h budget
+/// won't deliver it honestly.
+///
+/// For v0.26: bail with an informative message so operators don't
+/// silently fall through to a no-validation flow.
+async fn sso_login_saml(sso_saml_path: &Path) -> Result<()> {
+    let bytes = std::fs::read(sso_saml_path)
+        .with_context(|| format!("read {}", sso_saml_path.display()))?;
+    let cfg: serde_json::Value =
+        serde_json::from_slice(&bytes).context("parse sso-saml.json")?;
+    let issuer = cfg
+        .get("idp_entity_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("<missing>");
+    let sso_url = cfg
+        .get("sso_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("<missing>");
+    let binding = cfg
+        .get("sso_binding")
+        .and_then(|v| v.as_str())
+        .unwrap_or("<missing>");
+    eprintln!("[sso login] detected SAML scaffold at {}", sso_saml_path.display());
+    eprintln!("  IdP entityID: {issuer}");
+    eprintln!("  SSO URL:      {sso_url}");
+    eprintln!("  Binding:      HTTP-{binding}");
+    anyhow::bail!(
+        "SAML login is not yet implemented (the scaffold is in place; \
+         the redirect-binding flow + signed-response validation lands \
+         in a Plan W follow-up). For now: use `aether sso configure` \
+         to switch to OIDC, or delete {} to fall back to OIDC.",
+        sso_saml_path.display()
+    );
 }
 
 fn urlencode(s: &str) -> String {
