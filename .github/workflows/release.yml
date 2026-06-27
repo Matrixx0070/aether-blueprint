@@ -24,8 +24,36 @@ permissions:
   id-token: write   # mint OIDC token for cosign keyless signing
 
 jobs:
+  # EE4: gate the release on STATUS.md not still containing the
+  # "(this commit)" placeholder. Six successive ships (Y7/Z7/AA7/BB7/
+  # CC7/DD7) needed a follow-up backfill commit because the ship-row's
+  # own SHA didn't exist at commit time; this job ends that pattern by
+  # refusing the workflow when the placeholder is present.
+  prerelease-checks:
+    name: pre-tag STATUS placeholder check
+    runs-on: ubuntu-latest
+    steps:
+      - name: resolve tag
+        id: tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "ref=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=${{ github.ref }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.ref }}
+
+      - name: run STATUS placeholder check
+        run: bash tests/check-status-no-placeholders.sh
+
   build:
     name: build ${{ matrix.target }}
+    needs: prerelease-checks
     strategy:
       fail-fast: false
       matrix:
