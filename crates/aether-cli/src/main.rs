@@ -330,6 +330,15 @@ enum SsoCmd {
         #[arg(long, default_value = "https://aether.invalid/saml/sp")]
         sp_entity_id: String,
     },
+    /// AA6: print the identity the current sso.token resolves to.
+    /// Calls the IdP's userinfo_endpoint (captured at `sso configure`
+    /// time) with the persisted access_token as a Bearer. Useful for
+    /// operators debugging "which identity is this session bound to".
+    Whoami {
+        /// Emit raw JSON instead of the formatted human-readable view.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -7328,6 +7337,12 @@ struct SsoConfig {
     token_endpoint: String,
     #[serde(default)]
     jwks_uri: Option<String>,
+    /// AA6: optional userinfo endpoint used by `aether sso whoami`.
+    /// `#[serde(default)]` keeps pre-AA6 sso.json files compatible —
+    /// older configs just get None and `whoami` reports a clear
+    /// "re-run sso configure" message.
+    #[serde(default)]
+    userinfo_endpoint: Option<String>,
 }
 
 fn sso_config_path() -> Result<PathBuf> {
@@ -7340,6 +7355,15 @@ fn sso_token_path() -> Result<PathBuf> {
     let home = std::env::var_os("HOME")
         .ok_or_else(|| anyhow!("HOME not set"))?;
     Ok(PathBuf::from(home).join(".aether/sso.token"))
+}
+
+/// AA6: sidecar path for the OAuth access_token. Used by
+/// `aether sso whoami`; the userinfo endpoint requires the
+/// access_token (not the id_token, which is a JWT).
+fn sso_access_token_path() -> Result<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .ok_or_else(|| anyhow!("HOME not set"))?;
+    Ok(PathBuf::from(home).join(".aether/sso.access_token"))
 }
 
 fn load_sso_config() -> Result<Option<SsoConfig>> {
@@ -7413,6 +7437,10 @@ async fn sso_cmd(sub: SsoCmd) -> Result<()> {
                 .get("jwks_uri")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
+            let userinfo_endpoint = meta
+                .get("userinfo_endpoint")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             let cfg = SsoConfig {
                 issuer: issuer_trim,
                 client_id,
@@ -7420,6 +7448,7 @@ async fn sso_cmd(sub: SsoCmd) -> Result<()> {
                 authorization_endpoint,
                 token_endpoint,
                 jwks_uri,
+                userinfo_endpoint,
             };
             let path = sso_config_path()?;
             if let Some(parent) = path.parent() {
@@ -7486,6 +7515,7 @@ async fn sso_cmd(sub: SsoCmd) -> Result<()> {
         SsoCmd::ConfigureSaml { idp_metadata_url, sp_entity_id } => {
             sso_configure_saml(&idp_metadata_url, &sp_entity_id).await
         }
+        SsoCmd::Whoami { json } => sso_whoami(json).await,
         SsoCmd::Logout => {
             let path = sso_token_path()?;
             match std::fs::remove_file(&path) {
@@ -7503,6 +7533,12 @@ async fn sso_cmd(sub: SsoCmd) -> Result<()> {
                     eprintln!("[sso logout] no token at {} (already logged out)", path.display());
                 }
                 Err(e) => anyhow::bail!("remove {}: {e}", path.display()),
+            }
+            // AA6: best-effort cleanup of the access_token sidecar.
+            // Missing-file is the common case (pre-AA6 logins didn't
+            // write it); ignore it silently.
+            if let Ok(access_path) = sso_access_token_path() {
+                let _ = std::fs::remove_file(&access_path);
             }
             Ok(())
         }
@@ -7722,6 +7758,29 @@ async fn sso_login() -> Result<()> {
                 "id_token present but issuer published no jwks_uri — refusing to \
                  persist an unverified token. Set AETHER_OIDC_ALLOW_UNVERIFIED=1 to \
                  fall back to legacy warn-and-persist (NOT recommended)."
+            );
+        }
+    }
+
+    // AA6: persist the access_token as a sidecar at sso.access_token
+    // (mode 0600) when the IdP issued one. Used by `aether sso whoami`
+    // which calls the userinfo endpoint — the spec requires the
+    // access_token as Bearer, not the id_token (which is a signed JWT
+    // for offline claim verification). Done BEFORE writing sso.token
+    // so a failure here surfaces before the main token is persisted.
+    if let Some(at) = access_token.as_deref() {
+        let access_path = sso_access_token_path()?;
+        if let Some(parent) = access_path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        std::fs::write(&access_path, at)
+            .context("write sso.access_token sidecar")?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(
+                &access_path,
+                std::fs::Permissions::from_mode(0o600),
             );
         }
     }
@@ -7983,6 +8042,172 @@ fn verify_at_hash_claim(
             "id_token at_hash mismatch: computed `{computed}`, got `{got}` — \
              refusing as access-token-substitution defense"
         );
+    }
+    Ok(())
+}
+
+/// AA6: shape of the userinfo response we present to the operator.
+/// Captures the OIDC core §5.3.2 claims most enterprise IdPs return;
+/// the raw JSON is still available via `--json` for the long tail
+/// (custom claims, IdP-specific extensions).
+#[derive(Debug, Clone, PartialEq)]
+struct WhoamiClaims {
+    sub: String,
+    email: Option<String>,
+    email_verified: Option<bool>,
+    name: Option<String>,
+    preferred_username: Option<String>,
+    /// Common enterprise extension. Some IdPs (Okta, Auth0, Keycloak)
+    /// return this as an array; some return a single string. We
+    /// normalise to `Vec<String>` so the display path is uniform.
+    groups: Vec<String>,
+}
+
+/// AA6: parse a userinfo JSON document into the WhoamiClaims shape.
+/// Pure function — no I/O — so the claim-extraction logic can be
+/// unit-tested without a fake HTTP server. `sub` is REQUIRED per
+/// OIDC core §5.3.2; missing-sub is a hard error.
+fn parse_whoami_claims(doc: &serde_json::Value) -> Result<WhoamiClaims> {
+    let sub = doc
+        .get("sub")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("userinfo response missing required `sub` claim"))?
+        .to_string();
+    let email = doc.get("email").and_then(|v| v.as_str()).map(str::to_string);
+    let email_verified = doc.get("email_verified").and_then(|v| v.as_bool());
+    let name = doc.get("name").and_then(|v| v.as_str()).map(str::to_string);
+    let preferred_username = doc
+        .get("preferred_username")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let groups = match doc.get("groups") {
+        Some(serde_json::Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect(),
+        Some(serde_json::Value::String(s)) => vec![s.clone()],
+        _ => Vec::new(),
+    };
+    Ok(WhoamiClaims {
+        sub,
+        email,
+        email_verified,
+        name,
+        preferred_username,
+        groups,
+    })
+}
+
+/// AA6: `aether sso whoami` — load sso.json + sso.access_token,
+/// call `userinfo_endpoint` with Bearer auth, print the resolved
+/// identity. `json` flag emits the raw userinfo JSON instead of the
+/// formatted view; useful for piping into jq.
+///
+/// Bearer source order:
+///   1. `~/.aether/sso.access_token` (sidecar written by sso_login
+///      since AA6 when the IdP issued an access_token).
+///   2. `~/.aether/sso.token` (legacy fallback — works only when the
+///      sso.token contains an access_token, NOT an id_token JWT).
+async fn sso_whoami(json: bool) -> Result<()> {
+    let cfg = load_sso_config()?.ok_or_else(|| {
+        anyhow!(
+            "no sso.json — run `aether sso configure --issuer <url> \
+             --client-id <id>` first"
+        )
+    })?;
+    let userinfo_endpoint = cfg.userinfo_endpoint.as_deref().ok_or_else(|| {
+        anyhow!(
+            "sso.json has no userinfo_endpoint — issuer's discovery doc \
+             did not advertise one, or sso.json was written by a pre-AA6 \
+             aether. Re-run `aether sso configure --issuer <url> \
+             --client-id <id>` to refresh."
+        )
+    })?;
+
+    // Bearer source: prefer the AA6 sidecar, fall back to sso.token
+    // (which may be an id_token JWT — the IdP will reject it with 401
+    // but we surface a clear error in that case).
+    let bearer = {
+        let access_path = sso_access_token_path()?;
+        let tok_path = sso_token_path()?;
+        if access_path.exists() {
+            std::fs::read_to_string(&access_path)
+                .with_context(|| format!("read {}", access_path.display()))?
+        } else if tok_path.exists() {
+            eprintln!(
+                "[sso whoami] WARN: {} not present (logged in before AA6?) — \
+                 falling back to {} which may be an id_token JWT \
+                 (userinfo will reject)",
+                access_path.display(),
+                tok_path.display()
+            );
+            std::fs::read_to_string(&tok_path)
+                .with_context(|| format!("read {}", tok_path.display()))?
+        } else {
+            anyhow::bail!(
+                "no sso.token at {} — run `aether sso login` first",
+                tok_path.display()
+            );
+        }
+    };
+    let bearer = bearer.trim();
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .context("build userinfo reqwest client")?;
+    let resp = client
+        .get(userinfo_endpoint)
+        .bearer_auth(bearer)
+        .send()
+        .await
+        .with_context(|| format!("GET {userinfo_endpoint}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!(
+            "userinfo HTTP {status} from {userinfo_endpoint}: {body}"
+        );
+    }
+    // 256 KiB body cap (same defense as Z2 JWKS fetch).
+    const USERINFO_MAX_BYTES: usize = 256 * 1024;
+    let bytes = resp
+        .bytes()
+        .await
+        .with_context(|| format!("read userinfo body from {userinfo_endpoint}"))?;
+    if bytes.len() > USERINFO_MAX_BYTES {
+        anyhow::bail!(
+            "userinfo body is {} bytes (cap {} KiB) — refusing as DoS defense",
+            bytes.len(),
+            USERINFO_MAX_BYTES / 1024
+        );
+    }
+    let doc: serde_json::Value =
+        serde_json::from_slice(&bytes).context("parse userinfo JSON")?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&doc)?);
+        return Ok(());
+    }
+    let claims = parse_whoami_claims(&doc)?;
+    println!("issuer:    {}", cfg.issuer);
+    println!("client_id: {}", cfg.client_id);
+    println!("sub:       {}", claims.sub);
+    if let Some(e) = &claims.email {
+        match claims.email_verified {
+            Some(true) => println!("email:     {e} (verified)"),
+            Some(false) => println!("email:     {e} (NOT verified)"),
+            None => println!("email:     {e}"),
+        }
+    }
+    if let Some(n) = &claims.name {
+        println!("name:      {n}");
+    }
+    if let Some(u) = &claims.preferred_username {
+        println!("username:  {u}");
+    }
+    if !claims.groups.is_empty() {
+        println!("groups:    {}", claims.groups.join(", "));
     }
     Ok(())
 }
@@ -13063,6 +13288,76 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "Y7 token file must be 0600 (got {:o})", mode);
         }
+    }
+
+    /// AA6: parse_whoami_claims pulls the standard OIDC core §5.3.2
+    /// claims out of a userinfo response. `sub` is REQUIRED — every
+    /// other field is optional.
+    #[test]
+    fn aa6_parse_whoami_full_claims_ok() {
+        let doc = serde_json::json!({
+            "sub": "alice-aa6-sub",
+            "email": "alice@idp.test",
+            "email_verified": true,
+            "name": "Alice AA6",
+            "preferred_username": "alice",
+            "groups": ["aether-admin", "engineering"],
+            "custom_claim": "ignored-but-not-rejected",
+        });
+        let claims = parse_whoami_claims(&doc).expect("parse");
+        assert_eq!(claims.sub, "alice-aa6-sub");
+        assert_eq!(claims.email.as_deref(), Some("alice@idp.test"));
+        assert_eq!(claims.email_verified, Some(true));
+        assert_eq!(claims.name.as_deref(), Some("Alice AA6"));
+        assert_eq!(claims.preferred_username.as_deref(), Some("alice"));
+        assert_eq!(claims.groups, vec!["aether-admin", "engineering"]);
+    }
+
+    /// AA6: minimal valid response — just `sub` — parses cleanly with
+    /// all other fields None / empty.
+    #[test]
+    fn aa6_parse_whoami_minimal_sub_only() {
+        let doc = serde_json::json!({"sub": "u-001"});
+        let claims = parse_whoami_claims(&doc).expect("parse");
+        assert_eq!(claims.sub, "u-001");
+        assert_eq!(claims.email, None);
+        assert_eq!(claims.email_verified, None);
+        assert_eq!(claims.name, None);
+        assert_eq!(claims.preferred_username, None);
+        assert!(claims.groups.is_empty());
+    }
+
+    /// AA6: missing `sub` is a hard error per OIDC core §5.3.2.
+    #[test]
+    fn aa6_parse_whoami_missing_sub_rejects() {
+        let doc = serde_json::json!({"email": "x@y.z"});
+        let err = parse_whoami_claims(&doc).unwrap_err().to_string();
+        assert!(
+            err.contains("missing required `sub`"),
+            "missing-sub error: {err}"
+        );
+    }
+
+    /// AA6: some IdPs return `groups` as a single string rather than
+    /// an array. Normalise to `Vec<String>` either way.
+    #[test]
+    fn aa6_parse_whoami_groups_string_normalises_to_vec() {
+        let doc = serde_json::json!({"sub": "u", "groups": "single-group"});
+        let claims = parse_whoami_claims(&doc).expect("parse");
+        assert_eq!(claims.groups, vec!["single-group"]);
+    }
+
+    /// AA6: `groups` array with mixed types (string + number) — keep
+    /// only the strings, silently drop the rest. Non-strict because
+    /// IdP-specific extensions vary wildly in shape.
+    #[test]
+    fn aa6_parse_whoami_groups_array_filters_non_strings() {
+        let doc = serde_json::json!({
+            "sub": "u",
+            "groups": ["a", 42, "b", null, "c"],
+        });
+        let claims = parse_whoami_claims(&doc).expect("parse");
+        assert_eq!(claims.groups, vec!["a", "b", "c"]);
     }
 
     /// AA5: build an isolated temp HOME for IdP-cert tests.
