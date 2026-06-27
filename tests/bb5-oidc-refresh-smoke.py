@@ -251,6 +251,11 @@ def main():
 
     env = os.environ.copy()
     env["HOME"] = str(home)
+    # BB5 smoke pins the lead window narrow so CC5's proactive refresh
+    # path (which would otherwise fire on every whoami against the
+    # 300s expires_in this fake IdP issues) doesn't interfere with the
+    # BB5 reactive 401 → refresh path this smoke is here to exercise.
+    env["AETHER_OIDC_REFRESH_LEAD_SECS"] = "60"
     sso_token = home / ".aether" / "sso.token"
     sso_access = home / ".aether" / "sso.access_token"
     sso_refresh = home / ".aether" / "sso.refresh_token"

@@ -7398,6 +7398,47 @@ fn sso_refresh_token_path() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".aether/sso.refresh_token"))
 }
 
+/// CC5: sidecar path for the access_token's expiry instant
+/// (RFC 3339 UTC timestamp). Written at login + refresh when the IdP
+/// returns an `expires_in` field. Consumed by `aether sso whoami` to
+/// refresh proactively in the lead window, instead of waiting for the
+/// userinfo endpoint to 401 reactively.
+fn sso_access_token_expires_at_path() -> Result<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .ok_or_else(|| anyhow!("HOME not set"))?;
+    Ok(PathBuf::from(home).join(".aether/sso.access_token.expires_at"))
+}
+
+/// CC5: read `AETHER_OIDC_REFRESH_LEAD_SECS` with a default of 5
+/// minutes (300s). Clamped to [60, 3600] — 60s is a sane floor
+/// (faster than that and short-lived tokens churn before the call
+/// completes); 1h ceiling prevents "always-refresh" pathological
+/// configurations that defeat the whole feature.
+fn oidc_refresh_lead_secs() -> i64 {
+    let raw = match std::env::var("AETHER_OIDC_REFRESH_LEAD_SECS") {
+        Ok(v) => v,
+        Err(_) => return 300,
+    };
+    let parsed: i64 = match raw.parse() {
+        Ok(n) => n,
+        Err(_) => return 300,
+    };
+    parsed.clamp(60, 3600)
+}
+
+/// CC5: pure helper — is the access_token expiring within
+/// `lead_secs` of `now`? Returns true when `now >= expires_at -
+/// lead_secs` (so already-expired tokens always return true; tokens
+/// safely ahead of the lead window return false).
+fn is_access_token_expiring(
+    expires_at: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+    lead_secs: i64,
+) -> bool {
+    let lead = chrono::Duration::seconds(lead_secs);
+    now + lead >= expires_at
+}
+
 /// BB5: common sidecar writer — ensures the parent dir exists, writes
 /// the value, sets mode 0600 (Unix only). Used by both AA6 access-token
 /// persistence and BB5 refresh-token persistence so the on-disk format
@@ -7589,15 +7630,20 @@ async fn sso_cmd(sub: SsoCmd) -> Result<()> {
                 }
                 Err(e) => anyhow::bail!("remove {}: {e}", path.display()),
             }
-            // AA6 + BB5: best-effort cleanup of the access_token and
-            // refresh_token sidecars. Missing-file is the common case
-            // (pre-AA6 logins didn't write the access sidecar; pre-BB5
-            // didn't write the refresh sidecar); ignore silently.
+            // AA6 + BB5 + CC5: best-effort cleanup of the
+            // access_token, refresh_token, and access-token-expiry
+            // sidecars. Missing-file is the common case (pre-AA6
+            // logins didn't write the access sidecar; pre-BB5 didn't
+            // write the refresh sidecar; pre-CC5 didn't write the
+            // expiry); ignore silently.
             if let Ok(access_path) = sso_access_token_path() {
                 let _ = std::fs::remove_file(&access_path);
             }
             if let Ok(refresh_path) = sso_refresh_token_path() {
                 let _ = std::fs::remove_file(&refresh_path);
+            }
+            if let Ok(expires_path) = sso_access_token_expires_at_path() {
+                let _ = std::fs::remove_file(&expires_path);
             }
             Ok(())
         }
@@ -7845,6 +7891,18 @@ async fn sso_login() -> Result<()> {
     if let Some(rt) = refresh_token.as_deref() {
         write_sso_sidecar(&sso_refresh_token_path()?, rt)
             .context("write sso.refresh_token sidecar")?;
+    }
+    // CC5: persist access_token expiry instant when the IdP returned
+    // `expires_in`. RFC 3339 UTC so it's human-readable + stable
+    // across timezone changes. `sso whoami` reads it on each call to
+    // decide whether to refresh proactively instead of reactively.
+    if let Some(exp_secs) = token_resp.get("expires_in").and_then(|v| v.as_i64()) {
+        let expires_at = chrono::Utc::now() + chrono::Duration::seconds(exp_secs);
+        write_sso_sidecar(
+            &sso_access_token_expires_at_path()?,
+            &expires_at.to_rfc3339(),
+        )
+        .context("write sso.access_token.expires_at sidecar")?;
     }
 
     let token_value = id_token
@@ -8293,6 +8351,16 @@ async fn sso_refresh() -> Result<()> {
     } else {
         false
     };
+    // CC5: rewrite expires_at when the refresh response carries
+    // expires_in (most IdPs do). Without this, a manual refresh
+    // would keep the OLD expiry, defeating proactive refresh.
+    if let Some(exp_secs) = new_resp.expires_in {
+        let expires_at = chrono::Utc::now() + chrono::Duration::seconds(exp_secs as i64);
+        write_sso_sidecar(
+            &sso_access_token_expires_at_path()?,
+            &expires_at.to_rfc3339(),
+        )?;
+    }
     eprintln!(
         "[sso refresh] new access_token ({}B) written; refresh_token {}",
         new_resp.access_token.len(),
@@ -8357,7 +8425,66 @@ async fn sso_whoami(json: bool, no_refresh: bool) -> Result<()> {
         }
     };
     let bearer = read_bearer()?;
-    let bearer = bearer.trim().to_string();
+    let mut bearer = bearer.trim().to_string();
+
+    // CC5: proactive refresh. Read sso.access_token.expires_at; if
+    // we're inside the AETHER_OIDC_REFRESH_LEAD_SECS window and the
+    // refresh sidecar is present, refresh BEFORE the userinfo call.
+    // --no-refresh disables both this and the BB5 reactive 401 path.
+    if !no_refresh {
+        let expires_path = sso_access_token_expires_at_path()?;
+        if expires_path.exists() {
+            let raw = std::fs::read_to_string(&expires_path)
+                .with_context(|| format!("read {}", expires_path.display()))?;
+            match chrono::DateTime::parse_from_rfc3339(raw.trim()) {
+                Ok(parsed) => {
+                    let expires_at = parsed.with_timezone(&chrono::Utc);
+                    let lead = oidc_refresh_lead_secs();
+                    if is_access_token_expiring(expires_at, chrono::Utc::now(), lead) {
+                        let refresh_path = sso_refresh_token_path()?;
+                        if refresh_path.exists() {
+                            eprintln!(
+                                "[sso whoami] proactive refresh (CC5) — access_token \
+                                 expires_at {} (lead {lead}s)",
+                                expires_at.to_rfc3339()
+                            );
+                            let rt_raw = std::fs::read_to_string(&refresh_path)
+                                .with_context(|| {
+                                    format!("read {}", refresh_path.display())
+                                })?;
+                            let new_resp = refresh_oauth_access_token(
+                                &cfg.token_endpoint,
+                                &cfg.client_id,
+                                rt_raw.trim(),
+                            )
+                            .await?;
+                            write_sso_sidecar(
+                                &sso_access_token_path()?,
+                                &new_resp.access_token,
+                            )?;
+                            if let Some(rt) = new_resp.refresh_token.as_deref() {
+                                write_sso_sidecar(&sso_refresh_token_path()?, rt)?;
+                            }
+                            if let Some(exp_secs) = new_resp.expires_in {
+                                let new_expires_at = chrono::Utc::now()
+                                    + chrono::Duration::seconds(exp_secs as i64);
+                                write_sso_sidecar(
+                                    &sso_access_token_expires_at_path()?,
+                                    &new_expires_at.to_rfc3339(),
+                                )?;
+                            }
+                            bearer = new_resp.access_token;
+                        }
+                    }
+                }
+                Err(e) => eprintln!(
+                    "[sso whoami] WARN: ignoring malformed {} ({e}) — \
+                     falling through to reactive 401 path",
+                    expires_path.display()
+                ),
+            }
+        }
+    }
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -13962,6 +14089,63 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "Y7 token file must be 0600 (got {:o})", mode);
         }
+    }
+
+    /// CC5: token already expired — returns true for any non-negative
+    /// lead. Refresh is unconditionally needed at this point.
+    #[test]
+    fn cc5_is_expiring_already_expired() {
+        let now = chrono::DateTime::from_timestamp(1_750_000_000, 0).unwrap();
+        let expires_at = now - chrono::Duration::seconds(60); // 60s ago
+        assert!(is_access_token_expiring(expires_at, now, 0), "lead=0");
+        assert!(is_access_token_expiring(expires_at, now, 300), "lead=300");
+        assert!(is_access_token_expiring(expires_at, now, 3600), "lead=3600");
+    }
+
+    /// CC5: token inside the lead window. expires_at = now + 200s,
+    /// lead = 300s ⇒ should refresh proactively (within window).
+    #[test]
+    fn cc5_is_expiring_within_lead_window() {
+        let now = chrono::DateTime::from_timestamp(1_750_000_000, 0).unwrap();
+        let expires_at = now + chrono::Duration::seconds(200);
+        assert!(is_access_token_expiring(expires_at, now, 300));
+        // Boundary: now + lead == expires_at → true (we trigger AT
+        // the window edge, not after).
+        let edge = now + chrono::Duration::seconds(300);
+        assert!(is_access_token_expiring(edge, now, 300), "boundary trigger");
+    }
+
+    /// CC5: token outside the lead window. expires_at = now + 600s,
+    /// lead = 300s ⇒ no refresh needed (300s of safety left).
+    #[test]
+    fn cc5_is_expiring_outside_lead_window() {
+        let now = chrono::DateTime::from_timestamp(1_750_000_000, 0).unwrap();
+        let expires_at = now + chrono::Duration::seconds(600);
+        assert!(!is_access_token_expiring(expires_at, now, 300));
+        // 1s before the boundary: still outside.
+        let just_outside = now + chrono::Duration::seconds(301);
+        assert!(!is_access_token_expiring(just_outside, now, 300));
+    }
+
+    /// CC5: AETHER_OIDC_REFRESH_LEAD_SECS env knob — default + clamp +
+    /// invalid-input fallback. Same shape as the BB6 SAML metadata-
+    /// refresh-interval helper.
+    #[test]
+    fn cc5_oidc_refresh_lead_default_and_clamped() {
+        let _guard = aether_core::mock::ENV_TEST_LOCK
+            .lock()
+            .expect("env lock");
+        std::env::remove_var("AETHER_OIDC_REFRESH_LEAD_SECS");
+        assert_eq!(oidc_refresh_lead_secs(), 300, "default 5m");
+        std::env::set_var("AETHER_OIDC_REFRESH_LEAD_SECS", "120");
+        assert_eq!(oidc_refresh_lead_secs(), 120, "120s ok");
+        std::env::set_var("AETHER_OIDC_REFRESH_LEAD_SECS", "1");
+        assert_eq!(oidc_refresh_lead_secs(), 60, "clamped to 60s");
+        std::env::set_var("AETHER_OIDC_REFRESH_LEAD_SECS", "999999");
+        assert_eq!(oidc_refresh_lead_secs(), 3600, "clamped to 1h");
+        std::env::set_var("AETHER_OIDC_REFRESH_LEAD_SECS", "garbage");
+        assert_eq!(oidc_refresh_lead_secs(), 300, "invalid → default");
+        std::env::remove_var("AETHER_OIDC_REFRESH_LEAD_SECS");
     }
 
     /// CC4: helper to construct a ParsedSamlMetadata for fingerprint
