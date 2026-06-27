@@ -7700,11 +7700,30 @@ async fn sso_login() -> Result<()> {
             Some(&nonce),
             access_token.as_deref(),
         ).await?;
-        eprintln!("[sso login] id_token signature + nonce + at_hash OK");
+        eprintln!("[sso login] id_token signature + nonce + iat + at_hash OK");
     } else if id_token.is_some() && cfg.jwks_uri.is_none() {
-        eprintln!(
-            "[sso login] WARN id_token present but issuer published no jwks_uri — skipping signature validation"
-        );
+        // Z3: hard-refuse by default — persisting an unverified
+        // id_token leaves the operator with no provenance proof for
+        // the bearer they'll later present. Operators who genuinely
+        // need to point at a legacy issuer can set
+        // `AETHER_OIDC_ALLOW_UNVERIFIED=1` to fall back to the old
+        // warn-and-persist behavior.
+        if std::env::var("AETHER_OIDC_ALLOW_UNVERIFIED")
+            .ok()
+            .as_deref()
+            == Some("1")
+        {
+            eprintln!(
+                "[sso login] WARN id_token present but issuer published no jwks_uri — \
+                 AETHER_OIDC_ALLOW_UNVERIFIED=1 set, persisting WITHOUT signature verify"
+            );
+        } else {
+            anyhow::bail!(
+                "id_token present but issuer published no jwks_uri — refusing to \
+                 persist an unverified token. Set AETHER_OIDC_ALLOW_UNVERIFIED=1 to \
+                 fall back to legacy warn-and-persist (NOT recommended)."
+            );
+        }
     }
 
     let token_value = id_token
@@ -7875,13 +7894,32 @@ async fn validate_id_token(
     // attempt (OIDC core §15.5.2).
     verify_nonce_claim(&token_data.claims, expected_nonce)?;
 
-    // 5. Z2: at_hash binding (OIDC core §3.1.3.6). When the IdP
+    // 5. Z3: iat freshness. jsonwebtoken handles `exp` but not `iat`;
+    // bound it to ±AETHER_OIDC_CLOCK_SKEW_S (default 60s) so a
+    // malicious IdP can't mint backdated / future-dated tokens that
+    // skirt the SP's short-session policy.
+    let skew = oidc_clock_skew_seconds();
+    verify_iat_claim(&token_data.claims, chrono::Utc::now(), skew)?;
+
+    // 6. Z2: at_hash binding (OIDC core §3.1.3.6). When the IdP
     // returned BOTH an id_token and an access_token AND the id_token
     // carries an `at_hash` claim, the claim MUST equal the
     // left-most half of the hash-of-(access_token) under the
     // id_token's signing algorithm. Protects against an attacker
     // swapping the access_token after the token exchange.
-    verify_at_hash_claim(&token_data.claims, alg, access_token_for_at_hash)?;
+    // Z3: when `AETHER_OIDC_REQUIRE_AT_HASH=1` AND an access_token
+    // is present, the at_hash claim is REQUIRED (not just verified
+    // when present) — closes the spec-permissive escape hatch.
+    let require_at_hash = std::env::var("AETHER_OIDC_REQUIRE_AT_HASH")
+        .ok()
+        .as_deref()
+        == Some("1");
+    verify_at_hash_claim(
+        &token_data.claims,
+        alg,
+        access_token_for_at_hash,
+        require_at_hash,
+    )?;
 
     Ok(())
 }
@@ -7902,6 +7940,7 @@ fn verify_at_hash_claim(
     claims: &serde_json::Value,
     alg: jsonwebtoken::Algorithm,
     access_token_for_at_hash: Option<&str>,
+    require: bool,
 ) -> Result<()> {
     use base64::Engine as _;
     use sha2::Digest;
@@ -7909,7 +7948,15 @@ fn verify_at_hash_claim(
         return Ok(());
     };
     let Some(got) = claims.get("at_hash").and_then(|v| v.as_str()) else {
-        // No at_hash claim in auth-code flow → spec-compliant skip.
+        // No at_hash claim. Spec-compliant skip in auth-code flow
+        // (REQUIRED only in implicit/hybrid) — unless the operator
+        // set AETHER_OIDC_REQUIRE_AT_HASH=1 via the `require` flag.
+        if require {
+            anyhow::bail!(
+                "id_token has no `at_hash` claim but access_token was issued and \
+                 AETHER_OIDC_REQUIRE_AT_HASH=1 — refusing as permissive-IdP defense"
+            );
+        }
         return Ok(());
     };
     let computed = match alg {
@@ -9161,6 +9208,50 @@ fn saml_clock_skew_seconds() -> i64 {
         Err(_) => return 30,
     };
     parsed.clamp(0, 300)
+}
+
+/// Z3: same shape as `saml_clock_skew_seconds` but driven by
+/// `AETHER_OIDC_CLOCK_SKEW_S`. Default 60s — id_tokens are issued
+/// fresh and short-lived, so a tighter window than SAML's 30s
+/// default actually risks false rejections on real wall-clock drift.
+fn oidc_clock_skew_seconds() -> i64 {
+    let raw = match std::env::var("AETHER_OIDC_CLOCK_SKEW_S") {
+        Ok(v) => v,
+        Err(_) => return 60,
+    };
+    let parsed: i64 = match raw.parse() {
+        Ok(n) => n,
+        Err(_) => return 60,
+    };
+    parsed.clamp(0, 300)
+}
+
+/// Z3: assert the id_token's `iat` (issued-at, unix-seconds) is
+/// within ±skew of `now`. jsonwebtoken validates `exp` but not `iat`,
+/// so a malicious IdP could mint a token with iat far in the past
+/// (defeating any future replay window) or far in the future
+/// (defeating short-lived session policies). Pure helper for testing.
+fn verify_iat_claim(
+    claims: &serde_json::Value,
+    now: chrono::DateTime<chrono::Utc>,
+    skew_secs: i64,
+) -> Result<()> {
+    let iat = claims
+        .get("iat")
+        .and_then(|v| v.as_i64())
+        .ok_or_else(|| anyhow!("id_token missing `iat` claim (required for freshness)"))?;
+    let iat_t = chrono::DateTime::from_timestamp(iat, 0)
+        .ok_or_else(|| anyhow!("id_token iat `{iat}` out of range"))?;
+    let delta = (now - iat_t).num_seconds();
+    if delta.abs() > skew_secs {
+        anyhow::bail!(
+            "id_token iat is {} seconds from now (skew window ±{}s) — \
+             refusing as freshness defense",
+            delta,
+            skew_secs
+        );
+    }
+    Ok(())
 }
 
 /// Y5: load an RSA signing public key from a PEM-encoded x509
@@ -12896,6 +12987,7 @@ mod tests {
             &claims,
             jsonwebtoken::Algorithm::RS256,
             Some(access),
+            false,
         )
         .expect("matching at_hash must pass");
     }
@@ -12912,6 +13004,7 @@ mod tests {
             &claims,
             jsonwebtoken::Algorithm::RS256,
             Some("smoke-access"),
+            false,
         )
         .unwrap_err()
         .to_string();
@@ -12927,6 +13020,7 @@ mod tests {
             &claims,
             jsonwebtoken::Algorithm::RS256,
             Some("smoke-access"),
+            false,
         )
         .expect("absent at_hash must skip");
     }
@@ -12937,7 +13031,7 @@ mod tests {
     #[test]
     fn z2_verify_at_hash_no_access_token_ok() {
         let claims = serde_json::json!({"at_hash": "AAAAAAAAAAAAAAAAAAAAAA"});
-        verify_at_hash_claim(&claims, jsonwebtoken::Algorithm::RS256, None)
+        verify_at_hash_claim(&claims, jsonwebtoken::Algorithm::RS256, None, false)
             .expect("no access_token → skip");
     }
 
@@ -12956,8 +13050,87 @@ mod tests {
             &claims,
             jsonwebtoken::Algorithm::EdDSA,
             Some(access),
+            false,
         )
         .expect("EdDSA SHA-512[:32] at_hash match");
+    }
+
+    /// Z3: strict mode (`require=true`) refuses when at_hash claim
+    /// is absent but access_token was issued.
+    #[test]
+    fn z3_verify_at_hash_strict_rejects_when_absent() {
+        let claims = serde_json::json!({"sub": "alice"});
+        let err = verify_at_hash_claim(
+            &claims,
+            jsonwebtoken::Algorithm::RS256,
+            Some("smoke-access"),
+            true,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("AETHER_OIDC_REQUIRE_AT_HASH"),
+            "strict-mode error cites env knob: {err}"
+        );
+    }
+
+    /// Z3: iat within ±skew passes.
+    #[test]
+    fn z3_verify_iat_within_skew_ok() {
+        let now = chrono::DateTime::from_timestamp(1_000_000_000, 0).unwrap();
+        let claims = serde_json::json!({"iat": 1_000_000_000_i64});
+        verify_iat_claim(&claims, now, 60).expect("iat=now must pass");
+        // 30s behind now, skew 60s — passes.
+        let claims2 = serde_json::json!({"iat": 999_999_970_i64});
+        verify_iat_claim(&claims2, now, 60).expect("iat -30s in 60s skew passes");
+        // 30s ahead, skew 60s — passes.
+        let claims3 = serde_json::json!({"iat": 1_000_000_030_i64});
+        verify_iat_claim(&claims3, now, 60).expect("iat +30s in 60s skew passes");
+    }
+
+    /// Z3: iat far in the past is rejected (token replay).
+    #[test]
+    fn z3_verify_iat_too_far_past_rejects() {
+        let now = chrono::DateTime::from_timestamp(1_000_000_000, 0).unwrap();
+        let claims = serde_json::json!({"iat": 999_999_000_i64}); // 1000s ago
+        let err = verify_iat_claim(&claims, now, 60).unwrap_err().to_string();
+        assert!(err.contains("freshness"), "freshness error: {err}");
+        assert!(err.contains("1000"), "error cites delta: {err}");
+    }
+
+    /// Z3: iat far in the future is rejected (clock-skew attack).
+    #[test]
+    fn z3_verify_iat_too_far_future_rejects() {
+        let now = chrono::DateTime::from_timestamp(1_000_000_000, 0).unwrap();
+        let claims = serde_json::json!({"iat": 1_000_001_000_i64}); // 1000s ahead
+        let err = verify_iat_claim(&claims, now, 60).unwrap_err().to_string();
+        assert!(err.contains("freshness"), "freshness error: {err}");
+    }
+
+    /// Z3: iat claim is required — missing claim is a hard error.
+    #[test]
+    fn z3_verify_iat_missing_rejects() {
+        let now = chrono::DateTime::from_timestamp(1_000_000_000, 0).unwrap();
+        let claims = serde_json::json!({"sub": "alice"}); // no iat
+        let err = verify_iat_claim(&claims, now, 60).unwrap_err().to_string();
+        assert!(err.contains("missing `iat`"), "missing-iat error: {err}");
+    }
+
+    /// Z3: AETHER_OIDC_CLOCK_SKEW_S env knob — default + clamp +
+    /// invalid-input fallback. Same shape as the Y6 SAML helper.
+    /// Uses ENV_TEST_LOCK to serialise mutation across parallel tests.
+    #[test]
+    fn z3_oidc_clock_skew_default_and_clamped() {
+        let _guard = aether_core::mock::ENV_TEST_LOCK.lock().expect("env lock");
+        std::env::remove_var("AETHER_OIDC_CLOCK_SKEW_S");
+        assert_eq!(oidc_clock_skew_seconds(), 60, "unset → default 60s");
+        std::env::set_var("AETHER_OIDC_CLOCK_SKEW_S", "0");
+        assert_eq!(oidc_clock_skew_seconds(), 0, "0 → 0");
+        std::env::set_var("AETHER_OIDC_CLOCK_SKEW_S", "10000");
+        assert_eq!(oidc_clock_skew_seconds(), 300, "clamped to 300");
+        std::env::set_var("AETHER_OIDC_CLOCK_SKEW_S", "garbage");
+        assert_eq!(oidc_clock_skew_seconds(), 60, "invalid → default 60s");
+        std::env::remove_var("AETHER_OIDC_CLOCK_SKEW_S");
     }
 
     /// Z1': legacy path — caller did NOT send a nonce. The check

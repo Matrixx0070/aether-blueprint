@@ -299,7 +299,10 @@ def main():
     print(f"[smoke] sso.token mode = 0{mode:o} (expected 0600)")
 
     httpd.shutdown()
-    print("[smoke] Z1'+Z2 LIVE-VERIFIED OK (nonce + at_hash + JWKS hardening)")
+    print(
+        "[smoke] Z1'+Z2+Z3 LIVE-VERIFIED OK "
+        "(nonce + at_hash + iat + JWKS hardening + require-jwks default)"
+    )
 
 
 if __name__ == "__main__":
