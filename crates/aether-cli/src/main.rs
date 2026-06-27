@@ -8727,6 +8727,12 @@ struct ParsedSamlMetadata {
     sso_url: String,
     binding: String,
     signing_certs: Vec<String>,
+    /// DD5: validUntil attribute on `<md:EntityDescriptor>`. The IdP
+    /// declares "trust this document only until this instant"; aether
+    /// bails on expired metadata and warns when near expiry so the
+    /// operator catches stale state before a verify-time blowup.
+    /// `None` when the IdP doesn't publish one — many in practice do.
+    valid_until: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// CC4: extract the trust-relevant fields from validated metadata XML.
@@ -8763,11 +8769,23 @@ fn parse_saml_metadata(xml: &str) -> Result<ParsedSamlMetadata> {
         .and_then(|c| c.get(1))
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| "<missing>".to_string());
+    // DD5: validUntil attribute (xsd:dateTime per saml-metadata-2.0
+    // §2.3.2). Absent on some IdPs — treat as "no expiry" silently.
+    let valid_until_re = regex::Regex::new(
+        r#"<(?:md:)?EntityDescriptor[^>]*validUntil="([^"]+)""#,
+    )
+    .expect("regex");
+    let valid_until = valid_until_re
+        .captures(xml)
+        .and_then(|c| c.get(1))
+        .and_then(|m| chrono::DateTime::parse_from_rfc3339(m.as_str()).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc));
     Ok(ParsedSamlMetadata {
         idp_entity_id,
         sso_url,
         binding,
         signing_certs,
+        valid_until,
     })
 }
 
@@ -8795,18 +8813,73 @@ fn compute_metadata_fingerprint(parsed: &ParsedSamlMetadata) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// DD5: read `AETHER_SAML_METADATA_STALENESS_WARN_SECS` with a
+/// default of 24 hours (86400s). Clamped to [3600 (1h), 2592000 (30
+/// days)] — sub-1h false-positives on busy IdPs; > 30d is the same
+/// as no warning.
+fn saml_metadata_staleness_warn_secs() -> i64 {
+    let raw = match std::env::var("AETHER_SAML_METADATA_STALENESS_WARN_SECS") {
+        Ok(v) => v,
+        Err(_) => return 86_400,
+    };
+    let parsed: i64 = match raw.parse() {
+        Ok(n) => n,
+        Err(_) => return 86_400,
+    };
+    parsed.clamp(3600, 2_592_000)
+}
+
+/// DD5: true when `valid_until` is in the past relative to `now`.
+/// Already-expired metadata is a hard refusal — the IdP officially
+/// declared it untrustworthy.
+fn is_metadata_expired(
+    valid_until: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    now >= valid_until
+}
+
+/// DD5: true when `valid_until` is within `warn_secs` of `now` (and
+/// not already expired). Used to surface a warning before the metadata
+/// becomes unusable, so the operator can re-fetch from the IdP.
+fn is_metadata_near_expiry(
+    valid_until: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+    warn_secs: i64,
+) -> bool {
+    if is_metadata_expired(valid_until, now) {
+        return false;
+    }
+    let warn = chrono::Duration::seconds(warn_secs);
+    now + warn >= valid_until
+}
+
 fn apply_saml_idp_metadata(
     xml: &str,
     idp_metadata_url: &str,
     sp_entity_id: &str,
 ) -> Result<usize> {
     let parsed = parse_saml_metadata(xml)?;
+    // DD5: hard-refuse expired metadata. The IdP officially declared
+    // it untrustworthy; rewriting idp-certs/ from an expired source
+    // would just bake the staleness in. Defense-in-depth — refresh-
+    // saml's tick also checks this, but configure-saml hits here too.
+    if let Some(valid_until) = parsed.valid_until {
+        if is_metadata_expired(valid_until, chrono::Utc::now()) {
+            anyhow::bail!(
+                "IdP metadata validUntil={} is already past — \
+                 refusing to apply; ask the IdP for a fresh metadata doc",
+                valid_until.to_rfc3339()
+            );
+        }
+    }
     let binding = parsed.binding.clone();
     let sso_url = parsed.sso_url.clone();
     let signing_certs = parsed.signing_certs.clone();
     let first_cert_b64 = signing_certs[0].clone();
     let idp_entity = parsed.idp_entity_id.clone();
     let metadata_fingerprint = compute_metadata_fingerprint(&parsed);
+    let valid_until_str = parsed.valid_until.map(|d| d.to_rfc3339());
 
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -8873,6 +8946,9 @@ fn apply_saml_idp_metadata(
         // the layout rewrite when they match — eliminates wasted I/O
         // against an IdP that hasn't actually rotated.
         "metadata_fingerprint": metadata_fingerprint,
+        // DD5: persisted validUntil. None when the IdP didn't publish
+        // one — `sso refresh-saml`'s staleness check skips silently.
+        "valid_until": valid_until_str,
         "discovered_at": chrono::Utc::now().to_rfc3339(),
     });
     let json = serde_json::to_string_pretty(&cfg)?;
@@ -8954,6 +9030,37 @@ async fn sso_refresh_saml(watch: bool) -> Result<()> {
 
     let tick = |xml: &str, prev: &mut Option<String>| -> Result<()> {
         let parsed = parse_saml_metadata(xml)?;
+        // DD5: staleness check runs BEFORE the drift compare so an
+        // expired metadata bails even on a "no drift" tick, and a
+        // near-expiry one logs even when the trust set is stable.
+        let now = chrono::Utc::now();
+        match parsed.valid_until {
+            Some(vu) if is_metadata_expired(vu, now) => {
+                anyhow::bail!(
+                    "[sso refresh-saml] metadata validUntil={} is past — \
+                     refusing tick; ask the IdP for a fresh metadata doc",
+                    vu.to_rfc3339()
+                );
+            }
+            Some(vu) => {
+                let warn_secs = saml_metadata_staleness_warn_secs();
+                if is_metadata_near_expiry(vu, now, warn_secs) {
+                    let remaining = (vu - now).num_seconds();
+                    eprintln!(
+                        "[sso refresh-saml] WARN: metadata validUntil={} \
+                         expires in {}s (within {warn_secs}s warn window)",
+                        vu.to_rfc3339(),
+                        remaining
+                    );
+                }
+            }
+            None => {
+                eprintln!(
+                    "[sso refresh-saml] metadata has no validUntil \
+                     (staleness check skipped)"
+                );
+            }
+        }
         let new_fp = compute_metadata_fingerprint(&parsed);
         if prev.as_deref() == Some(new_fp.as_str()) {
             eprintln!(
@@ -14302,6 +14409,7 @@ mod tests {
             sso_url: "https://idp.test/saml/sso".to_string(),
             binding: "Redirect".to_string(),
             signing_certs: certs.into_iter().map(String::from).collect(),
+            valid_until: None,
         }
     }
 
@@ -14379,12 +14487,14 @@ mod tests {
             sso_url: "c".to_string(),
             binding: "Redirect".to_string(),
             signing_certs: vec![],
+            valid_until: None,
         };
         let p2 = ParsedSamlMetadata {
             idp_entity_id: "a".to_string(),
             sso_url: "bc".to_string(),
             binding: "Redirect".to_string(),
             signing_certs: vec![],
+            valid_until: None,
         };
         // signing_certs is empty in both → `parse_saml_metadata` would
         // reject these in normal flow, but compute_metadata_fingerprint
@@ -15418,6 +15528,195 @@ BBBB-SECOND-CERT
             err2.contains("no configured IdP signing keys"),
             "empty-config error: {err2}"
         );
+    }
+
+    /// DD5: pure helper — expired returns true for now > valid_until.
+    #[test]
+    fn dd5_is_metadata_expired() {
+        let now = chrono::DateTime::from_timestamp(1_750_000_000, 0).unwrap();
+        let past = now - chrono::Duration::seconds(1);
+        let future = now + chrono::Duration::seconds(1);
+        assert!(is_metadata_expired(past, now), "past → expired");
+        assert!(is_metadata_expired(now, now), "boundary → expired");
+        assert!(!is_metadata_expired(future, now), "future → not expired");
+    }
+
+    /// DD5: near-expiry returns true when valid_until is within
+    /// `warn_secs` of now AND not already expired.
+    #[test]
+    fn dd5_is_metadata_near_expiry() {
+        let now = chrono::DateTime::from_timestamp(1_750_000_000, 0).unwrap();
+        let in_1h = now + chrono::Duration::hours(1);
+        let in_25h = now + chrono::Duration::hours(25);
+        let past = now - chrono::Duration::hours(1);
+        let warn = 24 * 3600; // 24h
+        assert!(
+            is_metadata_near_expiry(in_1h, now, warn),
+            "1h to expiry within 24h warn → true"
+        );
+        assert!(
+            !is_metadata_near_expiry(in_25h, now, warn),
+            "25h to expiry outside 24h warn → false"
+        );
+        assert!(
+            !is_metadata_near_expiry(past, now, warn),
+            "already-expired returns false (use is_metadata_expired)"
+        );
+        // Boundary: now + warn == valid_until → true.
+        let edge = now + chrono::Duration::seconds(warn);
+        assert!(is_metadata_near_expiry(edge, now, warn), "boundary trigger");
+    }
+
+    /// DD5: AETHER_SAML_METADATA_STALENESS_WARN_SECS env knob —
+    /// default + clamp + invalid-input fallback. Same shape as the
+    /// BB6 refresh-interval and Z3 OIDC clock-skew helpers.
+    #[test]
+    fn dd5_staleness_warn_secs_default_and_clamped() {
+        let _guard = aether_core::mock::ENV_TEST_LOCK
+            .lock()
+            .expect("env lock");
+        std::env::remove_var("AETHER_SAML_METADATA_STALENESS_WARN_SECS");
+        assert_eq!(saml_metadata_staleness_warn_secs(), 86400, "default 24h");
+        std::env::set_var("AETHER_SAML_METADATA_STALENESS_WARN_SECS", "7200");
+        assert_eq!(saml_metadata_staleness_warn_secs(), 7200, "2h ok");
+        std::env::set_var("AETHER_SAML_METADATA_STALENESS_WARN_SECS", "60");
+        assert_eq!(saml_metadata_staleness_warn_secs(), 3600, "clamped to 1h");
+        std::env::set_var(
+            "AETHER_SAML_METADATA_STALENESS_WARN_SECS",
+            "999999999",
+        );
+        assert_eq!(
+            saml_metadata_staleness_warn_secs(),
+            2_592_000,
+            "clamped to 30d"
+        );
+        std::env::set_var("AETHER_SAML_METADATA_STALENESS_WARN_SECS", "junk");
+        assert_eq!(
+            saml_metadata_staleness_warn_secs(),
+            86400,
+            "invalid → default"
+        );
+        std::env::remove_var("AETHER_SAML_METADATA_STALENESS_WARN_SECS");
+    }
+
+    /// DD5: parse_saml_metadata extracts the validUntil attribute when
+    /// present (xsd:dateTime → RFC 3339), leaves it None when absent.
+    /// Both `md:` and unprefixed forms accepted.
+    #[test]
+    fn dd5_parse_validuntil_present_and_absent() {
+        let xml_present = r#"<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
+                                                    entityID="https://idp.test"
+                                                    validUntil="2030-01-15T12:00:00Z">
+  <md:IDPSSODescriptor>
+    <md:KeyDescriptor use="signing">
+      <X509Certificate>CERT-X</X509Certificate>
+    </md:KeyDescriptor>
+    <md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+                            Location="https://idp/sso"/>
+  </md:IDPSSODescriptor>
+</md:EntityDescriptor>"#;
+        let parsed = parse_saml_metadata(xml_present).expect("parse");
+        let vu = parsed.valid_until.expect("validUntil present");
+        assert_eq!(vu.to_rfc3339(), "2030-01-15T12:00:00+00:00");
+
+        let xml_absent = r#"<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
+                                                   entityID="https://idp.test">
+  <md:IDPSSODescriptor>
+    <md:KeyDescriptor use="signing">
+      <X509Certificate>CERT-X</X509Certificate>
+    </md:KeyDescriptor>
+    <md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+                            Location="https://idp/sso"/>
+  </md:IDPSSODescriptor>
+</md:EntityDescriptor>"#;
+        let parsed_absent = parse_saml_metadata(xml_absent).expect("parse");
+        assert!(parsed_absent.valid_until.is_none(), "no validUntil → None");
+    }
+
+    /// DD5: apply_saml_idp_metadata bails when the metadata's
+    /// validUntil is already in the past — even with a fresh,
+    /// otherwise-valid trust set. Defense-in-depth so configure-saml
+    /// also gates.
+    #[test]
+    fn dd5_apply_bails_on_expired_metadata() {
+        let _guard = aether_core::mock::ENV_TEST_LOCK
+            .lock()
+            .expect("env lock");
+        let home = bb6_tmp_home("dd5-expired");
+        std::env::set_var("HOME", &home);
+        // validUntil 30 days in the past.
+        let past = chrono::Utc::now() - chrono::Duration::days(30);
+        let xml = format!(
+            r#"<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
+                                       entityID="https://idp.test"
+                                       validUntil="{}">
+  <md:IDPSSODescriptor>
+    <md:KeyDescriptor use="signing">
+      <X509Certificate>EXPIRED-CERT</X509Certificate>
+    </md:KeyDescriptor>
+    <md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+                            Location="https://idp/sso"/>
+  </md:IDPSSODescriptor>
+</md:EntityDescriptor>"#,
+            past.to_rfc3339()
+        );
+        let err = apply_saml_idp_metadata(&xml, "https://meta", "https://sp.test")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("validUntil") && err.contains("past"),
+            "error cites validUntil + past: {err}"
+        );
+        // Filesystem side-effect MUST NOT have happened (no sso-saml.json,
+        // no idp-certs/).
+        assert!(
+            !home.join(".aether/sso-saml.json").exists(),
+            "expired metadata must not write sso-saml.json"
+        );
+        std::env::remove_var("HOME");
+    }
+
+    /// DD5: apply_saml_idp_metadata persists `valid_until` in
+    /// sso-saml.json (RFC 3339) when the metadata carries one;
+    /// persists `null` (or absent) when it doesn't.
+    #[test]
+    fn dd5_apply_persists_valid_until_when_present() {
+        let _guard = aether_core::mock::ENV_TEST_LOCK
+            .lock()
+            .expect("env lock");
+        let home = bb6_tmp_home("dd5-persist");
+        std::env::set_var("HOME", &home);
+        let future = chrono::Utc::now() + chrono::Duration::days(180);
+        let xml = format!(
+            r#"<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
+                                       entityID="https://idp.test"
+                                       validUntil="{}">
+  <md:IDPSSODescriptor>
+    <md:KeyDescriptor use="signing">
+      <X509Certificate>FUTURE-CERT</X509Certificate>
+    </md:KeyDescriptor>
+    <md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+                            Location="https://idp/sso"/>
+  </md:IDPSSODescriptor>
+</md:EntityDescriptor>"#,
+            future.to_rfc3339()
+        );
+        apply_saml_idp_metadata(&xml, "https://meta", "https://sp.test")
+            .expect("apply");
+        let cfg_bytes = std::fs::read(home.join(".aether/sso-saml.json")).unwrap();
+        let cfg: serde_json::Value = serde_json::from_slice(&cfg_bytes).unwrap();
+        let persisted = cfg
+            .get("valid_until")
+            .and_then(|v| v.as_str())
+            .expect("valid_until persisted");
+        // Round-trip equality: persisted RFC 3339 parses back to the
+        // same instant we computed (within sub-second sloppiness).
+        let parsed = chrono::DateTime::parse_from_rfc3339(persisted)
+            .expect("RFC 3339")
+            .with_timezone(&chrono::Utc);
+        let delta = (parsed - future).num_milliseconds().abs();
+        assert!(delta < 1000, "round-trip delta {}ms", delta);
+        std::env::remove_var("HOME");
     }
 
     /// DD4: helper — build an Ed25519-signed SAMLResponse using the
