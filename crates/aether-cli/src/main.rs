@@ -8140,25 +8140,74 @@ async fn sso_login_saml(sso_saml_path: &Path) -> Result<()> {
         );
     }
 
-    let status = extract_saml_response_status(&saml_response_xml)?;
-    if status.code != "urn:oasis:names:tc:SAML:2.0:status:Success" {
+    // Y3: replace the Y2 regex with the quick-xml extractor. Same
+    // status check, plus the full assertion + signature shape gets
+    // pulled out and printed for operator-visible smoke
+    // verification of what Y4-Y7 will be working against.
+    let parsed = parse_saml_response_xml(&saml_response_xml)?;
+    if parsed.status.code != "urn:oasis:names:tc:SAML:2.0:status:Success" {
         anyhow::bail!(
             "IdP returned non-Success SAML status: {} {}",
-            status.code,
-            status.message.unwrap_or_default()
+            parsed.status.code,
+            parsed.status.message.unwrap_or_default()
         );
     }
     eprintln!(
-        "[sso login] Y2: SAMLResponse decoded ({} bytes XML), Status=Success",
+        "[sso login] Y3: SAMLResponse parsed via quick-xml ({} bytes XML), Status=Success",
         saml_response_xml.len()
     );
+    if let Some(iss) = &parsed.response_issuer {
+        eprintln!("  Response Issuer:    {iss}");
+    }
+    if let Some(assertion) = &parsed.assertion {
+        if let Some(id) = &assertion.id {
+            eprintln!("  Assertion ID:       {id}");
+        }
+        if let Some(iss) = &assertion.issuer {
+            eprintln!("  Assertion Issuer:   {iss}");
+        }
+        if let Some(nameid) = &assertion.subject_name_id {
+            eprintln!("  NameID:             {nameid}");
+        }
+        if let Some(scd) = &assertion.subject_confirmation_data {
+            eprintln!(
+                "  SubjectConfirmation NotOnOrAfter={:?} Recipient={:?} InResponseTo={:?}",
+                scd.not_on_or_after, scd.recipient, scd.in_response_to
+            );
+        }
+        if let Some(cond) = &assertion.conditions {
+            eprintln!(
+                "  Conditions NotBefore={:?} NotOnOrAfter={:?}",
+                cond.not_before, cond.not_on_or_after
+            );
+        }
+        if !assertion.audiences.is_empty() {
+            eprintln!("  Audiences:          {:?}", assertion.audiences);
+        }
+        if let Some(sig) = &assertion.signature {
+            eprintln!(
+                "  Assertion Signature: signed_info={}B value={}B x509={}",
+                sig.signed_info_fragment.len(),
+                sig.signature_value_b64.len(),
+                sig.x509_certificate_b64.is_some()
+            );
+        }
+    }
+    if let Some(sig) = &parsed.response_signature {
+        eprintln!(
+            "  Response Signature: signed_info={}B value={}B x509={}",
+            sig.signed_info_fragment.len(),
+            sig.signature_value_b64.len(),
+            sig.x509_certificate_b64.is_some()
+        );
+    }
 
     anyhow::bail!(
-        "Y2 ships SAMLResponse decode + Status:Success check. \
-         Quick-xml extractor (Y3), exclusive c14n# (Y4), RSA-SHA256 \
-         verify (Y5), assertion bounds (Y6), and NameID → tenant \
-         bearer (Y7) follow. Until those land, the response is \
-         received but NOT trusted — the token is NOT persisted."
+        "Y3 ships quick-xml parse + Status:Success check. Exclusive \
+         c14n# (Y4), RSA-SHA256 verify (Y5), assertion bounds (Y6), \
+         and NameID → tenant bearer (Y7) follow. Until those land, \
+         the response is parsed but NOT trusted — the token is NOT \
+         persisted."
     );
 }
 
@@ -8255,6 +8304,433 @@ fn parse_saml_acs_form(body: &str) -> Result<ParsedSamlAcs> {
 struct SamlStatus {
     code: String,
     message: Option<String>,
+}
+
+/// Y3: structured shape of a parsed SAMLResponse — populated by
+/// `parse_saml_response_xml` walking quick-xml events. Each
+/// optional field reflects whether the IdP included that element;
+/// callers (Y4 c14n, Y5 RSA verify, Y6 bounds, Y7 NameID binding)
+/// decide what to do on absence.
+#[derive(Debug, Default, Clone)]
+struct ParsedSamlResponse {
+    /// `<samlp:Status>/<samlp:StatusCode Value="…">`.
+    status: SamlStatus,
+    /// Top-level `<samlp:Response>/<saml:Issuer>` — the IdP entity ID.
+    response_issuer: Option<String>,
+    /// The first `<saml:Assertion>` block in the response. Real
+    /// IdPs ship exactly one; nested EncryptedAssertion is rejected.
+    assertion: Option<ParsedSamlAssertion>,
+    /// `<ds:Signature>` direct child of `<samlp:Response>`. Y5
+    /// verifies this against the IdP's x509 cert when present.
+    response_signature: Option<ParsedSamlSignature>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct ParsedSamlAssertion {
+    id: Option<String>,
+    issue_instant: Option<String>,
+    issuer: Option<String>,
+    subject_name_id: Option<String>,
+    subject_confirmation_data: Option<SubjectConfirmationData>,
+    conditions: Option<SamlConditions>,
+    /// Every `<saml:Audience>` body inside `<AudienceRestriction>`.
+    audiences: Vec<String>,
+    /// `<saml:AuthnStatement>` `AuthnInstant` attribute.
+    authn_instant: Option<String>,
+    /// `<ds:Signature>` direct child of `<saml:Assertion>` (the
+    /// signature shape Okta + most IdPs emit by default).
+    signature: Option<ParsedSamlSignature>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct SubjectConfirmationData {
+    not_on_or_after: Option<String>,
+    recipient: Option<String>,
+    in_response_to: Option<String>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct SamlConditions {
+    not_before: Option<String>,
+    not_on_or_after: Option<String>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct ParsedSamlSignature {
+    /// Raw byte slice of `<ds:SignedInfo>…</ds:SignedInfo>` exactly
+    /// as it appears in the input XML. Y4 c14n# operates on these
+    /// bytes — quick-xml normalizes events so we cannot rebuild
+    /// the canonical form from the parsed model.
+    signed_info_fragment: String,
+    /// Base64 body of `<ds:SignatureValue>`. Whitespace stripped.
+    signature_value_b64: String,
+    /// Base64 body of `<ds:KeyInfo>/<ds:X509Data>/<ds:X509Certificate>`
+    /// when present. Y5 verifies the assertion against THIS cert
+    /// only when it matches the configured IdP cert (defense
+    /// against confused-deputy attacks where an attacker swaps a
+    /// self-issued cert into a captured response).
+    x509_certificate_b64: Option<String>,
+}
+
+impl Default for SamlStatus {
+    fn default() -> Self {
+        Self {
+            code: String::new(),
+            message: None,
+        }
+    }
+}
+
+/// Y3: walk a SAMLResponse XML body via quick-xml and populate the
+/// `ParsedSamlResponse` model. Replaces the Y2 regex extractor at
+/// the only caller in `sso_login_saml`. The walker is namespace-
+/// prefix-tolerant (matches on local-name) so the same code path
+/// handles `saml:Issuer` and the default-namespace `<Issuer>` form.
+///
+/// Hardening: EncryptedAssertion is REFUSED here — Y8 (if ever) is
+/// the place to land assertion encryption; the v0.29 SP only
+/// accepts plaintext-signed assertions.
+fn parse_saml_response_xml(xml: &str) -> Result<ParsedSamlResponse> {
+    use quick_xml::events::Event;
+    use quick_xml::reader::Reader;
+
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+
+    // Element-name stack of the local-name (post-colon) of every
+    // open element. Used to identify what "we are inside of" so
+    // text events can be routed to the right field.
+    let mut path: Vec<String> = Vec::with_capacity(16);
+    let mut out = ParsedSamlResponse::default();
+    // Buffer state for the signature byte-fragment capture.
+    let mut signed_info_start_byte: Option<usize> = None;
+    let mut current_signature_value_b64 = String::new();
+    let mut current_x509_b64 = String::new();
+    // True while we're inside an <Assertion> (so signatures we see
+    // belong to the assertion, not the response envelope).
+    let mut inside_assertion = false;
+    let mut current_assertion = ParsedSamlAssertion::default();
+    let mut current_signature: Option<ParsedSamlSignature> = None;
+
+    loop {
+        let pos_before = reader.buffer_position() as usize;
+        match reader.read_event() {
+            Err(e) => anyhow::bail!("quick-xml parse error: {e}"),
+            Ok(Event::Eof) => break,
+            Ok(Event::Start(e)) => {
+                let local = local_name_owned(e.name().as_ref());
+                if local == "EncryptedAssertion" {
+                    anyhow::bail!(
+                        "EncryptedAssertion is not supported — IdP must \
+                         emit a plaintext signed Assertion"
+                    );
+                }
+                // SubjectConfirmationData / Conditions / AuthnStatement
+                // carry only attributes — capture before pushing.
+                match local.as_str() {
+                    "Response" if path.is_empty() => {
+                        // Top-level Response: no attrs needed for Y3.
+                    }
+                    "StatusCode"
+                        if path.last().map(|s| s.as_str()) == Some("Status") =>
+                    {
+                        // Top-level StatusCode (Responder / Requester /
+                        // Success). The nested sub-code lives deeper
+                        // and must NOT clobber the parent value.
+                        if let Some(v) = attr_value(&e, "Value") {
+                            if out.status.code.is_empty() {
+                                out.status.code = v.to_string();
+                            }
+                        }
+                    }
+                    "Assertion" => {
+                        inside_assertion = true;
+                        current_assertion = ParsedSamlAssertion::default();
+                        current_assertion.id =
+                            attr_value(&e, "ID").map(|s| s.to_string());
+                        current_assertion.issue_instant =
+                            attr_value(&e, "IssueInstant").map(|s| s.to_string());
+                    }
+                    "SubjectConfirmationData" if inside_assertion => {
+                        let scd = SubjectConfirmationData {
+                            not_on_or_after: attr_value(&e, "NotOnOrAfter")
+                                .map(|s| s.to_string()),
+                            recipient: attr_value(&e, "Recipient")
+                                .map(|s| s.to_string()),
+                            in_response_to: attr_value(&e, "InResponseTo")
+                                .map(|s| s.to_string()),
+                        };
+                        current_assertion.subject_confirmation_data = Some(scd);
+                    }
+                    "Conditions" if inside_assertion => {
+                        let cond = SamlConditions {
+                            not_before: attr_value(&e, "NotBefore")
+                                .map(|s| s.to_string()),
+                            not_on_or_after: attr_value(&e, "NotOnOrAfter")
+                                .map(|s| s.to_string()),
+                        };
+                        current_assertion.conditions = Some(cond);
+                    }
+                    "AuthnStatement" if inside_assertion => {
+                        current_assertion.authn_instant =
+                            attr_value(&e, "AuthnInstant").map(|s| s.to_string());
+                    }
+                    "Signature" => {
+                        current_signature = Some(ParsedSamlSignature::default());
+                    }
+                    "SignedInfo" => {
+                        // pos_before points to the byte index of the
+                        // < of <SignedInfo>. quick-xml's
+                        // buffer_position is the offset of the byte
+                        // AFTER the matched event, so we subtract
+                        // the event's source length to get the start.
+                        let after = reader.buffer_position() as usize;
+                        let event_len = after.saturating_sub(pos_before);
+                        signed_info_start_byte = Some(after.saturating_sub(event_len));
+                    }
+                    _ => {}
+                }
+                path.push(local);
+            }
+            Ok(Event::Empty(e)) => {
+                let local = local_name_owned(e.name().as_ref());
+                // Empty (self-closing) variants: StatusCode + NameID
+                // can appear as either Start/Text/End or Empty when
+                // the IdP omits inner content.
+                if local == "StatusCode"
+                    && path.last().map(|s| s.as_str()) == Some("Status")
+                {
+                    // Empty (self-closing) top-level StatusCode —
+                    // the success-path shape most IdPs emit.
+                    if let Some(v) = attr_value(&e, "Value") {
+                        if out.status.code.is_empty() {
+                            out.status.code = v.to_string();
+                        }
+                    }
+                }
+                if local == "SubjectConfirmationData" && inside_assertion {
+                    let scd = SubjectConfirmationData {
+                        not_on_or_after: attr_value(&e, "NotOnOrAfter")
+                            .map(|s| s.to_string()),
+                        recipient: attr_value(&e, "Recipient")
+                            .map(|s| s.to_string()),
+                        in_response_to: attr_value(&e, "InResponseTo")
+                            .map(|s| s.to_string()),
+                    };
+                    current_assertion.subject_confirmation_data = Some(scd);
+                }
+                if local == "Conditions" && inside_assertion {
+                    let cond = SamlConditions {
+                        not_before: attr_value(&e, "NotBefore")
+                            .map(|s| s.to_string()),
+                        not_on_or_after: attr_value(&e, "NotOnOrAfter")
+                            .map(|s| s.to_string()),
+                    };
+                    current_assertion.conditions = Some(cond);
+                }
+                if local == "AuthnStatement" && inside_assertion {
+                    current_assertion.authn_instant =
+                        attr_value(&e, "AuthnInstant").map(|s| s.to_string());
+                }
+            }
+            Ok(Event::Text(t)) => {
+                let parent = match path.last() {
+                    Some(p) => p.as_str(),
+                    None => continue,
+                };
+                let value = decode_text(&t)?;
+                match parent {
+                    "Issuer" => {
+                        let trimmed = value.trim().to_string();
+                        if inside_assertion {
+                            if current_assertion.issuer.is_none() {
+                                current_assertion.issuer = Some(trimmed);
+                            }
+                        } else if out.response_issuer.is_none() {
+                            out.response_issuer = Some(trimmed);
+                        }
+                    }
+                    "NameID" if inside_assertion => {
+                        if current_assertion.subject_name_id.is_none() {
+                            current_assertion.subject_name_id =
+                                Some(value.trim().to_string());
+                        }
+                    }
+                    "Audience" if inside_assertion => {
+                        current_assertion.audiences.push(value.trim().to_string());
+                    }
+                    "StatusMessage" if in_path(&path, &["Status"]) => {
+                        let trimmed = value.trim().to_string();
+                        if !trimmed.is_empty() {
+                            out.status.message = Some(trimmed);
+                        }
+                    }
+                    "SignatureValue" if current_signature.is_some() => {
+                        current_signature_value_b64.push_str(value.trim());
+                    }
+                    "X509Certificate" if current_signature.is_some() => {
+                        current_x509_b64.push_str(value.trim());
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::End(e)) => {
+                let local = local_name_owned(e.name().as_ref());
+                match local.as_str() {
+                    "Assertion" => {
+                        current_assertion.signature = current_signature.take();
+                        out.assertion = Some(std::mem::take(&mut current_assertion));
+                        inside_assertion = false;
+                    }
+                    "SignedInfo" => {
+                        if let Some(start) = signed_info_start_byte.take() {
+                            let end = reader.buffer_position() as usize;
+                            if end >= start && end <= xml.len() {
+                                let slice = &xml[start..end];
+                                if let Some(sig) = current_signature.as_mut() {
+                                    sig.signed_info_fragment = slice.to_string();
+                                }
+                            }
+                        }
+                    }
+                    "Signature" => {
+                        if let Some(sig) = current_signature.as_mut() {
+                            sig.signature_value_b64 =
+                                std::mem::take(&mut current_signature_value_b64);
+                            if !current_x509_b64.is_empty() {
+                                sig.x509_certificate_b64 =
+                                    Some(std::mem::take(&mut current_x509_b64));
+                            }
+                        }
+                        // If this Signature was on the Response envelope
+                        // (not inside an Assertion), file it there now.
+                        if !inside_assertion {
+                            out.response_signature = current_signature.take();
+                        }
+                    }
+                    _ => {}
+                }
+                path.pop();
+            }
+            // StatusCode often appears as a Start (not Empty) with a
+            // nested sub-StatusCode child. We capture Value on Start.
+            // Re-walk the Start branch to extract.
+            _ => {}
+        }
+    }
+
+    // The Start-branch StatusCode capture: scan the events we
+    // already walked through path bookkeeping by re-running the
+    // first Start of StatusCode against attrs. Cheap second pass.
+    if out.status.code.is_empty() {
+        out.status.code = parse_first_status_code(xml).unwrap_or_default();
+    }
+    if out.status.code.is_empty() {
+        anyhow::bail!("SAMLResponse missing <Status>/<StatusCode Value=…>");
+    }
+    Ok(out)
+}
+
+/// Y3: fallback for Start-event StatusCode (the one with a nested
+/// sub-code). Walks until the FIRST `<StatusCode … Value="…">`
+/// inside a `<Status>` block. Tiny + bounded so we don't bother
+/// hand-threading attribute capture through the main walker.
+fn parse_first_status_code(xml: &str) -> Option<String> {
+    use quick_xml::events::Event;
+    use quick_xml::reader::Reader;
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+    let mut in_status = false;
+    loop {
+        match reader.read_event() {
+            Err(_) | Ok(Event::Eof) => return None,
+            Ok(Event::Start(e)) => {
+                let local = local_name_owned(e.name().as_ref());
+                if local == "Status" {
+                    in_status = true;
+                } else if in_status && local == "StatusCode" {
+                    return attr_value(&e, "Value").map(|s| s.to_string());
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                let local = local_name_owned(e.name().as_ref());
+                if in_status && local == "StatusCode" {
+                    return attr_value(&e, "Value").map(|s| s.to_string());
+                }
+            }
+            Ok(Event::End(e)) => {
+                let local = local_name_owned(e.name().as_ref());
+                if local == "Status" {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Y3: helper — strip an XML namespace prefix from an element name.
+/// `b"saml:Assertion"` → `"Assertion"`. `b"Assertion"` → `"Assertion"`.
+fn local_name_owned(qname: &[u8]) -> String {
+    let s = std::str::from_utf8(qname).unwrap_or("");
+    match s.rfind(':') {
+        Some(i) => s[i + 1..].to_string(),
+        None => s.to_string(),
+    }
+}
+
+/// Y3: helper — pull an attribute by local-name (ignoring any
+/// namespace prefix in the attribute name).
+fn attr_value<'a>(
+    e: &'a quick_xml::events::BytesStart<'_>,
+    local_name: &str,
+) -> Option<std::borrow::Cow<'a, str>> {
+    for a in e.attributes().with_checks(false).flatten() {
+        let k = a.key.as_ref();
+        let raw = std::str::from_utf8(k).unwrap_or("");
+        let local = match raw.rfind(':') {
+            Some(i) => &raw[i + 1..],
+            None => raw,
+        };
+        if local == local_name {
+            let bytes = a.value;
+            let s = match bytes {
+                std::borrow::Cow::Borrowed(b) => {
+                    std::borrow::Cow::Borrowed(std::str::from_utf8(b).ok()?)
+                }
+                std::borrow::Cow::Owned(b) => std::borrow::Cow::Owned(
+                    String::from_utf8(b).ok()?,
+                ),
+            };
+            return Some(s);
+        }
+    }
+    None
+}
+
+/// Y3: helper — check whether `path` contains every needle, in
+/// order. Path is the open-element stack; needles match on
+/// local-name. Used to scope text events to the right ancestor.
+fn in_path(path: &[String], needles: &[&str]) -> bool {
+    let mut idx = 0;
+    for seg in path {
+        if idx < needles.len() && seg == needles[idx] {
+            idx += 1;
+            if idx == needles.len() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Y3: helper — decode a quick-xml Text event into a String,
+/// surfacing decode errors with context.
+fn decode_text(t: &quick_xml::events::BytesText<'_>) -> Result<String> {
+    let s = t
+        .unescape()
+        .with_context(|| "quick-xml text unescape")?;
+    Ok(s.into_owned())
 }
 
 /// Y2: extract `<samlp:Status><samlp:StatusCode Value="..."/>
@@ -10646,6 +11122,161 @@ mod tests {
         assert!(
             err.to_lowercase().contains("base64"),
             "informative: {err}"
+        );
+    }
+
+    /// Y3: quick-xml extractor pulls the standard shape Okta /
+    /// Auth0 / Azure AD emit: Response wrapper with Issuer +
+    /// Status:Success + a signed Assertion with NameID +
+    /// Conditions + AudienceRestriction + AuthnStatement.
+    #[test]
+    fn y3_parse_signed_assertion_shape() {
+        let xml = r##"<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" ID="_r1" Version="2.0" IssueInstant="2026-06-27T00:00:00Z" Destination="http://127.0.0.1:8080/sso/saml/acs" InResponseTo="_y1-rt">
+  <saml:Issuer>https://idp.example/saml/metadata</saml:Issuer>
+  <samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>
+  <saml:Assertion ID="_a1" Version="2.0" IssueInstant="2026-06-27T00:00:00Z">
+    <saml:Issuer>https://idp.example/saml/metadata</saml:Issuer>
+    <ds:Signature>
+      <ds:SignedInfo><ds:CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/><ds:SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"/><ds:Reference URI="#_a1"><ds:Transforms><ds:Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/><ds:Transform Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/></ds:Transforms><ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/><ds:DigestValue>ZGlnZXN0LXZhbHVl</ds:DigestValue></ds:Reference></ds:SignedInfo>
+      <ds:SignatureValue>c2lnLXZhbHVl</ds:SignatureValue>
+      <ds:KeyInfo><ds:X509Data><ds:X509Certificate>Y2VydC1iYXNlNjQ=</ds:X509Certificate></ds:X509Data></ds:KeyInfo>
+    </ds:Signature>
+    <saml:Subject>
+      <saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress">alice@example.com</saml:NameID>
+      <saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">
+        <saml:SubjectConfirmationData NotOnOrAfter="2026-06-27T00:05:00Z" Recipient="http://127.0.0.1:8080/sso/saml/acs" InResponseTo="_y1-rt"/>
+      </saml:SubjectConfirmation>
+    </saml:Subject>
+    <saml:Conditions NotBefore="2026-06-27T00:00:00Z" NotOnOrAfter="2026-06-27T00:05:00Z">
+      <saml:AudienceRestriction><saml:Audience>https://sp.example/saml</saml:Audience></saml:AudienceRestriction>
+    </saml:Conditions>
+    <saml:AuthnStatement AuthnInstant="2026-06-27T00:00:00Z">
+      <saml:AuthnContext><saml:AuthnContextClassRef>urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport</saml:AuthnContextClassRef></saml:AuthnContext>
+    </saml:AuthnStatement>
+  </saml:Assertion>
+</samlp:Response>"##;
+        let parsed = parse_saml_response_xml(xml).expect("parse");
+        assert_eq!(
+            parsed.status.code,
+            "urn:oasis:names:tc:SAML:2.0:status:Success"
+        );
+        assert_eq!(
+            parsed.response_issuer.as_deref(),
+            Some("https://idp.example/saml/metadata")
+        );
+        let a = parsed.assertion.expect("assertion present");
+        assert_eq!(a.id.as_deref(), Some("_a1"));
+        assert_eq!(
+            a.issuer.as_deref(),
+            Some("https://idp.example/saml/metadata")
+        );
+        assert_eq!(a.subject_name_id.as_deref(), Some("alice@example.com"));
+        let scd = a
+            .subject_confirmation_data
+            .expect("SubjectConfirmationData");
+        assert_eq!(scd.not_on_or_after.as_deref(), Some("2026-06-27T00:05:00Z"));
+        assert_eq!(
+            scd.recipient.as_deref(),
+            Some("http://127.0.0.1:8080/sso/saml/acs")
+        );
+        assert_eq!(scd.in_response_to.as_deref(), Some("_y1-rt"));
+        let cond = a.conditions.expect("Conditions");
+        assert_eq!(cond.not_before.as_deref(), Some("2026-06-27T00:00:00Z"));
+        assert_eq!(cond.not_on_or_after.as_deref(), Some("2026-06-27T00:05:00Z"));
+        assert_eq!(a.audiences, vec!["https://sp.example/saml"]);
+        assert_eq!(a.authn_instant.as_deref(), Some("2026-06-27T00:00:00Z"));
+        let sig = a.signature.expect("Assertion signature");
+        assert!(
+            sig.signed_info_fragment.contains("<ds:SignedInfo>"),
+            "signed_info_fragment starts with the open tag: {}",
+            sig.signed_info_fragment
+        );
+        assert!(
+            sig.signed_info_fragment.contains("</ds:SignedInfo>"),
+            "signed_info_fragment includes the close tag"
+        );
+        assert!(
+            sig.signed_info_fragment.contains("rsa-sha256"),
+            "signed_info_fragment carries the inner content"
+        );
+        assert_eq!(sig.signature_value_b64, "c2lnLXZhbHVl");
+        assert_eq!(
+            sig.x509_certificate_b64.as_deref(),
+            Some("Y2VydC1iYXNlNjQ=")
+        );
+    }
+
+    /// Y3: EncryptedAssertion is refused with an informative error
+    /// — the v0.29 SP only trusts plaintext signed assertions.
+    #[test]
+    fn y3_refuses_encrypted_assertion() {
+        let xml = r#"<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"><samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status><saml:EncryptedAssertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion">…</saml:EncryptedAssertion></samlp:Response>"#;
+        let err = parse_saml_response_xml(xml).unwrap_err().to_string();
+        assert!(
+            err.contains("EncryptedAssertion"),
+            "informative refusal: {err}"
+        );
+    }
+
+    /// Y3: a Responder failure with StatusMessage propagates the
+    /// IdP's error text to the caller (same shape Y2's regex did,
+    /// now via quick-xml).
+    #[test]
+    fn y3_extracts_responder_failure_message() {
+        let xml = r#"<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"><samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Responder"><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:AuthnFailed"/></samlp:StatusCode><samlp:StatusMessage>bad credentials</samlp:StatusMessage></samlp:Status></samlp:Response>"#;
+        let parsed = parse_saml_response_xml(xml).expect("parse");
+        assert_eq!(
+            parsed.status.code,
+            "urn:oasis:names:tc:SAML:2.0:status:Responder"
+        );
+        assert_eq!(parsed.status.message.as_deref(), Some("bad credentials"));
+    }
+
+    /// Y3: default-namespace form (no `samlp:` prefix because samlp
+    /// is the default namespace) still parses end-to-end.
+    #[test]
+    fn y3_parses_default_namespace_form() {
+        let xml = r#"<Response xmlns="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion">
+  <saml:Issuer>https://idp.example</saml:Issuer>
+  <Status><StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></Status>
+  <saml:Assertion ID="_a2"><saml:Issuer>https://idp.example</saml:Issuer></saml:Assertion>
+</Response>"#;
+        let parsed = parse_saml_response_xml(xml).expect("parse");
+        assert_eq!(
+            parsed.status.code,
+            "urn:oasis:names:tc:SAML:2.0:status:Success"
+        );
+        assert_eq!(parsed.response_issuer.as_deref(), Some("https://idp.example"));
+        assert_eq!(
+            parsed
+                .assertion
+                .as_ref()
+                .and_then(|a| a.id.as_deref()),
+            Some("_a2")
+        );
+    }
+
+    /// Y3: SignedInfo byte-fragment captures the EXACT input bytes
+    /// (no normalization). Y4 c14n# will rely on this — the
+    /// canonical form must be derived from the raw bytes, never
+    /// from re-serializing the parsed model.
+    #[test]
+    fn y3_signed_info_fragment_is_exact_input_bytes() {
+        let inner = r##"<ds:SignedInfo>  <!-- spaced --><ds:CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/>
+<ds:SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"/></ds:SignedInfo>"##;
+        let xml = format!(
+            r##"<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status><saml:Assertion ID="_a3"><saml:Issuer>x</saml:Issuer><ds:Signature>{inner}<ds:SignatureValue>QUJD</ds:SignatureValue></ds:Signature></saml:Assertion></samlp:Response>"##
+        );
+        let parsed = parse_saml_response_xml(&xml).expect("parse");
+        let frag = parsed
+            .assertion
+            .expect("a")
+            .signature
+            .expect("sig")
+            .signed_info_fragment;
+        assert_eq!(
+            frag, inner,
+            "Y4 c14n# depends on this being the EXACT input substring"
         );
     }
 
