@@ -7958,33 +7958,162 @@ async fn sso_configure_saml(idp_metadata_url: &str, sp_entity_id: &str) -> Resul
 /// For v0.26: bail with an informative message so operators don't
 /// silently fall through to a no-validation flow.
 async fn sso_login_saml(sso_saml_path: &Path) -> Result<()> {
+    use base64::Engine as _;
     let bytes = std::fs::read(sso_saml_path)
         .with_context(|| format!("read {}", sso_saml_path.display()))?;
     let cfg: serde_json::Value =
         serde_json::from_slice(&bytes).context("parse sso-saml.json")?;
-    let issuer = cfg
+    let idp_entity_id = cfg
         .get("idp_entity_id")
         .and_then(|v| v.as_str())
-        .unwrap_or("<missing>");
+        .ok_or_else(|| anyhow!("sso-saml.json missing idp_entity_id"))?;
     let sso_url = cfg
         .get("sso_url")
         .and_then(|v| v.as_str())
-        .unwrap_or("<missing>");
+        .ok_or_else(|| anyhow!("sso-saml.json missing sso_url"))?;
     let binding = cfg
         .get("sso_binding")
         .and_then(|v| v.as_str())
-        .unwrap_or("<missing>");
+        .unwrap_or("Redirect");
+    let sp_entity_id = cfg
+        .get("sp_entity_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("sso-saml.json missing sp_entity_id"))?;
     eprintln!("[sso login] detected SAML scaffold at {}", sso_saml_path.display());
-    eprintln!("  IdP entityID: {issuer}");
+    eprintln!("  IdP entityID: {idp_entity_id}");
     eprintln!("  SSO URL:      {sso_url}");
     eprintln!("  Binding:      HTTP-{binding}");
-    anyhow::bail!(
-        "SAML login is not yet implemented (the scaffold is in place; \
-         the redirect-binding flow + signed-response validation lands \
-         in a Plan W follow-up). For now: use `aether sso configure` \
-         to switch to OIDC, or delete {} to fall back to OIDC.",
-        sso_saml_path.display()
+    eprintln!("  SP entityID:  {sp_entity_id}");
+    if binding != "Redirect" {
+        anyhow::bail!(
+            "HTTP-POST binding not yet supported (Y1 ships HTTP-Redirect only). \
+             Re-run `aether sso configure-saml --idp-metadata-url <url>` against \
+             an IdP that advertises HTTP-Redirect binding."
+        );
+    }
+
+    // Bind a kernel-chosen ACS port. Y2 will own the listener that
+    // reads the SAMLResponse off this socket; Y1 only needs the port
+    // so the AssertionConsumerServiceURL embedded in the AuthnRequest
+    // is well-defined.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .context("bind 127.0.0.1:0 for SAML ACS callback")?;
+    let port = listener
+        .local_addr()
+        .context("local_addr on ACS listener")?
+        .port();
+    let acs_url = format!("http://127.0.0.1:{port}/sso/saml/acs");
+    drop(listener); // Y2 will rebind. Holding it here would race with the listener Y2 spawns.
+
+    let relay_state = {
+        use rand_core::RngCore;
+        let mut buf = [0u8; 16];
+        rand_core::OsRng.fill_bytes(&mut buf);
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
+    };
+    let authn_request_xml = build_authn_request_xml(
+        idp_entity_id,
+        sso_url,
+        sp_entity_id,
+        &acs_url,
+        chrono::Utc::now(),
+        None,
+    )?;
+    let saml_request_param = encode_saml_request_redirect(authn_request_xml.as_bytes())?;
+    let redirect_url = format!(
+        "{sso_url}?SAMLRequest={}&RelayState={}",
+        saml_request_param,
+        urlencode(&relay_state),
     );
+
+    eprintln!("[sso login] Y1: AuthnRequest emitted. Open this URL in your browser:");
+    eprintln!("  {redirect_url}");
+    let _ = std::process::Command::new("xdg-open")
+        .arg(&redirect_url)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    let _ = std::process::Command::new("open")
+        .arg(&redirect_url)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    anyhow::bail!(
+        "Y1 ships AuthnRequest emission only. The ACS callback listener \
+         (which would have bound to 127.0.0.1:{port}/sso/saml/acs) lands \
+         in Y2 alongside the SAMLResponse decode + signature verify \
+         pipeline (Y3-Y7). Until then, the redirect URL above is for \
+         manual smoke-testing the AuthnRequest against an IdP."
+    );
+}
+
+/// Y1: Build a minimal SAML 2.0 AuthnRequest XML for HTTP-Redirect
+/// binding. The XML carries only the fields a strict IdP needs:
+/// `ID`, `Version`, `IssueInstant`, `Destination`, `<saml:Issuer>`,
+/// `ProtocolBinding`, `AssertionConsumerServiceURL`.
+///
+/// `now` is injected so unit tests can pin the IssueInstant; in
+/// production the call site passes `chrono::Utc::now()`.
+///
+/// `request_id` similarly lets tests pin the ID; production passes
+/// None and gets `_<32-hex>` (RFC 7522 §3 advises NCName format, so
+/// the leading underscore matters).
+fn build_authn_request_xml(
+    idp_entity_id: &str,
+    destination: &str,
+    sp_entity_id: &str,
+    acs_url: &str,
+    now: chrono::DateTime<chrono::Utc>,
+    request_id: Option<&str>,
+) -> Result<String> {
+    // Reject anything that would let an attacker (or a misconfigured
+    // sso-saml.json) break out of the attribute context. SAML
+    // AuthnRequest attributes hold URLs and entity IDs, neither of
+    // which legitimately contain `<`, `>`, `"`, or `&` un-escaped.
+    // Hand-rolled XML emit (we don't want a full XML writer dep for
+    // a fixed-shape document) is only safe under this validation.
+    for (name, value) in [
+        ("destination", destination),
+        ("acs_url", acs_url),
+        ("idp_entity_id", idp_entity_id),
+        ("sp_entity_id", sp_entity_id),
+    ] {
+        if value.contains(['<', '>', '"', '&']) {
+            anyhow::bail!(
+                "{name} contains XML-special character — refusing to \
+                 emit AuthnRequest (got {value:?})"
+            );
+        }
+    }
+    let issue_instant = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let id = match request_id {
+        Some(s) => s.to_string(),
+        None => {
+            use rand_core::RngCore;
+            let mut buf = [0u8; 16];
+            rand_core::OsRng.fill_bytes(&mut buf);
+            format!("_{}", hex::encode(buf))
+        }
+    };
+    Ok(format!(
+        r#"<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="{id}" Version="2.0" IssueInstant="{issue_instant}" Destination="{destination}" ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" AssertionConsumerServiceURL="{acs_url}"><saml:Issuer>{sp_entity_id}</saml:Issuer></samlp:AuthnRequest>"#
+    ))
+}
+
+/// Y1: Encode an AuthnRequest XML body for the HTTP-Redirect binding
+/// per saml-bindings-2.0 §3.4.4.1: raw DEFLATE (no zlib wrapper),
+/// then base64 (standard, NOT URL-safe — bindings spec calls for
+/// standard base64), then URL-encode for the `SAMLRequest` query
+/// parameter.
+fn encode_saml_request_redirect(xml: &[u8]) -> Result<String> {
+    use base64::Engine as _;
+    use flate2::{write::DeflateEncoder, Compression};
+    use std::io::Write;
+    let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(xml).context("deflate SAMLRequest")?;
+    let deflated = encoder.finish().context("deflate finish SAMLRequest")?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(deflated);
+    Ok(urlencode(&b64))
 }
 
 fn urlencode(s: &str) -> String {
@@ -10171,6 +10300,96 @@ mod tests {
     use super::*;
     use aether_core::mock::MockLlmProvider;
     use aether_llm::{ContentBlock, MessagesResponse, StopReason};
+
+    /// Y1: AuthnRequest XML emits the required attributes and the
+    /// Issuer body matches the SP entity ID. Pin IssueInstant + ID so
+    /// the assertion is stable across runs.
+    #[test]
+    fn y1_authn_request_xml_shape() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-06-27T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let xml = build_authn_request_xml(
+            "https://idp.example/saml/metadata",
+            "https://idp.example/saml/sso",
+            "https://sp.example/saml",
+            "http://127.0.0.1:34567/sso/saml/acs",
+            now,
+            Some("_test-id-1234"),
+        )
+        .unwrap();
+        assert!(xml.contains(r#"ID="_test-id-1234""#), "xml has ID: {xml}");
+        assert!(xml.contains(r#"Version="2.0""#), "xml has Version: {xml}");
+        assert!(
+            xml.contains(r#"IssueInstant="2026-06-27T00:00:00Z""#),
+            "xml has pinned IssueInstant: {xml}"
+        );
+        assert!(
+            xml.contains(r#"Destination="https://idp.example/saml/sso""#),
+            "xml has Destination: {xml}"
+        );
+        assert!(
+            xml.contains(
+                r#"AssertionConsumerServiceURL="http://127.0.0.1:34567/sso/saml/acs""#
+            ),
+            "xml has ACS URL: {xml}"
+        );
+        assert!(
+            xml.contains("<saml:Issuer>https://sp.example/saml</saml:Issuer>"),
+            "xml has Issuer body: {xml}"
+        );
+    }
+
+    /// Y1: refuse to emit an AuthnRequest if any attribute carries
+    /// an XML-special character — hand-rolled emit is only safe under
+    /// strict input validation.
+    #[test]
+    fn y1_authn_request_refuses_xml_special() {
+        let now = chrono::Utc::now();
+        let bad = build_authn_request_xml(
+            "https://idp.example",
+            "https://idp.example",
+            r#"sp"><script>alert(1)</script>"#,
+            "http://127.0.0.1:1/acs",
+            now,
+            Some("_t"),
+        );
+        assert!(bad.is_err(), "must refuse XML-special in sp_entity_id");
+        let msg = bad.unwrap_err().to_string();
+        assert!(msg.contains("XML-special"), "informative error: {msg}");
+    }
+
+    /// Y1: the HTTP-Redirect binding encoding pipeline round-trips —
+    /// URL-decode → base64-decode → INFLATE recovers the original XML
+    /// bytes. This proves the wire format we hand to the IdP is what
+    /// they will see after the symmetric decode.
+    #[test]
+    fn y1_redirect_encode_roundtrip() {
+        use base64::Engine as _;
+        use flate2::read::DeflateDecoder;
+        use std::io::Read;
+        let xml = r#"<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="_y1-rt" Version="2.0" IssueInstant="2026-06-27T00:00:00Z" Destination="https://idp.example/sso"><saml:Issuer xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion">https://sp.example</saml:Issuer></samlp:AuthnRequest>"#;
+        let urlenc = encode_saml_request_redirect(xml.as_bytes()).unwrap();
+        // URL-decode → base64-decode → INFLATE → original.
+        let b64 = urldecode(&urlenc);
+        let deflated = base64::engine::general_purpose::STANDARD
+            .decode(b64.as_bytes())
+            .expect("base64 decode");
+        let mut decoder = DeflateDecoder::new(&deflated[..]);
+        let mut recovered = Vec::new();
+        decoder.read_to_end(&mut recovered).expect("inflate");
+        assert_eq!(
+            std::str::from_utf8(&recovered).unwrap(),
+            xml,
+            "redirect-binding encode → decode round-trip lost data"
+        );
+        // Sanity: the URL-encoded form contains no characters that
+        // would terminate a query parameter (no raw `&`, `=`, `#`).
+        assert!(
+            !urlenc.contains('&') && !urlenc.contains('=') && !urlenc.contains('#'),
+            "URL-encoded SAMLRequest should not contain query-terminating chars: {urlenc}"
+        );
+    }
 
     #[tokio::test]
     async fn run_print_concatenates_text_blocks() {

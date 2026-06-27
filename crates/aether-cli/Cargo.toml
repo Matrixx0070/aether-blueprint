@@ -43,6 +43,7 @@ tokio-stream.workspace = true
 hmac.workspace = true
 regex.workspace = true
 redis.workspace = true
+flate2.workspace = true
 once_cell.workspace = true
 chrono.workspace = true
 rustyline = "13"
