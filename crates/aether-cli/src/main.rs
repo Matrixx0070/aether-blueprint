@@ -8222,12 +8222,68 @@ async fn sso_login_saml(sso_saml_path: &Path) -> Result<()> {
         "[sso login] Y6: assertion bounds + audience verified (clock skew {skew}s)"
     );
 
-    anyhow::bail!(
-        "Y6 ships Conditions + AudienceRestriction validation. \
-         NameID → tenant bearer (Y7) follows. Until Y7 lands, the \
-         response is cryptographically valid AND within bounds but \
-         the token is NOT persisted."
+    // Y7: every gate (Y3 parse, Y5 signature, Y6 bounds) has now
+    // passed. Mint a SAML-namespaced session token from the
+    // verified NameID + IdP entity ID + a fresh nonce, write it to
+    // ~/.aether/sso.token at mode 0600, and report success. The
+    // downstream AETHER_REQUIRE_SSO gate reads this file.
+    let nameid = parsed
+        .assertion
+        .as_ref()
+        .and_then(|a| a.subject_name_id.as_deref())
+        .ok_or_else(|| anyhow!("Y7: assertion has no <saml:NameID>"))?;
+    let idp_for_token = parsed
+        .response_issuer
+        .as_deref()
+        .or_else(|| {
+            parsed
+                .assertion
+                .as_ref()
+                .and_then(|a| a.issuer.as_deref())
+        })
+        .unwrap_or(idp_entity_id);
+    let token_path = write_saml_session_token(nameid, idp_for_token)?;
+    eprintln!(
+        "[sso login] Y7: SAML session token persisted to {} (mode 0600)",
+        token_path.display()
     );
+    eprintln!("[sso login] SAML login complete (NameID={nameid})");
+    Ok(())
+}
+
+/// Y7: mint and persist a SAML-namespaced session token. Format:
+/// `saml.v1.<b64url(nameid)>.<b64url(idp_entity_id)>.<b64url(32-byte-nonce)>`.
+/// The fields are decoupled with `.` so downstream consumers can
+/// parse them without a separate metadata file. Returns the
+/// written path so the caller can echo it back to the operator.
+fn write_saml_session_token(nameid: &str, idp_entity_id: &str) -> Result<PathBuf> {
+    use base64::Engine as _;
+    let mut nonce = [0u8; 32];
+    {
+        use rand_core::RngCore;
+        rand_core::OsRng.fill_bytes(&mut nonce);
+    }
+    let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let token_value = format!(
+        "saml.v1.{}.{}.{}",
+        b64.encode(nameid.as_bytes()),
+        b64.encode(idp_entity_id.as_bytes()),
+        b64.encode(nonce),
+    );
+    let path = sso_token_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::write(&path, &token_value).context("write sso.token")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(
+            &path,
+            std::fs::Permissions::from_mode(0o600),
+        );
+    }
+    Ok(path)
 }
 
 /// Y2: extract Content-Length from an HTTP request prefix. Returns
@@ -12523,6 +12579,50 @@ mod tests {
         // Sanity: pubkey modulus is non-trivial (we really had a
         // 2048-bit RSA pair).
         assert!(pub_key.n().bits() >= 2000);
+    }
+
+    /// Y7: session-token writer produces the expected three-field
+    /// `saml.v1.<nameid>.<idp>.<nonce>` shape with URL-safe-no-pad
+    /// base64 fields and persists the file at 0600.
+    #[test]
+    fn y7_session_token_format_and_mode() {
+        use base64::Engine as _;
+        let dir = std::env::temp_dir().join(format!(
+            "aether-y7-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create tmp HOME");
+        std::env::set_var("HOME", &dir);
+        let path =
+            write_saml_session_token("alice@example.com", "https://idp.example/saml/metadata")
+                .expect("write token");
+        let text = std::fs::read_to_string(&path).expect("read token");
+        let parts: Vec<&str> = text.split('.').collect();
+        assert_eq!(parts.len(), 5, "saml . v1 . nameid . idp . nonce ({text})");
+        assert_eq!(parts[0], "saml");
+        assert_eq!(parts[1], "v1");
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let decoded_nameid = b64
+            .decode(parts[2].as_bytes())
+            .expect("nameid is URL-safe-no-pad base64");
+        assert_eq!(
+            std::str::from_utf8(&decoded_nameid).unwrap(),
+            "alice@example.com"
+        );
+        let decoded_idp = b64.decode(parts[3].as_bytes()).expect("idp is base64");
+        assert_eq!(
+            std::str::from_utf8(&decoded_idp).unwrap(),
+            "https://idp.example/saml/metadata"
+        );
+        let nonce_bytes = b64.decode(parts[4].as_bytes()).expect("nonce is base64");
+        assert_eq!(nonce_bytes.len(), 32, "32-byte nonce");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "Y7 token file must be 0600 (got {:o})", mode);
+        }
     }
 
     /// Y6: helper to build a minimal parsed SAMLResponse with the
