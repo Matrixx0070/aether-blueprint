@@ -7409,6 +7409,17 @@ fn sso_access_token_expires_at_path() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".aether/sso.access_token.expires_at"))
 }
 
+/// DD6: sidecar path for the local-vs-IdP clock skew (signed integer
+/// seconds, ASCII text). Positive = local clock ahead of the IdP's
+/// `Date:` header; negative = local behind. Written after every
+/// successful POST to the token_endpoint; consumed by
+/// `aether sso whoami` to warn when the skew exceeds the threshold.
+fn sso_clock_skew_path() -> Result<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .ok_or_else(|| anyhow!("HOME not set"))?;
+    Ok(PathBuf::from(home).join(".aether/sso.clock_skew_secs"))
+}
+
 /// CC5: read `AETHER_OIDC_REFRESH_LEAD_SECS` with a default of 5
 /// minutes (300s). Clamped to [60, 3600] — 60s is a sane floor
 /// (faster than that and short-lived tokens churn before the call
@@ -7645,6 +7656,9 @@ async fn sso_cmd(sub: SsoCmd) -> Result<()> {
             if let Ok(expires_path) = sso_access_token_expires_at_path() {
                 let _ = std::fs::remove_file(&expires_path);
             }
+            if let Ok(skew_path) = sso_clock_skew_path() {
+                let _ = std::fs::remove_file(&skew_path);
+            }
             Ok(())
         }
     }
@@ -7814,6 +7828,9 @@ async fn sso_login() -> Result<()> {
         let body = resp.text().await.unwrap_or_default();
         anyhow::bail!("token exchange failed: {body}");
     }
+    // DD6: record local-vs-IdP clock skew BEFORE consuming the body.
+    // Best-effort; missing/malformed Date header is silently ignored.
+    let _ = record_clock_skew_from_response(&resp);
     let token_resp: serde_json::Value = resp.json().await.context("parse token JSON")?;
     let id_token = token_resp
         .get("id_token")
@@ -8260,6 +8277,63 @@ fn parse_token_response(doc: &serde_json::Value) -> Result<TokenResponse> {
     })
 }
 
+/// DD6: read `AETHER_OIDC_CLOCK_SKEW_WARN_SECS` with a default of 60
+/// seconds. Clamped to [10, 3600] — sub-10s false-positives on real
+/// NTP-synced fleets; > 1h is the same as no warning.
+fn oidc_clock_skew_warn_secs() -> i64 {
+    let raw = match std::env::var("AETHER_OIDC_CLOCK_SKEW_WARN_SECS") {
+        Ok(v) => v,
+        Err(_) => return 60,
+    };
+    let parsed: i64 = match raw.parse() {
+        Ok(n) => n,
+        Err(_) => return 60,
+    };
+    parsed.clamp(10, 3600)
+}
+
+/// DD6: parse an HTTP `Date:` header per RFC 7231 §7.1.1.1
+/// (IMF-fixdate, e.g. `Sun, 06 Nov 1994 08:49:37 GMT`). chrono's
+/// `parse_from_rfc2822` parser accepts the GMT timezone literal,
+/// which is the only form modern HTTP servers emit in practice.
+/// Returns `None` for unparseable input — caller logs + falls
+/// through (skew detection is advisory, not load-bearing).
+fn parse_http_date(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc2822(s.trim())
+        .ok()
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+}
+
+/// DD6: compute signed skew in seconds. Positive = local clock ahead
+/// of the IdP's `Date:` value; negative = local clock behind. Pure
+/// so the math is unit-testable without HTTP fixtures.
+fn compute_clock_skew_secs(
+    server_date: chrono::DateTime<chrono::Utc>,
+    local_now: chrono::DateTime<chrono::Utc>,
+) -> i64 {
+    (local_now - server_date).num_seconds()
+}
+
+/// DD6: extract + persist the local-vs-IdP clock skew from a
+/// reqwest response. Best-effort: missing / malformed `Date:`
+/// header is silently swallowed so a stale skew sidecar isn't
+/// overwritten with garbage.
+fn record_clock_skew_from_response(resp: &reqwest::Response) -> Result<Option<i64>> {
+    let Some(hv) = resp.headers().get("date") else {
+        return Ok(None);
+    };
+    let Ok(hv_str) = hv.to_str() else {
+        return Ok(None);
+    };
+    let Some(server_date) = parse_http_date(hv_str) else {
+        return Ok(None);
+    };
+    let skew = compute_clock_skew_secs(server_date, chrono::Utc::now());
+    let path = sso_clock_skew_path()?;
+    write_sso_sidecar(&path, &skew.to_string())?;
+    Ok(Some(skew))
+}
+
 /// BB5: exchange a refresh_token for a fresh access_token at the
 /// issuer's token_endpoint per RFC 6749 §6. Returns the parsed
 /// response without persisting anything — the caller decides which
@@ -8292,6 +8366,8 @@ async fn refresh_oauth_access_token(
             "refresh_token grant failed: HTTP {status} from {token_endpoint}: {body}"
         );
     }
+    // DD6: record local-vs-IdP clock skew BEFORE consuming the body.
+    let _ = record_clock_skew_from_response(&resp);
     // 256 KiB body cap — same Z2 hardening pattern as JWKS + userinfo.
     const TOKEN_MAX_BYTES: usize = 256 * 1024;
     let bytes = resp
@@ -8426,6 +8502,27 @@ async fn sso_whoami(json: bool, no_refresh: bool) -> Result<()> {
     };
     let bearer = read_bearer()?;
     let mut bearer = bearer.trim().to_string();
+
+    // DD6: warn when the persisted local-vs-IdP clock skew exceeds
+    // the configured threshold. Advisory only — userinfo proceeds.
+    // Most often catches broken NTP or container-time-skew issues
+    // that would otherwise defeat CC5's proactive refresh.
+    if let Ok(skew_path) = sso_clock_skew_path() {
+        if let Ok(raw) = std::fs::read_to_string(&skew_path) {
+            if let Ok(skew_secs) = raw.trim().parse::<i64>() {
+                let warn_secs = oidc_clock_skew_warn_secs();
+                if skew_secs.abs() > warn_secs {
+                    eprintln!(
+                        "[sso whoami] WARN: local-vs-IdP clock skew is {}s \
+                         (threshold {}s, set AETHER_OIDC_CLOCK_SKEW_WARN_SECS \
+                         to retune) — proactive refresh and id_token iat \
+                         checks may misfire. Check NTP/container time sync.",
+                        skew_secs, warn_secs
+                    );
+                }
+            }
+        }
+    }
 
     // CC5: proactive refresh. Read sso.access_token.expires_at; if
     // we're inside the AETHER_OIDC_REFRESH_LEAD_SECS window and the
@@ -15528,6 +15625,58 @@ BBBB-SECOND-CERT
             err2.contains("no configured IdP signing keys"),
             "empty-config error: {err2}"
         );
+    }
+
+    /// DD6: pure helper — parse the canonical RFC 7231 IMF-fixdate
+    /// HTTP `Date:` header. chrono's RFC 2822 parser accepts GMT.
+    #[test]
+    fn dd6_parse_http_date_rfc7231() {
+        // Canonical RFC 7231 example.
+        let dt = parse_http_date("Sun, 06 Nov 1994 08:49:37 GMT")
+            .expect("RFC 7231 IMF-fixdate parses");
+        assert_eq!(dt.to_rfc3339(), "1994-11-06T08:49:37+00:00");
+        // Whitespace tolerance.
+        let dt2 = parse_http_date("  Wed, 21 Oct 2015 07:28:00 GMT  ")
+            .expect("trims whitespace");
+        assert_eq!(dt2.to_rfc3339(), "2015-10-21T07:28:00+00:00");
+        // Garbage → None.
+        assert!(parse_http_date("not a date").is_none());
+        assert!(parse_http_date("").is_none());
+    }
+
+    /// DD6: compute_clock_skew_secs returns signed seconds: positive
+    /// when local is ahead of server, negative when behind.
+    #[test]
+    fn dd6_compute_clock_skew_signed() {
+        let server = chrono::DateTime::from_timestamp(1_750_000_000, 0).unwrap();
+        // local 120s ahead of server.
+        let local_ahead = server + chrono::Duration::seconds(120);
+        assert_eq!(compute_clock_skew_secs(server, local_ahead), 120);
+        // local 90s behind server.
+        let local_behind = server - chrono::Duration::seconds(90);
+        assert_eq!(compute_clock_skew_secs(server, local_behind), -90);
+        // exactly synced.
+        assert_eq!(compute_clock_skew_secs(server, server), 0);
+    }
+
+    /// DD6: AETHER_OIDC_CLOCK_SKEW_WARN_SECS env knob — default 60s,
+    /// clamped [10, 3600], invalid → default.
+    #[test]
+    fn dd6_clock_skew_warn_secs_default_and_clamped() {
+        let _guard = aether_core::mock::ENV_TEST_LOCK
+            .lock()
+            .expect("env lock");
+        std::env::remove_var("AETHER_OIDC_CLOCK_SKEW_WARN_SECS");
+        assert_eq!(oidc_clock_skew_warn_secs(), 60, "default 60s");
+        std::env::set_var("AETHER_OIDC_CLOCK_SKEW_WARN_SECS", "120");
+        assert_eq!(oidc_clock_skew_warn_secs(), 120, "120s ok");
+        std::env::set_var("AETHER_OIDC_CLOCK_SKEW_WARN_SECS", "1");
+        assert_eq!(oidc_clock_skew_warn_secs(), 10, "clamped to 10s");
+        std::env::set_var("AETHER_OIDC_CLOCK_SKEW_WARN_SECS", "999999");
+        assert_eq!(oidc_clock_skew_warn_secs(), 3600, "clamped to 1h");
+        std::env::set_var("AETHER_OIDC_CLOCK_SKEW_WARN_SECS", "garbage");
+        assert_eq!(oidc_clock_skew_warn_secs(), 60, "invalid → default");
+        std::env::remove_var("AETHER_OIDC_CLOCK_SKEW_WARN_SECS");
     }
 
     /// DD5: pure helper — expired returns true for now > valid_until.
