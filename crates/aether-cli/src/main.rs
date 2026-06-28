@@ -1383,7 +1383,12 @@ async fn run_print_agent(
         };
         if let Some(ConversationItem::Assistant { text, tool_uses }) = session.history.last() {
             if let Some(t) = text {
-                last_text = Some(t.clone());
+                // Accumulate across MaxTokens continuation turns so the full
+                // response is printed, not just the last chunk.
+                match last_text.as_mut() {
+                    Some(acc) => acc.push_str(t),
+                    None => last_text = Some(t.clone()),
+                }
             }
             for tu in tool_uses {
                 eprintln!("[tool] {}", format_tool_use(tu));
