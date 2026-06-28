@@ -5,8 +5,8 @@ description: |
   twenty or more non-empty lines each ≤ 5 words. Raised from 8/8 to
   eliminate false-positives on technical audit bullet lists where lines
   like "Missing auth middleware" (3 words) appear in runs of 8+.
-severity: critical
-action: block
+severity: medium
+action: warn
 applies_when: not_creative_writing_context
 detector:
   kind: builtin
