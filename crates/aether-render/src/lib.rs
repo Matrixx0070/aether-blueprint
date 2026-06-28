@@ -121,6 +121,8 @@ pub enum ChatLine {
     Assistant(String),
     AssistantPartial(String),
     SystemNote(String),
+    /// Full-width brand-coloured bold heading (no prefix glyph) — startup card.
+    Brand(String),
 }
 
 #[derive(Debug, Clone)]
@@ -176,14 +178,32 @@ pub struct UiState {
 impl UiState {
     pub fn new(model: String, session_id: String, perm_mode: String, cwd: String) -> Self {
         let model_short = model.split('/').last().unwrap_or(&model).to_string();
+        let version = env!("CARGO_PKG_VERSION");
+        let perm = perm_label(&perm_mode);
+        // Diamond logo lines (brand colour) + info card (dim)
+        //
+        //    ◆◆◆        Aether v0.35.0
+        //   ◆   ◆       model · perm
+        //  ◆     ◆      cwd
+        //   ◆   ◆
+        //    ◆◆◆
+        let chat_lines = vec![
+            ChatLine::Brand("   ◆◆◆        ".to_string()),
+            ChatLine::Brand(format!("  ◆   ◆       Aether  v{version}")),
+            ChatLine::Brand(format!("  ◆     ◆     {model_short}  ·  {perm}")),
+            ChatLine::Brand(format!("  ◆   ◆       {cwd}")),
+            ChatLine::Brand("   ◆◆◆  ".to_string()),
+            ChatLine::SystemNote(String::new()),
+            ChatLine::SystemNote(
+                "Try \"summarize this codebase\" or ask anything to start".to_string(),
+            ),
+        ];
         Self {
             model,
             session_id,
             perm_mode,
             cwd,
-            chat_lines: vec![ChatLine::SystemNote(format!(
-                "◆ Aether ready — {model_short} — type a message below to start"
-            ))],
+            chat_lines,
             tool_log: Vec::new(),
             fleet: Vec::new(),
             input_buffer: String::new(),
@@ -458,12 +478,24 @@ pub fn draw_frame(
                 (">", C_USER_PFX)
             };
 
+            const SUGGESTIONS: &[&str] = &[
+                "Try \"summarize this codebase\"",
+                "Try \"find all TODO comments\"",
+                "Try \"explain the main entry point\"",
+                "Try \"what does this project do?\"",
+            ];
+            let sugg_idx = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                / 8;
+            let placeholder: String = if state.status_running {
+                "thinking…".to_string()
+            } else {
+                SUGGESTIONS[sugg_idx as usize % SUGGESTIONS.len()].to_string()
+            };
+
             let input_content: Vec<Line> = if state.input_buffer.is_empty() {
-                let placeholder = if state.status_running {
-                    "thinking…"
-                } else {
-                    "type a message…"
-                };
                 vec![Line::from(vec![
                     Span::styled(
                         format!("  {pfx}  "),
@@ -514,6 +546,12 @@ pub fn draw_frame(
 
         // ── 4. Hints bar ──────────────────────────────────────────────
         {
+            let perm = perm_label(&state.perm_mode);
+            let (perm_color, perm_sym) = match perm {
+                "bypass" => (C_WARN, "⚡"),
+                "auto-edit" => (C_OK, "✓"),
+                _ => (C_DIM, "·"),
+            };
             let thinking_part = if state.status_running {
                 format!("{spin}  thinking   ")
             } else {
@@ -524,16 +562,21 @@ pub fn draw_frame(
             } else {
                 String::new()
             };
-            let hints = format!(
-                "  {}↵ send   ⇧↵ newline   pgup/pgdn scroll   esc quit{}",
-                thinking_part, cost_part,
-            );
-            f.render_widget(
-                Paragraph::new(Line::from(Span::styled(
-                    hints,
+            let hints_line = Line::from(vec![
+                Span::styled(
+                    format!("  {perm_sym} {perm} mode  ·  "),
+                    Style::default().fg(perm_color).bg(C_HDR_BG),
+                ),
+                Span::styled(
+                    format!(
+                        "{}↵ send  ⇧↵ newline  pgup/pgdn scroll  esc quit{}",
+                        thinking_part, cost_part
+                    ),
                     Style::default().fg(C_DIM).bg(C_HDR_BG),
-                )))
-                .style(Style::default().bg(C_HDR_BG)),
+                ),
+            ]);
+            f.render_widget(
+                Paragraph::new(hints_line).style(Style::default().bg(C_HDR_BG)),
                 outer[3],
             );
         }
@@ -557,6 +600,16 @@ fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str) -> Vec<Line<'
         ChatLine::SystemNote(body) => {
             render_message("  ·  ", C_DIM, body, C_DIM, false, false, spin)
         }
+        ChatLine::Brand(body) => vec![
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    body.clone(),
+                    Style::default().fg(C_BRAND).add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(""),
+        ],
     }
 }
 
