@@ -1383,11 +1383,15 @@ async fn run_print_agent(
         };
         if let Some(ConversationItem::Assistant { text, tool_uses }) = session.history.last() {
             if let Some(t) = text {
-                // Accumulate across MaxTokens continuation turns so the full
-                // response is printed, not just the last chunk.
-                match last_text.as_mut() {
-                    Some(acc) => acc.push_str(t),
-                    None => last_text = Some(t.clone()),
+                // Only accumulate text-only turns (tool_uses empty). Text
+                // that accompanies a tool call is preamble ("I'll read the
+                // file..."), not the final answer — accumulating it would
+                // pollute the output with intermediate chatter.
+                if tool_uses.is_empty() {
+                    match last_text.as_mut() {
+                        Some(acc) => acc.push_str(t),
+                        None => last_text = Some(t.clone()),
+                    }
                 }
             }
             for tu in tool_uses {
