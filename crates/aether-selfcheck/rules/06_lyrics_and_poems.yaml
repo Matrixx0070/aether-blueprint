@@ -1,9 +1,10 @@
 id: lyrics_and_poems
 description: |
   Detects song-lyric / poem / haiku-shaped output via consecutive short
-  lines. Their brevity does not exempt them from copyright. v2 heuristic:
-  eight or more non-empty lines each ≤ 8 words (raised from 4/12 to
-  reduce false-positives on legitimate numbered/bulleted audit lists).
+  lines. Their brevity does not exempt them from copyright. v3 heuristic:
+  twenty or more non-empty lines each ≤ 5 words. Raised from 8/8 to
+  eliminate false-positives on technical audit bullet lists where lines
+  like "Missing auth middleware" (3 words) appear in runs of 8+.
 severity: critical
 action: block
 applies_when: not_creative_writing_context
@@ -11,5 +12,5 @@ detector:
   kind: builtin
   name: short_line_stanza
   config:
-    min_consecutive_short_lines: 8
-    max_words_per_line: 8
+    min_consecutive_short_lines: 20
+    max_words_per_line: 5
