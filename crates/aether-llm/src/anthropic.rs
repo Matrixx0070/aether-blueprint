@@ -214,21 +214,46 @@ impl AnthropicProvider {
         Ok(p)
     }
 
-    /// Best-effort auto-detection: explicit `ANTHROPIC_API_KEY` env wins,
-    /// then `CLAUDE_CODE_OAUTH_TOKEN` env, then `~/.claude/.credentials.json`.
-    /// Returns the first viable source; errors only when none works.
+    /// Best-effort auto-detection.
+    ///
+    /// Priority (highest → lowest):
+    ///   1. `~/.claude/.credentials.json` OAuth token — preferred when present;
+    ///      it's a Max-subscription token that doesn't incur per-token billing.
+    ///   2. `CLAUDE_CODE_OAUTH_TOKEN` env var
+    ///   3. `ANTHROPIC_API_KEY` env var (plain API key or proxy dummy key)
+    ///
+    /// `ANTHROPIC_BASE_URL` overrides the API base **only** when falling back to
+    /// an API key (cases 3 above). OAuth tokens must reach `api.anthropic.com`
+    /// directly and are never redirected through a local proxy.
     pub fn from_env_or_credentials() -> Result<Self, LlmError> {
-        if let Ok(k) = std::env::var("ANTHROPIC_API_KEY") {
-            if !k.trim().is_empty() {
-                return Ok(Self::new(k));
-            }
+        // Prefer on-disk OAuth credentials when available.
+        if let Ok(p) = Self::from_claude_code_credentials() {
+            return Ok(p);
         }
         if let Ok(t) = std::env::var("CLAUDE_CODE_OAUTH_TOKEN") {
             if !t.trim().is_empty() {
                 return Ok(Self::with_oauth(t));
             }
         }
-        Self::from_claude_code_credentials()
+        // Fall back to API key — honour ANTHROPIC_BASE_URL for proxy routing.
+        let mut provider = Self::from_api_key_env()?;
+        if let Ok(base) = std::env::var("ANTHROPIC_BASE_URL") {
+            if !base.trim().is_empty() {
+                provider = provider.with_base(base);
+            }
+        }
+        Ok(provider)
+    }
+
+    fn from_api_key_env() -> Result<Self, LlmError> {
+        if let Ok(k) = std::env::var("ANTHROPIC_API_KEY") {
+            if !k.trim().is_empty() {
+                return Ok(Self::new(k));
+            }
+        }
+        Err(LlmError::Transport(
+            "No Anthropic credentials found. Set ANTHROPIC_API_KEY or run `claude` to set up OAuth.".to_string()
+        ))
     }
 
     /// Override the API base URL. Used by tests against a local mock or
