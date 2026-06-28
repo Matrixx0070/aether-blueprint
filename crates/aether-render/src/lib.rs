@@ -188,21 +188,30 @@ impl UiState {
         let model_short = model.split('/').last().unwrap_or(&model).to_string();
         let version = env!("CARGO_PKG_VERSION");
         let perm = perm_label(&perm_mode);
-        // Startup splash: diamond logo (brand-blue) with info column (per-row colour)
+        // Startup splash: 7-row double-edge diamond, no top margin.
+        // Info starts at logo row 2 (same vertical position as CC's "Claude Code" text).
         //
-        //   ◆◆◆
-        //  ◆   ◆   Aether  v0.35.0      ← bold white
-        //  ◆     ◆ model · perm         ← indigo
-        //  ◆   ◆   ~/cwd               ← dim
-        //   ◆◆◆
+        //     ◆◆◆◆◆                          ← row 1: solid top cap (no info)
+        //   ◆◆     ◆◆   Aether  v0.35.0     ← row 2: upper + bold white title
+        //  ◆◆       ◆◆  model · perm        ← row 3: widening + indigo model
+        // ◆◆         ◆◆ ~/cwd              ← row 4: widest + dim cwd
+        //  ◆◆       ◆◆                      ← row 5: narrowing  (no info)
+        //   ◆◆     ◆◆                        ← row 6: lower      (no info)
+        //     ◆◆◆◆◆                          ← row 7: solid bottom cap (no info)
+        //
+        //    Try "…"                          ← dim, no · prefix
+        //
+        // All logo strings are 15 visible columns so the info column aligns.
         let chat_lines = vec![
-            ChatLine::SplashRow { logo: "   ◆◆◆  ".to_string(),      info: String::new(),                          style: SplashStyle::Title  },
-            ChatLine::SplashRow { logo: "  ◆   ◆  ".to_string(),     info: format!("Aether  v{version}"),          style: SplashStyle::Title  },
-            ChatLine::SplashRow { logo: "  ◆     ◆  ".to_string(),   info: format!("{model_short}  ·  {perm}"),    style: SplashStyle::Accent },
-            ChatLine::SplashRow { logo: "  ◆   ◆  ".to_string(),     info: cwd.clone(),                            style: SplashStyle::Dim    },
-            ChatLine::SplashRow { logo: "   ◆◆◆  ".to_string(),      info: String::new(),                          style: SplashStyle::Title  },
-            ChatLine::SystemNote(String::new()),
-            ChatLine::SystemNote("Try \"summarize this codebase\" or ask anything to start".to_string()),
+            ChatLine::SplashRow { logo: "     ◆◆◆◆◆     ".to_string(), info: String::new(),                       style: SplashStyle::Title  },
+            ChatLine::SplashRow { logo: "   ◆◆     ◆◆   ".to_string(), info: format!("Aether  v{version}"),       style: SplashStyle::Title  },
+            ChatLine::SplashRow { logo: "  ◆◆       ◆◆  ".to_string(), info: format!("{model_short}  ·  {perm}"), style: SplashStyle::Accent },
+            ChatLine::SplashRow { logo: " ◆◆         ◆◆ ".to_string(), info: cwd.clone(),                         style: SplashStyle::Dim    },
+            ChatLine::SplashRow { logo: "  ◆◆       ◆◆  ".to_string(), info: String::new(),                       style: SplashStyle::Title  },
+            ChatLine::SplashRow { logo: "   ◆◆     ◆◆   ".to_string(), info: String::new(),                       style: SplashStyle::Title  },
+            ChatLine::SplashRow { logo: "     ◆◆◆◆◆     ".to_string(), info: String::new(),                       style: SplashStyle::Title  },
+            ChatLine::SplashRow { logo: String::new(),                  info: String::new(),                       style: SplashStyle::Dim    }, // blank
+            ChatLine::SplashRow { logo: "  ".to_string(),              info: "Try \"summarize this codebase\" or ask anything".to_string(), style: SplashStyle::Dim },
         ];
         Self {
             model,
@@ -391,10 +400,17 @@ pub fn draw_frame(
             );
         }
 
-        // ── 2. Main area: chat (left) + side panel (right) ───────────
+        // ── 2. Main area: chat (full-width) + side panel (only when active) ─
+        // The tools/fleet panel is hidden when there is no activity so the
+        // chat and splash card get the full width, matching CC's clean startup.
+        let has_side = !state.tool_log.is_empty() || !state.fleet.is_empty();
         let main = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+            .constraints(if has_side {
+                vec![Constraint::Percentage(70), Constraint::Percentage(30)]
+            } else {
+                vec![Constraint::Percentage(100)]
+            })
             .split(outer[1]);
 
         // Chat — no border, clean message flow with prefix glyphs
@@ -420,8 +436,8 @@ pub fn draw_frame(
             );
         }
 
-        // Side panel: tools (always) + fleet (when sub-agents are active)
-        {
+        // Side panel: tools + fleet — rendered only when there is activity.
+        if has_side {
             let border_style = Style::default().fg(C_BORDER);
             let title_style = Style::default().fg(C_DIM).add_modifier(Modifier::BOLD);
 
@@ -435,18 +451,11 @@ pub fn draw_frame(
                 (main[1], None)
             };
 
-            let tool_lines: Vec<Line> = if state.tool_log.is_empty() {
-                vec![Line::from(Span::styled(
-                    "  no activity yet",
-                    Style::default().fg(C_DIM),
-                ))]
-            } else {
-                state
-                    .tool_log
-                    .iter()
-                    .map(|t| tool_entry_to_line(t, spin))
-                    .collect()
-            };
+            let tool_lines: Vec<Line> = state
+                .tool_log
+                .iter()
+                .map(|t| tool_entry_to_line(t, spin))
+                .collect();
             f.render_widget(
                 Paragraph::new(tool_lines)
                     .block(
@@ -556,7 +565,7 @@ pub fn draw_frame(
             let (perm_color, perm_sym) = match perm {
                 "bypass" => (C_WARN, "⚡"),
                 "auto-edit" => (C_OK, "✓"),
-                _ => (C_DIM, "·"),
+                _ => (C_DIM, "◆"),
             };
             let thinking_part = if state.status_running {
                 format!("{spin}  thinking   ")
