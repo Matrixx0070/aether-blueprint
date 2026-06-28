@@ -284,7 +284,8 @@ impl UiState {
             }
             UiEvent::Error(e) => {
                 self.last_error = Some(e.clone());
-                self.chat_lines.push(ChatLine::SystemNote(format!("⚠  {e}")));
+                self.chat_lines
+                    .push(ChatLine::SystemNote(format!("⚠  {}", clean_error_message(&e))));
                 self.status_running = false;
             }
             UiEvent::AwaitUser => {
@@ -415,12 +416,23 @@ pub fn draw_frame(
 
         // Chat — no border, clean message flow with prefix glyphs
         {
+            // Once a real conversation starts, hide the splash card (CC behaviour).
+            let has_convo = state.chat_lines.iter().any(|cl| {
+                matches!(
+                    cl,
+                    ChatLine::User(_) | ChatLine::Assistant(_) | ChatLine::AssistantPartial(_)
+                )
+            });
             let total = state.chat_lines.len();
             let chat: Vec<Line> = state
                 .chat_lines
                 .iter()
                 .enumerate()
                 .flat_map(|(i, cl)| {
+                    // Hide splash rows once conversation begins
+                    if has_convo && matches!(cl, ChatLine::SplashRow { .. }) {
+                        return vec![];
+                    }
                     // Show spinner after the last in-flight partial only
                     let trail_spin = i + 1 == total
                         && state.status_running
@@ -864,6 +876,24 @@ fn fleet_entry_to_line(e: &FleetEntry) -> Line<'static> {
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+/// Pull a human-readable message out of an LLM error string.
+/// Handles upstream JSON blobs by extracting the innermost `"message":"…"` value;
+/// falls back to truncating the raw string to 120 chars.
+fn clean_error_message(raw: &str) -> String {
+    for key in &[r#""message":""#, r#""msg":""#] {
+        if let Some(pos) = raw.find(key) {
+            let start = pos + key.len();
+            if let Some(end) = raw[start..].find('"') {
+                let msg = &raw[start..start + end];
+                if !msg.is_empty() {
+                    return msg.to_string();
+                }
+            }
+        }
+    }
+    truncate_chars(raw, 120)
+}
 
 fn truncate_chars(s: &str, max: usize) -> String {
     let chars: Vec<char> = s.chars().collect();
