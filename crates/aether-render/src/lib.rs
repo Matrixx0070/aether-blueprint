@@ -115,14 +115,22 @@ pub enum UiCommand {
     Quit,
 }
 
+/// Style for the info column of a [`ChatLine::SplashRow`].
+#[derive(Debug, Clone)]
+pub enum SplashStyle {
+    Title,  // slate-200 bold  — "Aether v0.35.0"
+    Accent, // indigo-400      — model · perm
+    Dim,    // slate-500       — cwd path
+}
+
 #[derive(Debug, Clone)]
 pub enum ChatLine {
     User(String),
     Assistant(String),
     AssistantPartial(String),
     SystemNote(String),
-    /// Full-width brand-coloured bold heading (no prefix glyph) — startup card.
-    Brand(String),
+    /// Startup splash row: `logo` in brand-blue bold, `info` in `style`-determined colour.
+    SplashRow { logo: String, info: String, style: SplashStyle },
 }
 
 #[derive(Debug, Clone)]
@@ -180,23 +188,21 @@ impl UiState {
         let model_short = model.split('/').last().unwrap_or(&model).to_string();
         let version = env!("CARGO_PKG_VERSION");
         let perm = perm_label(&perm_mode);
-        // Diamond logo lines (brand colour) + info card (dim)
+        // Startup splash: diamond logo (brand-blue) with info column (per-row colour)
         //
-        //    ◆◆◆        Aether v0.35.0
-        //   ◆   ◆       model · perm
-        //  ◆     ◆      cwd
-        //   ◆   ◆
-        //    ◆◆◆
+        //   ◆◆◆
+        //  ◆   ◆   Aether  v0.35.0      ← bold white
+        //  ◆     ◆ model · perm         ← indigo
+        //  ◆   ◆   ~/cwd               ← dim
+        //   ◆◆◆
         let chat_lines = vec![
-            ChatLine::Brand("   ◆◆◆        ".to_string()),
-            ChatLine::Brand(format!("  ◆   ◆       Aether  v{version}")),
-            ChatLine::Brand(format!("  ◆     ◆     {model_short}  ·  {perm}")),
-            ChatLine::Brand(format!("  ◆   ◆       {cwd}")),
-            ChatLine::Brand("   ◆◆◆  ".to_string()),
+            ChatLine::SplashRow { logo: "   ◆◆◆  ".to_string(),      info: String::new(),                          style: SplashStyle::Title  },
+            ChatLine::SplashRow { logo: "  ◆   ◆  ".to_string(),     info: format!("Aether  v{version}"),          style: SplashStyle::Title  },
+            ChatLine::SplashRow { logo: "  ◆     ◆  ".to_string(),   info: format!("{model_short}  ·  {perm}"),    style: SplashStyle::Accent },
+            ChatLine::SplashRow { logo: "  ◆   ◆  ".to_string(),     info: cwd.clone(),                            style: SplashStyle::Dim    },
+            ChatLine::SplashRow { logo: "   ◆◆◆  ".to_string(),      info: String::new(),                          style: SplashStyle::Title  },
             ChatLine::SystemNote(String::new()),
-            ChatLine::SystemNote(
-                "Try \"summarize this codebase\" or ask anything to start".to_string(),
-            ),
+            ChatLine::SystemNote("Try \"summarize this codebase\" or ask anything to start".to_string()),
         ];
         Self {
             model,
@@ -600,16 +606,24 @@ fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str) -> Vec<Line<'
         ChatLine::SystemNote(body) => {
             render_message("  ·  ", C_DIM, body, C_DIM, false, false, spin)
         }
-        ChatLine::Brand(body) => vec![
-            Line::from(vec![
-                Span::raw("  "),
-                Span::styled(
-                    body.clone(),
-                    Style::default().fg(C_BRAND).add_modifier(Modifier::BOLD),
-                ),
-            ]),
-            Line::from(""),
-        ],
+        ChatLine::SplashRow { logo, info, style } => {
+            let (info_color, info_mod) = match style {
+                SplashStyle::Title  => (C_BODY,     Modifier::BOLD),
+                SplashStyle::Accent => (C_ASST_PFX, Modifier::empty()),
+                SplashStyle::Dim    => (C_DIM,       Modifier::empty()),
+            };
+            let mut spans = vec![Span::styled(
+                logo.clone(),
+                Style::default().fg(C_BRAND).add_modifier(Modifier::BOLD),
+            )];
+            if !info.is_empty() {
+                spans.push(Span::styled(
+                    info.clone(),
+                    Style::default().fg(info_color).add_modifier(info_mod),
+                ));
+            }
+            vec![Line::from(spans)]
+        }
     }
 }
 
