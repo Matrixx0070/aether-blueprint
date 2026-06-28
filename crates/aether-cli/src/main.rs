@@ -4348,7 +4348,17 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
 
     let session_id = new_session_id();
     let perm_str = format!("{:?}", permission_mode);
-    let mut ui = UiState::new(model.to_string(), session_id.clone(), perm_str);
+    let cwd = {
+        let p = std::env::current_dir().unwrap_or_default();
+        let home = std::env::var("HOME").unwrap_or_default();
+        let s = p.display().to_string();
+        if !home.is_empty() && s.starts_with(&home) {
+            format!("~{}", &s[home.len()..])
+        } else {
+            s
+        }
+    };
+    let mut ui = UiState::new(model.to_string(), session_id.clone(), perm_str, cwd);
 
     let (etx, mut erx, _ctx, mut crx) = channels();
     let etx_for_driver = etx.clone();

@@ -48,8 +48,63 @@ pub fn is_file_mutator(tool_name: &str) -> bool {
 pub fn is_parallel_safe(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "Read" | "Glob" | "Grep" | "MemoryRead"
+        "Read" | "Glob" | "Grep" | "MemoryRead" | "WebFetch" | "WebSearch"
     )
+}
+
+/// Conservative allowlist of Unix binaries whose normal operation is
+/// unconditionally read-only (no flag changes that). Excludes `find`,
+/// `sed -i`, `awk` (can write via redirection or `-i`), `xargs` (chains
+/// to arbitrary commands), and `tee` (writes).
+const SAFE_BASH_BINARIES: &[&str] = &[
+    "cat", "ls", "head", "tail", "wc", "stat", "file", "echo", "pwd",
+    "which", "type", "du", "df", "ps", "env", "printenv", "uname",
+    "date", "id", "whoami", "hostname", "uptime", "diff", "sort",
+    "uniq", "cut", "tr", "basename", "dirname", "realpath", "readlink",
+    "grep", "rg",
+];
+
+/// Shell metacharacters that indicate output side-effects or command
+/// chaining. We scan the raw command string without parsing quoting —
+/// a conservative false-negative (falls back to sequential) is
+/// acceptable; a false-positive (parallelises a mutating command) is not.
+const SHELL_SIDE_EFFECT_CHARS: &[char] = &['>', '|', ';', '`', '&', '\n'];
+
+/// Return true when a `Bash` tool call looks like a single, read-only
+/// invocation with no shell chaining or output redirection.
+///
+/// Only inspects the `command` field of the tool input JSON. The check
+/// is deliberately conservative: any unrecognised binary or any shell
+/// metacharacter forces the call back to the sequential slot.
+pub fn bash_command_is_readonly(input: &serde_json::Value) -> bool {
+    let cmd = match input.get("command").and_then(|v| v.as_str()) {
+        Some(s) => s.trim(),
+        None => return false,
+    };
+
+    // Fast-reject on side-effect characters anywhere in the command.
+    if cmd.chars().any(|c| SHELL_SIDE_EFFECT_CHARS.contains(&c)) {
+        return false;
+    }
+    // Command substitution via $()
+    if cmd.contains("$(") {
+        return false;
+    }
+
+    // Extract the binary name. Strip a leading path so `/usr/bin/cat`
+    // matches the same as plain `cat`.
+    let first_word = cmd.split_ascii_whitespace().next().unwrap_or("");
+    let binary = first_word.rsplit('/').next().unwrap_or(first_word);
+
+    SAFE_BASH_BINARIES.contains(&binary)
+}
+
+/// True if `tool_name`+`input` can safely run concurrently with other
+/// calls in the same batch. Named tools are checked by `is_parallel_safe`;
+/// `Bash` calls are additionally inspected to allow read-only invocations.
+pub fn can_run_parallel(tool_name: &str, input: &serde_json::Value) -> bool {
+    is_parallel_safe(tool_name)
+        || (tool_name == "Bash" && bash_command_is_readonly(input))
 }
 
 pub fn decide(mode: PermissionMode, tool_name: &str) -> PermissionOutcome {
@@ -433,10 +488,10 @@ impl Executor {
         // unknown tools run in their original sequential slot.
         let mut i = 0;
         while i < uses.len() {
-            if !parallel_disabled && is_parallel_safe(&uses[i].name) {
+            if !parallel_disabled && can_run_parallel(&uses[i].name, &uses[i].input) {
                 // Find the end of the safe run.
                 let mut j = i + 1;
-                while j < uses.len() && is_parallel_safe(&uses[j].name) {
+                while j < uses.len() && can_run_parallel(&uses[j].name, &uses[j].input) {
                     j += 1;
                 }
                 // Single safe call: no point spawning a join_all.
@@ -608,12 +663,211 @@ mod tests {
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 
+    // ── bash_command_is_readonly / can_run_parallel ───────────────────────
+
+    fn bash_input(cmd: &str) -> serde_json::Value {
+        serde_json::json!({ "command": cmd })
+    }
+
+    #[test]
+    fn bash_readonly_allows_safe_binaries() {
+        for cmd in &[
+            "cat file.txt",
+            "ls -la /tmp",
+            "head -n 20 src/main.rs",
+            "tail -f /var/log/syslog",
+            "wc -l *.rs",
+            "stat /etc/hostname",
+            "echo hello",
+            "pwd",
+            "which cargo",
+            "du -sh .",
+            "df -h",
+            "ps aux",
+            "uname -a",
+            "date +%Y-%m-%d",
+            "id",
+            "whoami",
+            "hostname",
+            "diff a.txt b.txt",
+            "sort -u list.txt",
+            "uniq -c words.txt",
+            "cut -d, -f1 data.csv",
+            "grep -r TODO src/",
+            "rg 'fn main' --type rust",
+            "/usr/bin/cat /etc/os-release",
+        ] {
+            assert!(
+                bash_command_is_readonly(&bash_input(cmd)),
+                "expected readonly for: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn bash_readonly_rejects_mutating_binaries() {
+        for cmd in &[
+            "rm -rf /tmp/test",
+            "mv src dst",
+            "cp a b",
+            "mkdir newdir",
+            "touch file.txt",
+            "chmod 755 script.sh",
+            "chown root file",
+            "dd if=/dev/zero of=disk",
+            "tee output.txt",
+            "find . -exec rm {} \\;",
+            "sed -i 's/a/b/' file",
+            "awk '{print > \"out\"}' file",
+            "xargs rm",
+            "curl https://example.com",
+            "wget https://example.com",
+        ] {
+            assert!(
+                !bash_command_is_readonly(&bash_input(cmd)),
+                "expected NOT readonly for: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn bash_readonly_rejects_shell_operators() {
+        // Output redirect
+        assert!(!bash_command_is_readonly(&bash_input("ls > out.txt")));
+        assert!(!bash_command_is_readonly(&bash_input("echo hi >> file")));
+        // Pipe (could chain to a mutating command)
+        assert!(!bash_command_is_readonly(&bash_input("cat file | rm -f")));
+        assert!(!bash_command_is_readonly(&bash_input("ls | grep foo")));
+        // Semicolon chaining
+        assert!(!bash_command_is_readonly(&bash_input("ls; rm -rf /")));
+        // Background
+        assert!(!bash_command_is_readonly(&bash_input("ls &")));
+        // Command substitution via $()
+        assert!(!bash_command_is_readonly(&bash_input("echo $(rm -rf /)")));
+        // Backtick substitution
+        assert!(!bash_command_is_readonly(&bash_input("echo `id`")));
+        // Newline command separator
+        assert!(!bash_command_is_readonly(&bash_input("ls\nrm -rf /")));
+        // Logical AND/OR chaining
+        assert!(!bash_command_is_readonly(&bash_input("ls && rm file")));
+        assert!(!bash_command_is_readonly(&bash_input("ls || rm file")));
+    }
+
+    #[test]
+    fn bash_readonly_rejects_missing_or_empty_command() {
+        assert!(!bash_command_is_readonly(&serde_json::json!({})));
+        assert!(!bash_command_is_readonly(&serde_json::json!({"command": ""})));
+        assert!(!bash_command_is_readonly(&serde_json::json!({"command": "   "})));
+    }
+
+    #[test]
+    fn can_run_parallel_combines_named_tools_and_bash() {
+        // Named parallel-safe tools still work
+        assert!(can_run_parallel("Read", &serde_json::json!({})));
+        assert!(can_run_parallel("Glob", &serde_json::json!({})));
+        assert!(can_run_parallel("WebFetch", &serde_json::json!({})));
+        // Bash with read-only command
+        assert!(can_run_parallel("Bash", &bash_input("cat README.md")));
+        assert!(can_run_parallel("Bash", &bash_input("ls -la")));
+        // Bash with mutating command
+        assert!(!can_run_parallel("Bash", &bash_input("rm -rf /")));
+        assert!(!can_run_parallel("Bash", &bash_input("cat a | tee b")));
+        // Non-Bash mutating tools never parallel
+        assert!(!can_run_parallel("Write", &serde_json::json!({})));
+        assert!(!can_run_parallel("Edit", &serde_json::json!({})));
+    }
+
+    #[tokio::test]
+    async fn readonly_bash_calls_run_in_parallel() {
+        let _guard = crate::mock::ENV_TEST_LOCK.lock().expect("env lock");
+        let log = Arc::new(tokio::sync::Mutex::new(Vec::<String>::new()));
+        let mut reg = ToolRegistry::new();
+        // Register a "Bash" mock that records start/finish with yields.
+        reg.register(Box::new(InterleaveTool {
+            name: "Bash",
+            log: log.clone(),
+        }));
+
+        let exec = Executor::new(PermissionMode::BypassPermissions);
+        let uses = vec![
+            RecordedToolUse {
+                id: "b1".into(),
+                name: "Bash".into(),
+                input: bash_input("cat a.txt"),
+            },
+            RecordedToolUse {
+                id: "b2".into(),
+                name: "Bash".into(),
+                input: bash_input("ls -la"),
+            },
+            RecordedToolUse {
+                id: "b3".into(),
+                name: "Bash".into(),
+                input: bash_input("head -5 README.md"),
+            },
+        ];
+        let out = exec.execute(&reg, &uses).await;
+
+        // Results back in input order
+        assert_eq!(out[0].tool_use_id, "b1");
+        assert_eq!(out[1].tool_use_id, "b2");
+        assert_eq!(out[2].tool_use_id, "b3");
+
+        // First three log entries should all be starts — parallel dispatch
+        let g = log.lock().await;
+        let first_three: Vec<&str> = g.iter().take(3).map(|s| s.as_str()).collect();
+        assert!(
+            first_three.iter().all(|s| s.ends_with(":start")),
+            "expected 3 parallel starts, got {first_three:?} (full: {g:?})"
+        );
+    }
+
+    #[tokio::test]
+    async fn mutating_bash_breaks_parallel_batch() {
+        let _guard = crate::mock::ENV_TEST_LOCK.lock().expect("env lock");
+        // [cat, rm, cat] → cat runs alone, rm runs alone, cat runs alone.
+        // If rm were batched with either cat, the log would show 2+ starts
+        // before any finish on the first batch (or 3 starts total).
+        // Sequential dispatch gives start,finish,start,finish,start,finish.
+        let counter = Arc::new(AtomicU64::new(0));
+        let mut reg = ToolRegistry::new();
+        reg.register(Box::new(CountTool {
+            name: "Bash",
+            calls: counter.clone(),
+        }));
+
+        let exec = Executor::new(PermissionMode::BypassPermissions);
+        let uses = vec![
+            RecordedToolUse {
+                id: "b1".into(),
+                name: "Bash".into(),
+                input: bash_input("cat a.txt"),
+            },
+            RecordedToolUse {
+                id: "b2".into(),
+                name: "Bash".into(),
+                input: bash_input("rm -rf /tmp/test"),
+            },
+            RecordedToolUse {
+                id: "b3".into(),
+                name: "Bash".into(),
+                input: bash_input("ls -la"),
+            },
+        ];
+        let out = exec.execute(&reg, &uses).await;
+        assert_eq!(out.len(), 3);
+        // All three must have run exactly once
+        assert_eq!(counter.load(Ordering::SeqCst), 3);
+    }
+
     #[test]
     fn is_parallel_safe_covers_read_only_only() {
         assert!(is_parallel_safe("Read"));
         assert!(is_parallel_safe("Glob"));
         assert!(is_parallel_safe("Grep"));
         assert!(is_parallel_safe("MemoryRead"));
+        assert!(is_parallel_safe("WebFetch"));
+        assert!(is_parallel_safe("WebSearch"));
         // Mutating tools must NEVER be flagged safe — a parallel write
         // would race file state, an interactive prompt can't run twice.
         assert!(!is_parallel_safe("Write"));

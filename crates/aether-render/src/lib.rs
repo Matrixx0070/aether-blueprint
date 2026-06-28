@@ -1,17 +1,15 @@
-//! Ratatui-based TUI for aether.
+//! Ratatui-based TUI for aether — Claude Code-inspired visual design.
 //!
-//! Three panes + status:
-//!   1. Chat (left, scrollable):  alternating user / assistant turns
-//!   2. Tool log (right side):    streaming tool calls + status
-//!   3. Status bar (1 line):      model · session · tokens · perm
-//!   4. Input area (bottom):      multi-line text entry
+//! Layout (top → bottom):
+//!   1. Header bar  (1 line):  ◆ Aether · model · cwd · perm
+//!   2. Main area   (flex):    chat (left ~70%) | tools panel (right ~30%)
+//!   3. Input area  (4 lines): "> " prompt with typed message
+//!   4. Hints bar   (1 line):  key shortcuts + session cost
 //!
-//! Event loop runs on the foreground tokio task. Background "session
-//! driver" task owns the agent loop; it pushes UiEvents into an mpsc.
-//! The TUI drains those events between draw ticks (~16ms / 60fps).
-//!
-//! The original Renderer / PlainRenderer trait from v0.1 is kept as a
-//! headless fallback for tests and non-TTY usage.
+//! Chat messages use CC-style prefix glyphs ("> " user, "◆ " aether) with
+//! no surrounding box borders — the conversation flows cleanly down the left
+//! pane. The right panel keeps a subtle border to delineate tool activity.
+//! A live spinner animates when the agent is thinking.
 
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
@@ -20,9 +18,37 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Terminal;
 use std::io::{self, Stdout};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
-// ── headless renderer (kept for tests / non-TTY usage) ────────────────────
+// ── colour palette (TrueColor) ────────────────────────────────────────────────
+
+const C_BRAND: Color = Color::Rgb(99, 179, 237); // sky-300   — ◆ brand glyph
+const C_HDR_BG: Color = Color::Rgb(15, 23, 42); // slate-950 — header / hints bg
+const C_USER_PFX: Color = Color::Rgb(148, 163, 184); // slate-400 — ">" user prefix
+const C_ASST_PFX: Color = Color::Rgb(129, 140, 248); // indigo-400— "◆" aether prefix
+const C_BODY: Color = Color::Rgb(226, 232, 240); // slate-200 — body text
+const C_DIM: Color = Color::Rgb(100, 116, 139); // slate-500 — dim / secondary
+const C_CODE_FG: Color = Color::Rgb(125, 211, 252); // sky-300   — inline `code`
+const C_CODE_BG: Color = Color::Rgb(30, 41, 59); // slate-800 — inline code bg
+const C_HEAD_FG: Color = Color::Rgb(192, 132, 252); // purple-400— ## headings
+const C_OK: Color = Color::Rgb(74, 222, 128); // green-400 — tool success
+const C_WARN: Color = Color::Rgb(251, 191, 36); // amber-400 — running / warn
+const C_ERR: Color = Color::Rgb(248, 113, 113); // red-400   — error
+const C_BORDER: Color = Color::Rgb(51, 65, 85); // slate-700 — panel border
+
+// Eight-frame braille spinner; advances at ~8 fps (125 ms / frame).
+const SPINNER_FRAMES: &[&str] = &["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
+
+fn spinner_frame() -> &'static str {
+    let ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_millis();
+    SPINNER_FRAMES[(ms / 125) as usize % SPINNER_FRAMES.len()]
+}
+
+// ── headless renderer (kept for tests / non-TTY usage) ───────────────────────
 
 pub trait Renderer: Send {
     fn write_text(&mut self, s: &str);
@@ -54,9 +80,9 @@ impl Renderer for PlainRenderer {
     fn flush(&mut self) {}
 }
 
-// ── TUI types ─────────────────────────────────────────────────────────────
+// ── TUI event / command types ─────────────────────────────────────────────────
 
-/// Events emitted by the session driver task → UI.
+/// Events pushed by the session-driver task into the UI event loop.
 #[derive(Debug, Clone)]
 pub enum UiEvent {
     AssistantDelta(String),
@@ -81,7 +107,7 @@ pub enum UiEvent {
     AwaitUser,
 }
 
-/// Commands from UI → session driver.
+/// Commands sent from the UI back to the session driver.
 #[derive(Debug, Clone)]
 pub enum UiCommand {
     UserMessage(String),
@@ -127,10 +153,13 @@ pub enum FleetStatus {
     Error,
 }
 
+// ── UI state ──────────────────────────────────────────────────────────────────
+
 pub struct UiState {
     pub model: String,
     pub session_id: String,
     pub perm_mode: String,
+    pub cwd: String,
     pub chat_lines: Vec<ChatLine>,
     pub tool_log: Vec<ToolEntry>,
     pub fleet: Vec<FleetEntry>,
@@ -145,12 +174,16 @@ pub struct UiState {
 }
 
 impl UiState {
-    pub fn new(model: String, session_id: String, perm_mode: String) -> Self {
+    pub fn new(model: String, session_id: String, perm_mode: String, cwd: String) -> Self {
+        let model_short = model.split('/').last().unwrap_or(&model).to_string();
         Self {
             model,
             session_id,
             perm_mode,
-            chat_lines: Vec::new(),
+            cwd,
+            chat_lines: vec![ChatLine::SystemNote(format!(
+                "◆ Aether ready — {model_short} — type a message below to start"
+            ))],
             tool_log: Vec::new(),
             fleet: Vec::new(),
             input_buffer: String::new(),
@@ -215,7 +248,9 @@ impl UiState {
                 self.cost_usd = cost_usd;
             }
             UiEvent::Error(e) => {
-                self.last_error = Some(e);
+                self.last_error = Some(e.clone());
+                self.chat_lines.push(ChatLine::SystemNote(format!("⚠  {e}")));
+                self.status_running = false;
             }
             UiEvent::AwaitUser => {
                 self.status_running = false;
@@ -224,7 +259,7 @@ impl UiState {
     }
 }
 
-// ── terminal lifecycle ────────────────────────────────────────────────────
+// ── terminal lifecycle ────────────────────────────────────────────────────────
 
 pub fn setup_terminal() -> io::Result<Terminal<CrosstermBackend<Stdout>>> {
     use crossterm::{event::EnableBracketedPaste, execute, terminal};
@@ -239,9 +274,7 @@ pub fn setup_terminal() -> io::Result<Terminal<CrosstermBackend<Stdout>>> {
     Terminal::new(CrosstermBackend::new(stdout))
 }
 
-pub fn teardown_terminal(
-    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-) -> io::Result<()> {
+pub fn teardown_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()> {
     use crossterm::{event::DisableBracketedPaste, execute, terminal};
     terminal::disable_raw_mode()?;
     execute!(
@@ -254,7 +287,7 @@ pub fn teardown_terminal(
     Ok(())
 }
 
-/// RAII guard: cooks the terminal even on panic.
+/// RAII guard: restores the terminal even on panic.
 pub struct TerminalGuard {
     terminal: Option<Terminal<CrosstermBackend<Stdout>>>,
 }
@@ -266,7 +299,7 @@ impl TerminalGuard {
         })
     }
     pub fn terminal(&mut self) -> &mut Terminal<CrosstermBackend<Stdout>> {
-        self.terminal.as_mut().expect("terminal in guard")
+        self.terminal.as_mut().expect("terminal already dropped")
     }
 }
 
@@ -278,310 +311,515 @@ impl Drop for TerminalGuard {
     }
 }
 
-// ── one-frame draw ────────────────────────────────────────────────────────
+// ── frame renderer ────────────────────────────────────────────────────────────
 
 pub fn draw_frame(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     state: &UiState,
 ) -> io::Result<()> {
+    let spin = spinner_frame();
+
     terminal.draw(|f| {
+        // Outer vertical split: header | main | input | hints
         let outer = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(5),
-                Constraint::Length(1),
-                Constraint::Length(5),
+                Constraint::Length(1), // header bar
+                Constraint::Min(5),    // chat + tools
+                Constraint::Length(4), // input (1 border + 3 content lines)
+                Constraint::Length(1), // hints bar
             ])
             .split(f.area());
 
-        // Right side splits between tools (top) and fleet (bottom) when
-        // any sub-agents have been launched; otherwise tools takes the
-        // whole right side.
-        let main_split = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-            .split(outer[0]);
+        // ── 1. Header bar ─────────────────────────────────────────────
+        {
+            let model_short = state.model.split('/').last().unwrap_or(&state.model);
+            let cwd = shorten_path(&state.cwd, 36);
+            let perm = perm_label(&state.perm_mode);
 
-        let chat: Vec<Line> = state
-            .chat_lines
-            .iter()
-            .flat_map(chat_line_to_lines)
-            .collect();
-        let chat_widget = Paragraph::new(chat)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(Span::styled(
-                        " chat ",
-                        Style::default().add_modifier(Modifier::BOLD),
-                    )),
-            )
-            .wrap(Wrap { trim: false })
-            .scroll((state.chat_scroll, 0));
-        f.render_widget(chat_widget, main_split[0]);
-
-        let (tools_area, fleet_area) = if !state.fleet.is_empty() {
-            let split = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-                .split(main_split[1]);
-            (split[0], Some(split[1]))
-        } else {
-            (main_split[1], None)
-        };
-
-        let tool_lines: Vec<Line> = state.tool_log.iter().map(tool_entry_to_line).collect();
-        let tools_widget = Paragraph::new(tool_lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(Span::styled(
-                        " tools ",
-                        Style::default().add_modifier(Modifier::BOLD),
-                    )),
-            )
-            .wrap(Wrap { trim: false });
-        f.render_widget(tools_widget, tools_area);
-
-        if let Some(area) = fleet_area {
-            let fleet_lines: Vec<Line> =
-                state.fleet.iter().map(fleet_entry_to_line).collect();
-            let fleet_widget = Paragraph::new(fleet_lines)
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title(Span::styled(
-                            " fleet ",
-                            Style::default().add_modifier(Modifier::BOLD),
-                        )),
-                )
-                .wrap(Wrap { trim: false });
-            f.render_widget(fleet_widget, area);
+            let hdr = Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    "◆ Aether",
+                    Style::default()
+                        .fg(C_BRAND)
+                        .bg(C_HDR_BG)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("  ·  ", Style::default().fg(C_DIM).bg(C_HDR_BG)),
+                Span::styled(
+                    model_short.to_string(),
+                    Style::default().fg(C_BODY).bg(C_HDR_BG),
+                ),
+                Span::styled("  ·  ", Style::default().fg(C_DIM).bg(C_HDR_BG)),
+                Span::styled(cwd, Style::default().fg(C_DIM).bg(C_HDR_BG)),
+                Span::styled("  ·  ", Style::default().fg(C_DIM).bg(C_HDR_BG)),
+                Span::styled(
+                    perm.to_string(),
+                    Style::default().fg(C_WARN).bg(C_HDR_BG),
+                ),
+            ]);
+            f.render_widget(
+                Paragraph::new(hdr).style(Style::default().bg(C_HDR_BG)),
+                outer[0],
+            );
         }
 
-        let status_text = format!(
-            " {} | session {} | perm {} | tok in={} out={} total={} ~${:.4}{} ",
-            state.model,
-            state.session_id,
-            state.perm_mode,
-            state.tokens_in,
-            state.tokens_out,
-            state.tokens_total,
-            state.cost_usd,
-            if state.status_running { " | RUNNING" } else { "" },
-        );
-        let status = Paragraph::new(status_text).style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
-        f.render_widget(status, outer[1]);
+        // ── 2. Main area: chat (left) + side panel (right) ───────────
+        let main = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+            .split(outer[1]);
 
-        let input_lines: Vec<Line> = state
-            .input_buffer
-            .lines()
-            .map(|l| Line::from(l.to_string()))
-            .collect();
-        let display = if input_lines.is_empty() {
-            vec![Line::from(Span::styled(
-                "type a prompt (Enter to send, Shift+Enter newline, Esc to quit)",
-                Style::default().fg(Color::DarkGray),
-            ))]
-        } else {
-            input_lines
-        };
-        let input_widget = Paragraph::new(display)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(Span::styled(
-                        " you ",
-                        Style::default().add_modifier(Modifier::BOLD),
-                    )),
-            )
-            .wrap(Wrap { trim: false });
-        f.render_widget(input_widget, outer[2]);
+        // Chat — no border, clean message flow with prefix glyphs
+        {
+            let total = state.chat_lines.len();
+            let chat: Vec<Line> = state
+                .chat_lines
+                .iter()
+                .enumerate()
+                .flat_map(|(i, cl)| {
+                    // Show spinner after the last in-flight partial only
+                    let trail_spin = i + 1 == total
+                        && state.status_running
+                        && matches!(cl, ChatLine::AssistantPartial(_));
+                    chat_line_to_lines(cl, trail_spin, spin)
+                })
+                .collect();
+            f.render_widget(
+                Paragraph::new(chat)
+                    .wrap(Wrap { trim: false })
+                    .scroll((state.chat_scroll, 0)),
+                main[0],
+            );
+        }
+
+        // Side panel: tools (always) + fleet (when sub-agents are active)
+        {
+            let border_style = Style::default().fg(C_BORDER);
+            let title_style = Style::default().fg(C_DIM).add_modifier(Modifier::BOLD);
+
+            let (tools_area, fleet_area) = if !state.fleet.is_empty() {
+                let split = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+                    .split(main[1]);
+                (split[0], Some(split[1]))
+            } else {
+                (main[1], None)
+            };
+
+            let tool_lines: Vec<Line> = if state.tool_log.is_empty() {
+                vec![Line::from(Span::styled(
+                    "  no activity yet",
+                    Style::default().fg(C_DIM),
+                ))]
+            } else {
+                state
+                    .tool_log
+                    .iter()
+                    .map(|t| tool_entry_to_line(t, spin))
+                    .collect()
+            };
+            f.render_widget(
+                Paragraph::new(tool_lines)
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .border_style(border_style)
+                            .title(Span::styled(" Tools ", title_style)),
+                    )
+                    .wrap(Wrap { trim: false }),
+                tools_area,
+            );
+
+            if let Some(area) = fleet_area {
+                let fleet_lines: Vec<Line> =
+                    state.fleet.iter().map(fleet_entry_to_line).collect();
+                f.render_widget(
+                    Paragraph::new(fleet_lines)
+                        .block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .border_style(border_style)
+                                .title(Span::styled(" Fleet ", title_style)),
+                        )
+                        .wrap(Wrap { trim: false }),
+                    area,
+                );
+            }
+        }
+
+        // ── 3. Input area ─────────────────────────────────────────────
+        {
+            let (pfx, pfx_color) = if state.status_running {
+                (spin, C_WARN)
+            } else {
+                (">", C_USER_PFX)
+            };
+
+            let input_content: Vec<Line> = if state.input_buffer.is_empty() {
+                let placeholder = if state.status_running {
+                    "thinking…"
+                } else {
+                    "type a message…"
+                };
+                vec![Line::from(vec![
+                    Span::styled(
+                        format!("  {pfx}  "),
+                        Style::default()
+                            .fg(pfx_color)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(placeholder, Style::default().fg(C_DIM)),
+                ])]
+            } else {
+                state
+                    .input_buffer
+                    .lines()
+                    .enumerate()
+                    .map(|(i, line)| {
+                        let prefix_span = if i == 0 {
+                            Span::styled(
+                                format!("  {pfx}  "),
+                                Style::default()
+                                    .fg(pfx_color)
+                                    .add_modifier(Modifier::BOLD),
+                            )
+                        } else {
+                            Span::raw("       ")
+                        };
+                        Line::from(vec![
+                            prefix_span,
+                            Span::styled(
+                                line.to_string(),
+                                Style::default().fg(C_BODY),
+                            ),
+                        ])
+                    })
+                    .collect()
+            };
+
+            f.render_widget(
+                Paragraph::new(input_content)
+                    .block(
+                        Block::default()
+                            .borders(Borders::TOP)
+                            .border_style(Style::default().fg(C_BORDER)),
+                    )
+                    .wrap(Wrap { trim: false }),
+                outer[2],
+            );
+        }
+
+        // ── 4. Hints bar ──────────────────────────────────────────────
+        {
+            let thinking_part = if state.status_running {
+                format!("{spin}  thinking   ")
+            } else {
+                String::new()
+            };
+            let cost_part = if state.cost_usd > 0.0 {
+                format!("   ~${:.4}", state.cost_usd)
+            } else {
+                String::new()
+            };
+            let hints = format!(
+                "  {}↵ send   ⇧↵ newline   pgup/pgdn scroll   esc quit{}",
+                thinking_part, cost_part,
+            );
+            f.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    hints,
+                    Style::default().fg(C_DIM).bg(C_HDR_BG),
+                )))
+                .style(Style::default().bg(C_HDR_BG)),
+                outer[3],
+            );
+        }
     })?;
     Ok(())
 }
 
-fn chat_line_to_lines(cl: &ChatLine) -> Vec<Line<'static>> {
-    let (prefix, style, body, is_assistant) = match cl {
-        ChatLine::User(s) => (
-            " you › ",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-            s.clone(),
-            false,
-        ),
-        ChatLine::Assistant(s) => (
-            " aether › ",
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-            s.clone(),
-            true,
-        ),
-        ChatLine::AssistantPartial(s) => (
-            " aether › ",
-            Style::default().fg(Color::Green),
-            s.clone(),
-            true,
-        ),
-        ChatLine::SystemNote(s) => (
-            " note › ",
-            Style::default().fg(Color::DarkGray),
-            s.clone(),
-            false,
-        ),
-    };
-    let mut out = Vec::new();
-    let mut first = true;
-    let mut in_fenced_code = false;
-    for line in body.lines() {
-        // Toggle fenced-code state on ``` lines
-        let trimmed = line.trim_start();
-        let is_fence = trimmed.starts_with("```");
-        if is_fence {
-            in_fenced_code = !in_fenced_code;
+// ── chat line → ratatui Lines ─────────────────────────────────────────────────
+
+fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str) -> Vec<Line<'static>> {
+    match cl {
+        ChatLine::User(body) => {
+            render_message("  >  ", C_USER_PFX, body, C_BODY, false, trail_spin, spin)
         }
-        let leader: Line = if first {
+        ChatLine::Assistant(body) => {
+            render_message("  ◆  ", C_ASST_PFX, body, C_BODY, true, false, spin)
+        }
+        ChatLine::AssistantPartial(body) => {
+            render_message("  ◆  ", C_ASST_PFX, body, C_BODY, true, trail_spin, spin)
+        }
+        ChatLine::SystemNote(body) => {
+            render_message("  ·  ", C_DIM, body, C_DIM, false, false, spin)
+        }
+    }
+}
+
+/// Render one chat message as a sequence of styled `Line`s.
+///
+/// `prefix`      — 5-char glyph sequence (e.g. "  >  ") — must be `&'static str`
+/// `prefix_color`— colour for the prefix glyph
+/// `body`        — raw text of the message
+/// `body_color`  — colour used for non-markdown-decorated body text
+/// `is_assistant`— enables inline-markdown rendering and code-block colouring
+/// `trail_spin`  — append the live spinner to the very last line
+/// `spin`        — current spinner frame string
+fn render_message(
+    prefix: &'static str,
+    prefix_color: Color,
+    body: &str,
+    body_color: Color,
+    is_assistant: bool,
+    trail_spin: bool,
+    spin: &str,
+) -> Vec<Line<'static>> {
+    let pfx_style = Style::default()
+        .fg(prefix_color)
+        .add_modifier(Modifier::BOLD);
+    // Continuation indent — same visible width as prefix (5 chars).
+    const CONT: &str = "     ";
+
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let mut first = true;
+    let mut in_code_block = false;
+
+    let raw_lines: Vec<&str> = body.lines().collect();
+    let n = raw_lines.len();
+
+    for (li, &line) in raw_lines.iter().enumerate() {
+        let is_last = li + 1 == n;
+        let trimmed = line.trim_start();
+
+        if trimmed.starts_with("```") {
+            in_code_block = !in_code_block;
+        }
+
+        let leader: Span<'static> = if first {
             first = false;
-            Line::from(Span::styled(prefix.to_string(), style))
+            Span::styled(prefix, pfx_style)
         } else {
-            Line::from(Span::raw("           ".to_string()))
+            Span::raw(CONT)
         };
-        let body_spans = if !is_assistant || is_fence {
-            // raw render for non-assistant lines and fence delimiters
-            vec![Span::raw(line.to_string())]
-        } else if in_fenced_code {
-            // inside a code block — render whole line in cyan
+
+        let mut body_spans: Vec<Span<'static>> = if !is_assistant || trimmed.starts_with("```") {
+            // Fence delimiter or non-assistant: dim raw text
             vec![Span::styled(
                 line.to_string(),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(C_DIM),
+            )]
+        } else if in_code_block {
+            // Inside a fenced code block: sky-300 text
+            vec![Span::styled(
+                line.to_string(),
+                Style::default().fg(C_CODE_FG),
             )]
         } else {
-            inline_markdown_spans(line)
+            // Normal assistant prose: inline markdown rendering
+            inline_markdown_spans(line, body_color)
         };
-        let mut combined = leader.spans;
-        combined.extend(body_spans);
-        out.push(Line::from(combined));
+
+        if trail_spin && is_last {
+            body_spans.push(Span::styled(
+                format!(" {spin}"),
+                Style::default().fg(C_WARN),
+            ));
+        }
+
+        let mut row = vec![leader];
+        row.extend(body_spans);
+        out.push(Line::from(row));
     }
+
+    // Empty body: just the prefix glyph (possibly with spinner)
     if first {
-        out.push(Line::from(Span::styled(prefix.to_string(), style)));
+        let mut row: Vec<Span<'static>> = vec![Span::styled(prefix, pfx_style)];
+        if trail_spin {
+            row.push(Span::styled(
+                format!(" {spin}"),
+                Style::default().fg(C_WARN),
+            ));
+        }
+        out.push(Line::from(row));
     }
+
+    // Blank separator line after each message
     out.push(Line::from(""));
     out
 }
 
-/// Lightweight inline markdown: **bold** + `inline code` + headings.
-/// Skips full CommonMark; what we ship is enough to make assistant
-/// output readable in a terminal without parser overhead.
-fn inline_markdown_spans(line: &str) -> Vec<Span<'static>> {
-    // Heading: '# ' prefix → bold + magenta
-    let stripped = line.trim_start_matches('#').trim_start();
-    if stripped.len() < line.len() && stripped.len() < line.len() {
-        let depth = line.len() - line.trim_start_matches('#').len();
-        if depth > 0 && depth <= 6 && line.chars().nth(depth) == Some(' ') {
+// ── inline markdown spans ─────────────────────────────────────────────────────
+
+/// Lightweight inline-markdown parser: headings, `inline code`, **bold**, *italic*.
+///
+/// Returns owned-string `Span<'static>` values so they can live in the
+/// `Vec<Line<'static>>` that the renderer produces.
+fn inline_markdown_spans(line: &str, body_color: Color) -> Vec<Span<'static>> {
+    // Detect ATX heading: one-to-six '#' chars followed immediately by a space.
+    let hash_count = line.len() - line.trim_start_matches('#').len();
+    if hash_count >= 1 && hash_count <= 6 {
+        let after = &line[hash_count..];
+        if after.starts_with(' ') {
             return vec![Span::styled(
                 line.to_string(),
                 Style::default()
-                    .fg(Color::Magenta)
+                    .fg(C_HEAD_FG)
                     .add_modifier(Modifier::BOLD),
             )];
         }
     }
+
     let mut out: Vec<Span<'static>> = Vec::new();
+    let mut buf = String::new();
     let bytes = line.as_bytes();
     let mut i = 0;
-    let mut buf = String::new();
+
+    let flush_buf = |buf: &mut String, out: &mut Vec<Span<'static>>, color: Color| {
+        if !buf.is_empty() {
+            out.push(Span::styled(
+                std::mem::take(buf),
+                Style::default().fg(color),
+            ));
+        }
+    };
+
     while i < bytes.len() {
         // Inline code `...`
         if bytes[i] == b'`' {
-            // emit pending buffer as plain
-            if !buf.is_empty() {
-                out.push(Span::raw(buf.clone()));
-                buf.clear();
-            }
-            // find closing backtick
+            flush_buf(&mut buf, &mut out, body_color);
             if let Some(end) = line[i + 1..].find('`') {
-                let code = &line[i + 1..i + 1 + end];
                 out.push(Span::styled(
-                    code.to_string(),
-                    Style::default().fg(Color::Cyan).bg(Color::DarkGray),
+                    line[i + 1..i + 1 + end].to_string(),
+                    Style::default().fg(C_CODE_FG).bg(C_CODE_BG),
                 ));
                 i += end + 2;
                 continue;
             }
         }
-        // Bold **...**
+
+        // Bold **...**  (check before single-* italic)
         if i + 1 < bytes.len() && &bytes[i..i + 2] == b"**" {
-            if !buf.is_empty() {
-                out.push(Span::raw(buf.clone()));
-                buf.clear();
-            }
+            flush_buf(&mut buf, &mut out, body_color);
             if let Some(end) = line[i + 2..].find("**") {
-                let bold = &line[i + 2..i + 2 + end];
                 out.push(Span::styled(
-                    bold.to_string(),
-                    Style::default().add_modifier(Modifier::BOLD),
+                    line[i + 2..i + 2 + end].to_string(),
+                    Style::default()
+                        .fg(body_color)
+                        .add_modifier(Modifier::BOLD),
                 ));
                 i += end + 4;
                 continue;
             }
         }
-        buf.push(line[i..].chars().next().unwrap());
-        i += line[i..].chars().next().unwrap().len_utf8();
+
+        // Italic *...*
+        if bytes[i] == b'*' {
+            flush_buf(&mut buf, &mut out, body_color);
+            if let Some(end) = line[i + 1..].find('*') {
+                out.push(Span::styled(
+                    line[i + 1..i + 1 + end].to_string(),
+                    Style::default()
+                        .fg(body_color)
+                        .add_modifier(Modifier::ITALIC),
+                ));
+                i += end + 2;
+                continue;
+            }
+        }
+
+        let ch = line[i..].chars().next().unwrap();
+        buf.push(ch);
+        i += ch.len_utf8();
     }
-    if !buf.is_empty() {
-        out.push(Span::raw(buf));
-    }
+
+    flush_buf(&mut buf, &mut out, body_color);
     if out.is_empty() {
         out.push(Span::raw(String::new()));
     }
     out
 }
 
+// ── tool / fleet line rendering ───────────────────────────────────────────────
+
+fn tool_entry_to_line(t: &ToolEntry, spin: &str) -> Line<'static> {
+    let (sym, color) = match &t.status {
+        ToolStatus::Running => (spin.to_string(), C_WARN),
+        ToolStatus::Ok(_) => ("✓".to_string(), C_OK),
+        ToolStatus::Err(_) => ("✗".to_string(), C_ERR),
+    };
+    let result_preview = match &t.status {
+        ToolStatus::Ok(p) | ToolStatus::Err(p) if !p.is_empty() => {
+            format!("  —  {}", truncate_chars(p, 26))
+        }
+        _ => String::new(),
+    };
+    let summary = if t.summary.is_empty() {
+        String::new()
+    } else {
+        format!("  {}", truncate_chars(&t.summary, 22))
+    };
+    Line::from(Span::styled(
+        format!("  {sym}  {}{}{}", t.name, summary, result_preview),
+        Style::default().fg(color),
+    ))
+}
+
 fn fleet_entry_to_line(e: &FleetEntry) -> Line<'static> {
     let (sym, color) = match &e.status {
-        FleetStatus::Running => ("◌", Color::Yellow),
-        FleetStatus::Done => ("✓", Color::Green),
-        FleetStatus::Cancelled => ("⊘", Color::Magenta),
-        FleetStatus::Error => ("✗", Color::Red),
+        FleetStatus::Running => ("◌", C_WARN),
+        FleetStatus::Done => ("✓", C_OK),
+        FleetStatus::Cancelled => ("⊘", C_DIM),
+        FleetStatus::Error => ("✗", C_ERR),
     };
-    let mut label = format!("[{:>2}] {}", e.id, truncate_str(&e.description, 32));
+    let mut label = format!(
+        "  {sym}  [{:>2}] {}",
+        e.id,
+        truncate_chars(&e.description, 26)
+    );
     if let Some(p) = &e.preview {
-        label.push_str(" — ");
-        label.push_str(&truncate_str(p, 32));
+        label.push_str("  —  ");
+        label.push_str(&truncate_chars(p, 20));
     }
-    Line::from(vec![
-        Span::styled(format!("{sym} "), Style::default().fg(color)),
-        Span::raw(label),
-    ])
+    Line::from(Span::styled(label, Style::default().fg(color)))
 }
 
-fn tool_entry_to_line(t: &ToolEntry) -> Line<'static> {
-    let (sym, color) = match &t.status {
-        ToolStatus::Running => ("◌", Color::Yellow),
-        ToolStatus::Ok(_) => ("✓", Color::Green),
-        ToolStatus::Err(_) => ("✗", Color::Red),
-    };
-    let label = if t.summary.is_empty() {
-        t.name.clone()
-    } else {
-        format!("{} {}", t.name, truncate_str(&t.summary, 40))
-    };
-    Line::from(vec![
-        Span::styled(format!("{sym} "), Style::default().fg(color)),
-        Span::raw(label),
-    ])
-}
+// ── helpers ───────────────────────────────────────────────────────────────────
 
-fn truncate_str(s: &str, n: usize) -> String {
-    if s.len() <= n {
+fn truncate_chars(s: &str, max: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max {
         s.to_string()
     } else {
-        format!("{}…", &s[..n])
+        let t: String = chars[..max.saturating_sub(1)].iter().collect();
+        format!("{t}…")
     }
 }
+
+fn shorten_path(path: &str, max: usize) -> String {
+    if path.len() <= max {
+        path.to_string()
+    } else {
+        let keep = max.saturating_sub(1);
+        format!("…{}", &path[path.len().saturating_sub(keep)..])
+    }
+}
+
+fn perm_label(perm: &str) -> &'static str {
+    let lower = perm.to_lowercase();
+    if lower.contains("bypass") {
+        "bypass"
+    } else if lower.contains("autoedit") || lower.contains("auto_edit") {
+        "auto-edit"
+    } else {
+        "default"
+    }
+}
+
+// ── channels ──────────────────────────────────────────────────────────────────
 
 pub fn channels() -> (
     mpsc::UnboundedSender<UiEvent>,
@@ -594,9 +832,15 @@ pub fn channels() -> (
     (etx, erx, ctx, crx)
 }
 
+// ── tests ─────────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn new_state() -> UiState {
+        UiState::new("m".into(), "s".into(), "p".into(), "~".into())
+    }
 
     #[test]
     fn plain_renderer_accumulates_text() {
@@ -616,23 +860,23 @@ mod tests {
 
     #[test]
     fn ui_state_apply_assistant_streams_then_finalises() {
-        let mut s = UiState::new("m".into(), "s".into(), "p".into());
+        let mut s = new_state();
         s.apply(UiEvent::AssistantDelta("hel".into()));
         s.apply(UiEvent::AssistantDelta("lo".into()));
         match s.chat_lines.last().unwrap() {
             ChatLine::AssistantPartial(t) => assert_eq!(t, "hello"),
-            _ => panic!("expected partial"),
+            _ => panic!("expected AssistantPartial"),
         }
         s.apply(UiEvent::AssistantDone("hello".into()));
         match s.chat_lines.last().unwrap() {
             ChatLine::Assistant(t) => assert_eq!(t, "hello"),
-            _ => panic!("expected finalised"),
+            _ => panic!("expected Assistant"),
         }
     }
 
     #[test]
     fn ui_state_tool_done_resolves_running_entry() {
-        let mut s = UiState::new("m".into(), "s".into(), "p".into());
+        let mut s = new_state();
         s.apply(UiEvent::ToolStart {
             name: "Bash".into(),
             summary: "echo hi".into(),
@@ -644,5 +888,36 @@ mod tests {
             preview: "hi".into(),
         });
         assert!(matches!(s.tool_log[0].status, ToolStatus::Ok(_)));
+    }
+
+    #[test]
+    fn error_event_pushes_system_note_and_clears_running() {
+        let mut s = new_state();
+        s.status_running = true;
+        s.apply(UiEvent::Error("boom".into()));
+        assert!(!s.status_running);
+        assert_eq!(s.last_error.as_deref(), Some("boom"));
+        assert!(matches!(s.chat_lines.last(), Some(ChatLine::SystemNote(_))));
+    }
+
+    #[test]
+    fn truncate_chars_handles_unicode() {
+        let s = "café";
+        assert_eq!(truncate_chars(s, 10), "café");
+        assert_eq!(truncate_chars(s, 3), "ca…");
+    }
+
+    #[test]
+    fn inline_markdown_spans_heading() {
+        let spans = inline_markdown_spans("## Hello world", C_BODY);
+        assert_eq!(spans.len(), 1);
+        assert!(spans[0].style.fg == Some(C_HEAD_FG));
+    }
+
+    #[test]
+    fn inline_markdown_spans_code() {
+        let spans = inline_markdown_spans("use `foo` here", C_BODY);
+        // should have: "use ", "foo" (code), " here"
+        assert!(spans.iter().any(|sp| sp.style.bg == Some(C_CODE_BG)));
     }
 }
