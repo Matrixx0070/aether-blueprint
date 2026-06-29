@@ -606,8 +606,13 @@ pub fn draw_frame(
                 ),
                 Span::styled("  ·  ", Style::default().fg(C_DIM).bg(C_HDR_BG)),
                 Span::styled(
-                    model_display,
-                    Style::default().fg(C_BODY).bg(C_HDR_BG),
+                    model_display.clone(),
+                    // Opus = amber, Sonnet = sky-blue (brand), Haiku = green
+                    Style::default().fg(
+                        if model_display.contains("opus") { C_WARN }
+                        else if model_display.contains("haiku") { C_OK }
+                        else { C_BRAND }
+                    ).bg(C_HDR_BG).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("  ·  ", Style::default().fg(C_DIM).bg(C_HDR_BG)),
                 Span::styled(cwd, Style::default().fg(C_DIM).bg(C_HDR_BG)),

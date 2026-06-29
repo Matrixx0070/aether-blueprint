@@ -5401,13 +5401,19 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     }
                                     continue;
                                 }
-                                "/copy" | "/cp" => {
-                                    // Copy last assistant response to clipboard via xclip
-                                    let last_asst = ui.chat_lines.iter().rev().find_map(|cl| {
-                                        if let ChatLine::Assistant(body, _, _) = cl {
-                                            Some(body.clone())
-                                        } else { None }
-                                    });
+                                cmd if cmd == "/copy" || cmd == "/cp" || cmd.starts_with("/copy ") || cmd.starts_with("/cp ") => {
+                                    // Copy Nth assistant response to clipboard (/copy or /copy 2)
+                                    let n_arg: Option<usize> = cmd.split_whitespace().nth(1)
+                                        .and_then(|s| s.parse().ok());
+                                    let all_asst: Vec<&str> = ui.chat_lines.iter().filter_map(|cl| {
+                                        if let ChatLine::Assistant(body, _, _) = cl { Some(body.as_str()) } else { None }
+                                    }).collect();
+                                    let target_idx = if let Some(n) = n_arg {
+                                        if n > 0 && n <= all_asst.len() { Some(n - 1) } else { None }
+                                    } else {
+                                        all_asst.len().checked_sub(1)
+                                    };
+                                    let last_asst = target_idx.and_then(|i| all_asst.get(i).map(|s| s.to_string()));
                                     if let Some(text) = last_asst {
                                         let result = std::process::Command::new("xclip")
                                             .args(["-selection", "clipboard"])
@@ -5440,9 +5446,13 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                         };
                                         ui.chat_lines.push(ChatLine::SystemNote(note));
                                     } else {
-                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                        let count = ui.chat_lines.iter().filter(|cl| matches!(cl, ChatLine::Assistant(_, _, _))).count();
+                                        let hint = if count > 0 {
+                                            format!("No response #{} — session has {} response{}. Usage: /copy N", n_arg.unwrap_or(0), count, if count == 1 { "" } else { "s" })
+                                        } else {
                                             "Nothing to copy — no assistant response yet.".to_string()
-                                        ));
+                                        };
+                                        ui.chat_lines.push(ChatLine::SystemNote(hint));
                                     }
                                     ui.follow_tail = true;
                                     continue;
@@ -5490,15 +5500,38 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         ui.chat_scroll = ui.chat_scroll.saturating_add(1);
                     }
                     KeyCode::Up => {
-                        // Walk backwards through history
+                        // Walk backwards through history.
+                        // Smart: if buffer is non-empty and not from history, do prefix-match recall.
                         if !ui.input_history.is_empty() {
-                            let new_idx = match ui.history_idx {
-                                None => ui.input_history.len() - 1,
-                                Some(i) => i.saturating_sub(1),
+                            let prefix = if ui.history_idx.is_none() && !ui.input_buffer.is_empty() {
+                                Some(ui.input_buffer.clone())
+                            } else {
+                                None
                             };
-                            ui.history_idx = Some(new_idx);
-                            ui.input_buffer = ui.input_history[new_idx].clone();
-                            ui.input_cursor = ui.input_buffer.len();
+                            let search_from = match ui.history_idx {
+                                None => ui.input_history.len(),
+                                Some(i) => i,
+                            };
+                            let new_idx = if let Some(ref pfx) = prefix {
+                                // Find most recent history entry starting with prefix
+                                ui.input_history[..search_from]
+                                    .iter().enumerate().rev()
+                                    .find(|(_, h)| h.starts_with(pfx.as_str()))
+                                    .map(|(i, _)| i)
+                            } else {
+                                Some(search_from.saturating_sub(1))
+                            };
+                            if let Some(idx) = new_idx {
+                                ui.history_idx = Some(idx);
+                                ui.input_buffer = ui.input_history[idx].clone();
+                                ui.input_cursor = ui.input_buffer.len();
+                            } else if prefix.is_some() {
+                                // No prefix match — fall through to plain recall
+                                let plain_idx = ui.input_history.len() - 1;
+                                ui.history_idx = Some(plain_idx);
+                                ui.input_buffer = ui.input_history[plain_idx].clone();
+                                ui.input_cursor = ui.input_buffer.len();
+                            }
                         }
                     }
                     KeyCode::Down => {
