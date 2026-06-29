@@ -4570,17 +4570,66 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                 }
                                 "/cost" => {
                                     let note = if ui.cost_usd > 0.0 {
-                                        format!("Session cost: ${:.4}  ↑{} tokens  ↓{} tokens  total {}",
-                                            ui.cost_usd, ui.tokens_in, ui.tokens_out, ui.tokens_total)
+                                        let tps_str = if ui.last_tps > 0.5 { format!("  ·  {:.0} t/s", ui.last_tps) } else { String::new() };
+                                        let avg_dur = if !ui.response_durations.is_empty() {
+                                            let avg = ui.response_durations.iter().sum::<f64>() / ui.response_durations.len() as f64;
+                                            format!("  ·  {:.1}s avg", avg)
+                                        } else { String::new() };
+                                        let mut s = format!(
+                                            "Session cost: ${:.4}  ↑{} in  ↓{} out{}{}\n",
+                                            ui.cost_usd, ui.tokens_in, ui.tokens_out, avg_dur, tps_str
+                                        );
+                                        if !ui.msg_cost_snapshots.is_empty() {
+                                            s.push_str("Per-message cost:\n");
+                                            let mut prev = 0.0f64;
+                                            for (i, &snap) in ui.msg_cost_snapshots.iter().enumerate() {
+                                                let delta = snap - prev;
+                                                prev = snap;
+                                                s.push_str(&format!("  msg {} — ${:.4}\n", i + 1, delta));
+                                            }
+                                        }
+                                        s.trim_end().to_string()
                                     } else {
-                                        "No cost data yet.".to_string()
+                                        "No cost data yet — send a message first.".to_string()
                                     };
                                     ui.chat_lines.push(ChatLine::SystemNote(note));
                                     continue;
                                 }
                                 "/help" | "/h" => {
                                     ui.chat_lines.push(ChatLine::SystemNote(
-                                        "Commands:\n  /clear        clear chat display\n  /compact      compress old exchanges (keep last 4)\n  /cost         token usage + cost\n  /export       save transcript to file\n  /help         this list\n  /load <n>     restore session n\n  /model <name> switch model (opus/sonnet/haiku)\n  /quit         exit\n  /search <t>   search chat history\n  /sessions     list saved sessions\n  /undo         remove last exchange from display\n\nKeys:\n  ↑↓       message history recall\n  ⇧↵       newline in input\n  ⇥        tab-complete slash commands\n  ^L       clear screen\n  ^C       cancel in-flight / clear / exit\n  PgUp/Dn  scroll chat\n  Home/End  scroll to top/bottom\n\nSessions auto-saved to ~/.aether/sessions/ on exit".to_string()
+                                        "Aether — slash commands\n\
+                                         \n\
+                                         /clear          clear chat display\n\
+                                         /compact        compress history (keep last 4)\n\
+                                         /cost           token usage + cost\n\
+                                         /export [file]  save transcript to markdown\n\
+                                         /load <n>       restore saved session n\n\
+                                         /model <name>   switch model (opus/sonnet/haiku)\n\
+                                         /pin <text>     pin a sticky note at top\n\
+                                         /search <term>  search chat history\n\
+                                         /sessions       list saved sessions\n\
+                                         /stats          session statistics\n\
+                                         /undo           remove last exchange from display\n\
+                                         /quit           exit\n\
+                                         \n\
+                                         Input shortcuts\n\
+                                         \n\
+                                         ↑↓              history recall\n\
+                                         ←→              move cursor\n\
+                                         Alt+←/→         word jump\n\
+                                         Ctrl+A / E      start / end of line\n\
+                                         Ctrl+W          delete word backwards\n\
+                                         Ctrl+K          kill to end of line\n\
+                                         Ctrl+U          kill to start of line\n\
+                                         Del             forward delete\n\
+                                         Shift+↵         newline in input\n\
+                                         Tab             complete slash command\n\
+                                         Ctrl+C          cancel / clear / exit\n\
+                                         Ctrl+L          clear chat display\n\
+                                         PgUp/Dn         scroll chat\n\
+                                         End             resume tail (follow latest)\n\
+                                         \n\
+                                         Sessions auto-saved to ~/.aether/sessions/".to_string()
                                     ));
                                     continue;
                                 }
