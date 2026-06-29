@@ -1202,13 +1202,21 @@ pub fn draw_frame(
             } else {
                 String::new()
             };
+            // Hints cycle every 8 s (4 groups: input / search / nav / commands)
+            let hints_group = (elapsed / 8) % 4;
+            let static_hints = match hints_group {
+                0 => "↵ send  ⇧↵ newline  ↑↓ history  ←→ move  ^A/E line  ^W del-word  ^L clear  /help",
+                1 => "^R reverse-i-search  ^Y yank last  ^K kill-end  ^U kill-start  ⇥ tab-complete  ^` code fence",
+                2 => "Pg↑↓ scroll  End jump to tail  ^H top  F2 panel  F3 timestamps  ^N new session",
+                _ => "/retry  /copy  /note  /compact  /export  /search  /cost  /model  /sessions  /undo  /pin",
+            };
             let mut hints_spans = vec![
                 Span::styled(
                     format!("  {perm_sym} {perm}  ·  "),
                     Style::default().fg(perm_color).bg(C_HDR_BG),
                 ),
                 Span::styled(
-                    format!("{}↵ send  ⇧↵ nl  ↑↓ hist  ←→ move  ^A/E line  ^W del-word  ^L clear  /help", thinking_part),
+                    format!("{}{}", thinking_part, static_hints),
                     Style::default().fg(C_DIM).bg(C_HDR_BG),
                 ),
                 Span::styled(
@@ -1706,6 +1714,31 @@ fn inline_markdown_spans(line: &str, body_color: Color) -> Vec<Span<'static>> {
                 ));
                 i += end + 2;
                 continue;
+            }
+        }
+
+        // Markdown link [text](url)
+        if bytes[i] == b'[' {
+            if let Some(text_end) = line[i + 1..].find("](") {
+                let text = &line[i + 1..i + 1 + text_end];
+                let after = &line[i + 2 + text_end..];
+                if let Some(url_end) = after.find(')') {
+                    let url = &after[..url_end];
+                    flush_buf(&mut buf, &mut out, body_color);
+                    // Linked text in brand color
+                    out.push(Span::styled(text.to_string(), Style::default().fg(C_BRAND).add_modifier(Modifier::UNDERLINED)));
+                    // Dim parenthetical URL (truncated if long)
+                    if !url.is_empty() {
+                        let url_display: String = if url.len() > 50 {
+                            format!("({}…)", &url[..47])
+                        } else {
+                            format!("({url})")
+                        };
+                        out.push(Span::styled(url_display, Style::default().fg(C_DIM)));
+                    }
+                    i += text_end + url_end + 4; // [text](url) consumed
+                    continue;
+                }
             }
         }
 
