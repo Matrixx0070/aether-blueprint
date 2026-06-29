@@ -1900,11 +1900,11 @@ fn render_message(
                     let mut spans: Vec<Span<'static>> = Vec::new();
                     for cell in inner {
                         spans.push(Span::styled(" │ ".to_string(), Style::default().fg(C_ASST_PFX)));
-                        if !cell.trim().is_empty() {
-                            spans.push(Span::styled(
-                                cell.trim().to_string(),
-                                Style::default().fg(C_BODY).add_modifier(Modifier::BOLD),
-                            ));
+                        let trimmed_cell = cell.trim();
+                        if !trimmed_cell.is_empty() {
+                            // Apply inline markdown (bold, code, links) inside table cells
+                            let cell_spans = inline_markdown_spans(trimmed_cell, C_BODY);
+                            spans.extend(cell_spans);
                         }
                     }
                     spans.push(Span::styled(" │".to_string(), Style::default().fg(C_ASST_PFX)));

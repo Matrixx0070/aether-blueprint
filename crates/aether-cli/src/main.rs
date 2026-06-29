@@ -6233,6 +6233,184 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /copy code [N] — copy Nth code block from last AI response to clipboard
+                                cmd if cmd == "/copy code" || cmd.starts_with("/copy code ") => {
+                                    let n_arg: Option<usize> = cmd.split_whitespace().nth(2)
+                                        .and_then(|s| s.parse().ok());
+                                    let last_asst = ui.chat_lines.iter().rev().find_map(|cl| {
+                                        if let ChatLine::Assistant(body, _, _) = cl { Some(body.clone()) } else { None }
+                                    });
+                                    if let Some(text) = last_asst {
+                                        // Extract fenced code blocks: (lang, code)
+                                        let mut blocks: Vec<(String, String)> = Vec::new();
+                                        let mut in_block = false;
+                                        let mut blk_lang = String::new();
+                                        let mut blk_lines: Vec<&str> = Vec::new();
+                                        for line in text.lines() {
+                                            if !in_block && line.trim_start().starts_with("```") {
+                                                in_block = true;
+                                                blk_lang = line.trim().trim_start_matches('`').trim().to_string();
+                                                blk_lines = Vec::new();
+                                            } else if in_block && line.trim() == "```" {
+                                                in_block = false;
+                                                blocks.push((blk_lang.clone(), blk_lines.join("\n")));
+                                                blk_lines = Vec::new();
+                                            } else if in_block {
+                                                blk_lines.push(line);
+                                            }
+                                        }
+                                        if blocks.is_empty() {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                "No code blocks found in last response.".to_string()
+                                            ));
+                                        } else {
+                                            let target = if let Some(n) = n_arg {
+                                                if n > 0 && n <= blocks.len() { Some(n - 1) } else { None }
+                                            } else {
+                                                Some(blocks.len() - 1)
+                                            };
+                                            if let Some(idx) = target {
+                                                let code = &blocks[idx].1;
+                                                let lang_label = if blocks[idx].0.is_empty() { "code".to_string() } else { blocks[idx].0.clone() };
+                                                let result = std::process::Command::new("xclip")
+                                                    .args(["-selection", "clipboard"])
+                                                    .stdin(std::process::Stdio::piped())
+                                                    .spawn()
+                                                    .and_then(|mut child| {
+                                                        use std::io::Write as _;
+                                                        if let Some(stdin) = child.stdin.as_mut() {
+                                                            stdin.write_all(code.as_bytes())?;
+                                                        }
+                                                        child.wait()
+                                                    })
+                                                    .or_else(|_| {
+                                                        std::process::Command::new("xsel")
+                                                            .args(["--clipboard", "--input"])
+                                                            .stdin(std::process::Stdio::piped())
+                                                            .spawn()
+                                                            .and_then(|mut child| {
+                                                                use std::io::Write as _;
+                                                                if let Some(stdin) = child.stdin.as_mut() {
+                                                                    stdin.write_all(code.as_bytes())?;
+                                                                }
+                                                                child.wait()
+                                                            })
+                                                    });
+                                                let note = match result {
+                                                    Ok(_) => format!("Copied block {} ({}, {} lines) to clipboard.", idx + 1, lang_label, code.lines().count()),
+                                                    Err(e) => format!("Copy failed (need xclip or xsel): {e}"),
+                                                };
+                                                ui.chat_lines.push(ChatLine::SystemNote(note));
+                                            } else {
+                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                    format!("No block #{} — response has {} block{}. Usage: /copy code N", n_arg.unwrap_or(0), blocks.len(), if blocks.len() == 1 { "" } else { "s" })
+                                                ));
+                                            }
+                                        }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Nothing to copy — no assistant response yet.".to_string()
+                                        ));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /extract [code] — write each code block from last response to /tmp files
+                                cmd if cmd == "/extract" || cmd == "/extract code" => {
+                                    let last_asst = ui.chat_lines.iter().rev().find_map(|cl| {
+                                        if let ChatLine::Assistant(body, _, _) = cl { Some(body.clone()) } else { None }
+                                    });
+                                    if let Some(text) = last_asst {
+                                        let mut blocks: Vec<(String, String)> = Vec::new();
+                                        let mut in_block = false;
+                                        let mut blk_lang = String::new();
+                                        let mut blk_lines: Vec<&str> = Vec::new();
+                                        for line in text.lines() {
+                                            if !in_block && line.trim_start().starts_with("```") {
+                                                in_block = true;
+                                                blk_lang = line.trim().trim_start_matches('`').trim().to_string();
+                                                blk_lines = Vec::new();
+                                            } else if in_block && line.trim() == "```" {
+                                                in_block = false;
+                                                blocks.push((blk_lang.clone(), blk_lines.join("\n")));
+                                                blk_lines = Vec::new();
+                                            } else if in_block {
+                                                blk_lines.push(line);
+                                            }
+                                        }
+                                        if blocks.is_empty() {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                "No code blocks found in last response.".to_string()
+                                            ));
+                                        } else {
+                                            let mut paths: Vec<String> = Vec::new();
+                                            for (i, (lang, code)) in blocks.iter().enumerate() {
+                                                let ext = match lang.to_lowercase().as_str() {
+                                                    "rust" | "rs" => "rs",
+                                                    "python" | "py" => "py",
+                                                    "javascript" | "js" => "js",
+                                                    "typescript" | "ts" => "ts",
+                                                    "bash" | "sh" | "shell" => "sh",
+                                                    "toml" => "toml",
+                                                    "yaml" | "yml" => "yaml",
+                                                    "json" => "json",
+                                                    "go" => "go",
+                                                    "c" => "c",
+                                                    "cpp" | "c++" => "cpp",
+                                                    "html" => "html",
+                                                    "css" => "css",
+                                                    "sql" => "sql",
+                                                    "markdown" | "md" => "md",
+                                                    _ => "txt",
+                                                };
+                                                let path = format!("/tmp/aether-code-{}.{}", i + 1, ext);
+                                                match std::fs::write(&path, code) {
+                                                    Ok(_) => paths.push(format!("{} ({})", path, if lang.is_empty() { "text" } else { lang.as_str() })),
+                                                    Err(e) => paths.push(format!("{} — write failed: {e}", path)),
+                                                }
+                                            }
+                                            let note = format!("Extracted {} block{} → {}", paths.len(), if paths.len() == 1 { "" } else { "s" }, paths.join(", "));
+                                            ui.chat_lines.push(ChatLine::SystemNote(note));
+                                        }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Nothing to extract — no assistant response yet.".to_string()
+                                        ));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /outline — extract headings from last AI response as mini-TOC
+                                "/outline" => {
+                                    let last_asst = ui.chat_lines.iter().rev().find_map(|cl| {
+                                        if let ChatLine::Assistant(body, _, _) = cl { Some(body.clone()) } else { None }
+                                    });
+                                    if let Some(text) = last_asst {
+                                        let headings: Vec<String> = text.lines()
+                                            .filter(|l| l.starts_with('#'))
+                                            .map(|l| {
+                                                let level = l.chars().take_while(|c| *c == '#').count();
+                                                let title = l.trim_start_matches('#').trim();
+                                                let indent = "  ".repeat(level.saturating_sub(1));
+                                                format!("{}{}. {}", indent, level, title)
+                                            })
+                                            .collect();
+                                        if headings.is_empty() {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                "No headings found in last response.".to_string()
+                                            ));
+                                        } else {
+                                            let outline = format!("Outline ({} heading{}):\n{}", headings.len(), if headings.len() == 1 { "" } else { "s" }, headings.join("\n"));
+                                            ui.chat_lines.push(ChatLine::SystemNote(outline));
+                                        }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Nothing to outline — no assistant response yet.".to_string()
+                                        ));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -6335,9 +6513,9 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         // Slash command completion: Tab while buffer starts with '/'
                         const SLASH_CMDS: &[&str] = &[
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
-                            "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/cost", "/count", "/ctx", "/diff", "/doctor", "/drop ", "/export", "/focus", "/format",
+                            "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy code ", "/cost", "/count", "/ctx", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/go ", "/grep ", "/help", "/hist", "/history", "/last", "/linenums", "/load ", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/raw", "/replay ", "/reset-cost", "/retry", "/search ", "/sessions", "/speed", "/stats", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/undo", "/unpin", "/version", "/wc", "/wrap",
+                            "/outline", "/raw", "/replay ", "/reset-cost", "/retry", "/search ", "/sessions", "/speed", "/stats", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
