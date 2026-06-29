@@ -233,6 +233,8 @@ pub struct UiState {
     pending_cost_snap: bool,
     /// Pinned note shown at top of chat — set by /pin command.
     pub pinned_note: Option<String>,
+    /// When true, the side panel (tools/fleet) is hidden — F2 to toggle.
+    pub side_panel_hidden: bool,
 }
 
 impl UiState {
@@ -308,6 +310,7 @@ impl UiState {
             response_start: None,
             pending_cost_snap: false,
             pinned_note: None,
+            side_panel_hidden: false,
         }
     }
 
@@ -490,6 +493,14 @@ pub fn draw_frame(
             .filter(|cl| matches!(cl, ChatLine::User(_, _)))
             .count();
 
+        // Context window usage — computed once, reused in input border + hints bar
+        let ctx_max = model_context_window(&state.model);
+        let ctx_pct = if ctx_max > 0 && state.tokens_total > 0 {
+            (state.tokens_total as f64 / ctx_max as f64).min(1.0)
+        } else {
+            0.0
+        };
+
         // Dynamic input height: 1 border + content lines, clamped 2..=8
         let input_content_lines = state.input_buffer.lines().count().max(1);
         let input_height = (input_content_lines + 1).min(8) as u16;
@@ -561,7 +572,7 @@ pub fn draw_frame(
         let has_convo_for_layout = state.chat_lines.iter().any(|cl| {
             matches!(cl, ChatLine::User(_, _) | ChatLine::Assistant(_, _, _) | ChatLine::AssistantPartial(_))
         });
-        let has_side = has_tools || has_convo_for_layout;
+        let has_side = (has_tools || has_convo_for_layout) && !state.side_panel_hidden;
         let main = Layout::default()
             .direction(Direction::Horizontal)
             .constraints(if has_side {
@@ -962,13 +973,35 @@ pub fn draw_frame(
                     .collect()
             };
 
+            let input_border_color = if ctx_pct > 0.9 {
+                let ms = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis();
+                if (ms / 400) % 2 == 0 { C_ERR } else { C_WARN }
+            } else if ctx_pct > 0.75 {
+                C_WARN
+            } else {
+                C_BORDER
+            };
+            let input_title = if ctx_pct > 0.75 {
+                format!(" ⚠ context {:.0}% full ", ctx_pct * 100.0)
+            } else {
+                String::new()
+            };
+            let input_block = if input_title.is_empty() {
+                Block::default()
+                    .borders(Borders::TOP)
+                    .border_style(Style::default().fg(input_border_color))
+            } else {
+                Block::default()
+                    .borders(Borders::TOP)
+                    .border_style(Style::default().fg(input_border_color))
+                    .title(Span::styled(input_title, Style::default().fg(input_border_color).add_modifier(Modifier::BOLD)))
+            };
             f.render_widget(
                 Paragraph::new(input_content)
-                    .block(
-                        Block::default()
-                            .borders(Borders::TOP)
-                            .border_style(Style::default().fg(C_BORDER)),
-                    )
+                    .block(input_block)
                     .wrap(Wrap { trim: false }),
                 outer[2],
             );
@@ -994,13 +1027,7 @@ pub fn draw_frame(
                 format!("{}h{}m", elapsed / 3600, (elapsed % 3600) / 60)
             };
 
-            // Context window usage mini-bar (10 blocks)
-            let ctx_max = model_context_window(&state.model);
-            let ctx_pct = if ctx_max > 0 && state.tokens_total > 0 {
-                (state.tokens_total as f64 / ctx_max as f64).min(1.0)
-            } else {
-                0.0
-            };
+            // Context window usage mini-bar (10 blocks) — ctx_pct precomputed at frame start
             let filled = (ctx_pct * 10.0).round() as usize;
             let ctx_bar: String = (0..10)
                 .map(|i| if i < filled { '█' } else { '░' })
@@ -1100,6 +1127,13 @@ pub fn draw_frame(
                 hints_spans.push(Span::styled(
                     "  ↑SCROLL".to_string(),
                     Style::default().fg(C_WARN).bg(C_HDR_BG).add_modifier(Modifier::BOLD),
+                ));
+            }
+            // F2 panel toggle badge
+            if state.side_panel_hidden {
+                hints_spans.push(Span::styled(
+                    "  F2:panel".to_string(),
+                    Style::default().fg(C_DIM).bg(C_HDR_BG),
                 ));
             }
 

@@ -4680,6 +4680,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                          Ctrl+L          clear chat display\n\
                                          PgUp/Dn         scroll chat\n\
                                          End             resume tail (follow latest)\n\
+                                         F2              toggle side panel (full-width chat)\n\
                                          \n\
                                          Sessions auto-saved to ~/.aether/sessions/".to_string()
                                     ));
@@ -5073,6 +5074,9 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     KeyCode::End => {
                         ui.chat_scroll = 9999;
                         ui.follow_tail = true;
+                    }
+                    KeyCode::F(2) => {
+                        ui.side_panel_hidden = !ui.side_panel_hidden;
                     }
                     KeyCode::Char(c) => {
                         ui.input_buffer.insert(ui.input_cursor, c);
