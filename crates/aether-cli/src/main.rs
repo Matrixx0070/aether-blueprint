@@ -4755,6 +4755,11 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                             ui.input_cursor = 0;
                         }
                     }
+                    KeyCode::Char('j') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Ctrl+J: insert newline (readline linefeed alias for Shift+Enter)
+                        ui.input_buffer.insert(ui.input_cursor, '\n');
+                        ui.input_cursor += 1;
+                    }
                     KeyCode::Char('s') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         // Ctrl+S: save current session without clearing the conversation
                         match session_save(&ui) {
@@ -4863,6 +4868,66 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                cmd if cmd == "/drop" || cmd.starts_with("/drop ") => {
+                                    let n: usize = cmd.trim_start_matches("/drop").trim().parse().unwrap_or(1).max(1);
+                                    // Remove the last N user+assistant exchange pairs from the display.
+                                    let conv_indices: Vec<usize> = ui.chat_lines.iter().enumerate()
+                                        .filter_map(|(i, cl)| if matches!(cl, ChatLine::User(_, _) | ChatLine::Assistant(_, _, _)) { Some(i) } else { None })
+                                        .collect();
+                                    let drop_count = (n * 2).min(conv_indices.len());
+                                    if drop_count == 0 {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Nothing to drop.".to_string()));
+                                    } else {
+                                        let cut_from = conv_indices[conv_indices.len() - drop_count];
+                                        ui.chat_lines.retain_mut(|_| true); // force borrow reset
+                                        let new_lines: Vec<ChatLine> = ui.chat_lines.drain(..)
+                                            .enumerate()
+                                            .filter_map(|(i, cl)| if i < cut_from { Some(cl) } else { None })
+                                            .collect();
+                                        ui.chat_lines = new_lines;
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("Dropped {} exchange pair{}. (display only — API context unchanged)", n, if n == 1 { "" } else { "s" })
+                                        ));
+                                        ui.follow_tail = true;
+                                    }
+                                    continue;
+                                }
+                                cmd if cmd == "/template" || cmd.starts_with("/template ") || cmd == "/tmpl" || cmd.starts_with("/tmpl ") => {
+                                    let arg = cmd.trim_start_matches("/template").trim_start_matches("/tmpl").trim();
+                                    const TEMPLATES: &[(&str, &str, &str)] = &[
+                                        ("review",    "code review",   "Please review this code for correctness, performance, and style. Highlight any bugs, anti-patterns, or improvement opportunities:\n\n```\n\n```"),
+                                        ("explain",   "explain code",  "Explain what this code does, step by step. Assume I'm familiar with the language but not this specific pattern:\n\n```\n\n```"),
+                                        ("refactor",  "refactor",      "Refactor this code to be cleaner, more readable, and idiomatic. Keep the same behavior:\n\n```\n\n```"),
+                                        ("test",      "write tests",   "Write comprehensive unit tests for the following code. Cover edge cases and error paths:\n\n```\n\n```"),
+                                        ("debug",     "debug",         "Help me debug this issue. The problem is:\n\nExpected behavior:\nActual behavior:\nRelevant code:\n\n```\n\n```"),
+                                        ("plan",      "plan feature",  "Help me plan the implementation of this feature:\n\nFeature:\nConstraints:\nCurrent codebase context:"),
+                                        ("optimize",  "optimize",      "Optimize this code for performance. Show bottlenecks and suggest improvements with reasoning:\n\n```\n\n```"),
+                                        ("docs",      "write docs",    "Write clear documentation/docstring for this code. Include parameters, return values, and usage examples:\n\n```\n\n```"),
+                                    ];
+                                    if arg.is_empty() {
+                                        let mut list = "Templates — /template <name> to load:\n".to_string();
+                                        for (name, desc, _) in TEMPLATES {
+                                            list.push_str(&format!("  {name:<10}  {desc}\n"));
+                                        }
+                                        ui.chat_lines.push(ChatLine::SystemNote(list));
+                                        ui.follow_tail = true;
+                                    } else if let Some((_, _, body)) = TEMPLATES.iter().find(|(n, _, _)| *n == arg) {
+                                        // Load template into input buffer
+                                        ui.input_undo = Some((ui.input_buffer.clone(), ui.input_cursor));
+                                        ui.input_buffer = body.to_string();
+                                        ui.input_cursor = ui.input_buffer.len();
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("Template '{arg}' loaded into input. Edit and ↵ to send.")
+                                        ));
+                                        ui.follow_tail = true;
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("Unknown template '{arg}'. Run /template to see available templates.")
+                                        ));
+                                        ui.follow_tail = true;
+                                    }
+                                    continue;
+                                }
                                 cmd if cmd == "/compact" || cmd.starts_with("/compact ") => {
                                     // Keep last N user+assistant exchange pairs, collapse the rest.
                                     let keep_pairs: usize = cmd
@@ -4956,6 +5021,8 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                          /clear             clear chat display\n\
                                          /clear-history     wipe in-session input history  (/clh)\n\
                                          /compact [N]       compress history (keep last N=5 exchanges)\n\
+                                         /drop [N]          remove last N exchange pairs from display\n\
+                                         /template [name]   load a prompt template into input  (/tmpl)\n\
                                          /copy              copy last AI response to clipboard\n\
                                          /cost              token usage + per-message cost table\n\
                                          /export [file]     save transcript to markdown with frontmatter\n\
@@ -4992,6 +5059,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                          Ctrl+K / U      kill to end / start of line\n\
                                          Ctrl+T          transpose chars (Emacs)\n\
                                          Ctrl+B          bold-wrap word at cursor (**word**)\n\
+                                         Ctrl+J          insert newline (alias for Shift+↵)\n\
                                          Ctrl+O          open last URL in AI response\n\
                                          Ctrl+S          save session without clearing\n\
                                          Ctrl+Y          yank last AI response into input\n\
@@ -5811,9 +5879,9 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         // Slash command completion: Tab while buffer starts with '/'
                         const SLASH_CMDS: &[&str] = &[
                             "/bm ", "/bookmark ", "/bookmarks",
-                            "/clear", "/clear-history", "/clh", "/compact", "/copy", "/cost", "/doctor", "/export", "/format",
+                            "/clear", "/clear-history", "/clh", "/compact", "/copy", "/cost", "/doctor", "/drop ", "/export", "/format",
                             "/go ", "/help", "/hist", "/history", "/linenums", "/load ", "/model ", "/note ", "/pin ", "/quit",
-                            "/raw", "/retry", "/search ", "/sessions", "/stats", "/timestamps", "/todo ", "/undo", "/unpin",
+                            "/raw", "/retry", "/search ", "/sessions", "/stats", "/template ", "/tmpl ", "/timestamps", "/todo ", "/undo", "/unpin",
                         ];
                         let buf = ui.input_buffer.trim_end().to_string();
                         if buf.starts_with('/') && !buf.contains(' ') {
