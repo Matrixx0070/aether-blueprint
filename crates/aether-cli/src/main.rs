@@ -4922,6 +4922,8 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                          /model <name>      switch model (opus/sonnet/haiku)\n\
                                          /note <text>       append to ~/.aether/notes.md\n\
                                          /pin <text>        pin sticky note at top of chat\n\
+                                         /pin               show current pin\n\
+                                         /unpin             clear the pin\n\
                                          /retry             resend last message (removes last AI response)\n\
                                          /search <term>     search + scroll to match; highlights hits\n\
                                          /sessions          list saved sessions\n\
@@ -5072,9 +5074,32 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                "/unpin" => {
+                                    if ui.pinned_note.take().is_some() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Pin cleared.".to_string()));
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("No pin is set.".to_string()));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 cmd if cmd.starts_with("/pin") => {
                                     let text = cmd.trim_start_matches("/pin").trim();
-                                    if text.is_empty() {
+                                    if text.is_empty() || text == "show" {
+                                        // Show current pin (safer default than silently clearing)
+                                        match &ui.pinned_note {
+                                            Some(p) => {
+                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                    format!("Pinned: \"{p}\"\n  /unpin to clear  ·  /pin <new text> to replace")
+                                                ));
+                                            }
+                                            None => {
+                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                    "No pin set.  Usage: /pin <text>  (sticky note at top of chat)".to_string()
+                                                ));
+                                            }
+                                        }
+                                    } else if text == "clear" {
                                         ui.pinned_note = None;
                                         ui.chat_lines.push(ChatLine::SystemNote("Pin cleared.".to_string()));
                                     } else {
@@ -5626,7 +5651,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         const SLASH_CMDS: &[&str] = &[
                             "/clear", "/clear-history", "/clh", "/compact", "/copy", "/cost", "/doctor", "/export", "/format",
                             "/help", "/hist", "/history", "/linenums", "/load ", "/model ", "/note ", "/pin ", "/quit",
-                            "/raw", "/retry", "/search ", "/sessions", "/stats", "/timestamps", "/undo",
+                            "/raw", "/retry", "/search ", "/sessions", "/stats", "/timestamps", "/undo", "/unpin",
                         ];
                         let buf = ui.input_buffer.trim_end().to_string();
                         if buf.starts_with('/') && !buf.contains(' ') {

@@ -632,7 +632,7 @@ pub fn draw_frame(
                     Style::default().fg(C_BODY).bg(C_HDR_BG).add_modifier(Modifier::ITALIC),
                 ));
             }
-            // Wall clock HH:MM — always visible for temporal grounding
+            // Wall clock HH:MM + session uptime +Nm/+Hh
             let wall_clock = {
                 let ts = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -642,9 +642,21 @@ pub fn draw_frame(
                 let m = (ts % 3600) / 60;
                 format!("{:02}:{:02}", h, m)
             };
+            let uptime_badge = {
+                let secs = state.session_start.elapsed().as_secs();
+                if secs < 60 {
+                    format!("+{secs}s")
+                } else if secs < 3600 {
+                    format!("+{}m", secs / 60)
+                } else {
+                    format!("+{}h{}m", secs / 3600, (secs % 3600) / 60)
+                }
+            };
             hdr_spans.extend([
                 Span::styled("  ·  ", Style::default().fg(C_DIM).bg(C_HDR_BG)),
                 Span::styled(wall_clock, Style::default().fg(C_DIM).bg(C_HDR_BG)),
+                Span::raw(" "),
+                Span::styled(uptime_badge, Style::default().fg(Color::Rgb(51, 65, 85)).bg(C_HDR_BG)),
                 Span::styled("  ·  ", Style::default().fg(C_DIM).bg(C_HDR_BG)),
                 Span::styled(
                     format!("{perm_sym} {perm}"),
@@ -1137,7 +1149,12 @@ pub fn draw_frame(
                 (1, col)
             };
             let input_title = if ctx_pct > 0.75 {
-                format!(" ⚠ context {:.0}% full ", ctx_pct * 100.0)
+                // Mini block-char progress bar: 8 cells, ██░░ style
+                let pct = (ctx_pct * 100.0) as u8;
+                let filled = (ctx_pct * 8.0).round() as usize;
+                let bar: String = "█".repeat(filled) + &"░".repeat(8usize.saturating_sub(filled));
+                let warn = if ctx_pct > 0.9 { "⚠ " } else { "" };
+                format!(" {warn}[{bar}] {pct}% ctx ")
             } else if let Some(note) = &state.pinned_note {
                 let preview: String = note.chars().take(40).collect();
                 format!(" ★ {} ", preview)
