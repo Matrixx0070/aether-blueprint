@@ -245,6 +245,8 @@ pub struct UiState {
     pub new_msgs_while_scrolled: u32,
     /// Instant when the last AssistantDone arrived — used to flash input border for ~1.2s.
     pub response_done_at: Option<std::time::Instant>,
+    /// When true, full timestamps are shown on each message header.
+    pub show_timestamps: bool,
 }
 
 impl UiState {
@@ -325,6 +327,7 @@ impl UiState {
             history_presearch_buf: String::new(),
             new_msgs_while_scrolled: 0,
             response_done_at: None,
+            show_timestamps: false,
         }
     }
 
@@ -660,7 +663,7 @@ pub fn draw_frame(
                     let trail_spin = i + 1 == total
                         && state.status_running
                         && matches!(cl, ChatLine::AssistantPartial(_));
-                    chat_line_to_lines(cl, trail_spin, spin)
+                    chat_line_to_lines(cl, trail_spin, spin, state.show_timestamps)
                 })
                 .collect();
 
@@ -787,6 +790,7 @@ pub fn draw_frame(
                     kh("End", "jump to latest"),
                     kh("^H", "jump to oldest"),
                     kh("F2", "toggle side panel"),
+                    kh("F3", "toggle timestamps"),
                     kh("^L", "clear display"),
                     kh("^N", "new session"),
                     kh("^P", "pin last response"),
@@ -1046,15 +1050,29 @@ pub fn draw_frame(
             };
 
             let input_line_count = state.input_buffer.lines().count().max(1);
+            let input_char_count = state.input_buffer.len();
+            let input_token_est = input_char_count / 4; // standard chars/token heuristic
             let input_title = if ctx_pct > 0.75 {
                 format!(" ⚠ context {:.0}% full ", ctx_pct * 100.0)
             } else if let Some(note) = &state.pinned_note {
                 let preview: String = note.chars().take(40).collect();
                 format!(" ★ {} ", preview)
-            } else if input_line_count > 1 {
-                format!(" ↵ {} lines ", input_line_count)
             } else {
-                String::new()
+                let lines_part = if input_line_count > 1 {
+                    format!("↵ {}  ", input_line_count)
+                } else {
+                    String::new()
+                };
+                let tokens_part = if input_token_est >= 50 {
+                    format!("~{}t ", input_token_est)
+                } else {
+                    String::new()
+                };
+                if lines_part.is_empty() && tokens_part.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {}{}", lines_part, tokens_part)
+                }
             };
             // Flash bright brand-blue for 1.2s after a response completes
             let response_flash = state.response_done_at
@@ -1257,18 +1275,24 @@ pub fn draw_frame(
 
 // ── chat line → ratatui Lines ─────────────────────────────────────────────────
 
-fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str) -> Vec<Line<'static>> {
+fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str, show_timestamps: bool) -> Vec<Line<'static>> {
     match cl {
         ChatLine::User(body, ts) => {
             let mut lines: Vec<Line<'static>> = Vec::new();
-            if *ts > 0 {
-                let h = (ts % 86400) / 3600;
-                let m = (ts % 3600) / 60;
+            if *ts > 0 || show_timestamps {
+                let ts_str = if *ts > 0 {
+                    let h = (ts % 86400) / 3600;
+                    let m = (ts % 3600) / 60;
+                    let s = ts % 60;
+                    format!("{:02}:{:02}:{:02}", h, m, s)
+                } else {
+                    "now".to_string()
+                };
                 lines.push(Line::from(vec![
                     Span::styled("  ·  ", Style::default().fg(Color::Rgb(30, 41, 59))),
                     Span::styled(
-                        format!("{:02}:{:02}", h, m),
-                        Style::default().fg(Color::Rgb(51, 65, 85)),
+                        ts_str,
+                        Style::default().fg(if show_timestamps { C_DIM } else { Color::Rgb(51, 65, 85) }),
                     ),
                 ]));
             }

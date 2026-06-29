@@ -4872,6 +4872,13 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                "/timestamps" | "/ts" => {
+                                    ui.show_timestamps = !ui.show_timestamps;
+                                    let state = if ui.show_timestamps { "on" } else { "off" };
+                                    ui.chat_lines.push(ChatLine::SystemNote(format!("Timestamps {state}  (F3 or /timestamps to toggle)")));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/sessions" | "/ls" => {
                                     let files = session_list();
                                     if files.is_empty() {
@@ -5346,7 +5353,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         const SLASH_CMDS: &[&str] = &[
                             "/clear", "/compact", "/copy", "/cost", "/doctor", "/export", "/help",
                             "/load ", "/model ", "/note ", "/pin ", "/quit", "/retry", "/search ",
-                            "/sessions", "/stats", "/undo",
+                            "/sessions", "/stats", "/timestamps", "/undo",
                         ];
                         let buf = ui.input_buffer.trim_end().to_string();
                         if buf.starts_with('/') && !buf.contains(' ') {
@@ -5454,6 +5461,11 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     KeyCode::F(2) => {
                         ui.side_panel_hidden = !ui.side_panel_hidden;
+                    }
+                    KeyCode::F(3) => {
+                        ui.show_timestamps = !ui.show_timestamps;
+                        let state = if ui.show_timestamps { "on" } else { "off" };
+                        ui.chat_lines.push(ChatLine::SystemNote(format!("Timestamps {state}  (F3 or /timestamps to toggle)")));
                     }
                     KeyCode::Char(c) => {
                         if let Some(ref mut q) = ui.history_search {
