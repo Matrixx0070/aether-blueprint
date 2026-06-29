@@ -4632,7 +4632,6 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                 ui.input_history.push(msg.clone());
                             }
                             ui.chat_lines.push(ChatLine::User(msg.clone()));
-                            ui.chat_scroll = 9999;
                             ui.follow_tail = true;
                             ui.status_running = true;
                             if _ctx.send(UiCommand::UserMessage(msg)).is_err() {
@@ -4674,7 +4673,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     KeyCode::PageDown => {
                         ui.chat_scroll = ui.chat_scroll.saturating_add(5);
-                        if ui.chat_scroll >= 9990 { ui.follow_tail = true; }
+                        // follow_tail re-engages when user explicitly jumps to End
                     }
                     KeyCode::Home => {
                         ui.chat_scroll = 0;

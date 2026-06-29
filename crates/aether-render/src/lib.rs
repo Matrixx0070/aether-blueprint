@@ -261,9 +261,7 @@ impl UiState {
                     Some(ChatLine::AssistantPartial(s)) => s.push_str(&d),
                     _ => self.chat_lines.push(ChatLine::AssistantPartial(d)),
                 }
-                if self.follow_tail {
-                    self.chat_scroll = 9999;
-                }
+                // follow_tail scrolling is handled in draw_frame() using real line counts
             }
             UiEvent::AssistantDone(final_text) => {
                 if matches!(self.chat_lines.last(), Some(ChatLine::AssistantPartial(_))) {
@@ -472,10 +470,20 @@ pub fn draw_frame(
                     chat_line_to_lines(cl, trail_spin, spin)
                 })
                 .collect();
+
+            // Compute scroll: when follow_tail is set, scroll so the last line is visible.
+            // We know how many rendered lines there are and the viewport height.
+            let viewport_h = main[0].height as usize;
+            let effective_scroll = if state.follow_tail {
+                chat.len().saturating_sub(viewport_h) as u16
+            } else {
+                state.chat_scroll
+            };
+
             f.render_widget(
                 Paragraph::new(chat)
                     .wrap(Wrap { trim: false })
-                    .scroll((state.chat_scroll, 0)),
+                    .scroll((effective_scroll, 0)),
                 main[0],
             );
         }
