@@ -4581,6 +4581,45 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     ui.chat_scroll = 0;
                                     continue;
                                 }
+                                cmd if cmd == "/compact" || cmd.starts_with("/compact ") => {
+                                    // Keep last N user+assistant exchange pairs, collapse the rest.
+                                    let keep_pairs: usize = cmd
+                                        .strip_prefix("/compact")
+                                        .and_then(|s| s.trim().parse().ok())
+                                        .unwrap_or(5);
+                                    // Count existing conversation lines
+                                    let conv_lines: Vec<_> = ui.chat_lines.iter().enumerate()
+                                        .filter(|(_, cl)| matches!(cl,
+                                            ChatLine::User(_, _) | ChatLine::Assistant(_, _, _)
+                                        ))
+                                        .map(|(i, _)| i)
+                                        .collect();
+                                    let keep_from = conv_lines.len().saturating_sub(keep_pairs * 2);
+                                    if keep_from == 0 {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("Nothing to compact — fewer than {} exchange pairs.", keep_pairs)
+                                        ));
+                                    } else {
+                                        let drop_count = keep_from;
+                                        let cutoff_idx = conv_lines[keep_from - 1];
+                                        // Remove everything up to and including cutoff_idx, then prepend a note
+                                        let kept: Vec<ChatLine> = ui.chat_lines.drain(..)
+                                            .enumerate()
+                                            .filter_map(|(i, cl)| if i > cutoff_idx { Some(cl) } else { None })
+                                            .collect();
+                                        ui.chat_lines = kept;
+                                        ui.chat_lines.insert(0, ChatLine::SystemNote(
+                                            format!(
+                                                "⟳ Compact — {} earlier messages hidden  (cost so far: ${:.4}  ·  /cost for details)",
+                                                drop_count,
+                                                ui.cost_usd
+                                            )
+                                        ));
+                                        ui.chat_scroll = 0;
+                                        ui.follow_tail = true;
+                                    }
+                                    continue;
+                                }
                                 "/cost" => {
                                     let note = if ui.cost_usd > 0.0 {
                                         let tps_str = if ui.last_tps > 0.5 { format!("  ·  {:.0} t/s", ui.last_tps) } else { String::new() };
@@ -4613,7 +4652,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                         "Aether — slash commands\n\
                                          \n\
                                          /clear          clear chat display\n\
-                                         /compact        compress history (keep last 4)\n\
+                                         /compact [N]    compress history (keep last N=5 exchange pairs)\n\
                                          /cost           token usage + cost\n\
                                          /export [file]  save transcript to markdown\n\
                                          /load <n>       restore saved session n\n\
@@ -4667,36 +4706,6 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                         "Nothing to undo.".to_string()
                                     };
                                     ui.chat_lines.push(ChatLine::SystemNote(msg));
-                                    ui.follow_tail = true;
-                                    continue;
-                                }
-                                "/compact" => {
-                                    // Count messages, keep last 4 exchanges, summarize older ones.
-                                    let user_msgs: Vec<usize> = ui.chat_lines.iter().enumerate()
-                                        .filter(|(_, cl)| matches!(cl, ChatLine::User(_, _)))
-                                        .map(|(i, _)| i)
-                                        .collect();
-                                    if user_msgs.len() <= 4 {
-                                        ui.chat_lines.push(ChatLine::SystemNote(
-                                            format!("Conversation has only {} message(s) — nothing to compact.", user_msgs.len())
-                                        ));
-                                    } else {
-                                        // Keep splash rows + last 4 user+ai pairs
-                                        let keep_from = user_msgs[user_msgs.len() - 4];
-                                        let removed = user_msgs.len() - 4;
-                                        let mut new_lines: Vec<ChatLine> = ui.chat_lines.iter()
-                                            .filter(|cl| matches!(cl, ChatLine::SplashRow { .. }))
-                                            .cloned()
-                                            .collect();
-                                        new_lines.push(ChatLine::SystemNote(
-                                            format!("── {removed} earlier exchange(s) compacted ── (use /sessions to reload full history)")
-                                        ));
-                                        new_lines.extend(ui.chat_lines.drain(keep_from..));
-                                        ui.chat_lines = new_lines;
-                                        ui.chat_lines.push(ChatLine::SystemNote(
-                                            format!("Compacted: removed {removed} exchanges, keeping last 4.")
-                                        ));
-                                    }
                                     ui.follow_tail = true;
                                     continue;
                                 }

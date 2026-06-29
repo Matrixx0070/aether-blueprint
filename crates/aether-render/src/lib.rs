@@ -1019,11 +1019,23 @@ pub fn draw_frame(
             };
 
             // Right stats segment
-            let thinking_part = if state.status_running && state.stream_chars > 0 {
-                let words = (state.stream_chars / 5).max(1);
-                format!("{spin}  ~{}w ~{}c  ", words, state.stream_chars)
-            } else if state.status_running {
-                format!("{spin}  ")
+            let thinking_part = if state.status_running {
+                let timer_str = if let Some(t0) = state.stream_start {
+                    let secs = t0.elapsed().as_secs_f64();
+                    if secs >= 1.0 {
+                        format!("  ⏱{:.1}s", secs)
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                };
+                if state.stream_chars > 0 {
+                    let words = (state.stream_chars / 5).max(1);
+                    format!("{spin}{timer_str}  ~{}w ~{}c  ", words, state.stream_chars)
+                } else {
+                    format!("{spin}{timer_str}  ")
+                }
             } else {
                 String::new()
             };
@@ -1684,7 +1696,7 @@ fn tool_entry_to_lines(t: &ToolEntry, spin: &str) -> Vec<Line<'static>> {
     let summary = if t.summary.is_empty() {
         String::new()
     } else {
-        format!("  {}", truncate_chars(&t.summary, 18))
+        format!("  {}", truncate_chars(&t.summary, 45))
     };
     let timing = match t.elapsed_ms {
         Some(ms) if ms >= 1000 => format!("  {:.1}s", ms as f64 / 1000.0),
@@ -1723,7 +1735,7 @@ fn tool_entry_to_lines(t: &ToolEntry, spin: &str) -> Vec<Line<'static>> {
         ToolStatus::Ok(preview) | ToolStatus::Err(preview) if !preview.is_empty() => {
             let is_err = matches!(&t.status, ToolStatus::Err(_));
             let preview_lines: Vec<&str> = preview.lines().collect();
-            let show_n = preview_lines.len().min(5);
+            let show_n = preview_lines.len().min(8);
             for raw in &preview_lines[..show_n] {
                 let (marker, line_color) = if raw.starts_with('+') {
                     ("+", C_OK)
@@ -1736,7 +1748,7 @@ fn tool_entry_to_lines(t: &ToolEntry, spin: &str) -> Vec<Line<'static>> {
                 };
                 let body = raw.trim_start_matches(['+', '-', '@']).trim_start();
                 lines.push(Line::from(Span::styled(
-                    format!("     {} {}", marker, truncate_chars(body, 28)),
+                    format!("     {} {}", marker, truncate_chars(body, 48)),
                     Style::default().fg(line_color),
                 )));
             }
