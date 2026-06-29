@@ -1493,6 +1493,26 @@ fn inline_markdown_spans(line: &str, body_color: Color) -> Vec<Span<'static>> {
             }
         }
 
+        // Bare file path: token starting with / or ~/ or ./ at word boundary
+        let at_word_boundary = i == 0
+            || matches!(bytes.get(i.saturating_sub(1)), Some(&b' ') | Some(&b'\t') | Some(&b'(') | Some(&b','));
+        if at_word_boundary && (bytes[i] == b'/'
+            || (bytes[i] == b'~' && bytes.get(i + 1) == Some(&b'/'))
+            || (bytes[i] == b'.' && bytes.get(i + 1) == Some(&b'/')))
+        {
+            let rest = &line[i..];
+            let path_end = rest
+                .find(|c: char| c.is_whitespace() || matches!(c, ')' | ',' | '"' | '\'' | '>'))
+                .unwrap_or(rest.len());
+            let token = &rest[..path_end];
+            if token.len() > 2 && (token.contains('/') || token.contains('.')) {
+                flush_buf(&mut buf, &mut out, body_color);
+                out.push(Span::styled(token.to_string(), Style::default().fg(C_CODE_FG)));
+                i += path_end;
+                continue;
+            }
+        }
+
         let ch = line[i..].chars().next().unwrap();
         buf.push(ch);
         i += ch.len_utf8();
