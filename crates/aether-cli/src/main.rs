@@ -4600,6 +4600,21 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         // Kill-line: delete from cursor to end of buffer
                         ui.input_buffer.truncate(ui.input_cursor);
                     }
+                    KeyCode::Char('p') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Ctrl+P: pin / unpin last assistant response as a reminder
+                        if ui.pinned_note.is_some() {
+                            ui.pinned_note = None;
+                        } else {
+                            let last_assistant = ui.chat_lines.iter().rev().find_map(|cl| {
+                                if let ChatLine::Assistant(body, _, _) = cl {
+                                    Some(body.chars().take(80).collect::<String>())
+                                } else { None }
+                            });
+                            if let Some(snippet) = last_assistant {
+                                ui.pinned_note = Some(snippet);
+                            }
+                        }
+                    }
                     KeyCode::Char('l') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         // Clear visible chat (keeps session context intact)
                         ui.chat_lines.retain(|cl| !matches!(cl,

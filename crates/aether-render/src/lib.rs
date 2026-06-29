@@ -985,6 +985,14 @@ pub fn draw_frame(
                     .collect()
             };
 
+            let input_title = if ctx_pct > 0.75 {
+                format!(" ⚠ context {:.0}% full ", ctx_pct * 100.0)
+            } else if let Some(note) = &state.pinned_note {
+                let preview: String = note.chars().take(40).collect();
+                format!(" ★ {} ", preview)
+            } else {
+                String::new()
+            };
             let input_border_color = if ctx_pct > 0.9 {
                 let ms = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -993,13 +1001,10 @@ pub fn draw_frame(
                 if (ms / 400) % 2 == 0 { C_ERR } else { C_WARN }
             } else if ctx_pct > 0.75 {
                 C_WARN
+            } else if state.pinned_note.is_some() {
+                C_WARN // amber for pinned
             } else {
                 C_BORDER
-            };
-            let input_title = if ctx_pct > 0.75 {
-                format!(" ⚠ context {:.0}% full ", ctx_pct * 100.0)
-            } else {
-                String::new()
             };
             let input_block = if input_title.is_empty() {
                 Block::default()
