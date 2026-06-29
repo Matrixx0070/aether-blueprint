@@ -201,6 +201,8 @@ pub struct UiState {
     /// Total tool ok/err counts for the side-panel title.
     pub tools_ok: u32,
     pub tools_err: u32,
+    /// Character count of the in-progress response (for live streaming display).
+    pub stream_chars: u32,
 }
 
 impl UiState {
@@ -266,6 +268,7 @@ impl UiState {
             last_tps: 0.0,
             tools_ok: 0,
             tools_err: 0,
+            stream_chars: 0,
         }
     }
 
@@ -275,6 +278,7 @@ impl UiState {
                 if self.stream_start.is_none() {
                     self.stream_start = Some(std::time::Instant::now());
                 }
+                self.stream_chars += d.chars().count() as u32;
                 match self.chat_lines.last_mut() {
                     Some(ChatLine::AssistantPartial(s)) => s.push_str(&d),
                     _ => self.chat_lines.push(ChatLine::AssistantPartial(d)),
@@ -289,6 +293,7 @@ impl UiState {
                         self.last_tps = self.tokens_out as f64 / secs;
                     }
                 }
+                self.stream_chars = 0;
                 if matches!(self.chat_lines.last(), Some(ChatLine::AssistantPartial(_))) {
                     if let Some(last) = self.chat_lines.last_mut() {
                         *last = ChatLine::Assistant(final_text);
@@ -797,7 +802,9 @@ pub fn draw_frame(
             };
 
             // Right stats segment
-            let thinking_part = if state.status_running {
+            let thinking_part = if state.status_running && state.stream_chars > 0 {
+                format!("{spin}  ~{}c  ", state.stream_chars)
+            } else if state.status_running {
                 format!("{spin}  ")
             } else {
                 String::new()
@@ -964,8 +971,44 @@ fn render_message(
                 Style::default().fg(C_CODE_FG).bg(C_CODE_BG),
             )]
         } else {
-            // Normal assistant prose: inline markdown rendering
-            inline_markdown_spans(line, body_color)
+            // Normal assistant prose: check for block-level markdown patterns first.
+            // Horizontal rule: --- / *** / ___
+            if trimmed == "---" || trimmed == "***" || trimmed == "___" || trimmed.chars().all(|c| c == '-') && trimmed.len() >= 3 {
+                vec![Span::styled(
+                    "─────────────────────────────────────────────".to_string(),
+                    Style::default().fg(C_DIM),
+                )]
+            // Blockquote: > text
+            } else if trimmed.starts_with("> ") || trimmed == ">" {
+                let content = trimmed.trim_start_matches('>').trim_start();
+                let mut bq = vec![Span::styled("│ ".to_string(), Style::default().fg(C_ASST_PFX))];
+                bq.extend(inline_markdown_spans(content, Color::Rgb(148, 163, 184))); // slate-400
+                bq
+            // Unordered list item: - / * / +
+            } else if (trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("+ ")) && !in_code_block {
+                let content = &trimmed[2..];
+                let indent = line.len() - line.trim_start().len();
+                let pad = " ".repeat(indent);
+                let mut li_spans = vec![Span::styled(format!("{pad}• "), Style::default().fg(C_ASST_PFX))];
+                li_spans.extend(inline_markdown_spans(content, body_color));
+                li_spans
+            // Ordered list item: 1. / 2. etc.
+            } else if trimmed.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                let dot_pos = trimmed.find(". ");
+                if let Some(pos) = dot_pos {
+                    let num = &trimmed[..pos + 1];
+                    let content = &trimmed[pos + 2..];
+                    let indent = line.len() - line.trim_start().len();
+                    let pad = " ".repeat(indent);
+                    let mut li_spans = vec![Span::styled(format!("{pad}{num} "), Style::default().fg(C_ASST_PFX).add_modifier(Modifier::BOLD))];
+                    li_spans.extend(inline_markdown_spans(content, body_color));
+                    li_spans
+                } else {
+                    inline_markdown_spans(line, body_color)
+                }
+            } else {
+                inline_markdown_spans(line, body_color)
+            }
         };
 
         if trail_spin && is_last {

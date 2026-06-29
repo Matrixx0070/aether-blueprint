@@ -4802,6 +4802,14 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                             }
                         }
                     }
+                    // Alt+Up / Alt+Down: scroll chat one line at a time (must come before plain Up/Down)
+                    KeyCode::Up if k.modifiers.contains(KeyModifiers::ALT) => {
+                        ui.chat_scroll = ui.chat_scroll.saturating_sub(1);
+                        ui.follow_tail = false;
+                    }
+                    KeyCode::Down if k.modifiers.contains(KeyModifiers::ALT) => {
+                        ui.chat_scroll = ui.chat_scroll.saturating_add(1);
+                    }
                     KeyCode::Up => {
                         // Walk backwards through history
                         if !ui.input_history.is_empty() {
@@ -4853,12 +4861,11 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         ui.tab_cycle = 0;
                     }
                     KeyCode::PageUp => {
-                        ui.chat_scroll = ui.chat_scroll.saturating_sub(5);
+                        ui.chat_scroll = ui.chat_scroll.saturating_sub(10);
                         ui.follow_tail = false;
                     }
                     KeyCode::PageDown => {
-                        ui.chat_scroll = ui.chat_scroll.saturating_add(5);
-                        // follow_tail re-engages when user explicitly jumps to End
+                        ui.chat_scroll = ui.chat_scroll.saturating_add(10);
                     }
                     KeyCode::Home => {
                         ui.chat_scroll = 0;
