@@ -255,6 +255,9 @@ pub struct UiState {
     pub search_highlight: Option<String>,
     /// One-level undo buffer for the input box: (saved_text, saved_cursor).
     pub input_undo: Option<(String, usize)>,
+    /// When true, assistant messages render as plain text (no markdown).
+    /// Toggled by /format command.
+    pub raw_mode: bool,
 }
 
 impl UiState {
@@ -339,6 +342,7 @@ impl UiState {
             session_title: None,
             search_highlight: None,
             input_undo: None,
+            raw_mode: false,
         }
     }
 
@@ -692,7 +696,7 @@ pub fn draw_frame(
                     let trail_spin = i + 1 == total
                         && state.status_running
                         && matches!(cl, ChatLine::AssistantPartial(_));
-                    chat_line_to_lines(cl, trail_spin, spin, state.show_timestamps, state.search_highlight.as_deref())
+                    chat_line_to_lines(cl, trail_spin, spin, state.show_timestamps, state.search_highlight.as_deref(), state.raw_mode)
                 })
                 .collect();
 
@@ -1394,7 +1398,7 @@ fn apply_search_highlight(mut lines: Vec<Line<'static>>, term: &str) -> Vec<Line
 
 // ── chat line → ratatui Lines ─────────────────────────────────────────────────
 
-fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str, show_timestamps: bool, highlight: Option<&str>) -> Vec<Line<'static>> {
+fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str, show_timestamps: bool, highlight: Option<&str>, raw_mode: bool) -> Vec<Line<'static>> {
     match cl {
         ChatLine::User(body, ts) => {
             let mut lines: Vec<Line<'static>> = Vec::new();
@@ -1420,11 +1424,12 @@ fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str, show_timestam
             lines
         }
         ChatLine::Assistant(body, dur, cost) => {
-            let rendered = render_message("  ◆  ", C_ASST_PFX, body, C_BODY, true, false, spin, *dur, *cost);
+            // raw_mode disables markdown/syntax rendering — plain text only
+            let rendered = render_message("  ◆  ", C_ASST_PFX, body, C_BODY, !raw_mode, false, spin, *dur, *cost);
             if let Some(term) = highlight { apply_search_highlight(rendered, term) } else { rendered }
         }
         ChatLine::AssistantPartial(body) => {
-            let rendered = render_message("  ◆  ", C_ASST_PFX, body, C_BODY, true, trail_spin, spin, 0.0, 0.0);
+            let rendered = render_message("  ◆  ", C_ASST_PFX, body, C_BODY, !raw_mode, trail_spin, spin, 0.0, 0.0);
             if let Some(term) = highlight { apply_search_highlight(rendered, term) } else { rendered }
         }
         ChatLine::SystemNote(body) => {
@@ -1498,6 +1503,10 @@ fn render_message(
     let mut first = true;
     let mut in_code_block = false;
     let mut code_lang = String::new();
+    // Track diff stats within fenced diff blocks (+/- line counts)
+    let mut diff_plus: u32 = 0;
+    let mut diff_minus: u32 = 0;
+    let mut block_is_diff = false;
 
     let raw_lines: Vec<&str> = body.lines().collect();
     let n = raw_lines.len();
@@ -1508,11 +1517,30 @@ fn render_message(
 
         if trimmed.starts_with("```") {
             if in_code_block {
+                // Closing fence: emit diff stat line before the ruler
+                if block_is_diff && (diff_plus + diff_minus) > 0 {
+                    let stat_str = format!("  +{diff_plus} added  -{diff_minus} removed");
+                    out.push(Line::from(vec![
+                        Span::raw(CONT),
+                        Span::styled(stat_str, Style::default().fg(C_DIM).bg(C_CODE_BG)),
+                    ]));
+                }
+                diff_plus = 0;
+                diff_minus = 0;
+                block_is_diff = false;
                 in_code_block = false;
                 code_lang.clear();
             } else {
                 in_code_block = true;
                 code_lang = trimmed.trim_start_matches('`').trim().to_lowercase();
+                block_is_diff = matches!(code_lang.as_str(), "diff" | "patch" | "udiff");
+            }
+        } else if in_code_block && block_is_diff {
+            // Count meaningful diff lines (skip file headers +++ and ---)
+            if trimmed.starts_with('+') && !trimmed.starts_with("+++") {
+                diff_plus += 1;
+            } else if trimmed.starts_with('-') && !trimmed.starts_with("---") {
+                diff_minus += 1;
             }
         }
 

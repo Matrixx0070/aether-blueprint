@@ -4923,6 +4923,13 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                "/format" | "/raw" => {
+                                    ui.raw_mode = !ui.raw_mode;
+                                    let state = if ui.raw_mode { "raw (markdown off)" } else { "rendered (markdown on)" };
+                                    ui.chat_lines.push(ChatLine::SystemNote(format!("Format: {state}  (/format to toggle)")));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/sessions" | "/ls" => {
                                     let files = session_list();
                                     if files.is_empty() {
@@ -5461,9 +5468,9 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     KeyCode::Tab => {
                         // Slash command completion: Tab while buffer starts with '/'
                         const SLASH_CMDS: &[&str] = &[
-                            "/clear", "/compact", "/copy", "/cost", "/doctor", "/export", "/help",
-                            "/load ", "/model ", "/note ", "/pin ", "/quit", "/retry", "/search ",
-                            "/sessions", "/stats", "/timestamps", "/undo",
+                            "/clear", "/compact", "/copy", "/cost", "/doctor", "/export", "/format",
+                            "/help", "/load ", "/model ", "/note ", "/pin ", "/quit", "/raw",
+                            "/retry", "/search ", "/sessions", "/stats", "/timestamps", "/undo",
                         ];
                         let buf = ui.input_buffer.trim_end().to_string();
                         if buf.starts_with('/') && !buf.contains(' ') {
@@ -5519,6 +5526,17 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         let word_end = s[trimmed..].find(|c: char| !c.is_alphanumeric() && c != '_')
                             .map(|i| trimmed + i).unwrap_or(s.len());
                         ui.input_cursor += word_end;
+                    }
+                    KeyCode::Char('d') if k.modifiers.contains(KeyModifiers::ALT) => {
+                        // Alt+D: delete word forward (Emacs kill-word)
+                        if ui.input_cursor < ui.input_buffer.len() {
+                            ui.input_undo = Some((ui.input_buffer.clone(), ui.input_cursor));
+                            let s = &ui.input_buffer[ui.input_cursor..];
+                            let skip_ws = s.len() - s.trim_start().len();
+                            let word_end = s[skip_ws..].find(|c: char| !c.is_alphanumeric() && c != '_')
+                                .map(|i| skip_ws + i).unwrap_or(s.len());
+                            ui.input_buffer.drain(ui.input_cursor..ui.input_cursor + word_end);
+                        }
                     }
                     KeyCode::Left => {
                         if ui.input_cursor > 0 {
