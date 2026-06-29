@@ -4960,16 +4960,40 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                         else if elapsed < 3600 { format!("{}m{}s", elapsed/60, elapsed%60) }
                                         else { format!("{}h{}m", elapsed/3600, (elapsed%3600)/60) };
                                     let avg_tps = if ui.last_tps > 0.5 { format!("{:.0} t/s", ui.last_tps) } else { "—".to_string() };
-                                    let avg_dur = if !ui.response_durations.is_empty() {
+                                    let (avg_dur_str, max_dur_str) = if !ui.response_durations.is_empty() {
                                         let avg = ui.response_durations.iter().sum::<f64>() / ui.response_durations.len() as f64;
-                                        format!("{avg:.1}s avg")
-                                    } else { "—".to_string() };
+                                        let max = ui.response_durations.iter().cloned().fold(0.0_f64, f64::max);
+                                        (format!("{avg:.1}s avg"), format!("{max:.1}s max"))
+                                    } else { ("—".to_string(), "—".to_string()) };
                                     let cost_str = if ui.cost_usd > 0.0 { format!("${:.4}", ui.cost_usd) } else { "—".to_string() };
                                     let tok_in = ui.tokens_in;
                                     let tok_out = ui.tokens_out;
                                     let tools_total = ui.tools_ok + ui.tools_err;
+                                    // Word count across all AI responses
+                                    let (total_ai_words, longest_words, total_user_words) = {
+                                        let mut ai_w = 0usize;
+                                        let mut longest = 0usize;
+                                        let mut user_w = 0usize;
+                                        for cl in &ui.chat_lines {
+                                            match cl {
+                                                ChatLine::Assistant(body, _, _) | ChatLine::AssistantPartial(body) => {
+                                                    let wc = body.split_whitespace().count();
+                                                    ai_w += wc;
+                                                    if wc > longest { longest = wc; }
+                                                }
+                                                ChatLine::User(body, _) => {
+                                                    user_w += body.split_whitespace().count();
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                        (ai_w, longest, user_w)
+                                    };
+                                    let wpm = if elapsed > 60 {
+                                        format!("  ·  {:.0} AI wpm", total_ai_words as f64 / (elapsed as f64 / 60.0))
+                                    } else { String::new() };
                                     let mut stat = format!(
-                                        "Session stats\n  Messages:   {msg_count} sent\n  Runtime:    {elapsed_str}\n  Speed:      {avg_tps}  response time: {avg_dur}\n  Tokens:     ↑{tok_in} ↓{tok_out}\n  Cost:       {cost_str}\n  Tools:      {}✓ {}✗ ({tools_total} total)",
+                                        "Session stats\n  Messages:   {msg_count} sent\n  Runtime:    {elapsed_str}\n  Speed:      {avg_tps}  {avg_dur_str}  {max_dur_str}\n  Tokens:     ↑{tok_in} ↓{tok_out}\n  Words:      {total_ai_words} AI out  {total_user_words} you in  longest {longest_words}w{wpm}\n  Cost:       {cost_str}\n  Tools:      {}✓ {}✗ ({tools_total} total)",
                                         ui.tools_ok, ui.tools_err
                                     );
                                     // Per-message cost + duration breakdown

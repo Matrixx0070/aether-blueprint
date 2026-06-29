@@ -516,7 +516,17 @@ pub fn draw_frame(
     // Uses owned String so we don't need Box::leak (the trailing format! creates Cow::Owned).
     let spin_owned: String = {
         let base = spinner_frame();
-        if state.status_running && state.stream_chars > 0 {
+        if state.status_running && state.stream_chars == 0 {
+            // Connecting phase (awaiting first token): slow pulse dots
+            let ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            let dot_count = ((ms / 600) % 4) as usize;
+            let dots: String = "●".repeat(dot_count + 1)
+                + &"○".repeat(3usize.saturating_sub(dot_count));
+            format!("{dots} connecting")
+        } else if state.status_running && state.stream_chars > 0 {
             let words = (state.stream_chars / 5).max(1);
             let tps_str = if state.last_tps > 1.0 {
                 format!(" · {:.0}t/s", state.last_tps)
@@ -1064,14 +1074,28 @@ pub fn draw_frame(
             let input_line_count = state.input_buffer.lines().count().max(1);
             let input_char_count = state.input_buffer.len();
             let input_token_est = input_char_count / 4; // standard chars/token heuristic
+            // Compute cursor line:col (byte-safe — walk to cursor offset)
+            let cursor_safe = state.input_cursor.min(state.input_buffer.len());
+            let (cursor_line_num, cursor_col) = if input_line_count > 1 {
+                let before_cursor = &state.input_buffer[..cursor_safe];
+                let ln = before_cursor.lines().count().max(1);
+                let col = before_cursor.lines().last().map_or(0, |l| l.len()) + 1;
+                (ln, col)
+            } else {
+                // Single-line: col = char count before cursor
+                let col = state.input_buffer[..cursor_safe].chars().count() + 1;
+                (1, col)
+            };
             let input_title = if ctx_pct > 0.75 {
                 format!(" ⚠ context {:.0}% full ", ctx_pct * 100.0)
             } else if let Some(note) = &state.pinned_note {
                 let preview: String = note.chars().take(40).collect();
                 format!(" ★ {} ", preview)
             } else {
-                let lines_part = if input_line_count > 1 {
-                    format!("↵ {}  ", input_line_count)
+                let pos_part = if input_line_count > 1 {
+                    format!("{}:{} ↵{}  ", cursor_line_num, cursor_col, input_line_count)
+                } else if cursor_col > 40 {
+                    format!("col {}  ", cursor_col)
                 } else {
                     String::new()
                 };
@@ -1080,10 +1104,10 @@ pub fn draw_frame(
                 } else {
                     String::new()
                 };
-                if lines_part.is_empty() && tokens_part.is_empty() {
+                if pos_part.is_empty() && tokens_part.is_empty() {
                     String::new()
                 } else {
-                    format!(" {}{}", lines_part, tokens_part)
+                    format!(" {}{}", pos_part, tokens_part)
                 }
             };
             // Flash bright brand-blue for 1.2s after a response completes
