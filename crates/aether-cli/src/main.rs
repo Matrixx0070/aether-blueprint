@@ -4551,12 +4551,124 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                 }
                                 "/help" | "/h" => {
                                     ui.chat_lines.push(ChatLine::SystemNote(
-                                        "Commands: /clear  /cost  /help  /quit  /model <name>  /export [file]  |  Keys: ↑↓ history  ⇧↵ newline  ^L clear  ^C cancel  pgup/dn scroll  home/end".to_string()
+                                        "Commands:\n  /clear   clear chat\n  /cost    token usage + cost\n  /export  save transcript\n  /help    this list\n  /model <name>  switch model (opus/sonnet/haiku)\n  /quit    exit\n  /search <term>  search chat history\n  /sessions  list saved sessions\n  /load <n>  restore session n\n\nKeys:\n  ↑↓       message history\n  ⇧↵       newline\n  ⇥        tab-complete slash commands\n  ^L       clear screen\n  ^C       cancel / clear / exit\n  PgUp/Dn  scroll chat\n  Home/End  scroll to top/bottom\n\nSessions auto-saved to ~/.aether/sessions/ on exit".to_string()
                                     ));
                                     continue;
                                 }
                                 "/quit" | "/q" | "/exit" => {
                                     break 'outer;
+                                }
+                                "/sessions" | "/ls" => {
+                                    let files = session_list();
+                                    if files.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "No saved sessions yet. Sessions are auto-saved on exit.".to_string()
+                                        ));
+                                    } else {
+                                        let now = std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_secs();
+                                        let mut note = format!("Saved sessions ({} total) — /load <n> to restore:", files.len());
+                                        for (i, path) in files.iter().take(10).enumerate() {
+                                            let fname = path.file_name()
+                                                .and_then(|n| n.to_str())
+                                                .unwrap_or("?");
+                                            // Try mtime first, fall back to filename-as-ts
+                                            let mtime = std::fs::metadata(&path)
+                                                .and_then(|m| m.modified())
+                                                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)))
+                                                .map(|d| d.as_secs())
+                                                .unwrap_or_else(|_| fname.trim_end_matches(".jsonl").parse().unwrap_or(0));
+                                            let age = now.saturating_sub(mtime);
+                                            let age_str = if age < 60 { format!("{age}s ago") }
+                                                else if age < 3600 { format!("{}m ago", age/60) }
+                                                else if age < 86400 { format!("{}h ago", age/3600) }
+                                                else { format!("{}d ago", age/86400) };
+                                            // Show first line of content as preview
+                                            let preview = std::fs::read_to_string(&path)
+                                                .unwrap_or_default()
+                                                .lines()
+                                                .find(|l| l.contains("\"role\":\"user\""))
+                                                .and_then(|l| {
+                                                    let start = l.find("\"content\":\"")? + 11;
+                                                    let end = l[start..].find('"')? + start;
+                                                    Some(l[start..end].chars().take(40).collect::<String>())
+                                                })
+                                                .unwrap_or_else(|| fname.to_string());
+                                            note.push_str(&format!("\n  [{i}] {age_str}  \"{preview}\""));
+                                        }
+                                        ui.chat_lines.push(ChatLine::SystemNote(note));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/load") => {
+                                    let arg = cmd.trim_start_matches("/load").trim();
+                                    let files = session_list();
+                                    if files.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "No sessions saved yet.".to_string()
+                                        ));
+                                    } else if let Ok(idx) = arg.parse::<usize>() {
+                                        if let Some(path) = files.get(idx) {
+                                            let loaded = session_load(path);
+                                            let count = loaded.len();
+                                            let fname = path.file_name()
+                                                .and_then(|n| n.to_str())
+                                                .unwrap_or("?")
+                                                .to_string();
+                                            // Keep splash rows, replace rest
+                                            ui.chat_lines.retain(|cl| matches!(cl, ChatLine::SplashRow { .. }));
+                                            ui.chat_lines.extend(loaded);
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("Loaded {count} messages from [{idx}] {fname}  (view-only — new messages start fresh context)")
+                                            ));
+                                            ui.follow_tail = true;
+                                        } else {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("No session [{idx}] — run /sessions to list")
+                                            ));
+                                        }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /load <number>  (run /sessions to see list)".to_string()
+                                        ));
+                                    }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/search") => {
+                                    let term = cmd.trim_start_matches("/search").trim();
+                                    if term.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /search <term>".to_string()
+                                        ));
+                                    } else {
+                                        let term_lower = term.to_lowercase();
+                                        let mut matches: Vec<String> = Vec::new();
+                                        for cl in &ui.chat_lines {
+                                            let (role, body) = match cl {
+                                                ChatLine::User(b) => ("you", b.as_str()),
+                                                ChatLine::Assistant(b) | ChatLine::AssistantPartial(b) => ("AI", b.as_str()),
+                                                _ => continue,
+                                            };
+                                            for line in body.lines() {
+                                                if line.to_lowercase().contains(&term_lower) {
+                                                    let preview = line.trim().chars().take(60).collect::<String>();
+                                                    matches.push(format!("  [{role}] {preview}"));
+                                                    break; // one hit per message block
+                                                }
+                                            }
+                                        }
+                                        let result = if matches.is_empty() {
+                                            format!("No matches for \"{term}\"")
+                                        } else {
+                                            format!("{} match{} for \"{term}\":\n{}", matches.len(), if matches.len() == 1 { "" } else { "es" }, matches.join("\n"))
+                                        };
+                                        ui.chat_lines.push(ChatLine::SystemNote(result));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
                                 }
                                 cmd if cmd.starts_with("/model") => {
                                     let new_model = cmd.trim_start_matches("/model").trim();
@@ -4666,7 +4778,8 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     KeyCode::Tab => {
                         // Slash command completion: Tab while buffer starts with '/'
                         const SLASH_CMDS: &[&str] = &[
-                            "/clear", "/cost", "/export", "/help", "/model ", "/quit",
+                            "/clear", "/cost", "/export", "/help", "/load ", "/model ",
+                            "/quit", "/search ", "/sessions",
                         ];
                         let buf = ui.input_buffer.trim_end().to_string();
                         if buf.starts_with('/') && !buf.contains(' ') {
@@ -4715,10 +4828,116 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
             }
         }
     }
+    // Auto-save session on exit if there's any conversation
+    let _ = session_save(&ui);
+
     let _ = _ctx.send(UiCommand::Quit);
     drop(guard); // cooks the terminal
     let _ = driver_handle.await;
     Ok(())
+}
+
+// ── session persistence ───────────────────────────────────────────────────────
+
+fn session_dir() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    std::path::Path::new(&home).join(".aether").join("sessions")
+}
+
+fn session_save(ui: &aether_render::UiState) -> std::io::Result<std::path::PathBuf> {
+    use aether_render::ChatLine;
+    let has_convo = ui.chat_lines.iter().any(|cl| {
+        matches!(cl, ChatLine::User(_) | ChatLine::Assistant(_))
+    });
+    if !has_convo {
+        return Err(std::io::Error::new(std::io::ErrorKind::Other, "no conversation"));
+    }
+    let dir = session_dir();
+    std::fs::create_dir_all(&dir)?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let path = dir.join(format!("{ts}.jsonl"));
+    let mut out = String::new();
+    // First line: metadata
+    out.push_str(&format!(
+        "{{\"_meta\":true,\"model\":\"{}\",\"ts\":{}}}\n",
+        ui.model.replace('"', "\\\""),
+        ts
+    ));
+    for cl in &ui.chat_lines {
+        use aether_render::ChatLine;
+        let (role, text) = match cl {
+            ChatLine::User(m) => ("user", m.as_str()),
+            ChatLine::Assistant(m) | ChatLine::AssistantPartial(m) => ("assistant", m.as_str()),
+            ChatLine::SystemNote(m) => ("system", m.as_str()),
+            _ => continue,
+        };
+        let escaped = text
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r");
+        out.push_str(&format!("{{\"role\":\"{role}\",\"content\":\"{escaped}\"}}\n"));
+    }
+    std::fs::write(&path, &out)?;
+    Ok(path)
+}
+
+fn session_list() -> Vec<std::path::PathBuf> {
+    let dir = session_dir();
+    let mut files: Vec<_> = std::fs::read_dir(&dir)
+        .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()).collect())
+        .unwrap_or_default();
+    // Sort newest first (by filename which starts with timestamp)
+    files.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+    files
+}
+
+fn session_load(path: &std::path::Path) -> Vec<aether_render::ChatLine> {
+    use aether_render::ChatLine;
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+    let mut lines = vec![];
+    for raw_line in content.lines() {
+        if raw_line.contains("\"_meta\":true") {
+            continue;
+        }
+        // Extract role
+        let role_start = match raw_line.find("\"role\":\"").map(|i| i + 8) {
+            Some(s) => s,
+            None => continue,
+        };
+        let role_end = match raw_line[role_start..].find('"').map(|i| role_start + i) {
+            Some(e) => e,
+            None => continue,
+        };
+        // Extract content
+        let content_start = match raw_line.find("\"content\":\"").map(|i| i + 11) {
+            Some(s) => s,
+            None => continue,
+        };
+        let content_end = match raw_line[content_start..].rfind('"').map(|i| content_start + i) {
+            Some(e) => e,
+            None => continue,
+        };
+        let role = &raw_line[role_start..role_end];
+        let body = raw_line[content_start..content_end]
+            .replace("\\n", "\n")
+            .replace("\\r", "\r")
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\");
+        match role {
+            "user" => lines.push(ChatLine::User(body)),
+            "assistant" => lines.push(ChatLine::Assistant(body)),
+            "system" => lines.push(ChatLine::SystemNote(body)),
+            _ => {}
+        }
+    }
+    lines
 }
 
 /// Unwrap an AgentError down to an LlmError if possible, and use the

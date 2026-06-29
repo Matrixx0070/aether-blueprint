@@ -194,6 +194,13 @@ pub struct UiState {
     pub follow_tail: bool,
     /// Cycles through Tab-completions for slash commands.
     pub tab_cycle: usize,
+    /// Instant when the first streaming delta arrived for the current response.
+    pub stream_start: Option<std::time::Instant>,
+    /// Tokens/second for the last completed response.
+    pub last_tps: f64,
+    /// Total tool ok/err counts for the side-panel title.
+    pub tools_ok: u32,
+    pub tools_err: u32,
 }
 
 impl UiState {
@@ -255,12 +262,19 @@ impl UiState {
             history_idx: None,
             follow_tail: true,
             tab_cycle: 0,
+            stream_start: None,
+            last_tps: 0.0,
+            tools_ok: 0,
+            tools_err: 0,
         }
     }
 
     pub fn apply(&mut self, ev: UiEvent) {
         match ev {
             UiEvent::AssistantDelta(d) => {
+                if self.stream_start.is_none() {
+                    self.stream_start = Some(std::time::Instant::now());
+                }
                 match self.chat_lines.last_mut() {
                     Some(ChatLine::AssistantPartial(s)) => s.push_str(&d),
                     _ => self.chat_lines.push(ChatLine::AssistantPartial(d)),
@@ -268,6 +282,13 @@ impl UiState {
                 // follow_tail scrolling is handled in draw_frame() using real line counts
             }
             UiEvent::AssistantDone(final_text) => {
+                // Compute tokens/second from stream duration and output tokens
+                if let Some(t0) = self.stream_start.take() {
+                    let secs = t0.elapsed().as_secs_f64();
+                    if secs > 0.1 && self.tokens_out > 0 {
+                        self.last_tps = self.tokens_out as f64 / secs;
+                    }
+                }
                 if matches!(self.chat_lines.last(), Some(ChatLine::AssistantPartial(_))) {
                     if let Some(last) = self.chat_lines.last_mut() {
                         *last = ChatLine::Assistant(final_text);
@@ -291,11 +312,13 @@ impl UiState {
             } => {
                 for entry in self.tool_log.iter_mut().rev() {
                     if entry.name == name && matches!(entry.status, ToolStatus::Running) {
-                        entry.status = if is_error {
-                            ToolStatus::Err(preview.clone())
+                        if is_error {
+                            entry.status = ToolStatus::Err(preview.clone());
+                            self.tools_err += 1;
                         } else {
-                            ToolStatus::Ok(preview.clone())
-                        };
+                            entry.status = ToolStatus::Ok(preview.clone());
+                            self.tools_ok += 1;
+                        }
                         break;
                     }
                 }
@@ -385,14 +408,18 @@ pub fn draw_frame(
     let spin = spinner_frame();
 
     terminal.draw(|f| {
+        // Dynamic input height: 1 border + content lines, clamped 2..=8
+        let input_content_lines = state.input_buffer.lines().count().max(1);
+        let input_height = (input_content_lines + 1).min(8) as u16;
+
         // Outer vertical split: header | main | input | hints
         let outer = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1), // header bar
-                Constraint::Min(5),    // chat + tools
-                Constraint::Length(4), // input (1 border + 3 content lines)
-                Constraint::Length(1), // hints bar
+                Constraint::Length(1),            // header bar
+                Constraint::Min(5),               // chat + tools
+                Constraint::Length(input_height), // input (dynamic)
+                Constraint::Length(1),            // hints bar
             ])
             .split(f.area());
 
@@ -533,18 +560,28 @@ pub fn draw_frame(
                     Style::default().fg(C_DIM),
                 )));
             }
-            tool_lines.extend(
-                state.tool_log[skip..]
-                    .iter()
-                    .map(|t| tool_entry_to_line(t, spin)),
-            );
+            for t in &state.tool_log[skip..] {
+                tool_lines.extend(tool_entry_to_lines(t, spin));
+            }
+            let tools_title = {
+                let ok = state.tools_ok;
+                let err = state.tools_err;
+                if err > 0 {
+                    format!(" Tools  {}✓  {}✗ ", ok, err)
+                } else if ok > 0 {
+                    format!(" Tools  {}✓ ", ok)
+                } else {
+                    " Tools ".to_string()
+                }
+            };
+            let tools_title_color = if state.tools_err > 0 { C_ERR } else if state.tools_ok > 0 { C_OK } else { C_DIM };
             f.render_widget(
                 Paragraph::new(tool_lines)
                     .block(
                         Block::default()
                             .borders(Borders::ALL)
                             .border_style(border_style)
-                            .title(Span::styled(" Tools ", title_style)),
+                            .title(Span::styled(tools_title, Style::default().fg(tools_title_color).add_modifier(Modifier::BOLD))),
                     )
                     .wrap(Wrap { trim: false }),
                 tools_area,
@@ -728,6 +765,9 @@ pub fn draw_frame(
             if state.tokens_in > 0 || state.tokens_out > 0 {
                 right_parts.push(format!("↑{} ↓{}", fmt_tokens(state.tokens_in), fmt_tokens(state.tokens_out)));
             }
+            if state.last_tps > 0.5 {
+                right_parts.push(format!("{:.0} t/s", state.last_tps));
+            }
             if state.cost_usd > 0.0 {
                 right_parts.push(format!("${:.4}", state.cost_usd));
             }
@@ -791,7 +831,7 @@ fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str) -> Vec<Line<'
             render_message("  ◆  ", C_ASST_PFX, body, C_BODY, true, trail_spin, spin)
         }
         ChatLine::SystemNote(body) => {
-            render_message("  ·  ", C_DIM, body, C_DIM, false, false, spin)
+            render_message("  ─  ", C_DIM, body, C_BODY, false, false, spin)
         }
         ChatLine::SplashRow { logo, info, style } => {
             let (info_color, info_mod) = match style {
@@ -1021,28 +1061,58 @@ fn tool_type_icon(name: &str) -> &'static str {
     "◦"
 }
 
-fn tool_entry_to_line(t: &ToolEntry, spin: &str) -> Line<'static> {
+fn tool_entry_to_lines(t: &ToolEntry, spin: &str) -> Vec<Line<'static>> {
     let (sym, color) = match &t.status {
         ToolStatus::Running => (spin.to_string(), C_WARN),
         ToolStatus::Ok(_) => ("✓".to_string(), C_OK),
         ToolStatus::Err(_) => ("✗".to_string(), C_ERR),
     };
     let icon = tool_type_icon(&t.name);
-    let result_preview = match &t.status {
-        ToolStatus::Ok(p) | ToolStatus::Err(p) if !p.is_empty() => {
-            format!("  —  {}", truncate_chars(p, 24))
-        }
-        _ => String::new(),
-    };
     let summary = if t.summary.is_empty() {
         String::new()
     } else {
-        format!("  {}", truncate_chars(&t.summary, 20))
+        format!("  {}", truncate_chars(&t.summary, 22))
     };
-    Line::from(Span::styled(
-        format!("  {sym} {icon} {}{}{}", t.name, summary, result_preview),
+
+    // Header line (always one line)
+    let mut lines: Vec<Line<'static>> = vec![Line::from(Span::styled(
+        format!("  {sym} {icon} {}{}", t.name, summary),
         Style::default().fg(color),
-    ))
+    ))];
+
+    // Preview: show up to 5 sub-lines with diff coloring for completed tools
+    match &t.status {
+        ToolStatus::Ok(preview) | ToolStatus::Err(preview) if !preview.is_empty() => {
+            let is_err = matches!(&t.status, ToolStatus::Err(_));
+            let preview_lines: Vec<&str> = preview.lines().collect();
+            let show_n = preview_lines.len().min(5);
+            for raw in &preview_lines[..show_n] {
+                let (marker, line_color) = if raw.starts_with('+') {
+                    ("+", C_OK)
+                } else if raw.starts_with('-') {
+                    ("-", C_ERR)
+                } else if raw.starts_with('@') {
+                    ("@", C_ASST_PFX)
+                } else {
+                    ("·", if is_err { C_ERR } else { C_DIM })
+                };
+                let body = raw.trim_start_matches(['+', '-', '@']).trim_start();
+                lines.push(Line::from(Span::styled(
+                    format!("     {} {}", marker, truncate_chars(body, 28)),
+                    Style::default().fg(line_color),
+                )));
+            }
+            if preview_lines.len() > 5 {
+                lines.push(Line::from(Span::styled(
+                    format!("     … {} more", preview_lines.len() - 5),
+                    Style::default().fg(C_DIM),
+                )));
+            }
+        }
+        _ => {}
+    }
+
+    lines
 }
 
 fn fleet_entry_to_line(e: &FleetEntry) -> Line<'static> {
