@@ -4733,6 +4733,24 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                             ui.input_cursor = 0;
                         }
                     }
+                    KeyCode::Char('s') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Ctrl+S: save current session without clearing the conversation
+                        match session_save(&ui) {
+                            Ok(path) => {
+                                let p = path.display().to_string();
+                                let short = p.rsplit('/').next().unwrap_or(&p).to_string();
+                                ui.chat_lines.push(ChatLine::SystemNote(
+                                    format!("Session saved → {short}")
+                                ));
+                            }
+                            Err(e) => {
+                                ui.chat_lines.push(ChatLine::SystemNote(
+                                    format!("Save failed: {e}")
+                                ));
+                            }
+                        }
+                        ui.follow_tail = true;
+                    }
                     KeyCode::Char('n') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         // Ctrl+N: new conversation — save current session, clear display + counters
                         let _ = session_save(&ui);
@@ -4929,6 +4947,10 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                          /sessions          list saved sessions\n\
                                          /history  /hist    show recent input history with indices\n\
                                          /stats             session statistics (words, cost, speed)\n\
+                                         /todo              list todos (from ~/.aether/todo.md)\n\
+                                         /todo + <task>     add a pending task\n\
+                                         /todo done <N>     mark task N complete\n\
+                                         /todo clear-done   remove completed tasks\n\
                                          /timestamps  /ts   toggle per-message timestamps  (F3)\n\
                                          /doctor            config + auth health check\n\
                                          /undo              remove last exchange from display\n\
@@ -4945,6 +4967,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                          Ctrl+K / U      kill to end / start of line\n\
                                          Ctrl+T          transpose chars (Emacs)\n\
                                          Ctrl+B          bold-wrap word at cursor (**word**)\n\
+                                         Ctrl+S          save session without clearing\n\
                                          Ctrl+Y          yank last AI response into input\n\
                                          Ctrl+Z          undo last input change\n\
                                          Ctrl+G          abort / cancel (Emacs)\n\
@@ -5471,6 +5494,70 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                cmd if cmd == "/todo" || cmd.starts_with("/todo ") => {
+                                    let todo_path = std::env::var("HOME").ok()
+                                        .map(|h| std::path::PathBuf::from(h).join(".aether").join("todo.md"))
+                                        .unwrap_or_else(|| std::path::PathBuf::from("/tmp/aether-todo.md"));
+                                    let sub = cmd.trim_start_matches("/todo").trim();
+                                    let msg = if sub.is_empty() || sub == "list" {
+                                        // List todos
+                                        let content = std::fs::read_to_string(&todo_path).unwrap_or_default();
+                                        if content.trim().is_empty() {
+                                            format!("No todos. Add with: /todo + <task>  |  done with: /todo done <N>")
+                                        } else {
+                                            let mut out = String::from("Todos:\n");
+                                            for (i, line) in content.lines().filter(|l| !l.is_empty()).enumerate() {
+                                                out.push_str(&format!("  [{:>2}] {line}\n", i + 1));
+                                            }
+                                            out.push_str("  /todo + <task>  |  /todo done <N>  |  /todo clear-done");
+                                            out
+                                        }
+                                    } else if let Some(task) = sub.strip_prefix("+ ").or_else(|| sub.strip_prefix("add ")) {
+                                        // Add item
+                                        if let Some(parent) = todo_path.parent() { let _ = std::fs::create_dir_all(parent); }
+                                        let entry = format!("- [ ] {task}\n");
+                                        let result = std::fs::OpenOptions::new().create(true).append(true).open(&todo_path)
+                                            .and_then(|mut f| { use std::io::Write as _; f.write_all(entry.as_bytes()) });
+                                        match result {
+                                            Ok(_) => format!("Added: □ {task}"),
+                                            Err(e) => format!("Todo save failed: {e}"),
+                                        }
+                                    } else if let Some(n_str) = sub.strip_prefix("done ").or_else(|| sub.strip_prefix("x ")) {
+                                        // Mark Nth item done
+                                        if let Ok(n) = n_str.trim().parse::<usize>() {
+                                            let content = std::fs::read_to_string(&todo_path).unwrap_or_default();
+                                            let lines: Vec<&str> = content.lines().filter(|l| !l.is_empty()).collect();
+                                            if n >= 1 && n <= lines.len() {
+                                                let updated: String = lines.iter().enumerate()
+                                                    .map(|(i, l)| if i + 1 == n { l.replacen("- [ ]", "- [x]", 1) } else { l.to_string() })
+                                                    .collect::<Vec<_>>().join("\n") + "\n";
+                                                let task_preview = lines[n - 1].trim_start_matches("- [ ] ").trim_start_matches("- [x] ").chars().take(50).collect::<String>();
+                                                match std::fs::write(&todo_path, updated) {
+                                                    Ok(_) => format!("Done ✓: {task_preview}"),
+                                                    Err(e) => format!("Todo update failed: {e}"),
+                                                }
+                                            } else {
+                                                format!("No todo [{n}].")
+                                            }
+                                        } else {
+                                            "Usage: /todo done <number>".to_string()
+                                        }
+                                    } else if sub == "clear-done" {
+                                        let content = std::fs::read_to_string(&todo_path).unwrap_or_default();
+                                        let kept: String = content.lines()
+                                            .filter(|l| !l.trim_start().starts_with("- [x]"))
+                                            .map(|l| format!("{l}\n")).collect();
+                                        match std::fs::write(&todo_path, &kept) {
+                                            Ok(_) => "Done items cleared.".to_string(),
+                                            Err(e) => format!("Clear failed: {e}"),
+                                        }
+                                    } else {
+                                        format!("Unknown /todo subcommand: {sub}\n  Usage: /todo  |  /todo + <task>  |  /todo done <N>  |  /todo clear-done")
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/retry" | "/r" => {
                                     // Resend the last user message (remove last assistant response + resend)
                                     let last_user_msg = ui.chat_lines.iter().rev().find_map(|cl| {
@@ -5485,6 +5572,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                         }
                                         ui.follow_tail = true;
                                         ui.status_running = true;
+                                        ui.waiting_since = Some(std::time::Instant::now());
                                         ui.chat_lines.push(ChatLine::SystemNote(
                                             format!("↺ Retrying: \"{}\"", retry_msg.chars().take(50).collect::<String>())
                                         ));
@@ -5582,6 +5670,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                             }
                             ui.follow_tail = true;
                             ui.status_running = true;
+                            ui.waiting_since = Some(std::time::Instant::now());
                             ui.msg_times_secs.push(ts);
                             if _ctx.send(UiCommand::UserMessage(msg)).is_err() {
                                 break 'outer;
@@ -5651,7 +5740,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         const SLASH_CMDS: &[&str] = &[
                             "/clear", "/clear-history", "/clh", "/compact", "/copy", "/cost", "/doctor", "/export", "/format",
                             "/help", "/hist", "/history", "/linenums", "/load ", "/model ", "/note ", "/pin ", "/quit",
-                            "/raw", "/retry", "/search ", "/sessions", "/stats", "/timestamps", "/undo", "/unpin",
+                            "/raw", "/retry", "/search ", "/sessions", "/stats", "/timestamps", "/todo ", "/undo", "/unpin",
                         ];
                         let buf = ui.input_buffer.trim_end().to_string();
                         if buf.starts_with('/') && !buf.contains(' ') {

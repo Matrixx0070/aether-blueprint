@@ -245,6 +245,8 @@ pub struct UiState {
     pub new_msgs_while_scrolled: u32,
     /// Instant when the last AssistantDone arrived — used to flash input border for ~1.2s.
     pub response_done_at: Option<std::time::Instant>,
+    /// Instant when the current request was submitted — cleared on first delta received.
+    pub waiting_since: Option<std::time::Instant>,
     /// When true, full timestamps are shown on each message header.
     pub show_timestamps: bool,
     /// Auto-extracted from the first user message (first 5 words, up to 40 chars).
@@ -341,6 +343,7 @@ impl UiState {
             history_presearch_buf: String::new(),
             new_msgs_while_scrolled: 0,
             response_done_at: None,
+            waiting_since: None,
             show_timestamps: false,
             session_title: None,
             search_highlight: None,
@@ -355,6 +358,7 @@ impl UiState {
             UiEvent::AssistantDelta(d) => {
                 if self.stream_start.is_none() {
                     self.stream_start = Some(std::time::Instant::now());
+                    self.waiting_since = None; // first token received — TTFT elapsed
                 }
                 if self.response_start.is_none() {
                     self.response_start = Some(std::time::Instant::now());
@@ -1389,6 +1393,18 @@ pub fn draw_frame(
                     "  ● live".to_string(),
                     Style::default().fg(C_OK).bg(C_HDR_BG),
                 ));
+            }
+            // TTFT slow indicator: waiting >4s for first token
+            if state.status_running && state.stream_chars == 0 {
+                if let Some(t) = state.waiting_since {
+                    let wait_secs = t.elapsed().as_secs();
+                    if wait_secs >= 4 {
+                        hints_spans.push(Span::styled(
+                            format!("  [⧗ {}s slow]", wait_secs),
+                            Style::default().fg(C_WARN).bg(C_HDR_BG),
+                        ));
+                    }
+                }
             }
             // Reverse-i-search mode indicator overrides the right side of hints
             let hints_line = if let Some(ref q) = state.history_search {
