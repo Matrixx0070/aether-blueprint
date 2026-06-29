@@ -5077,9 +5077,12 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                          /drop [N]               remove last N pairs\n\
                                          /undo                   remove last exchange\n\
                                          /retry                  resend last message\n\
+                                         /replay N               resend Nth exchange\n\
                                          /diff                   diff last two AI responses\n\
                                          /search <term>          highlight + scroll to match\n\
+                                         /find <pattern>         highlight all matches in chat\n\
                                          /grep <pattern>         regex search across messages\n\
+                                         /goto N                 jump to exchange N\n\
                                          /last                   jump to latest response\n\
                                          \n\
                                          View\n\
@@ -5088,8 +5091,9 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                          /numbers  /num          toggle exchange [N] labels  (F5)\n\
                                          /timestamps  /ts        toggle timestamps  (F3)\n\
                                          /wrap                   toggle word-wrap (wide code mode)\n\
-                                         /theme                  cycle accent colour: sky/emerald/rose\n\
+                                         /theme                  cycle accent colour: sky/emerald/rose  (F7)\n\
                                          /focus                  zen mode — hide hints bar  (F6, Ctrl+F)\n\
+                                         /outline                extract headings as TOC\n\
                                          F2                      toggle side panel\n\
                                          \n\
                                          Compose\n\
@@ -5103,27 +5107,34 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                          \n\
                                          Files & sessions\n\
                                          /export [file]          save transcript to markdown\n\
+                                         /share                  quick export to /tmp/aether-chat-*.md\n\
                                          /load <n>               restore saved session\n\
                                          /sessions               list saved sessions\n\
                                          Ctrl+S                  save session now\n\
                                          \n\
+                                         Code & extraction\n\
+                                         /copy [N]               copy Nth AI response to clipboard\n\
+                                         /copy code [N]          copy Nth code block to clipboard\n\
+                                         /extract [code]         write code blocks to /tmp files\n\
+                                         \n\
                                          Info\n\
                                          /cost                   token usage + per-message cost\n\
-                                         /count                  word/char/code stats\n\
+                                         /context  /ctx          context window breakdown + bar\n\
+                                         /wc  /count             word/char/sentence/read-time stats\n\
                                          /stats                  timing + cost summary\n\
-                                         /speed                  per-response t/s history\n\
+                                         /speed                  per-response t/s + median history\n\
                                          /history  /hist         recent input history  (↑↓ to cycle)\n\
                                          /model [name]           switch model (opus/sonnet/haiku)\n\
                                          /version                Aether build info\n\
                                          /doctor                 auth + config health check\n\
                                          /quit                   exit  (Ctrl+Q)\n\
                                          \n\
-                                         Tools\n\
+                                         Tools & notes\n\
                                          /clear-tools            clear tool log panel  (/cltools)\n\
                                          /todo [+ task | done N] manage ~/.aether/todo.md checklist\n\
                                          /note <text>            append to ~/.aether/notes.md\n\
-                                         /copy [N]               copy Nth AI response to clipboard\n\
                                          /bookmark <name>        mark scroll position  (/bm)\n\
+                                         /bookmarks [N]          list or jump-to bookmark N\n\
                                          /go <name>              jump to bookmark\n\
                                          \n\
                                          Input shortcuts\n\
@@ -5137,10 +5148,11 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                          Alt+.                   insert last word from AI response\n\
                                          Right (at end)          accept ghost-text suggestion\n\
                                          Ctrl+X e                open $EDITOR to compose\n\
+                                         Ctrl+G                  find using input buffer as pattern\n\
                                          Ctrl+O                  open last URL from AI\n\
                                          Ctrl+Y                  yank last AI response into input\n\
                                          Ctrl+Z / /undo          undo last input edit / exchange\n\
-                                         Ctrl+G / Esc            cancel in-progress response\n\
+                                         Ctrl+D                  clear buffer (twice = exit)\n\
                                          Shift+↵ / Ctrl+↵        newline in input\n\
                                          Tab                     complete slash command / subcommand\n\
                                          Ctrl+`                  insert code fence\n\
@@ -7032,6 +7044,46 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                 ui.follow_tail = true;
                             }
                         }
+                    }
+                    KeyCode::Char('s') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Ctrl+S: quick-save current chat to /tmp
+                        let now_secs = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+                        let out_path = format!("/tmp/aether-chat-{now_secs}.md");
+                        let title = ui.session_title.as_deref().unwrap_or("Aether Session");
+                        let mut content = format!(
+                            "---\ntitle: {title}\nmodel: {}\nsession: {}\nexported: {now_secs}\n---\n\n# {title}\n\n",
+                            ui.model, ui.session_id
+                        );
+                        for cl in &ui.chat_lines {
+                            match cl {
+                                ChatLine::User(m, ts) => {
+                                    let ts_str = if *ts > 0 {
+                                        format!(" _{:02}:{:02}:{:02}_", (ts % 86400)/3600, (ts % 3600)/60, ts % 60)
+                                    } else { String::new() };
+                                    content.push_str(&format!("---\n\n**You**{ts_str}\n\n{m}\n\n"));
+                                }
+                                ChatLine::Assistant(m, dur, _cost) => {
+                                    let dur_str = if *dur > 0.0 { format!(" _{:.1}s_", dur) } else { String::new() };
+                                    content.push_str(&format!("**Aether**{dur_str}\n\n{m}\n\n"));
+                                }
+                                ChatLine::AssistantPartial(m) => {
+                                    content.push_str(&format!("**Aether** _(partial)_\n\n{m}\n\n"));
+                                }
+                                ChatLine::SystemNote(m) => {
+                                    content.push_str(&format!("> _{}_\n\n", m.replace('\n', "\n> ")));
+                                }
+                                _ => {}
+                            }
+                        }
+                        let note = match std::fs::write(&out_path, &content) {
+                            Ok(_) => format!("Saved → {out_path}  (Ctrl+S)"),
+                            Err(e) => format!("Save failed: {e}"),
+                        };
+                        ui.chat_lines.push(ChatLine::SystemNote(note));
+                        ui.follow_tail = true;
                     }
                     KeyCode::Char('x') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         ui.ctrl_x_pending = true;

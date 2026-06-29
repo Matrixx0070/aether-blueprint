@@ -667,6 +667,17 @@ pub fn draw_frame(
                 ),
                 Span::styled("  ·  ", Style::default().fg(C_DIM).bg(C_HDR_BG)),
                 Span::styled(
+                    // Model family icon: ⊕ Opus · ◈ Sonnet · ◇ Haiku
+                    if model_display.contains("opus") { "⊕ " }
+                    else if model_display.contains("haiku") { "◇ " }
+                    else { "◈ " },
+                    Style::default().fg(
+                        if model_display.contains("opus") { C_WARN }
+                        else if model_display.contains("haiku") { C_OK }
+                        else { t_brand }
+                    ).bg(C_HDR_BG),
+                ),
+                Span::styled(
                     model_display.clone(),
                     // Opus = amber, Sonnet = brand, Haiku = green
                     Style::default().fg(
