@@ -4647,6 +4647,23 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         ));
                         ui.chat_scroll = 0;
                     }
+                    KeyCode::Char('n') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Ctrl+N: new conversation — save current session, clear display + counters
+                        let _ = session_save(&ui);
+                        ui.chat_lines.retain(|cl| matches!(cl, ChatLine::SplashRow { .. }));
+                        ui.chat_scroll = 0;
+                        ui.follow_tail = true;
+                        ui.tokens_in = 0;
+                        ui.tokens_out = 0;
+                        ui.tokens_total = 0;
+                        ui.cost_usd = 0.0;
+                        ui.msg_times_secs.clear();
+                        ui.msg_cost_snapshots.clear();
+                        ui.response_durations.clear();
+                        ui.chat_lines.push(ChatLine::SystemNote(
+                            "New conversation started. Previous session saved.".to_string()
+                        ));
+                    }
                     KeyCode::Char('r') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         // Ctrl+R: reverse incremental history search.
                         // First press enters search mode with current buffer as query.
@@ -4781,6 +4798,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                          \n\
                                          /clear          clear chat display\n\
                                          /compact [N]    compress history (keep last N=5 exchange pairs)\n\
+                                         /copy           copy last AI response to clipboard\n\
                                          /cost           token usage + cost\n\
                                          /export [file]  save transcript to markdown\n\
                                          /load <n>       restore saved session n\n\
@@ -4808,6 +4826,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                          Tab             complete slash command\n\
                                          Ctrl+C          cancel / clear / exit\n\
                                          Ctrl+L          clear chat display\n\
+                                         Ctrl+N          new conversation (saves current)\n\
                                          PgUp/Dn         scroll chat\n\
                                          End             resume tail (follow latest)\n\
                                          F2              toggle side panel (full-width chat)\n\
@@ -5125,6 +5144,52 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     }
                                     continue;
                                 }
+                                "/copy" | "/cp" => {
+                                    // Copy last assistant response to clipboard via xclip
+                                    let last_asst = ui.chat_lines.iter().rev().find_map(|cl| {
+                                        if let ChatLine::Assistant(body, _, _) = cl {
+                                            Some(body.clone())
+                                        } else { None }
+                                    });
+                                    if let Some(text) = last_asst {
+                                        let result = std::process::Command::new("xclip")
+                                            .args(["-selection", "clipboard"])
+                                            .stdin(std::process::Stdio::piped())
+                                            .spawn()
+                                            .and_then(|mut child| {
+                                                use std::io::Write as _;
+                                                if let Some(stdin) = child.stdin.as_mut() {
+                                                    stdin.write_all(text.as_bytes())?;
+                                                }
+                                                child.wait()
+                                            })
+                                            .or_else(|_| {
+                                                // fallback: xsel
+                                                std::process::Command::new("xsel")
+                                                    .args(["--clipboard", "--input"])
+                                                    .stdin(std::process::Stdio::piped())
+                                                    .spawn()
+                                                    .and_then(|mut child| {
+                                                        use std::io::Write as _;
+                                                        if let Some(stdin) = child.stdin.as_mut() {
+                                                            stdin.write_all(text.as_bytes())?;
+                                                        }
+                                                        child.wait()
+                                                    })
+                                            });
+                                        let note = match result {
+                                            Ok(_) => format!("Copied {} chars to clipboard.", text.chars().count()),
+                                            Err(e) => format!("Copy failed (need xclip or xsel): {e}"),
+                                        };
+                                        ui.chat_lines.push(ChatLine::SystemNote(note));
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Nothing to copy — no assistant response yet.".to_string()
+                                        ));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -5182,7 +5247,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     KeyCode::Tab => {
                         // Slash command completion: Tab while buffer starts with '/'
                         const SLASH_CMDS: &[&str] = &[
-                            "/clear", "/compact", "/cost", "/doctor", "/export", "/help",
+                            "/clear", "/compact", "/copy", "/cost", "/doctor", "/export", "/help",
                             "/load ", "/model ", "/pin ", "/quit", "/search ",
                             "/sessions", "/stats", "/undo",
                         ];

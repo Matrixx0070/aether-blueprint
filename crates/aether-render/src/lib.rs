@@ -492,7 +492,23 @@ pub fn draw_frame(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     state: &UiState,
 ) -> io::Result<()> {
-    let spin = spinner_frame();
+    // Build enriched spinner string: plain frame when idle, live stats during streaming.
+    // Uses owned String so we don't need Box::leak (the trailing format! creates Cow::Owned).
+    let spin_owned: String = {
+        let base = spinner_frame();
+        if state.status_running && state.stream_chars > 0 {
+            let words = (state.stream_chars / 5).max(1);
+            let tps_str = if state.last_tps > 1.0 {
+                format!(" · {:.0}t/s", state.last_tps)
+            } else {
+                String::new()
+            };
+            format!("{base} ~{words}w{tps_str}")
+        } else {
+            base.to_string()
+        }
+    };
+    let spin = spin_owned.as_str();
 
     terminal.draw(|f| {
         // Precompute message count (used in side panel + hints bar)
