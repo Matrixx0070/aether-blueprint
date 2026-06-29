@@ -5510,13 +5510,14 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     continue;
                                 }
                                 "/wc" => {
-                                    // Alias for /count
                                     let mut user_msgs = 0usize;
                                     let mut asst_msgs = 0usize;
                                     let mut user_words = 0usize;
                                     let mut asst_words = 0usize;
                                     let mut user_chars = 0usize;
                                     let mut asst_chars = 0usize;
+                                    let mut asst_sentences = 0usize;
+                                    let mut asst_char_sum = 0usize;
                                     let mut code_blocks = 0usize;
                                     for cl in &ui.chat_lines {
                                         match cl {
@@ -5527,8 +5528,15 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                             }
                                             ChatLine::Assistant(body, _, _) => {
                                                 asst_msgs += 1;
-                                                asst_words += body.split_whitespace().count();
+                                                let words: Vec<&str> = body.split_whitespace().collect();
+                                                asst_words += words.len();
                                                 asst_chars += body.len();
+                                                // Sentence count: words ending in .!?
+                                                asst_sentences += words.iter().filter(|w| {
+                                                    w.ends_with('.') || w.ends_with('!') || w.ends_with('?')
+                                                }).count();
+                                                // Sum word lengths for avg
+                                                asst_char_sum += words.iter().map(|w| w.chars().count()).sum::<usize>();
                                                 code_blocks += body.matches("```").count() / 2;
                                             }
                                             _ => {}
@@ -5536,8 +5544,16 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     }
                                     let total_words = user_words + asst_words;
                                     let avg_asst = if asst_msgs > 0 { asst_words / asst_msgs } else { 0 };
+                                    let avg_word_len = if asst_words > 0 { asst_char_sum / asst_words } else { 0 };
+                                    // Reading time at 200 wpm
+                                    let read_secs = (total_words as f64 / 200.0 * 60.0) as u64;
+                                    let read_str = if read_secs < 60 {
+                                        format!("{read_secs}s read")
+                                    } else {
+                                        format!("{}m{}s read", read_secs / 60, read_secs % 60)
+                                    };
                                     ui.chat_lines.push(ChatLine::SystemNote(format!(
-                                        "Conversation counts\n  Messages:    {user_msgs} you  ·  {asst_msgs} AI\n  Words:       {user_words} you  ·  {asst_words} AI  ·  {total_words} total\n  Chars:       {user_chars} you  ·  {asst_chars} AI\n  Avg AI resp: ~{avg_asst}w\n  Code blocks: {code_blocks}"
+                                        "Conversation counts\n  Messages:    {user_msgs} you  ·  {asst_msgs} AI\n  Words:       {user_words} you  ·  {asst_words} AI  ·  {total_words} total  ({read_str} @200wpm)\n  Chars:       {user_chars} you  ·  {asst_chars} AI\n  Avg AI resp: ~{avg_asst}w  ·  avg word {avg_word_len}c\n  Sentences:   ~{asst_sentences} AI\n  Code blocks: {code_blocks}"
                                     )));
                                     ui.follow_tail = true;
                                     continue;

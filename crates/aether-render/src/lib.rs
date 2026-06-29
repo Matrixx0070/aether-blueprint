@@ -1809,16 +1809,44 @@ fn render_message(
         let mut body_spans: Vec<Span<'static>> = if trimmed.starts_with("```") {
             // Fence delimiter: decorated ruler for assistant messages.
             // After the toggle above: in_code_block==true = opening fence, false = closing fence.
-            let fence_text = if is_assistant {
+            if is_assistant {
                 if in_code_block && !code_lang.is_empty() {
-                    format!("  ─── {} ─────────────────────────", code_lang.to_uppercase())
+                    // Opening fence with colored language badge
+                    let lang_color = match code_lang.as_str() {
+                        "rust" | "rs"               => Color::Rgb(222, 165, 132), // rust orange
+                        "python" | "py"             => Color::Rgb(52, 211, 153),  // emerald-400
+                        "javascript" | "js" | "jsx" => Color::Rgb(250, 204, 21),  // yellow-400
+                        "typescript" | "ts" | "tsx" => Color::Rgb(96, 165, 250),  // blue-400
+                        "bash" | "sh" | "shell" | "zsh" => Color::Rgb(74, 222, 128), // green-400
+                        "go"                        => Color::Rgb(99, 179, 237),  // sky-300
+                        "c" | "cpp" | "c++"         => Color::Rgb(196, 181, 253), // purple-300
+                        "java" | "kotlin"           => Color::Rgb(253, 186, 116), // orange-300
+                        "diff" | "patch"            => Color::Rgb(248, 113, 113), // red-400
+                        "json" | "yaml" | "toml"    => Color::Rgb(148, 163, 184), // slate-400
+                        "sql"                       => Color::Rgb(216, 180, 254), // purple-300
+                        "html" | "css" | "xml"      => Color::Rgb(249, 115, 22),  // orange-500
+                        _                           => C_DIM,
+                    };
+                    vec![
+                        Span::styled("  ─── ".to_string(), Style::default().fg(C_DIM).bg(C_CODE_BG)),
+                        Span::styled(code_lang.to_uppercase(), Style::default().fg(lang_color).bg(C_CODE_BG).add_modifier(Modifier::BOLD)),
+                        Span::styled(" ─────────────────────────".to_string(), Style::default().fg(C_DIM).bg(C_CODE_BG)),
+                    ]
+                } else if in_code_block {
+                    // Opening fence no language
+                    vec![Span::styled("  ──────────────────────────────────".to_string(), Style::default().fg(C_DIM).bg(C_CODE_BG))]
                 } else {
-                    "  ──────────────────────────────────".to_string()
+                    // Closing fence: show line count
+                    let lines_label = if code_line_num > 0 {
+                        format!("  ─── {} line{} ─────────────────────", code_line_num, if code_line_num == 1 { "" } else { "s" })
+                    } else {
+                        "  ──────────────────────────────────".to_string()
+                    };
+                    vec![Span::styled(lines_label, Style::default().fg(C_DIM).bg(C_CODE_BG))]
                 }
             } else {
-                line.to_string()
-            };
-            vec![Span::styled(fence_text, Style::default().fg(C_DIM).bg(C_CODE_BG))]
+                vec![Span::styled(line.to_string(), Style::default().fg(C_DIM).bg(C_CODE_BG))]
+            }
         } else if !is_assistant {
             // Non-assistant (user messages etc): plain dim
             vec![Span::styled(
