@@ -5072,10 +5072,15 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                                 ChatLine::Assistant(b, _, _) | ChatLine::AssistantPartial(b) => ("AI", b.as_str()),
                                                 _ => continue,
                                             };
-                                            for line in body.lines() {
+                                            let body_lines: Vec<&str> = body.lines().collect();
+                                            for (li, line) in body_lines.iter().enumerate() {
                                                 if line.to_lowercase().contains(&term_lower) {
-                                                    let preview = line.trim().chars().take(60).collect::<String>();
-                                                    matches.push(format!("  [{role}] {preview}"));
+                                                    let match_line = line.trim().chars().take(70).collect::<String>();
+                                                    // Show 1 line of context after the match if available
+                                                    let ctx_after = body_lines.get(li + 1)
+                                                        .map(|l| format!("\n        {}", l.trim().chars().take(60).collect::<String>()))
+                                                        .unwrap_or_default();
+                                                    matches.push(format!("  [{role}] {match_line}{ctx_after}"));
                                                     break; // one hit per message block
                                                 }
                                             }

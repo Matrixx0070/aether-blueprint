@@ -1371,6 +1371,21 @@ fn render_message(
                 let mut bq = vec![Span::styled("│ ".to_string(), Style::default().fg(C_ASST_PFX))];
                 bq.extend(inline_markdown_spans(content, Color::Rgb(148, 163, 184))); // slate-400
                 bq
+            // Task list item: - [ ] unchecked  /  - [x] or - [X] checked
+            } else if trimmed.starts_with("- [ ] ") || trimmed.starts_with("- [x] ") || trimmed.starts_with("- [X] ") {
+                let is_done = !trimmed.starts_with("- [ ]");
+                let content = &trimmed[6..]; // skip "- [ ] " / "- [x] "
+                let indent = line.len() - line.trim_start().len();
+                let pad = " ".repeat(indent);
+                let (check_glyph, check_color) = if is_done {
+                    ("✓ ", C_OK)
+                } else {
+                    ("☐ ", C_DIM)
+                };
+                let text_color = if is_done { C_DIM } else { body_color };
+                let mut li_spans = vec![Span::styled(format!("{pad}{check_glyph}"), Style::default().fg(check_color).add_modifier(if is_done { Modifier::empty() } else { Modifier::empty() }))];
+                li_spans.extend(inline_markdown_spans(content, text_color));
+                li_spans
             // Unordered list item: - / * / +
             } else if (trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("+ ")) && !in_code_block {
                 let content = &trimmed[2..];
@@ -1540,6 +1555,21 @@ fn inline_markdown_spans(line: &str, body_color: Color) -> Vec<Span<'static>> {
                     Style::default().fg(C_CODE_FG).bg(C_CODE_BG),
                 ));
                 i += end + 2;
+                continue;
+            }
+        }
+
+        // Bold+italic ***...***  (must come before ** bold check)
+        if i + 2 < bytes.len() && &bytes[i..i + 3] == b"***" {
+            flush_buf(&mut buf, &mut out, body_color);
+            if let Some(end) = line[i + 3..].find("***") {
+                out.push(Span::styled(
+                    line[i + 3..i + 3 + end].to_string(),
+                    Style::default()
+                        .fg(body_color)
+                        .add_modifier(Modifier::BOLD | Modifier::ITALIC),
+                ));
+                i += end + 6;
                 continue;
             }
         }
