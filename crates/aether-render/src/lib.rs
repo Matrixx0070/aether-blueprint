@@ -627,7 +627,19 @@ pub fn draw_frame(
                     Style::default().fg(C_BODY).bg(C_HDR_BG).add_modifier(Modifier::ITALIC),
                 ));
             }
+            // Wall clock HH:MM — always visible for temporal grounding
+            let wall_clock = {
+                let ts = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let h = (ts % 86400) / 3600;
+                let m = (ts % 3600) / 60;
+                format!("{:02}:{:02}", h, m)
+            };
             hdr_spans.extend([
+                Span::styled("  ·  ", Style::default().fg(C_DIM).bg(C_HDR_BG)),
+                Span::styled(wall_clock, Style::default().fg(C_DIM).bg(C_HDR_BG)),
                 Span::styled("  ·  ", Style::default().fg(C_DIM).bg(C_HDR_BG)),
                 Span::styled(
                     format!("{perm_sym} {perm}"),
@@ -1115,15 +1127,21 @@ pub fn draw_frame(
                 } else {
                     String::new()
                 };
+                let word_count = state.input_buffer.split_whitespace().count();
+                let words_part = if word_count >= 20 {
+                    format!("~{}w ", word_count)
+                } else {
+                    String::new()
+                };
                 let tokens_part = if input_token_est >= 50 {
                     format!("~{}t ", input_token_est)
                 } else {
                     String::new()
                 };
-                if pos_part.is_empty() && tokens_part.is_empty() {
+                if pos_part.is_empty() && words_part.is_empty() && tokens_part.is_empty() {
                     String::new()
                 } else {
-                    format!(" {}{}", pos_part, tokens_part)
+                    format!(" {}{}{}", pos_part, words_part, tokens_part)
                 }
             };
             // Flash bright brand-blue for 1.2s after a response completes
@@ -1431,6 +1449,11 @@ fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str, show_timestam
     match cl {
         ChatLine::User(body, ts) => {
             let mut lines: Vec<Line<'static>> = Vec::new();
+            // Subtle top separator before each user turn
+            lines.push(Line::from(Span::styled(
+                "  ·─────────────────────────────────────────────────────".to_string(),
+                Style::default().fg(Color::Rgb(30, 41, 59)), // very dark separator
+            )));
             if *ts > 0 || show_timestamps {
                 let ts_str = if *ts > 0 {
                     let h = (ts % 86400) / 3600;
