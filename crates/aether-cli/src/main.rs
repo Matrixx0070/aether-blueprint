@@ -4289,7 +4289,7 @@ async fn serve_one_turn(
 
 async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> Result<()> {
     use aether_render::{
-        channels, draw_frame, ChatLine, TerminalGuard, UiCommand, UiEvent, UiState,
+        channels, draw_frame, ChatLine, SplashStyle, TerminalGuard, UiCommand, UiEvent, UiState,
     };
     use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
@@ -4369,6 +4369,51 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
             let branch = String::from_utf8_lossy(&out.stdout).trim().to_string();
             if !branch.is_empty() && branch != "HEAD" {
                 ui.git_branch = Some(branch);
+            }
+        }
+    }
+
+    // Inject up to 3 recent sessions into the splash screen
+    {
+        let now_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let sessions = session_list();
+        if !sessions.is_empty() {
+            ui.chat_lines.push(ChatLine::SplashRow {
+                logo: String::new(),
+                info: format!("Recent  ({} saved)  ·  /sessions for all  ·  /load <n> to restore", sessions.len()),
+                style: SplashStyle::Dim,
+            });
+            for (i, path) in sessions.iter().take(3).enumerate() {
+                let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+                let mtime = std::fs::metadata(path)
+                    .and_then(|m| m.modified())
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH)
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)))
+                    .map(|d| d.as_secs())
+                    .unwrap_or_else(|_| fname.trim_end_matches(".jsonl").parse().unwrap_or(0));
+                let age = now_ts.saturating_sub(mtime);
+                let age_str = if age < 60 { format!("{age}s ago") }
+                    else if age < 3600 { format!("{}m ago", age / 60) }
+                    else if age < 86400 { format!("{}h ago", age / 3600) }
+                    else { format!("{}d ago", age / 86400) };
+                let preview = std::fs::read_to_string(path)
+                    .unwrap_or_default()
+                    .lines()
+                    .find(|l| l.contains("\"kind\":\"user\""))
+                    .and_then(|l| {
+                        let start = l.find("\"text\":\"")? + 8;
+                        let end = l[start..].find('"')? + start;
+                        Some(l[start..end].chars().take(38).collect::<String>())
+                    })
+                    .unwrap_or_else(|| fname.trim_end_matches(".jsonl").to_string());
+                ui.chat_lines.push(ChatLine::SplashRow {
+                    logo: format!("  {}", i + 1),
+                    info: format!("{age_str}  —  \"{preview}\""),
+                    style: SplashStyle::Dim,
+                });
             }
         }
     }
@@ -5150,7 +5195,15 @@ fn session_save(ui: &aether_render::UiState) -> std::io::Result<std::path::PathB
 fn session_list() -> Vec<std::path::PathBuf> {
     let dir = session_dir();
     let mut files: Vec<_> = std::fs::read_dir(&dir)
-        .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()).collect())
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| {
+                    // Skip symlinks (the "latest" pointer) and non-.jsonl files
+                    !p.is_symlink() && p.extension().and_then(|e| e.to_str()) == Some("jsonl")
+                })
+                .collect()
+        })
         .unwrap_or_default();
     // Sort newest first (by filename which starts with timestamp)
     files.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
