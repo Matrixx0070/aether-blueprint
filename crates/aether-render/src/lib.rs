@@ -134,7 +134,8 @@ pub enum SplashStyle {
 
 #[derive(Debug, Clone)]
 pub enum ChatLine {
-    User(String),
+    /// User message. Second field is Unix timestamp (0 = unknown, from loaded sessions).
+    User(String, u64),
     /// Completed assistant message. Second field is response wall-clock seconds (0.0 = no timing).
     Assistant(String, f64),
     AssistantPartial(String),
@@ -520,7 +521,7 @@ pub fn draw_frame(
         // or nothing (100% chat) on the pre-convo splash screen.
         let has_tools = !state.tool_log.is_empty() || !state.fleet.is_empty();
         let has_convo_for_layout = state.chat_lines.iter().any(|cl| {
-            matches!(cl, ChatLine::User(_) | ChatLine::Assistant(_, _) | ChatLine::AssistantPartial(_))
+            matches!(cl, ChatLine::User(_, _) | ChatLine::Assistant(_, _) | ChatLine::AssistantPartial(_))
         });
         let has_side = has_tools || has_convo_for_layout;
         let main = Layout::default()
@@ -538,7 +539,7 @@ pub fn draw_frame(
             let has_convo = state.chat_lines.iter().any(|cl| {
                 matches!(
                     cl,
-                    ChatLine::User(_) | ChatLine::Assistant(_, _) | ChatLine::AssistantPartial(_)
+                    ChatLine::User(_, _) | ChatLine::Assistant(_, _) | ChatLine::AssistantPartial(_)
                 )
             });
 
@@ -843,7 +844,7 @@ pub fn draw_frame(
 
             // Message counter: count User lines
             let msg_count = state.chat_lines.iter()
-                .filter(|cl| matches!(cl, ChatLine::User(_)))
+                .filter(|cl| matches!(cl, ChatLine::User(_, _)))
                 .count();
 
             // Elapsed time
@@ -949,8 +950,19 @@ pub fn draw_frame(
 
 fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str) -> Vec<Line<'static>> {
     match cl {
-        ChatLine::User(body) => {
-            render_message("  >  ", C_USER_PFX, body, C_BODY, false, trail_spin, spin, 0.0)
+        ChatLine::User(body, ts) => {
+            let mut lines: Vec<Line<'static>> = Vec::new();
+            // Tiny dim timestamp line above user messages (skipped for loaded sessions with ts=0)
+            if *ts > 0 {
+                let h = (ts % 86400) / 3600;
+                let m = (ts % 3600) / 60;
+                lines.push(Line::from(Span::styled(
+                    format!("     {:02}:{:02}", h, m),
+                    Style::default().fg(Color::Rgb(51, 65, 85)), // slate-700
+                )));
+            }
+            lines.extend(render_message("  >  ", C_USER_PFX, body, C_BODY, false, trail_spin, spin, 0.0));
+            lines
         }
         ChatLine::Assistant(body, dur) => {
             render_message("  ◆  ", C_ASST_PFX, body, C_BODY, true, false, spin, *dur)
@@ -1041,11 +1053,20 @@ fn render_message(
         };
 
         let mut body_spans: Vec<Span<'static>> = if trimmed.starts_with("```") {
-            // Fence delimiter: dim text on code background
-            vec![Span::styled(
-                line.to_string(),
-                Style::default().fg(C_DIM).bg(C_CODE_BG),
-            )]
+            // Fence delimiter: decorated ruler for assistant messages.
+            // After the toggle above: in_code_block==true = opening fence, false = closing fence.
+            let fence_text = if is_assistant {
+                if in_code_block && !code_lang.is_empty() {
+                    // Opening fence with language label: "  ── RUST ─ ─ ─ ─ ─ ─ ─ ─ ─"
+                    format!("  ── {} ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─", code_lang.to_uppercase())
+                } else {
+                    // Opening fence (no lang) or closing fence: plain ruler
+                    "  ── ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─".to_string()
+                }
+            } else {
+                line.to_string()
+            };
+            vec![Span::styled(fence_text, Style::default().fg(C_DIM).bg(C_CODE_BG))]
         } else if !is_assistant {
             // Non-assistant (user messages etc): plain dim
             vec![Span::styled(
@@ -1251,6 +1272,17 @@ fn highlight_code_line(line: &str, lang: &str) -> Vec<Span<'static>> {
     };
     if is_line_comment {
         return vec![Span::styled(line.to_string(), Style::default().fg(C_SYN_CMT).bg(C_CODE_BG))];
+    }
+
+    // Diff/patch coloring: entire line gets color based on first character
+    if matches!(lang, "diff" | "patch" | "udiff") {
+        let color = match line.chars().next() {
+            Some('+') => C_OK,
+            Some('-') => C_ERR,
+            Some('@') => C_ASST_PFX,
+            _ => C_DIM,
+        };
+        return vec![Span::styled(line.to_string(), Style::default().fg(color).bg(C_CODE_BG))];
     }
 
     // Language keyword sets

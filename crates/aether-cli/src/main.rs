@@ -4518,7 +4518,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     KeyCode::Char('l') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         // Clear visible chat (keeps session context intact)
                         ui.chat_lines.retain(|cl| !matches!(cl,
-                            ChatLine::User(_) | ChatLine::Assistant(_, _) |
+                            ChatLine::User(_, _) | ChatLine::Assistant(_, _) |
                             ChatLine::AssistantPartial(_) | ChatLine::SystemNote(_)
                         ));
                         ui.chat_scroll = 0;
@@ -4533,7 +4533,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                             match msg.trim() {
                                 "/clear" | "/c" => {
                                     ui.chat_lines.retain(|cl| !matches!(cl,
-                                        ChatLine::User(_) | ChatLine::Assistant(_, _) |
+                                        ChatLine::User(_, _) | ChatLine::Assistant(_, _) |
                                         ChatLine::AssistantPartial(_) | ChatLine::SystemNote(_)
                                     ));
                                     ui.chat_scroll = 0;
@@ -4566,7 +4566,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                         ui.chat_lines.pop();
                                         removed += 1;
                                     }
-                                    if matches!(ui.chat_lines.last(), Some(ChatLine::User(_))) {
+                                    if matches!(ui.chat_lines.last(), Some(ChatLine::User(_, _))) {
                                         ui.chat_lines.pop();
                                         removed += 1;
                                     }
@@ -4582,7 +4582,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                 "/compact" => {
                                     // Count messages, keep last 4 exchanges, summarize older ones.
                                     let user_msgs: Vec<usize> = ui.chat_lines.iter().enumerate()
-                                        .filter(|(_, cl)| matches!(cl, ChatLine::User(_)))
+                                        .filter(|(_, cl)| matches!(cl, ChatLine::User(_, _)))
                                         .map(|(i, _)| i)
                                         .collect();
                                     if user_msgs.len() <= 4 {
@@ -4746,7 +4746,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                         let mut matches: Vec<String> = Vec::new();
                                         for cl in &ui.chat_lines {
                                             let (role, body) = match cl {
-                                                ChatLine::User(b) => ("you", b.as_str()),
+                                                ChatLine::User(b, _) => ("you", b.as_str()),
                                                 ChatLine::Assistant(b, _) | ChatLine::AssistantPartial(b) => ("AI", b.as_str()),
                                                 _ => continue,
                                             };
@@ -4807,7 +4807,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     let mut content = String::new();
                                     for line in &ui.chat_lines {
                                         match line {
-                                            ChatLine::User(m) => {
+                                            ChatLine::User(m, _) => {
                                                 content.push_str("**You:** ");
                                                 content.push_str(m);
                                                 content.push_str("\n\n");
@@ -4841,14 +4841,13 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                             if ui.input_history.last().map(|s| s.as_str()) != Some(&msg) {
                                 ui.input_history.push(msg.clone());
                             }
-                            ui.chat_lines.push(ChatLine::User(msg.clone()));
-                            ui.follow_tail = true;
-                            ui.status_running = true;
-                            // Record submission time for /stats
                             let ts = std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .unwrap_or_default()
                                 .as_secs();
+                            ui.chat_lines.push(ChatLine::User(msg.clone(), ts));
+                            ui.follow_tail = true;
+                            ui.status_running = true;
                             ui.msg_times_secs.push(ts);
                             if _ctx.send(UiCommand::UserMessage(msg)).is_err() {
                                 break 'outer;
@@ -4959,7 +4958,7 @@ fn session_dir() -> std::path::PathBuf {
 fn session_save(ui: &aether_render::UiState) -> std::io::Result<std::path::PathBuf> {
     use aether_render::ChatLine;
     let has_convo = ui.chat_lines.iter().any(|cl| {
-        matches!(cl, ChatLine::User(_) | ChatLine::Assistant(_, _))
+        matches!(cl, ChatLine::User(_, _) | ChatLine::Assistant(_, _))
     });
     if !has_convo {
         return Err(std::io::Error::new(std::io::ErrorKind::Other, "no conversation"));
@@ -4981,7 +4980,7 @@ fn session_save(ui: &aether_render::UiState) -> std::io::Result<std::path::PathB
     for cl in &ui.chat_lines {
         use aether_render::ChatLine;
         let (role, text) = match cl {
-            ChatLine::User(m) => ("user", m.as_str()),
+            ChatLine::User(m, _) => ("user", m.as_str()),
             ChatLine::Assistant(m, _) | ChatLine::AssistantPartial(m) => ("assistant", m.as_str()),
             ChatLine::SystemNote(m) => ("system", m.as_str()),
             _ => continue,
@@ -5043,7 +5042,7 @@ fn session_load(path: &std::path::Path) -> Vec<aether_render::ChatLine> {
             .replace("\\\"", "\"")
             .replace("\\\\", "\\");
         match role {
-            "user" => lines.push(ChatLine::User(body)),
+            "user" => lines.push(ChatLine::User(body, 0)),
             "assistant" => lines.push(ChatLine::Assistant(body, 0.0)),
             "system" => lines.push(ChatLine::SystemNote(body)),
             _ => {}
