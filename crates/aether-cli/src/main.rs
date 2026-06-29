@@ -5163,11 +5163,49 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                 }
                                 "/version" => {
                                     let version = env!("CARGO_PKG_VERSION");
-                                    ui.chat_lines.push(ChatLine::SystemNote(
-                                        format!("Aether  v{version}\n  model:    {}\n  session:  {}\n  built:    {} {}\n  features: TrueColor TUI · cosign provenance · SAML/OIDC · mTLS",
-                                            ui.model, ui.session_id,
-                                            env!("CARGO_PKG_VERSION"), "release")
-                                    ));
+                                    let msg = format!(
+"Aether  v{version}  —  Claude-powered terminal AI agent\n\
+\n\
+  model     {model}\n\
+  session   {session}\n\
+\n\
+  TUI\n\
+    ◈ TrueColor 3-theme palette (F7 to cycle: sky / emerald / rose)\n\
+    ◈ Syntax-highlighted fenced code with lang badge + line count\n\
+    ◈ Live streaming timer + c/s throughput rate\n\
+    ◈ Context-window pressure badge with blink alert at 85%\n\
+    ◈ Focus mode  ·  wrap toggle  ·  line numbers  ·  raw markdown\n\
+    ◈ Full-text search: Ctrl+G / /find  ·  /goto N to jump by exchange\n\
+    ◈ Bookmarks (/bm)  ·  pinned notes (/pin)  ·  session replay (/replay)\n\
+    ◈ Sparkline token-speed history  (/speed)\n\
+    ◈ Markdown TOC outline  (/outline)\n\
+    ◈ Ghost-text Tab completion for all slash commands\n\
+    ◈ Ctrl+Z undo  ·  Ctrl+S quick-save  ·  Ctrl+D safe clear\n\
+    ◈ Multi-line paste with line count notification\n\
+    ◈ Word count + reading time + sentence stats  (/wc)\n\
+    ◈ Todo tracker with progress bar  (/todo)\n\
+\n\
+  Export\n\
+    ◈ /copy [N]        clipboard: Nth assistant response\n\
+    ◈ /copy code [N]   clipboard: Nth code block\n\
+    ◈ /copy all        clipboard: full conversation\n\
+    ◈ /extract         write all code blocks to /tmp files\n\
+    ◈ /export [path]   full Markdown export with YAML frontmatter\n\
+    ◈ /share           quick export to /tmp\n\
+\n\
+  Security\n\
+    ◈ SAML 2.0 SSO (HTTP-POST + signed AuthnRequest + drift detection)\n\
+    ◈ OIDC federation (nonce + at_hash + JWKS + proactive refresh)\n\
+    ◈ EdDSA / Ed448 JWT  ·  mTLS  ·  arg-filter policy\n\
+    ◈ cosign keyless provenance on every release\n\
+    ◈ SIEM forwarding  ·  tenant quota  ·  OTel tracing\n\
+\n\
+  /help for key bindings  ·  /model to switch AI  ·  /cost for usage",
+                                        version = version,
+                                        model = ui.model,
+                                        session = ui.session_id,
+                                    );
+                                    ui.chat_lines.push(ChatLine::SystemNote(msg));
                                     ui.follow_tail = true;
                                     continue;
                                 }
@@ -6020,17 +6058,21 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                 cmd if cmd.starts_with("/model") => {
                                     let new_model = cmd.trim_start_matches("/model").trim();
                                     if new_model.is_empty() {
-                                        let models: &[(&str, &str, &str)] = &[
-                                            ("claude-opus-4-7",         "$15 / $75 per M tok",   "most capable · best for complex reasoning"),
-                                            ("claude-sonnet-4-6",       " $3 / $15 per M tok",   "balanced speed + quality"),
-                                            ("claude-haiku-4-5-20251001","$0.25 / $1.25 per M tok","fastest · lowest cost"),
+                                        let models: &[(&str, &str, &str, &str)] = &[
+                                            ("claude-opus-4-7",          "$15 / $75 per M",  "200k ctx",  "most capable · complex reasoning"),
+                                            ("claude-sonnet-4-6",        " $3 / $15 per M",  "200k ctx",  "balanced speed + quality"),
+                                            ("claude-haiku-4-5-20251001","$0.25/$1.25 per M","200k ctx",  "fastest · lowest cost"),
                                         ];
-                                        let mut menu = format!("Models  (current: {})\n", ui.model);
-                                        for (id, pricing, desc) in models {
+                                        let mut menu = format!("Models  (current: {})\n\n", ui.model);
+                                        for (id, pricing, ctx, desc) in models {
                                             let marker = if ui.model == *id { "→" } else { " " };
-                                            menu.push_str(&format!("  {marker} {id:<38} {pricing:<24} {desc}\n"));
+                                            menu.push_str(&format!("  {marker} {id:<38} {pricing:<18} {ctx:<10} {desc}\n"));
                                         }
-                                        menu.push_str("\n  /model opus|sonnet|haiku  or  /model claude-<id>  to switch");
+                                        menu.push_str("\n  /model opus|sonnet|haiku  or  /model claude-<id>  to switch\n");
+                                        menu.push_str(&format!("  current usage: {} ctx tokens  ({:.0}% of window)",
+                                            ui.tokens_total,
+                                            (ui.tokens_total as f64 / 200_000.0 * 100.0).min(100.0),
+                                        ));
                                         ui.chat_lines.push(ChatLine::SystemNote(menu));
                                     } else {
                                         let full = if new_model.starts_with("claude-") {
@@ -6046,7 +6088,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                         };
                                         ui.model = full.clone();
                                         ui.chat_lines.push(ChatLine::SystemNote(
-                                            format!("Switched to model: {full}  (takes effect on next message)")
+                                            format!("Switched to {full}  ·  200k context window  (takes effect on next message)")
                                         ));
                                     }
                                     continue;
@@ -6269,6 +6311,65 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     continue;
                                 }
                                 cmd if cmd == "/copy" || cmd == "/cp" || cmd.starts_with("/copy ") || cmd.starts_with("/cp ") => {
+                                    // /copy all — full conversation to clipboard
+                                    if cmd.split_whitespace().nth(1) == Some("all") {
+                                        let mut full_text = String::new();
+                                        let mut idx = 0usize;
+                                        for cl in &ui.chat_lines {
+                                            match cl {
+                                                ChatLine::User(m, _) => {
+                                                    idx += 1;
+                                                    full_text.push_str(&format!("You ({})\n{}\n\n", idx, m));
+                                                }
+                                                ChatLine::Assistant(m, dur, _) => {
+                                                    let dur_s = if *dur > 0.0 { format!(" [{:.1}s]", dur) } else { String::new() };
+                                                    full_text.push_str(&format!("Aether{dur_s}\n{m}\n\n"));
+                                                }
+                                                ChatLine::AssistantPartial(m) => {
+                                                    full_text.push_str(&format!("Aether (partial)\n{m}\n\n"));
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                        let chars = full_text.chars().count();
+                                        if chars == 0 {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                "Nothing to copy — conversation is empty.".to_string()
+                                            ));
+                                        } else {
+                                            let result = std::process::Command::new("xclip")
+                                                .args(["-selection", "clipboard"])
+                                                .stdin(std::process::Stdio::piped())
+                                                .spawn()
+                                                .and_then(|mut child| {
+                                                    use std::io::Write as _;
+                                                    if let Some(stdin) = child.stdin.as_mut() {
+                                                        let _ = stdin.write_all(full_text.as_bytes());
+                                                    }
+                                                    child.wait()
+                                                })
+                                                .or_else(|_| {
+                                                    std::process::Command::new("xsel")
+                                                        .args(["--clipboard", "--input"])
+                                                        .stdin(std::process::Stdio::piped())
+                                                        .spawn()
+                                                        .and_then(|mut child| {
+                                                            use std::io::Write as _;
+                                                            if let Some(stdin) = child.stdin.as_mut() {
+                                                                let _ = stdin.write_all(full_text.as_bytes());
+                                                            }
+                                                            child.wait()
+                                                        })
+                                                });
+                                            let note = match result {
+                                                Ok(_) => format!("Copied full conversation ({idx} exchanges, {chars} chars) to clipboard."),
+                                                Err(e) => format!("Copy failed (need xclip or xsel): {e}"),
+                                            };
+                                            ui.chat_lines.push(ChatLine::SystemNote(note));
+                                        }
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
                                     // Copy Nth assistant response to clipboard (/copy or /copy 2)
                                     let n_arg: Option<usize> = cmd.split_whitespace().nth(1)
                                         .and_then(|s| s.parse().ok());
@@ -6742,7 +6843,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         // Slash command completion: Tab while buffer starts with '/'
                         const SLASH_CMDS: &[&str] = &[
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
-                            "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy code ", "/cost", "/count", "/ctx", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
+                            "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/go ", "/goto ", "/grep ", "/help", "/hist", "/history", "/last", "/linenums", "/load ", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
                             "/outline", "/raw", "/replay ", "/reset-cost", "/retry", "/search ", "/sessions", "/share", "/speed", "/stats", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];

@@ -328,7 +328,31 @@ impl UiState {
             ChatLine::SplashRow { logo: "       ◆◆◆◆◆◆◆◆◆◆       ".to_string(), info: String::new(),                  style: SplashStyle::Title },
             ChatLine::SplashRow { logo: "         ◆◆◆◆◆◆         ".to_string(), info: String::new(),                  style: SplashStyle::Title },
             ChatLine::SplashRow { logo: "           ◆◆           ".to_string(), info: String::new(),                  style: SplashStyle::Title },
-            ChatLine::SplashRow { logo: String::new(), info: "type /help for commands, /model to switch, /cost for usage".to_string(), style: SplashStyle::Dim },
+            ChatLine::SplashRow { logo: String::new(), info: "/help  ·  F7 theme  ·  Ctrl+G find  ·  /model switch  ·  /cost usage  ·  /version features".to_string(), style: SplashStyle::Dim },
+            {
+                let tips: &[&str] = &[
+                    "Tip: /copy all — copies the full conversation to clipboard",
+                    "Tip: Ctrl+S — quick-save chat to /tmp as Markdown",
+                    "Tip: /outline — see a TOC of headings in AI responses",
+                    "Tip: F6 — focus mode hides the hints bar for more chat space",
+                    "Tip: /extract — writes all code blocks to /tmp files by language",
+                    "Tip: /speed — sparkline of token throughput across responses",
+                    "Tip: /todo add <task> — built-in todo tracker with progress bar",
+                    "Tip: Ctrl+G — find text using your current input buffer as pattern",
+                    "Tip: /bm — bookmark the current position; /bookmarks to list",
+                    "Tip: Alt+. — insert the last word from the AI response into input",
+                    "Tip: /wc — word count + reading time + sentence stats",
+                    "Tip: /replay — replay the last session step by step",
+                    "Tip: /pin <note> — pin a sticky note visible in the tools panel",
+                    "Tip: /goto N — jump to the Nth user/AI exchange",
+                    "Tip: Ctrl+B — wrap the word at cursor in **bold** markdown",
+                ];
+                let tip_idx = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as usize / 86400 % tips.len();
+                ChatLine::SplashRow { logo: String::new(), info: tips[tip_idx].to_string(), style: SplashStyle::Accent }
+            },
         ];
         Self {
             model,
