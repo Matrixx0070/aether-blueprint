@@ -251,6 +251,10 @@ pub struct UiState {
     pub bookmarks: Vec<(String, u16)>,
     /// When the session was last auto-saved.
     pub last_autosave: Option<std::time::Instant>,
+    /// When true, show [N] exchange numbers before user messages.
+    pub show_msg_numbers: bool,
+    /// When true, the next keypress is interpreted as the Ctrl+X chord target.
+    pub ctrl_x_pending: bool,
     /// When true, full timestamps are shown on each message header.
     pub show_timestamps: bool,
     /// Auto-extracted from the first user message (first 5 words, up to 40 chars).
@@ -350,6 +354,8 @@ impl UiState {
             waiting_since: None,
             bookmarks: Vec::new(),
             last_autosave: None,
+            show_msg_numbers: false,
+            ctrl_x_pending: false,
             show_timestamps: false,
             session_title: None,
             search_highlight: None,
@@ -726,6 +732,7 @@ pub fn draw_frame(
             };
 
             let total = state.chat_lines.len();
+            let mut user_msg_counter: u32 = 0;
             let mut chat: Vec<Line> = state
                 .chat_lines
                 .iter()
@@ -739,7 +746,14 @@ pub fn draw_frame(
                     let trail_spin = i + 1 == total
                         && state.status_running
                         && matches!(cl, ChatLine::AssistantPartial(_));
-                    chat_line_to_lines(cl, trail_spin, spin, state.show_timestamps, state.search_highlight.as_deref(), state.raw_mode, state.show_line_numbers)
+                    // Exchange number for message numbering mode
+                    let msg_num = if state.show_msg_numbers && matches!(cl, ChatLine::User(_, _)) {
+                        user_msg_counter += 1;
+                        user_msg_counter
+                    } else {
+                        0
+                    };
+                    chat_line_to_lines(cl, trail_spin, spin, state.show_timestamps, state.search_highlight.as_deref(), state.raw_mode, state.show_line_numbers, msg_num)
                 })
                 .collect();
 
@@ -1515,14 +1529,19 @@ fn apply_search_highlight(mut lines: Vec<Line<'static>>, term: &str) -> Vec<Line
 
 // ── chat line → ratatui Lines ─────────────────────────────────────────────────
 
-fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str, show_timestamps: bool, highlight: Option<&str>, raw_mode: bool, show_line_numbers: bool) -> Vec<Line<'static>> {
+fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str, show_timestamps: bool, highlight: Option<&str>, raw_mode: bool, show_line_numbers: bool, msg_num: u32) -> Vec<Line<'static>> {
     match cl {
         ChatLine::User(body, ts) => {
             let mut lines: Vec<Line<'static>> = Vec::new();
-            // Subtle top separator before each user turn
+            // Subtle top separator before each user turn, optionally with [N] exchange number
+            let sep = if msg_num > 0 {
+                format!("  [{msg_num}]─────────────────────────────────────────────────")
+            } else {
+                "  ·─────────────────────────────────────────────────────".to_string()
+            };
             lines.push(Line::from(Span::styled(
-                "  ·─────────────────────────────────────────────────────".to_string(),
-                Style::default().fg(Color::Rgb(30, 41, 59)), // very dark separator
+                sep,
+                Style::default().fg(Color::Rgb(30, 41, 59)),
             )));
             if *ts > 0 || show_timestamps {
                 let ts_str = if *ts > 0 {

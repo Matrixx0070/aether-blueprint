@@ -5035,6 +5035,8 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                          /copy              copy last AI response to clipboard\n\
                                          /cost              token usage + per-message cost table\n\
                                          /count             word/char/code-block counts for conversation\n\
+                                         /grep <pattern>    regex search across all messages\n\
+                                         /numbers  /num     toggle exchange number [N] in chat  (F5)\n\
                                          /reset-cost        zero out cost + token counters\n\
                                          /export [file]     save transcript to markdown with frontmatter\n\
                                          /format  /raw      toggle markdown rendering on/off\n\
@@ -5071,7 +5073,9 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                          Ctrl+T          transpose chars (Emacs)\n\
                                          Ctrl+B          bold-wrap word at cursor (**word**)\n\
                                          Ctrl+J          insert newline (alias for Shift+↵)\n\
+                                         Ctrl+X e        open $EDITOR to compose input\n\
                                          Ctrl+O          open last URL in AI response\n\
+                                         F5              toggle message numbers\n\
                                          Ctrl+S          save session without clearing\n\
                                          Ctrl+Y          yank last AI response into input\n\
                                          Ctrl+Z          undo last input change\n\
@@ -5281,6 +5285,63 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                         ui.chat_lines.push(ChatLine::SystemNote(
                                             format!("Pinned: \"{text}\"")
                                         ));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/numbers" | "/num" => {
+                                    ui.show_msg_numbers = !ui.show_msg_numbers;
+                                    let state = if ui.show_msg_numbers { "on" } else { "off" };
+                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                        format!("Message numbers {state}  (F5 or /numbers to toggle)")
+                                    ));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/grep ") => {
+                                    use regex::Regex;
+                                    let pattern = cmd.trim_start_matches("/grep").trim();
+                                    match Regex::new(pattern) {
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("Invalid regex: {e}")
+                                            ));
+                                        }
+                                        Ok(re) => {
+                                            let mut matches = 0u32;
+                                            let mut result = format!("grep /{pattern}/\n");
+                                            let mut msg_idx = 0u32;
+                                            for cl in &ui.chat_lines {
+                                                match cl {
+                                                    ChatLine::User(body, _) => {
+                                                        msg_idx += 1;
+                                                        for line in body.lines() {
+                                                            if re.is_match(line) {
+                                                                matches += 1;
+                                                                let preview: String = line.chars().take(80).collect();
+                                                                result.push_str(&format!("  [you/{msg_idx}] {preview}\n"));
+                                                            }
+                                                        }
+                                                    }
+                                                    ChatLine::Assistant(body, _, _) => {
+                                                        for line in body.lines() {
+                                                            if re.is_match(line) {
+                                                                matches += 1;
+                                                                let preview: String = line.chars().take(80).collect();
+                                                                result.push_str(&format!("  [ai/{msg_idx}]  {preview}\n"));
+                                                            }
+                                                        }
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
+                                            if matches == 0 {
+                                                result.push_str("  (no matches)");
+                                            } else {
+                                                result.push_str(&format!("  → {matches} match{}", if matches == 1 { "" } else { "es" }));
+                                            }
+                                            ui.chat_lines.push(ChatLine::SystemNote(result));
+                                        }
                                     }
                                     ui.follow_tail = true;
                                     continue;
@@ -5937,7 +5998,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         const SLASH_CMDS: &[&str] = &[
                             "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clh", "/compact", "/copy", "/cost", "/count", "/doctor", "/drop ", "/export", "/format",
-                            "/go ", "/help", "/hist", "/history", "/linenums", "/load ", "/model ", "/note ", "/pin ", "/quit",
+                            "/go ", "/grep ", "/help", "/hist", "/history", "/linenums", "/load ", "/model ", "/note ", "/num", "/numbers", "/pin ", "/quit",
                             "/raw", "/reset-cost", "/retry", "/search ", "/sessions", "/stats", "/template ", "/tmpl ", "/timestamps", "/todo ", "/undo", "/unpin",
                         ];
                         let buf = ui.input_buffer.trim_end().to_string();
@@ -6086,7 +6147,46 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         ui.chat_lines.push(ChatLine::SystemNote(msg));
                         ui.follow_tail = true;
                     }
+                    KeyCode::F(5) => {
+                        ui.show_msg_numbers = !ui.show_msg_numbers;
+                        let state = if ui.show_msg_numbers { "on" } else { "off" };
+                        ui.chat_lines.push(ChatLine::SystemNote(format!("Message numbers {state}  (F5 or /numbers to toggle)")));
+                    }
+                    KeyCode::Char('x') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        ui.ctrl_x_pending = true;
+                    }
                     KeyCode::Char(c) => {
+                        // Ctrl+X chord: Ctrl+X followed by 'e' opens $EDITOR
+                        if ui.ctrl_x_pending {
+                            ui.ctrl_x_pending = false;
+                            if c == 'e' {
+                                let editor = std::env::var("EDITOR")
+                                    .or_else(|_| std::env::var("VISUAL"))
+                                    .unwrap_or_else(|_| "nano".to_string());
+                                let tmp = format!("/tmp/aether-edit-{}.txt", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis());
+                                let _ = std::fs::write(&tmp, ui.input_buffer.as_bytes());
+                                // Suspend TUI, open editor, restore TUI
+                                let _ = crossterm::terminal::disable_raw_mode();
+                                let _ = crossterm::execute!(std::io::stdout(),
+                                    crossterm::terminal::LeaveAlternateScreen,
+                                    crossterm::cursor::Show);
+                                let _ = std::process::Command::new(&editor).arg(&tmp).status();
+                                let _ = crossterm::terminal::enable_raw_mode();
+                                let _ = crossterm::execute!(std::io::stdout(),
+                                    crossterm::terminal::EnterAlternateScreen,
+                                    crossterm::cursor::Hide);
+                                guard.terminal().clear().ok();
+                                // Read back edited content
+                                if let Ok(content) = std::fs::read_to_string(&tmp) {
+                                    ui.input_undo = Some((ui.input_buffer.clone(), ui.input_cursor));
+                                    ui.input_buffer = content.trim_end_matches('\n').to_string();
+                                    ui.input_cursor = ui.input_buffer.len();
+                                }
+                                let _ = std::fs::remove_file(&tmp);
+                                continue;
+                            }
+                            // Unknown Ctrl+X chord: ignore, fall through to normal char
+                        }
                         if let Some(ref mut q) = ui.history_search {
                             // Append char to search query and re-search
                             q.push(c);
