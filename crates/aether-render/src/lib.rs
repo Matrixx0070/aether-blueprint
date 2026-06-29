@@ -1386,12 +1386,20 @@ fn render_message(
                 let mut li_spans = vec![Span::styled(format!("{pad}{check_glyph}"), Style::default().fg(check_color).add_modifier(if is_done { Modifier::empty() } else { Modifier::empty() }))];
                 li_spans.extend(inline_markdown_spans(content, text_color));
                 li_spans
-            // Unordered list item: - / * / +
+            // Unordered list item: - / * / + (with nested bullet hierarchy)
             } else if (trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("+ ")) && !in_code_block {
                 let content = &trimmed[2..];
                 let indent = line.len() - line.trim_start().len();
                 let pad = " ".repeat(indent);
-                let mut li_spans = vec![Span::styled(format!("{pad}• "), Style::default().fg(C_ASST_PFX))];
+                // Bullet style: level 0 = •, level 1 (2–3 spaces) = ◦, level 2+ (4+ spaces) = ▪
+                let (bullet, bullet_color) = if indent >= 4 {
+                    ("▪ ", C_DIM)
+                } else if indent >= 2 {
+                    ("◦ ", Color::Rgb(100, 116, 139)) // slate-500
+                } else {
+                    ("• ", C_ASST_PFX)
+                };
+                let mut li_spans = vec![Span::styled(format!("{pad}{bullet}"), Style::default().fg(bullet_color))];
                 li_spans.extend(inline_markdown_spans(content, body_color));
                 li_spans
             // Ordered list item: 1. / 2. etc.
@@ -1479,7 +1487,13 @@ fn render_message(
         };
         let word_count = body.split_ascii_whitespace().count();
         let wc_str = if is_assistant && word_count > 5 {
-            format!("  ·  ~{}w", word_count)
+            // Add "~N min read" for long responses (180 wpm reading speed)
+            let read_min = word_count / 180;
+            if read_min >= 1 {
+                format!("  ·  ~{}w  ~{} min read", word_count, read_min)
+            } else {
+                format!("  ·  ~{}w", word_count)
+            }
         } else {
             String::new()
         };

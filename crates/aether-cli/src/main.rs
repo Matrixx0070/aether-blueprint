@@ -5162,6 +5162,37 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     }
                                     continue;
                                 }
+                                cmd if cmd.starts_with("/note") => {
+                                    let text = cmd.trim_start_matches("/note").trim();
+                                    if text.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /note <text>  — saves a quick note to ~/.aether/notes.md".to_string()
+                                        ));
+                                    } else {
+                                        let note_path = std::env::var("HOME").ok()
+                                            .map(|h| std::path::PathBuf::from(h).join(".aether").join("notes.md"))
+                                            .unwrap_or_else(|| std::path::PathBuf::from("/tmp/aether-notes.md"));
+                                        if let Some(parent) = note_path.parent() {
+                                            let _ = std::fs::create_dir_all(parent);
+                                        }
+                                        let ts = std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_secs();
+                                        let entry = format!("\n- [{ts}] {text}");
+                                        let result = std::fs::OpenOptions::new()
+                                            .create(true).append(true)
+                                            .open(&note_path)
+                                            .and_then(|mut f| { use std::io::Write as _; f.write_all(entry.as_bytes()) });
+                                        let msg = match result {
+                                            Ok(_) => format!("Note saved to {} ({})", note_path.display(), &text[..text.len().min(50)]),
+                                            Err(e) => format!("Note save failed: {e}"),
+                                        };
+                                        ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/retry" | "/r" => {
                                     // Resend the last user message (remove last assistant response + resend)
                                     let last_user_msg = ui.chat_lines.iter().rev().find_map(|cl| {
@@ -5293,7 +5324,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         // Slash command completion: Tab while buffer starts with '/'
                         const SLASH_CMDS: &[&str] = &[
                             "/clear", "/compact", "/copy", "/cost", "/doctor", "/export", "/help",
-                            "/load ", "/model ", "/pin ", "/quit", "/retry", "/search ",
+                            "/load ", "/model ", "/note ", "/pin ", "/quit", "/retry", "/search ",
                             "/sessions", "/stats", "/undo",
                         ];
                         let buf = ui.input_buffer.trim_end().to_string();
@@ -5381,6 +5412,11 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         ui.chat_scroll = ui.chat_scroll.saturating_add(10);
                     }
                     KeyCode::Home => {
+                        ui.chat_scroll = 0;
+                        ui.follow_tail = false;
+                    }
+                    KeyCode::Char('h') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Ctrl+H: jump to beginning of chat (show oldest messages)
                         ui.chat_scroll = 0;
                         ui.follow_tail = false;
                     }
