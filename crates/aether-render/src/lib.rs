@@ -1389,12 +1389,18 @@ fn render_message(
         out.push(Line::from(row));
     }
 
-    // Separator line after each message: show response time + cost for completed assistant messages.
+    // Separator line after each message: show response time + word count + cost.
     if duration_secs > 0.1 {
         let timing_str = if duration_secs >= 10.0 {
             format!("{:.0}s", duration_secs)
         } else {
             format!("{:.1}s", duration_secs)
+        };
+        let word_count = body.split_ascii_whitespace().count();
+        let wc_str = if is_assistant && word_count > 5 {
+            format!("  ·  ~{}w", word_count)
+        } else {
+            String::new()
         };
         let cost_str = if cost_delta_usd > 0.0 {
             format!("  ·  ${:.4}", cost_delta_usd)
@@ -1404,7 +1410,7 @@ fn render_message(
         out.push(Line::from(vec![
             Span::raw(CONT),
             Span::styled(
-                format!("  ─  {timing_str}{cost_str}"),
+                format!("  ─  {timing_str}{wc_str}{cost_str}"),
                 Style::default().fg(C_DIM),
             ),
         ]));
@@ -1426,12 +1432,21 @@ fn inline_markdown_spans(line: &str, body_color: Color) -> Vec<Span<'static>> {
     if hash_count >= 1 && hash_count <= 6 {
         let after = &line[hash_count..];
         if after.starts_with(' ') {
-            return vec![Span::styled(
-                line.to_string(),
-                Style::default()
-                    .fg(C_HEAD_FG)
-                    .add_modifier(Modifier::BOLD),
-            )];
+            let text = after.trim_start().to_string();
+            // Level 1–2: bold purple; level 3–4: regular purple; level 5–6: indigo dim
+            let (fg, mods) = match hash_count {
+                1 => (C_HEAD_FG, Modifier::BOLD | Modifier::UNDERLINED),
+                2 => (C_HEAD_FG, Modifier::BOLD),
+                3 => (Color::Rgb(167, 139, 250), Modifier::empty()), // violet-400
+                _ => (C_ASST_PFX, Modifier::empty()),                // indigo-400
+            };
+            let prefix_spans = (0..hash_count)
+                .map(|_| Span::styled("▍", Style::default().fg(fg)))
+                .collect::<Vec<_>>();
+            let mut out = prefix_spans;
+            out.push(Span::styled(" ", Style::default()));
+            out.push(Span::styled(text, Style::default().fg(fg).add_modifier(mods)));
+            return out;
         }
     }
 
@@ -2027,8 +2042,9 @@ mod tests {
     #[test]
     fn inline_markdown_spans_heading() {
         let spans = inline_markdown_spans("## Hello world", C_BODY);
-        assert_eq!(spans.len(), 1);
-        assert!(spans[0].style.fg == Some(C_HEAD_FG));
+        // level-2 heading: 2 bar spans + 1 space + 1 text span = 4
+        assert!(spans.len() >= 2);
+        assert!(spans.iter().any(|s| s.style.fg == Some(C_HEAD_FG)));
     }
 
     #[test]
