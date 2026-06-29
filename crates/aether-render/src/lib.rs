@@ -136,8 +136,8 @@ pub enum SplashStyle {
 pub enum ChatLine {
     /// User message. Second field is Unix timestamp (0 = unknown, from loaded sessions).
     User(String, u64),
-    /// Completed assistant message. Second field is response wall-clock seconds (0.0 = no timing).
-    Assistant(String, f64),
+    /// Completed assistant message. Second = response wall-clock seconds, third = cost delta USD (0.0 = unknown).
+    Assistant(String, f64, f64),
     AssistantPartial(String),
     SystemNote(String),
     /// Startup splash row: `logo` in brand-blue bold, `info` in `style`-determined colour.
@@ -348,10 +348,10 @@ impl UiState {
                 self.pending_cost_snap = true;
                 if matches!(self.chat_lines.last(), Some(ChatLine::AssistantPartial(_))) {
                     if let Some(last) = self.chat_lines.last_mut() {
-                        *last = ChatLine::Assistant(final_text, response_dur);
+                        *last = ChatLine::Assistant(final_text, response_dur, 0.0);
                     }
                 } else {
-                    self.chat_lines.push(ChatLine::Assistant(final_text, response_dur));
+                    self.chat_lines.push(ChatLine::Assistant(final_text, response_dur, 0.0));
                 }
             }
             UiEvent::ToolStart { name, summary } => {
@@ -396,7 +396,16 @@ impl UiState {
                 // Snapshot cost after AssistantDone (Usage arrives last in the event sequence)
                 if self.pending_cost_snap {
                     self.pending_cost_snap = false;
+                    let prev = self.msg_cost_snapshots.last().copied().unwrap_or(0.0);
+                    let delta = (cost_usd - prev).max(0.0);
                     self.msg_cost_snapshots.push(cost_usd);
+                    // Backfill cost_delta into the last completed Assistant message
+                    for line in self.chat_lines.iter_mut().rev() {
+                        if let ChatLine::Assistant(_, _, ref mut cost_field) = line {
+                            *cost_field = delta;
+                            break;
+                        }
+                    }
                 }
             }
             UiEvent::Error(e) => {
@@ -537,7 +546,7 @@ pub fn draw_frame(
         // or nothing (100% chat) on the pre-convo splash screen.
         let has_tools = !state.tool_log.is_empty() || !state.fleet.is_empty();
         let has_convo_for_layout = state.chat_lines.iter().any(|cl| {
-            matches!(cl, ChatLine::User(_, _) | ChatLine::Assistant(_, _) | ChatLine::AssistantPartial(_))
+            matches!(cl, ChatLine::User(_, _) | ChatLine::Assistant(_, _, _) | ChatLine::AssistantPartial(_))
         });
         let has_side = has_tools || has_convo_for_layout;
         let main = Layout::default()
@@ -555,7 +564,7 @@ pub fn draw_frame(
             let has_convo = state.chat_lines.iter().any(|cl| {
                 matches!(
                     cl,
-                    ChatLine::User(_, _) | ChatLine::Assistant(_, _) | ChatLine::AssistantPartial(_)
+                    ChatLine::User(_, _) | ChatLine::Assistant(_, _, _) | ChatLine::AssistantPartial(_)
                 )
             });
 
@@ -1082,14 +1091,14 @@ fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str) -> Vec<Line<'
                     Style::default().fg(Color::Rgb(51, 65, 85)), // slate-700
                 )));
             }
-            lines.extend(render_message("  >  ", C_USER_PFX, body, C_BODY, false, trail_spin, spin, 0.0));
+            lines.extend(render_message("  >  ", C_USER_PFX, body, C_BODY, false, trail_spin, spin, 0.0, 0.0));
             lines
         }
-        ChatLine::Assistant(body, dur) => {
-            render_message("  ◆  ", C_ASST_PFX, body, C_BODY, true, false, spin, *dur)
+        ChatLine::Assistant(body, dur, cost) => {
+            render_message("  ◆  ", C_ASST_PFX, body, C_BODY, true, false, spin, *dur, *cost)
         }
         ChatLine::AssistantPartial(body) => {
-            render_message("  ◆  ", C_ASST_PFX, body, C_BODY, true, trail_spin, spin, 0.0)
+            render_message("  ◆  ", C_ASST_PFX, body, C_BODY, true, trail_spin, spin, 0.0, 0.0)
         }
         ChatLine::SystemNote(body) => {
             let rule = Line::from(Span::styled(
@@ -1140,6 +1149,7 @@ fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str) -> Vec<Line<'
 /// `trail_spin`  — append the live spinner to the very last line
 /// `spin`        — current spinner frame string
 /// `duration_secs` — response wall-clock time (0.0 = no badge)
+/// `cost_delta_usd` — cost for this message (0.0 = unknown, omit from badge)
 fn render_message(
     prefix: &'static str,
     prefix_color: Color,
@@ -1149,6 +1159,7 @@ fn render_message(
     trail_spin: bool,
     spin: &str,
     duration_secs: f64,
+    cost_delta_usd: f64,
 ) -> Vec<Line<'static>> {
     let pfx_style = Style::default()
         .fg(prefix_color)
@@ -1307,17 +1318,22 @@ fn render_message(
         out.push(Line::from(row));
     }
 
-    // Separator line after each message: show response time for completed assistant messages.
+    // Separator line after each message: show response time + cost for completed assistant messages.
     if duration_secs > 0.1 {
         let timing_str = if duration_secs >= 10.0 {
             format!("{:.0}s", duration_secs)
         } else {
             format!("{:.1}s", duration_secs)
         };
+        let cost_str = if cost_delta_usd > 0.0 {
+            format!("  ·  ${:.4}", cost_delta_usd)
+        } else {
+            String::new()
+        };
         out.push(Line::from(vec![
             Span::raw(CONT),
             Span::styled(
-                format!("  ─  {timing_str}"),
+                format!("  ─  {timing_str}{cost_str}"),
                 Style::default().fg(C_DIM),
             ),
         ]));
