@@ -4778,22 +4778,37 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                 }
                                 "/cost" => {
                                     let note = if ui.cost_usd > 0.0 {
-                                        let tps_str = if ui.last_tps > 0.5 { format!("  ·  {:.0} t/s", ui.last_tps) } else { String::new() };
-                                        let avg_dur = if !ui.response_durations.is_empty() {
+                                        let tps_str = if ui.last_tps > 0.5 { format!("  ·  {:.0} t/s peak", ui.last_tps) } else { String::new() };
+                                        let (avg_dur, max_dur) = if !ui.response_durations.is_empty() {
                                             let avg = ui.response_durations.iter().sum::<f64>() / ui.response_durations.len() as f64;
-                                            format!("  ·  {:.1}s avg", avg)
+                                            let max = ui.response_durations.iter().cloned().fold(0.0_f64, f64::max);
+                                            (avg, max)
+                                        } else { (0.0, 0.0) };
+                                        let dur_str = if avg_dur > 0.0 {
+                                            format!("  ·  {:.1}s avg  {:.1}s max", avg_dur, max_dur)
                                         } else { String::new() };
                                         let mut s = format!(
                                             "Session cost: ${:.4}  ↑{} in  ↓{} out{}{}\n",
-                                            ui.cost_usd, ui.tokens_in, ui.tokens_out, avg_dur, tps_str
+                                            ui.cost_usd, ui.tokens_in, ui.tokens_out, dur_str, tps_str
                                         );
                                         if !ui.msg_cost_snapshots.is_empty() {
-                                            s.push_str("Per-message cost:\n");
+                                            s.push_str("  #   cost      time    speed\n");
+                                            s.push_str("  ─── ────────  ──────  ─────\n");
                                             let mut prev = 0.0f64;
                                             for (i, &snap) in ui.msg_cost_snapshots.iter().enumerate() {
                                                 let delta = snap - prev;
                                                 prev = snap;
-                                                s.push_str(&format!("  msg {} — ${:.4}\n", i + 1, delta));
+                                                let dur = ui.response_durations.get(i).copied().unwrap_or(0.0);
+                                                let tps = if dur > 0.0 && i < ui.response_durations.len() {
+                                                    // We don't have per-message token counts, so omit
+                                                    format!("{:.1}s", dur)
+                                                } else { "-".to_string() };
+                                                let speed = if dur > 0.01 {
+                                                    // Rough: assume ~200 chars/response → tokens out / dur
+                                                    "  ".to_string()
+                                                } else { "  ".to_string() };
+                                                let _ = speed;
+                                                s.push_str(&format!("  {:3}  ${:.4}   {}  \n", i + 1, delta, tps));
                                             }
                                         }
                                         s.trim_end().to_string()
@@ -5150,39 +5165,63 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                 }
                                 cmd if cmd.starts_with("/export") => {
                                     let fname = cmd.trim_start_matches("/export").trim();
+                                    let now_secs = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
                                     let out_path = if fname.is_empty() {
-                                        format!("/tmp/aether-chat-{}.md",
-                                            std::time::SystemTime::now()
-                                                .duration_since(std::time::UNIX_EPOCH)
-                                                .unwrap_or_default()
-                                                .as_secs())
+                                        format!("/tmp/aether-chat-{now_secs}.md")
                                     } else {
                                         fname.to_string()
                                     };
-                                    let mut content = String::new();
+                                    let title = ui.session_title.as_deref().unwrap_or("Aether Session");
+                                    let cost_line = if ui.cost_usd > 0.0 {
+                                        format!("cost: ${:.4}", ui.cost_usd)
+                                    } else {
+                                        "cost: unknown".to_string()
+                                    };
+                                    let mut content = format!(
+                                        "---\ntitle: {title}\nmodel: {}\nsession: {}\n{cost_line}\nexported: {now_secs}\n---\n\n# {title}\n\n",
+                                        ui.model, ui.session_id
+                                    );
+                                    let mut msg_idx = 0usize;
                                     for line in &ui.chat_lines {
                                         match line {
-                                            ChatLine::User(m, _) => {
-                                                content.push_str("**You:** ");
+                                            ChatLine::User(m, ts) => {
+                                                msg_idx += 1;
+                                                let ts_str = if *ts > 0 {
+                                                    let h = (ts % 86400) / 3600;
+                                                    let m2 = (ts % 3600) / 60;
+                                                    let s = ts % 60;
+                                                    format!(" _{:02}:{:02}:{:02}_", h, m2, s)
+                                                } else { String::new() };
+                                                content.push_str(&format!("---\n\n**You** ({msg_idx}){ts_str}\n\n"));
                                                 content.push_str(m);
                                                 content.push_str("\n\n");
                                             }
-                                            ChatLine::Assistant(m, _, _) | ChatLine::AssistantPartial(m) => {
-                                                content.push_str("**Aether:** ");
+                                            ChatLine::Assistant(m, dur, cost) => {
+                                                let dur_str = if *dur > 0.0 { format!(" _{:.1}s_", dur) } else { String::new() };
+                                                let cost_str = if *cost > 0.0 { format!(" _${:.4}_", cost) } else { String::new() };
+                                                content.push_str(&format!("**Aether**{dur_str}{cost_str}\n\n"));
+                                                content.push_str(m);
+                                                content.push_str("\n\n");
+                                            }
+                                            ChatLine::AssistantPartial(m) => {
+                                                content.push_str("**Aether** _(partial)_\n\n");
                                                 content.push_str(m);
                                                 content.push_str("\n\n");
                                             }
                                             ChatLine::SystemNote(m) => {
-                                                content.push_str("> ");
-                                                content.push_str(m);
-                                                content.push('\n');
+                                                content.push_str("> _");
+                                                content.push_str(&m.replace('\n', "\n> _"));
+                                                content.push_str("_\n\n");
                                             }
                                             _ => {}
                                         }
                                     }
                                     match std::fs::write(&out_path, &content) {
                                         Ok(()) => ui.chat_lines.push(ChatLine::SystemNote(
-                                            format!("Exported to {out_path}")
+                                            format!("Exported {msg_idx} messages to {out_path}")
                                         )),
                                         Err(e) => ui.chat_lines.push(ChatLine::SystemNote(
                                             format!("Export failed: {e}")
@@ -5305,6 +5344,19 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                 .unwrap_or_default()
                                 .as_secs();
                             ui.chat_lines.push(ChatLine::User(msg.clone(), ts));
+                            // Auto-name session from first user message (first 5 words)
+                            if ui.session_title.is_none() {
+                                let title: String = msg.split_whitespace()
+                                    .take(5)
+                                    .collect::<Vec<_>>()
+                                    .join(" ")
+                                    .chars()
+                                    .take(42)
+                                    .collect();
+                                if !title.is_empty() {
+                                    ui.session_title = Some(title);
+                                }
+                            }
                             ui.follow_tail = true;
                             ui.status_running = true;
                             ui.msg_times_secs.push(ts);

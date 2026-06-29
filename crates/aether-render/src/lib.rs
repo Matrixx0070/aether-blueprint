@@ -247,6 +247,9 @@ pub struct UiState {
     pub response_done_at: Option<std::time::Instant>,
     /// When true, full timestamps are shown on each message header.
     pub show_timestamps: bool,
+    /// Auto-extracted from the first user message (first 5 words, up to 40 chars).
+    /// Shown in the header bar so each session feels named.
+    pub session_title: Option<String>,
 }
 
 impl UiState {
@@ -328,6 +331,7 @@ impl UiState {
             new_msgs_while_scrolled: 0,
             response_done_at: None,
             show_timestamps: false,
+            session_title: None,
         }
     }
 
@@ -588,6 +592,14 @@ pub fn draw_frame(
                 hdr_spans.push(Span::styled(
                     format!("⎇ {branch}"),
                     Style::default().fg(C_ASST_PFX).bg(C_HDR_BG),
+                ));
+            }
+            // Session title (auto-extracted from first user message)
+            if let Some(ref title) = state.session_title {
+                hdr_spans.push(Span::styled("  ·  ", Style::default().fg(C_DIM).bg(C_HDR_BG)));
+                hdr_spans.push(Span::styled(
+                    title.clone(),
+                    Style::default().fg(C_BODY).bg(C_HDR_BG).add_modifier(Modifier::ITALIC),
                 ));
             }
             hdr_spans.extend([
