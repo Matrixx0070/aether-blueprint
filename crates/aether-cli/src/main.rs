@@ -4616,12 +4616,14 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         }
                     }
                     KeyCode::Char('u') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                        // Delete from start of buffer to cursor
+                        // Delete from start of buffer to cursor (save undo snapshot)
+                        ui.input_undo = Some((ui.input_buffer.clone(), ui.input_cursor));
                         ui.input_buffer.drain(..ui.input_cursor);
                         ui.input_cursor = 0;
                     }
                     KeyCode::Char('k') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                        // Kill-line: delete from cursor to end of buffer
+                        // Kill-line: delete from cursor to end of buffer (save undo snapshot)
+                        ui.input_undo = Some((ui.input_buffer.clone(), ui.input_cursor));
                         ui.input_buffer.truncate(ui.input_cursor);
                     }
                     KeyCode::Char('p') if k.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -4653,9 +4655,35 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                             if let ChatLine::Assistant(body, _, _) = cl { Some(body.clone()) } else { None }
                         });
                         if let Some(text) = last_asst {
+                            // Save undo snapshot before yanking
+                            ui.input_undo = Some((ui.input_buffer.clone(), ui.input_cursor));
                             let insert: String = text.chars().take(500).collect();
                             ui.input_buffer.insert_str(ui.input_cursor, &insert);
                             ui.input_cursor += insert.len();
+                        }
+                    }
+                    KeyCode::Char('z') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Ctrl+Z: restore last input undo snapshot
+                        if let Some((saved_buf, saved_cur)) = ui.input_undo.take() {
+                            // Save current state so Ctrl+Z can be toggled back
+                            let cur_buf = ui.input_buffer.clone();
+                            let cur_cur = ui.input_cursor;
+                            ui.input_buffer = saved_buf;
+                            ui.input_cursor = saved_cur.min(ui.input_buffer.len());
+                            ui.input_undo = Some((cur_buf, cur_cur));
+                        }
+                    }
+                    KeyCode::Char('g') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Ctrl+G: abort / cancel (Emacs-style)
+                        if ui.history_search.is_some() {
+                            ui.history_search = None;
+                            ui.input_buffer = std::mem::take(&mut ui.history_presearch_buf);
+                            ui.input_cursor = ui.input_buffer.len();
+                            ui.history_idx = None;
+                        } else if !ui.input_buffer.is_empty() {
+                            ui.input_undo = Some((ui.input_buffer.clone(), ui.input_cursor));
+                            ui.input_buffer.clear();
+                            ui.input_cursor = 0;
                         }
                     }
                     KeyCode::Char('n') if k.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -4735,6 +4763,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                         ChatLine::AssistantPartial(_) | ChatLine::SystemNote(_)
                                     ));
                                     ui.chat_scroll = 0;
+                                    ui.search_highlight = None;
                                     continue;
                                 }
                                 cmd if cmd == "/compact" || cmd.starts_with("/compact ") => {
@@ -5151,9 +5180,12 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                             ui.follow_tail = false;
                                         }
                                         let result = if matches.is_empty() {
+                                            ui.search_highlight = None;
                                             format!("No matches for \"{term}\"")
                                         } else {
-                                            format!("⌕ {} match{} for \"{term}\" — scrolled to first:\n{}", matches.len(), if matches.len() == 1 { "" } else { "es" }, matches.join("\n"))
+                                            // Activate highlight mode so matching text glows in chat
+                                            ui.search_highlight = Some(term.to_string());
+                                            format!("⌕ {} match{} for \"{term}\" — scrolled to first  (/clear to dismiss highlight):\n{}", matches.len(), if matches.len() == 1 { "" } else { "es" }, matches.join("\n"))
                                         };
                                         ui.chat_lines.push(ChatLine::SystemNote(result));
                                         if first_match_line_idx.is_none() {
@@ -5368,6 +5400,8 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                 .unwrap_or_default()
                                 .as_secs();
                             ui.chat_lines.push(ChatLine::User(msg.clone(), ts));
+                            // Clear any active search highlight when user sends a new message
+                            ui.search_highlight = None;
                             // Auto-name session from first user message (first 5 words)
                             if ui.session_title.is_none() {
                                 let title: String = msg.split_whitespace()

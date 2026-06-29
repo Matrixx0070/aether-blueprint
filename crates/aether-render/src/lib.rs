@@ -250,6 +250,11 @@ pub struct UiState {
     /// Auto-extracted from the first user message (first 5 words, up to 40 chars).
     /// Shown in the header bar so each session feels named.
     pub session_title: Option<String>,
+    /// When set, this term is highlighted in cyan+bold within rendered chat messages.
+    /// Set by /search, cleared on /clear or next user message.
+    pub search_highlight: Option<String>,
+    /// One-level undo buffer for the input box: (saved_text, saved_cursor).
+    pub input_undo: Option<(String, usize)>,
 }
 
 impl UiState {
@@ -332,6 +337,8 @@ impl UiState {
             response_done_at: None,
             show_timestamps: false,
             session_title: None,
+            search_highlight: None,
+            input_undo: None,
         }
     }
 
@@ -685,7 +692,7 @@ pub fn draw_frame(
                     let trail_spin = i + 1 == total
                         && state.status_running
                         && matches!(cl, ChatLine::AssistantPartial(_));
-                    chat_line_to_lines(cl, trail_spin, spin, state.show_timestamps)
+                    chat_line_to_lines(cl, trail_spin, spin, state.show_timestamps, state.search_highlight.as_deref())
                 })
                 .collect();
 
@@ -1317,9 +1324,77 @@ pub fn draw_frame(
     Ok(())
 }
 
+// ── search highlight post-processor ──────────────────────────────────────────
+
+/// Walks rendered spans and splits any that contain `term` (case-insensitive),
+/// inserting a yellow-bg highlight style around each match.
+fn apply_search_highlight(mut lines: Vec<Line<'static>>, term: &str) -> Vec<Line<'static>> {
+    if term.is_empty() { return lines; }
+    let term_lower = term.to_lowercase();
+    let hl_style = Style::default()
+        .fg(Color::Rgb(0, 0, 0))
+        .bg(Color::Rgb(253, 224, 71)) // amber-300 yellow
+        .add_modifier(Modifier::BOLD);
+
+    for line in &mut lines {
+        let mut new_spans: Vec<Span<'static>> = Vec::new();
+        for span in line.spans.drain(..) {
+            let text = span.content.to_string();
+            let base_style = span.style;
+            let text_lower = text.to_lowercase();
+            if text_lower.contains(&term_lower) {
+                let mut rest: &str = &text;
+                let mut rest_lower_start = 0usize;
+                let text_bytes = text.as_bytes();
+                let _ = text_bytes;
+                // Walk through matches in the lowercased copy
+                let mut pos_in_lower = 0usize;
+                let mut pos_in_orig = 0usize;
+                let lower_bytes = text_lower.as_bytes();
+                while pos_in_lower + term_lower.len() <= lower_bytes.len() {
+                    if lower_bytes[pos_in_lower..].starts_with(term_lower.as_bytes()) {
+                        // Before the match
+                        let before = &rest[..pos_in_orig - (rest.as_ptr() as usize - text.as_ptr() as usize)];
+                        let _ = before;
+                        break; // fall through to simpler split logic below
+                    }
+                    pos_in_lower += 1;
+                    pos_in_orig += 1;
+                }
+                // Simpler: use find() on slices
+                let mut remaining = text.as_str();
+                loop {
+                    let lower_remaining = remaining.to_lowercase();
+                    match lower_remaining.find(&term_lower) {
+                        None => {
+                            if !remaining.is_empty() {
+                                new_spans.push(Span::styled(remaining.to_string(), base_style));
+                            }
+                            break;
+                        }
+                        Some(byte_start) => {
+                            let byte_end = (byte_start + term_lower.len()).min(remaining.len());
+                            if byte_start > 0 {
+                                new_spans.push(Span::styled(remaining[..byte_start].to_string(), base_style));
+                            }
+                            new_spans.push(Span::styled(remaining[byte_start..byte_end].to_string(), hl_style));
+                            remaining = &remaining[byte_end..];
+                        }
+                    }
+                }
+                let _ = rest_lower_start;
+            } else {
+                new_spans.push(Span::styled(text, base_style));
+            }
+        }
+        line.spans = new_spans;
+    }
+    lines
+}
+
 // ── chat line → ratatui Lines ─────────────────────────────────────────────────
 
-fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str, show_timestamps: bool) -> Vec<Line<'static>> {
+fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str, show_timestamps: bool, highlight: Option<&str>) -> Vec<Line<'static>> {
     match cl {
         ChatLine::User(body, ts) => {
             let mut lines: Vec<Line<'static>> = Vec::new();
@@ -1340,14 +1415,17 @@ fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str, show_timestam
                     ),
                 ]));
             }
-            lines.extend(render_message("  >  ", C_USER_PFX, body, C_BODY, false, trail_spin, spin, 0.0, 0.0));
+            let rendered = render_message("  >  ", C_USER_PFX, body, C_BODY, false, trail_spin, spin, 0.0, 0.0);
+            lines.extend(if let Some(term) = highlight { apply_search_highlight(rendered, term) } else { rendered });
             lines
         }
         ChatLine::Assistant(body, dur, cost) => {
-            render_message("  ◆  ", C_ASST_PFX, body, C_BODY, true, false, spin, *dur, *cost)
+            let rendered = render_message("  ◆  ", C_ASST_PFX, body, C_BODY, true, false, spin, *dur, *cost);
+            if let Some(term) = highlight { apply_search_highlight(rendered, term) } else { rendered }
         }
         ChatLine::AssistantPartial(body) => {
-            render_message("  ◆  ", C_ASST_PFX, body, C_BODY, true, trail_spin, spin, 0.0, 0.0)
+            let rendered = render_message("  ◆  ", C_ASST_PFX, body, C_BODY, true, trail_spin, spin, 0.0, 0.0);
+            if let Some(term) = highlight { apply_search_highlight(rendered, term) } else { rendered }
         }
         ChatLine::SystemNote(body) => {
             let rule = Line::from(Span::styled(
