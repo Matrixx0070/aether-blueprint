@@ -235,6 +235,11 @@ pub struct UiState {
     pub pinned_note: Option<String>,
     /// When true, the side panel (tools/fleet) is hidden — F2 to toggle.
     pub side_panel_hidden: bool,
+    /// Non-None while user is in reverse-i-search mode (Ctrl+R).
+    /// Contains the current search query string.
+    pub history_search: Option<String>,
+    /// Saved input buffer before entering search mode (restored on Escape).
+    pub history_presearch_buf: String,
 }
 
 impl UiState {
@@ -311,6 +316,8 @@ impl UiState {
             pending_cost_snap: false,
             pinned_note: None,
             side_panel_hidden: false,
+            history_search: None,
+            history_presearch_buf: String::new(),
         }
     }
 
@@ -1153,8 +1160,21 @@ pub fn draw_frame(
                     Style::default().fg(C_DIM).bg(C_HDR_BG),
                 ));
             }
-
-            let hints_line = Line::from(hints_spans);
+            // Reverse-i-search mode indicator overrides the right side of hints
+            let hints_line = if let Some(ref q) = state.history_search {
+                Line::from(vec![
+                    Span::styled(
+                        format!("  ⌕ reverse-i-search: {}█", q),
+                        Style::default().fg(C_BRAND).bg(C_HDR_BG).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        "  ·  Ctrl+R: older  ·  Esc: cancel  ·  ↵: confirm".to_string(),
+                        Style::default().fg(C_DIM).bg(C_HDR_BG),
+                    ),
+                ])
+            } else {
+                Line::from(hints_spans)
+            };
             f.render_widget(
                 Paragraph::new(hints_line).style(Style::default().bg(C_HDR_BG)),
                 outer[3],
@@ -1616,8 +1636,12 @@ fn highlight_code_line(line: &str, lang: &str) -> Vec<Span<'static>> {
         return vec![Span::styled(line.to_string(), Style::default().fg(C_SYN_CMT).bg(C_CODE_BG))];
     }
 
-    // Diff/patch coloring: entire line gets color based on first character
-    if matches!(lang, "diff" | "patch" | "udiff") {
+    // Diff/patch coloring: explicit lang tag OR auto-detect from line content
+    let is_diff = matches!(lang, "diff" | "patch" | "udiff")
+        || (lang.is_empty()
+            && (line.starts_with("--- ") || line.starts_with("+++ ")
+                || line.starts_with("@@ ") || line.starts_with("@@\t")));
+    if is_diff {
         let color = match line.chars().next() {
             Some('+') => C_OK,
             Some('-') => C_ERR,
@@ -2055,7 +2079,7 @@ mod tests {
         }
         s.apply(UiEvent::AssistantDone("hello".into()));
         match s.chat_lines.last().unwrap() {
-            ChatLine::Assistant(t) => assert_eq!(t, "hello"),
+            ChatLine::Assistant(t, _, _) => assert_eq!(t, "hello"),
             _ => panic!("expected Assistant"),
         }
     }

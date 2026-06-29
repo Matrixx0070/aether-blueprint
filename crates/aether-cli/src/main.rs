@@ -4418,6 +4418,20 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
         }
     }
 
+    // Load persistent TUI input history from ~/.aether/input_history
+    let input_history_path = std::env::var("HOME").ok()
+        .map(|h| std::path::PathBuf::from(h).join(".aether").join("input_history"));
+    if let Some(ref p) = input_history_path {
+        if let Ok(data) = std::fs::read_to_string(p) {
+            for line in data.lines().rev().take(500) {
+                let s = line.trim().to_string();
+                if !s.is_empty() && !ui.input_history.contains(&s) {
+                    ui.input_history.insert(0, s);
+                }
+            }
+        }
+    }
+
     let (etx, mut erx, _ctx, mut crx) = channels();
     let etx_for_driver = etx.clone();
 
@@ -4560,7 +4574,17 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ui.input_cursor += s.len();
                 }
                 Event::Key(k) if k.kind == KeyEventKind::Press => match k.code {
-                    KeyCode::Esc => break 'outer,
+                    KeyCode::Esc => {
+                        if ui.history_search.is_some() {
+                            // Exit search mode, restore pre-search buffer
+                            ui.history_search = None;
+                            ui.input_buffer = std::mem::take(&mut ui.history_presearch_buf);
+                            ui.input_cursor = ui.input_buffer.len();
+                            ui.history_idx = None;
+                        } else {
+                            break 'outer;
+                        }
+                    }
                     KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         if ui.status_running {
                             // Cancel in-flight request
@@ -4623,7 +4647,51 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         ));
                         ui.chat_scroll = 0;
                     }
+                    KeyCode::Char('r') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Ctrl+R: reverse incremental history search.
+                        // First press enters search mode with current buffer as query.
+                        // Subsequent presses step to older matches.
+                        if ui.history_search.is_none() {
+                            // Enter search mode
+                            ui.history_presearch_buf = ui.input_buffer.clone();
+                            let q = ui.input_buffer.clone();
+                            // Start from the most recent history entry (or current idx - 1)
+                            let start = match ui.history_idx {
+                                Some(i) => i.saturating_sub(1),
+                                None => ui.input_history.len().saturating_sub(1),
+                            };
+                            let match_pos = ui.input_history[..=start.min(ui.input_history.len().saturating_sub(1))]
+                                .iter().enumerate().rev()
+                                .find(|(_, h)| q.is_empty() || h.contains(&q))
+                                .map(|(i, _)| i);
+                            ui.history_search = Some(q);
+                            if let Some(idx) = match_pos {
+                                ui.history_idx = Some(idx);
+                                ui.input_buffer = ui.input_history[idx].clone();
+                                ui.input_cursor = ui.input_buffer.len();
+                            }
+                        } else {
+                            // Already in search mode: step to next older match
+                            let q = ui.history_search.as_deref().unwrap_or("").to_string();
+                            let current_end = ui.history_idx
+                                .map(|i| i.saturating_sub(1))
+                                .filter(|&i| i > 0)
+                                .unwrap_or(0);
+                            let match_pos = ui.input_history[..current_end]
+                                .iter().enumerate().rev()
+                                .find(|(_, h)| q.is_empty() || h.contains(&q))
+                                .map(|(i, _)| i);
+                            if let Some(idx) = match_pos {
+                                ui.history_idx = Some(idx);
+                                ui.input_buffer = ui.input_history[idx].clone();
+                                ui.input_cursor = ui.input_buffer.len();
+                            }
+                        }
+                    }
                     KeyCode::Enter => {
+                        // Confirm search: exit search mode, keep matched buffer
+                        ui.history_search = None;
+                        ui.history_presearch_buf.clear();
                         if k.modifiers.contains(KeyModifiers::SHIFT) {
                             ui.input_buffer.insert(ui.input_cursor, '\n');
                             ui.input_cursor += 1;
@@ -4727,7 +4795,8 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                          \n\
                                          Input shortcuts\n\
                                          \n\
-                                         ↑↓              history recall\n\
+                                         ↑↓              history recall (in/out)\n\
+                                         Ctrl+R          reverse history search\n\
                                          ←→              move cursor\n\
                                          Alt+←/→         word jump\n\
                                          Ctrl+A / E      start / end of line\n\
@@ -5134,14 +5203,28 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         }
                     }
                     KeyCode::Backspace => {
-                        if ui.input_cursor > 0 {
+                        if let Some(ref mut q) = ui.history_search {
+                            // Backspace removes last char from search query
+                            if !q.is_empty() {
+                                q.pop();
+                                let q_clone = q.clone();
+                                let match_pos = ui.input_history.iter().enumerate().rev()
+                                    .find(|(_, h)| q_clone.is_empty() || h.contains(&q_clone))
+                                    .map(|(i, _)| i);
+                                if let Some(idx) = match_pos {
+                                    ui.history_idx = Some(idx);
+                                    ui.input_buffer = ui.input_history[idx].clone();
+                                    ui.input_cursor = ui.input_buffer.len();
+                                }
+                            }
+                        } else if ui.input_cursor > 0 {
                             let before = &ui.input_buffer[..ui.input_cursor];
                             let ch_len = before.chars().last().map(|c| c.len_utf8()).unwrap_or(0);
                             ui.input_cursor -= ch_len;
                             ui.input_buffer.remove(ui.input_cursor);
+                            ui.history_idx = None;
+                            ui.tab_cycle = 0;
                         }
-                        ui.history_idx = None;
-                        ui.tab_cycle = 0;
                     }
                     KeyCode::Left if k.modifiers.contains(KeyModifiers::ALT) => {
                         // Word-jump left: skip whitespace then non-whitespace
@@ -5199,10 +5282,24 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         ui.side_panel_hidden = !ui.side_panel_hidden;
                     }
                     KeyCode::Char(c) => {
-                        ui.input_buffer.insert(ui.input_cursor, c);
-                        ui.input_cursor += c.len_utf8();
-                        ui.history_idx = None;
-                        ui.tab_cycle = 0;
+                        if let Some(ref mut q) = ui.history_search {
+                            // Append char to search query and re-search
+                            q.push(c);
+                            let q_clone = q.clone();
+                            let match_pos = ui.input_history.iter().enumerate().rev()
+                                .find(|(_, h)| h.contains(&q_clone))
+                                .map(|(i, _)| i);
+                            if let Some(idx) = match_pos {
+                                ui.history_idx = Some(idx);
+                                ui.input_buffer = ui.input_history[idx].clone();
+                                ui.input_cursor = ui.input_buffer.len();
+                            }
+                        } else {
+                            ui.input_buffer.insert(ui.input_cursor, c);
+                            ui.input_cursor += c.len_utf8();
+                            ui.history_idx = None;
+                            ui.tab_cycle = 0;
+                        }
                     }
                     _ => {}
                 },
@@ -5212,6 +5309,30 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
     }
     // Auto-save session on exit if there's any conversation
     let _ = session_save(&ui);
+
+    // Persist TUI input history (append new entries, cap at 500 lines)
+    if let Some(ref p) = input_history_path {
+        if !ui.input_history.is_empty() {
+            let existing: Vec<String> = std::fs::read_to_string(p)
+                .unwrap_or_default()
+                .lines()
+                .map(|l| l.to_string())
+                .collect();
+            let mut merged: Vec<String> = existing;
+            for entry in &ui.input_history {
+                if !merged.contains(entry) {
+                    merged.push(entry.clone());
+                }
+            }
+            // Keep most recent 500
+            let start = merged.len().saturating_sub(500);
+            let to_write = merged[start..].join("\n");
+            if let Some(parent) = p.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(p, to_write);
+        }
+    }
 
     let _ = _ctx.send(UiCommand::Quit);
     drop(guard); // cooks the terminal
