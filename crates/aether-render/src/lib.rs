@@ -1063,7 +1063,19 @@ fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str) -> Vec<Line<'
             render_message("  ◆  ", C_ASST_PFX, body, C_BODY, true, trail_spin, spin, 0.0)
         }
         ChatLine::SystemNote(body) => {
-            render_message("  ─  ", C_DIM, body, C_BODY, false, false, spin, 0.0)
+            let rule = Line::from(Span::styled(
+                "  ──────────────────────────────────────────────────────".to_string(),
+                Style::default().fg(C_DIM),
+            ));
+            let mut lines: Vec<Line<'static>> = vec![rule.clone()];
+            for raw_line in body.lines() {
+                lines.push(Line::from(vec![
+                    Span::styled("  ℹ  ".to_string(), Style::default().fg(C_ASST_PFX)),
+                    Span::styled(raw_line.to_string(), Style::default().fg(Color::Rgb(148, 163, 184))),
+                ]));
+            }
+            lines.push(rule);
+            lines
         }
         ChatLine::SplashRow { logo, info, style } => {
             let (info_color, info_mod) = match style {
