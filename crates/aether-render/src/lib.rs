@@ -858,6 +858,12 @@ pub fn draw_frame(
                 "Try \"find all TODO comments\"",
                 "Try \"explain the main entry point\"",
                 "Try \"what does this project do?\"",
+                "Try \"find potential bugs in this code\"",
+                "Try \"write tests for the core logic\"",
+                "Try \"what's the architecture here?\"",
+                "Try \"show me the most complex file\"",
+                "Try \"list all public API endpoints\"",
+                "Try \"where should I add error handling?\"",
             ];
             let sugg_idx = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -1159,14 +1165,16 @@ fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str) -> Vec<Line<'
     match cl {
         ChatLine::User(body, ts) => {
             let mut lines: Vec<Line<'static>> = Vec::new();
-            // Tiny dim timestamp line above user messages (skipped for loaded sessions with ts=0)
             if *ts > 0 {
                 let h = (ts % 86400) / 3600;
                 let m = (ts % 3600) / 60;
-                lines.push(Line::from(Span::styled(
-                    format!("     {:02}:{:02}", h, m),
-                    Style::default().fg(Color::Rgb(51, 65, 85)), // slate-700
-                )));
+                lines.push(Line::from(vec![
+                    Span::styled("  ·  ", Style::default().fg(Color::Rgb(30, 41, 59))),
+                    Span::styled(
+                        format!("{:02}:{:02}", h, m),
+                        Style::default().fg(Color::Rgb(51, 65, 85)),
+                    ),
+                ]));
             }
             lines.extend(render_message("  >  ", C_USER_PFX, body, C_BODY, false, trail_spin, spin, 0.0, 0.0));
             lines
@@ -1491,6 +1499,21 @@ fn inline_markdown_spans(line: &str, body_color: Color) -> Vec<Span<'static>> {
                     Style::default()
                         .fg(body_color)
                         .add_modifier(Modifier::BOLD),
+                ));
+                i += end + 4;
+                continue;
+            }
+        }
+
+        // Strikethrough ~~...~~
+        if i + 1 < bytes.len() && &bytes[i..i + 2] == b"~~" {
+            flush_buf(&mut buf, &mut out, body_color);
+            if let Some(end) = line[i + 2..].find("~~") {
+                out.push(Span::styled(
+                    line[i + 2..i + 2 + end].to_string(),
+                    Style::default()
+                        .fg(C_DIM)
+                        .add_modifier(Modifier::CROSSED_OUT),
                 ));
                 i += end + 4;
                 continue;
