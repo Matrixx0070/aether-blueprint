@@ -4418,6 +4418,23 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
         }
     }
 
+    // Project context file detection
+    {
+        let cwd_path = std::env::current_dir().unwrap_or_default();
+        let ctx_names: &[&str] = &["AETHER.md", "CLAUDE.md", "aether.toml", ".aether/config.toml"];
+        let found: Vec<&str> = ctx_names.iter()
+            .filter(|&&f| cwd_path.join(f).exists())
+            .copied()
+            .collect();
+        if !found.is_empty() {
+            ui.chat_lines.push(ChatLine::SplashRow {
+                logo: String::new(),
+                info: format!("Project context loaded: {}  (/context to inspect)", found.join(", ")),
+                style: SplashStyle::Ok,
+            });
+        }
+    }
+
     // Load persistent TUI input history from ~/.aether/input_history
     let input_history_path = std::env::var("HOME").ok()
         .map(|h| std::path::PathBuf::from(h).join(".aether").join("input_history"));
@@ -5568,13 +5585,28 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     continue;
                                 }
                                 "/last" => {
-                                    // Scroll to the last AI response in chat
-                                    let last_asst_idx = ui.chat_lines.iter().rposition(|cl| {
-                                        matches!(cl, ChatLine::Assistant(_, _, _))
+                                    let last_asst = ui.chat_lines.iter().rev().find_map(|cl| {
+                                        if let ChatLine::Assistant(body, dur, cost) = cl {
+                                            Some((body.clone(), *dur, *cost))
+                                        } else { None }
                                     });
-                                    if last_asst_idx.is_some() {
-                                        ui.follow_tail = false;
-                                        // We'll jump to tail — simplest approach
+                                    if let Some((body, dur, cost)) = last_asst {
+                                        let words = body.split_whitespace().count();
+                                        let chars = body.chars().count();
+                                        let lines = body.lines().count();
+                                        let code_blocks = body.matches("```").count() / 2;
+                                        let dur_str = if dur > 0.0 { format!("{:.1}s", dur) } else { "—".to_string() };
+                                        let cost_str = if cost > 0.0 { format!("${:.4}", cost) } else { "—".to_string() };
+                                        let read_secs = (words as f64 / 200.0 * 60.0).max(1.0) as u64;
+                                        let read_str = if read_secs >= 60 {
+                                            format!("{}m{}s", read_secs / 60, read_secs % 60)
+                                        } else {
+                                            format!("{}s", read_secs)
+                                        };
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!(
+                                            "Last response\n  {words} words  ·  {chars} chars  ·  {lines} lines  ·  {code_blocks} code block{}\n  duration: {dur_str}  ·  cost: {cost_str}  ·  ~{read_str} to read",
+                                            if code_blocks == 1 { "" } else { "s" }
+                                        )));
                                         ui.follow_tail = true;
                                         ui.chat_scroll = 9999;
                                     } else {
@@ -6282,30 +6314,55 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     ui.follow_tail = true;
                                     continue;
                                 }
-                                "/retry" | "/r" => {
-                                    // Resend the last user message (remove last assistant response + resend)
+                                cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
+                                    // /retry [new text] — resend last message, or replace with new text
+                                    let replacement_raw = cmd.trim_start_matches("/retry").trim();
+                                    let replacement: Option<String> = if replacement_raw.is_empty() {
+                                        None
+                                    } else {
+                                        Some(replacement_raw.to_string())
+                                    };
                                     let last_user_msg = ui.chat_lines.iter().rev().find_map(|cl| {
                                         if let ChatLine::User(msg, _) = cl { Some(msg.clone()) } else { None }
                                     });
-                                    if let Some(retry_msg) = last_user_msg {
+                                    if last_user_msg.is_some() || replacement.is_some() {
                                         // Pop the last assistant block from display
                                         while matches!(ui.chat_lines.last(), Some(
                                             ChatLine::Assistant(_, _, _) | ChatLine::AssistantPartial(_) | ChatLine::SystemNote(_)
                                         )) {
                                             ui.chat_lines.pop();
                                         }
+                                        let retry_msg = replacement.unwrap_or_else(|| last_user_msg.unwrap_or_default());
+                                        if retry_msg.is_empty() {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                "Nothing to retry — send a message first.".to_string()
+                                            ));
+                                            continue;
+                                        }
+                                        // Replace the last user bubble with the new text
+                                        if matches!(ui.chat_lines.last(), Some(ChatLine::User(_, _))) {
+                                            ui.chat_lines.pop();
+                                        }
+                                        let ts = std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default().as_secs();
+                                        ui.chat_lines.push(ChatLine::User(retry_msg.clone(), ts));
                                         ui.follow_tail = true;
                                         ui.status_running = true;
                                         ui.waiting_since = Some(std::time::Instant::now());
                                         ui.chat_lines.push(ChatLine::SystemNote(
-                                            format!("↺ Retrying: \"{}\"", retry_msg.chars().take(50).collect::<String>())
+                                            format!("↺ Retrying: \"{}\"", retry_msg.chars().take(60).collect::<String>())
                                         ));
-                                        if _ctx.send(UiCommand::UserMessage(retry_msg)).is_err() {
+                                        let api_msg = match &ui.prompt_prefix {
+                                            Some(pfx) => format!("{pfx}\n\n{retry_msg}"),
+                                            None => retry_msg,
+                                        };
+                                        if _ctx.send(UiCommand::UserMessage(api_msg)).is_err() {
                                             break 'outer;
                                         }
                                     } else {
                                         ui.chat_lines.push(ChatLine::SystemNote(
-                                            "Nothing to retry — send a message first.".to_string()
+                                            "Nothing to retry — send a message first.\n  Usage: /retry             — resend last message\n         /retry <new text>  — replace with new message".to_string()
                                         ));
                                     }
                                     continue;
@@ -6845,7 +6902,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/go ", "/goto ", "/grep ", "/help", "/hist", "/history", "/last", "/linenums", "/load ", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/outline", "/raw", "/replay ", "/reset-cost", "/retry", "/search ", "/sessions", "/share", "/speed", "/stats", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/undo", "/unpin", "/version", "/wc", "/wrap",
+                            "/outline", "/raw", "/replay ", "/reset-cost", "/retry ", "/search ", "/sessions", "/share", "/speed", "/stats", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
