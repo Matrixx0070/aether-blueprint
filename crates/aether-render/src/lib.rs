@@ -284,6 +284,12 @@ pub struct UiState {
     /// When true, hints bar is hidden — maximises chat height (zen/focus mode).
     /// Toggled by /focus command or Ctrl+F.
     pub focus_mode: bool,
+    /// When set, this string is prepended to every AI request (silent system prefix).
+    /// Shown as a badge in the input title; cleared with /pin-cmd clear.
+    pub prompt_prefix: Option<String>,
+    /// Word and char count of the last completed AI response (for tools panel badge).
+    pub last_response_words: u32,
+    pub last_response_chars: u32,
 }
 
 impl UiState {
@@ -380,6 +386,9 @@ impl UiState {
             input_ghost: None,
             theme: 0,
             focus_mode: false,
+            prompt_prefix: None,
+            last_response_words: 0,
+            last_response_chars: 0,
         }
     }
 
@@ -414,6 +423,9 @@ impl UiState {
                     }
                 }
                 self.stream_chars = 0;
+                // Record last response size for tools panel badge
+                self.last_response_words = final_text.split_whitespace().count() as u32;
+                self.last_response_chars = final_text.chars().count() as u32;
                 // Record response duration (used both for /stats and per-message badge)
                 let response_dur = self.response_start.take().map(|t0| {
                     let d = t0.elapsed().as_secs_f64();
@@ -1019,12 +1031,17 @@ pub fn draw_frame(
             let tools_title = {
                 let ok = state.tools_ok;
                 let err = state.tools_err;
-                if err > 0 {
-                    format!(" Tools  {}✓  {}✗{} ", ok, err, tps_part)
-                } else if ok > 0 {
-                    format!(" Tools  {}✓{} ", ok, tps_part)
+                let resp_badge = if state.last_response_words > 0 && !state.status_running {
+                    format!("  ·  {}w", state.last_response_words)
                 } else {
-                    format!(" Tools{} ", tps_part)
+                    String::new()
+                };
+                if err > 0 {
+                    format!(" Tools  {}✓  {}✗{}{} ", ok, err, tps_part, resp_badge)
+                } else if ok > 0 {
+                    format!(" Tools  {}✓{}{} ", ok, tps_part, resp_badge)
+                } else {
+                    format!(" Tools{}{} ", tps_part, resp_badge)
                 }
             };
             let tools_title_color = if state.tools_err > 0 { C_ERR } else if state.tools_ok > 0 { C_OK } else { C_DIM };
@@ -1242,6 +1259,9 @@ pub fn draw_frame(
             } else if let Some(note) = &state.pinned_note {
                 let preview: String = note.chars().take(40).collect();
                 format!(" ★ {} ", preview)
+            } else if let Some(ref pfx) = state.prompt_prefix {
+                let preview: String = pfx.chars().take(30).collect();
+                format!(" ⬡ prefix: {} ", preview)
             } else {
                 let pos_part = if input_line_count > 1 {
                     format!("{}:{} ↵{}  ", cursor_line_num, cursor_col, input_line_count)

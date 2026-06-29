@@ -5421,6 +5421,61 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                "/last" => {
+                                    // Scroll to the last AI response in chat
+                                    let last_asst_idx = ui.chat_lines.iter().rposition(|cl| {
+                                        matches!(cl, ChatLine::Assistant(_, _, _))
+                                    });
+                                    if last_asst_idx.is_some() {
+                                        ui.follow_tail = false;
+                                        // We'll jump to tail — simplest approach
+                                        ui.follow_tail = true;
+                                        ui.chat_scroll = 9999;
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "No AI response yet.".to_string()
+                                        ));
+                                    }
+                                    continue;
+                                }
+                                "/clear-tools" | "/cltools" => {
+                                    let n = ui.tool_log.len();
+                                    ui.tool_log.clear();
+                                    ui.tools_ok = 0;
+                                    ui.tools_err = 0;
+                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                        format!("Tool log cleared  ({n} entries removed).")
+                                    ));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/pin-cmd" || cmd.starts_with("/pin-cmd ") => {
+                                    let arg = cmd.trim_start_matches("/pin-cmd").trim();
+                                    if arg.is_empty() || arg == "show" {
+                                        match &ui.prompt_prefix {
+                                            Some(p) => {
+                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                    format!("Prompt prefix active: \"{p}\"\n  /pin-cmd clear to remove  ·  /pin-cmd <text> to replace")
+                                                ));
+                                            }
+                                            None => {
+                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                    "No prompt prefix set.\n  /pin-cmd <text>  — prepend text to every AI request (invisible in chat)\n  /pin-cmd clear  — remove".to_string()
+                                                ));
+                                            }
+                                        }
+                                    } else if arg == "clear" {
+                                        ui.prompt_prefix = None;
+                                        ui.chat_lines.push(ChatLine::SystemNote("Prompt prefix cleared.".to_string()));
+                                    } else {
+                                        ui.prompt_prefix = Some(arg.to_string());
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("Prompt prefix set: \"{arg}\"\n  This will be prepended silently to every AI request.")
+                                        ));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/diff" => {
                                     // Collect last two completed AI responses
                                     let asst_texts: Vec<&str> = ui.chat_lines.iter().rev()
@@ -6075,7 +6130,12 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                             ui.status_running = true;
                             ui.waiting_since = Some(std::time::Instant::now());
                             ui.msg_times_secs.push(ts);
-                            if _ctx.send(UiCommand::UserMessage(msg)).is_err() {
+                            // Prepend prompt_prefix silently to the API message (not shown in chat)
+                            let api_msg = match &ui.prompt_prefix {
+                                Some(pfx) => format!("{pfx}\n\n{msg}"),
+                                None => msg,
+                            };
+                            if _ctx.send(UiCommand::UserMessage(api_msg)).is_err() {
                                 break 'outer;
                             }
                         }
@@ -6142,8 +6202,8 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         // Slash command completion: Tab while buffer starts with '/'
                         const SLASH_CMDS: &[&str] = &[
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
-                            "/clear", "/clear-history", "/clh", "/compact", "/copy", "/cost", "/count", "/diff", "/doctor", "/drop ", "/export", "/focus", "/format",
-                            "/go ", "/grep ", "/help", "/hist", "/history", "/linenums", "/load ", "/model ", "/note ", "/num", "/numbers", "/pin ", "/quit",
+                            "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/copy", "/cost", "/count", "/diff", "/doctor", "/drop ", "/export", "/focus", "/format",
+                            "/go ", "/grep ", "/help", "/hist", "/history", "/last", "/linenums", "/load ", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
                             "/raw", "/reset-cost", "/retry", "/search ", "/sessions", "/stats", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/undo", "/unpin", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
