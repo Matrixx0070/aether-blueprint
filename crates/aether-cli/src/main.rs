@@ -5181,7 +5181,14 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                         for (i, &v) in ui.tps_history.iter().enumerate() {
                                             msg.push_str(&format!("  [{:>2}]  {:.1} t/s\n", i + 1, v));
                                         }
-                                        msg.push_str(&format!("\n  avg {avg:.1}  ·  min {min:.1}  ·  max {max:.1} t/s"));
+                                        let mut sorted = ui.tps_history.clone();
+                                        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                                        let median = if n % 2 == 0 {
+                                            (sorted[n/2 - 1] + sorted[n/2]) / 2.0
+                                        } else {
+                                            sorted[n/2]
+                                        };
+                                        msg.push_str(&format!("\n  avg {avg:.1}  ·  median {median:.1}  ·  min {min:.1}  ·  max {max:.1} t/s"));
                                         ui.chat_lines.push(ChatLine::SystemNote(msg));
                                     }
                                     ui.follow_tail = true;
@@ -5306,19 +5313,37 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     ui.follow_tail = true;
                                     continue;
                                 }
-                                cmd if cmd == "/bookmarks" || cmd == "/bm" => {
+                                cmd if cmd == "/bookmarks" || cmd == "/bm"
+                                    || cmd.starts_with("/bookmarks ") || cmd.starts_with("/bm ") =>
+                                {
+                                    // /bookmarks [N] — list bookmarks; /bookmarks N jumps to Nth bookmark
+                                    let n_arg: Option<usize> = cmd.split_whitespace().nth(1)
+                                        .and_then(|s| s.parse().ok());
                                     if ui.bookmarks.is_empty() {
                                         ui.chat_lines.push(ChatLine::SystemNote(
                                             "No bookmarks set. Use /bookmark <name> to mark current scroll position.".to_string()
                                         ));
+                                    } else if let Some(n) = n_arg {
+                                        // Jump to Nth bookmark (1-based)
+                                        if n > 0 && n <= ui.bookmarks.len() {
+                                            let (name, pos) = &ui.bookmarks[n - 1];
+                                            ui.chat_scroll = *pos;
+                                            ui.follow_tail = false;
+                                            let name = name.clone();
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("→ Bookmark [{n}] «{name}»")));
+                                        } else {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("No bookmark #{n} — {} bookmarks set.", ui.bookmarks.len())
+                                            ));
+                                        }
                                     } else {
-                                        let mut out = format!("Bookmarks ({}):\n", ui.bookmarks.len());
-                                        for (name, pos) in &ui.bookmarks {
-                                            out.push_str(&format!("  ★ {name}  (line {pos})  —  /go {name}\n"));
+                                        let mut out = format!("Bookmarks ({}) — /bookmarks N to jump:\n", ui.bookmarks.len());
+                                        for (i, (name, pos)) in ui.bookmarks.iter().enumerate() {
+                                            out.push_str(&format!("  [{:>2}] ★ {name}  (line {pos})  —  /go {name}\n", i + 1));
                                         }
                                         ui.chat_lines.push(ChatLine::SystemNote(out));
                                     }
-                                    ui.follow_tail = false;
+                                    ui.follow_tail = true;
                                     continue;
                                 }
                                 cmd if cmd.starts_with("/bookmark ") || cmd.starts_with("/bm ") => {
@@ -6942,9 +6967,60 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         let state = if ui.focus_mode { "on" } else { "off" };
                         ui.chat_lines.push(ChatLine::SystemNote(format!("Focus mode {state}  (F6 or /focus to toggle)")));
                     }
+                    KeyCode::F(7) => {
+                        // F7: cycle colour theme (sky → emerald → rose → sky)
+                        ui.theme = (ui.theme + 1) % 3;
+                        let theme_name = match ui.theme { 1 => "emerald", 2 => "rose", _ => "sky" };
+                        ui.chat_lines.push(ChatLine::SystemNote(
+                            format!("Theme: {theme_name}  (F7 or /theme to cycle)")
+                        ));
+                        ui.follow_tail = true;
+                    }
                     KeyCode::Char('f') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         // Ctrl+F: toggle focus/zen mode (same as F6)
                         ui.focus_mode = !ui.focus_mode;
+                    }
+                    KeyCode::Char('g') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Ctrl+G: quick find — same as /find but takes text from clipboard or prompts
+                        // If there's text in the input buffer (possibly a pattern) use it; else noop
+                        if !ui.input_buffer.trim().is_empty() {
+                            let pattern = ui.input_buffer.trim().to_string();
+                            let pat_lower = pattern.to_lowercase();
+                            let match_count = ui.chat_lines.iter().filter(|cl| {
+                                let body = match cl {
+                                    ChatLine::User(b, _) => b.as_str(),
+                                    ChatLine::Assistant(b, _, _) => b.as_str(),
+                                    ChatLine::AssistantPartial(b) => b.as_str(),
+                                    ChatLine::SystemNote(b) => b.as_str(),
+                                    ChatLine::SplashRow { info, .. } => info.as_str(),
+                                };
+                                body.to_lowercase().contains(&pat_lower)
+                            }).count();
+                            if match_count > 0 {
+                                ui.search_highlight = Some(pattern.clone());
+                                // Scroll to first match
+                                let mut rendered_line: u16 = 0;
+                                for cl in &ui.chat_lines {
+                                    let body = match cl {
+                                        ChatLine::User(b, _) => b.as_str(),
+                                        ChatLine::Assistant(b, _, _) => b.as_str(),
+                                        ChatLine::AssistantPartial(b) => b.as_str(),
+                                        ChatLine::SystemNote(b) => b.as_str(),
+                                        ChatLine::SplashRow { info, .. } => info.as_str(),
+                                    };
+                                    if body.to_lowercase().contains(&pat_lower) {
+                                        ui.chat_scroll = rendered_line.saturating_sub(2);
+                                        ui.follow_tail = false;
+                                        break;
+                                    }
+                                    rendered_line += (body.lines().count() as u16).max(1) + 1;
+                                }
+                                ui.chat_lines.push(ChatLine::SystemNote(
+                                    format!("^G find: «{pattern}» — {match_count} match{}", if match_count == 1 { "" } else { "es" })
+                                ));
+                                ui.follow_tail = true;
+                            }
+                        }
                     }
                     KeyCode::Char('x') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         ui.ctrl_x_pending = true;

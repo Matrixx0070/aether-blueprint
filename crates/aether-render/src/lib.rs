@@ -1428,7 +1428,7 @@ pub fn draw_frame(
             let static_hints = match hints_group {
                 0 => "↵ send  ⇧↵ newline  ↑↓ history  ←→ move  ^A/E line  ^W del-word  ^L clear  /help",
                 1 => "^R reverse-i-search  ^Y yank last  ^K kill-end  ^U kill-start  ⇥ tab-complete  ^` code fence",
-                2 => "Pg↑↓ scroll  End jump to tail  ^H top  F2 panel  F3 timestamps  ^N new session",
+                2 => "Pg↑↓ scroll  End jump to tail  ^H top  F2 panel  F3 timestamps  F6 focus  F7 theme  ^G find  ^N new",
                 _ => "/retry  /copy  /note  /compact  /export  /search  /cost  /model  /sessions  /undo  /pin",
             };
             let mut hints_spans = vec![
