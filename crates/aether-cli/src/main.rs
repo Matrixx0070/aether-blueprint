@@ -4633,6 +4633,28 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         ui.input_undo = Some((ui.input_buffer.clone(), ui.input_cursor));
                         ui.input_buffer.truncate(ui.input_cursor);
                     }
+                    KeyCode::Char('o') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Ctrl+O: open last URL found in assistant responses
+                        let last_url = ui.chat_lines.iter().rev().find_map(|cl| {
+                            if let ChatLine::Assistant(body, _, _) | ChatLine::AssistantPartial(body) = cl {
+                                // Simple URL scan: find https?:// in body
+                                body.split_whitespace().rev().find(|w| {
+                                    w.starts_with("http://") || w.starts_with("https://")
+                                }).map(|u| u.trim_end_matches(|c: char| ".,;)>\"'`".contains(c)).to_string())
+                            } else { None }
+                        });
+                        match last_url {
+                            Some(url) => {
+                                let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+                                ui.chat_lines.push(ChatLine::SystemNote(format!("Opening: {url}")));
+                                ui.follow_tail = true;
+                            }
+                            None => {
+                                ui.chat_lines.push(ChatLine::SystemNote("No URL found in recent responses.".to_string()));
+                                ui.follow_tail = true;
+                            }
+                        }
+                    }
                     KeyCode::Char('p') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         // Ctrl+P: pin / unpin last assistant response as a reminder
                         if ui.pinned_note.is_some() {
@@ -4928,6 +4950,9 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     ui.chat_lines.push(ChatLine::SystemNote(
                                         "Aether — slash commands\n\
                                          \n\
+                                         /bookmark <name>   mark current scroll position  (/bm)\n\
+                                         /bookmarks         list all bookmarks  (/bm)\n\
+                                         /go <name>         jump to a saved bookmark\n\
                                          /clear             clear chat display\n\
                                          /clear-history     wipe in-session input history  (/clh)\n\
                                          /compact [N]       compress history (keep last N=5 exchanges)\n\
@@ -4967,6 +4992,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                          Ctrl+K / U      kill to end / start of line\n\
                                          Ctrl+T          transpose chars (Emacs)\n\
                                          Ctrl+B          bold-wrap word at cursor (**word**)\n\
+                                         Ctrl+O          open last URL in AI response\n\
                                          Ctrl+S          save session without clearing\n\
                                          Ctrl+Y          yank last AI response into input\n\
                                          Ctrl+Z          undo last input change\n\
@@ -5104,6 +5130,52 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                         ui.chat_lines.push(ChatLine::SystemNote("No pin is set.".to_string()));
                                     }
                                     ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/bookmarks" || cmd == "/bm" => {
+                                    if ui.bookmarks.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "No bookmarks set. Use /bookmark <name> to mark current scroll position.".to_string()
+                                        ));
+                                    } else {
+                                        let mut out = format!("Bookmarks ({}):\n", ui.bookmarks.len());
+                                        for (name, pos) in &ui.bookmarks {
+                                            out.push_str(&format!("  ★ {name}  (line {pos})  —  /go {name}\n"));
+                                        }
+                                        ui.chat_lines.push(ChatLine::SystemNote(out));
+                                    }
+                                    ui.follow_tail = false;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/bookmark ") || cmd.starts_with("/bm ") => {
+                                    let name = cmd.splitn(2, ' ').nth(1).unwrap_or("").trim().to_string();
+                                    if name.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /bookmark <name>".to_string()));
+                                    } else {
+                                        let pos = ui.chat_scroll;
+                                        ui.bookmarks.retain(|(n, _)| n != &name);
+                                        ui.bookmarks.push((name.clone(), pos));
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("★ Bookmarked '{name}' at line {pos}")
+                                        ));
+                                    }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/go ") => {
+                                    let name = cmd.trim_start_matches("/go").trim();
+                                    if let Some(&(_, pos)) = ui.bookmarks.iter().find(|(n, _)| n == name) {
+                                        ui.chat_scroll = pos;
+                                        ui.follow_tail = false;
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("Jumped to bookmark '{name}' (line {pos})")
+                                        ));
+                                    } else {
+                                        let names: Vec<&str> = ui.bookmarks.iter().map(|(n, _)| n.as_str()).collect();
+                                        let list = if names.is_empty() { "none".to_string() } else { names.join(", ") };
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("No bookmark '{name}'. Available: {list}")
+                                        ));
+                                    }
                                     continue;
                                 }
                                 cmd if cmd.starts_with("/pin") => {
@@ -5738,8 +5810,9 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     KeyCode::Tab => {
                         // Slash command completion: Tab while buffer starts with '/'
                         const SLASH_CMDS: &[&str] = &[
+                            "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clh", "/compact", "/copy", "/cost", "/doctor", "/export", "/format",
-                            "/help", "/hist", "/history", "/linenums", "/load ", "/model ", "/note ", "/pin ", "/quit",
+                            "/go ", "/help", "/hist", "/history", "/linenums", "/load ", "/model ", "/note ", "/pin ", "/quit",
                             "/raw", "/retry", "/search ", "/sessions", "/stats", "/timestamps", "/todo ", "/undo", "/unpin",
                         ];
                         let buf = ui.input_buffer.trim_end().to_string();

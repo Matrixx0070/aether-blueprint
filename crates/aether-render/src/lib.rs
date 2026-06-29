@@ -247,6 +247,8 @@ pub struct UiState {
     pub response_done_at: Option<std::time::Instant>,
     /// Instant when the current request was submitted — cleared on first delta received.
     pub waiting_since: Option<std::time::Instant>,
+    /// Named scroll-position bookmarks: (name, scroll_line).
+    pub bookmarks: Vec<(String, u16)>,
     /// When true, full timestamps are shown on each message header.
     pub show_timestamps: bool,
     /// Auto-extracted from the first user message (first 5 words, up to 40 chars).
@@ -344,6 +346,7 @@ impl UiState {
             new_msgs_while_scrolled: 0,
             response_done_at: None,
             waiting_since: None,
+            bookmarks: Vec::new(),
             show_timestamps: false,
             session_title: None,
             search_highlight: None,
@@ -1295,16 +1298,18 @@ pub fn draw_frame(
             if state.last_tps > 0.5 {
                 right_parts.push(format!("{:.0} t/s", state.last_tps));
             }
-            // t/s sparkline: 8-char bar chart of recent response speeds
-            if state.tps_history.len() >= 2 {
+            // t/s sparkline: build colored bar per reading (green=fast, amber=mid, red=slow)
+            let sparkline_spans: Option<Vec<(char, Color)>> = if state.tps_history.len() >= 2 {
                 let max_tps = state.tps_history.iter().cloned().fold(0.0_f64, f64::max).max(1.0);
-                let bars: String = state.tps_history.iter().map(|&v| {
-                    match ((v / max_tps) * 7.0).round() as usize {
+                Some(state.tps_history.iter().map(|&v| {
+                    let frac = v / max_tps;
+                    let bar = match (frac * 7.0).round() as usize {
                         0 => '▁', 1 => '▂', 2 => '▃', 3 => '▄', 4 => '▅', 5 => '▆', 6 => '▇', _ => '█',
-                    }
-                }).collect();
-                right_parts.push(bars);
-            }
+                    };
+                    let color = if frac > 0.75 { C_OK } else if frac > 0.4 { C_WARN } else { C_ERR };
+                    (bar, color)
+                }).collect())
+            } else { None };
             if state.cost_usd > 0.0 {
                 right_parts.push(format!("${:.4}", state.cost_usd));
             }
@@ -1351,6 +1356,13 @@ pub fn draw_frame(
                 format!("  ·  {right_str}"),
                 Style::default().fg(Color::Rgb(71, 85, 105)).bg(C_HDR_BG),
             ));
+            // Colored t/s sparkline — each bar gets its own color span
+            if let Some(bars) = sparkline_spans {
+                hints_spans.push(Span::styled("  ·  ".to_string(), Style::default().fg(Color::Rgb(71, 85, 105)).bg(C_HDR_BG)));
+                for (ch, color) in bars {
+                    hints_spans.push(Span::styled(ch.to_string(), Style::default().fg(color).bg(C_HDR_BG)));
+                }
+            }
             // Scroll mode indicator: amber badge when user has scrolled up from tail
             if !state.follow_tail {
                 let new_badge = if state.new_msgs_while_scrolled > 0 {
