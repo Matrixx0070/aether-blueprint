@@ -4793,10 +4793,12 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                             .filter_map(|(i, cl)| if i > cutoff_idx { Some(cl) } else { None })
                                             .collect();
                                         ui.chat_lines = kept;
+                                        let kept_count = conv_lines.len() - drop_count;
+                                        let kept_pairs = kept_count / 2;
+                                        let dropped_pairs = drop_count / 2;
                                         ui.chat_lines.insert(0, ChatLine::SystemNote(
                                             format!(
-                                                "⟳ Compact — {} earlier messages hidden  (cost so far: ${:.4}  ·  /cost for details)",
-                                                drop_count,
+                                                "⟳ Compacted {dropped_pairs} exchanges → keeping last {kept_pairs}  (cost so far: ${:.4}  ·  {drop_count} messages hidden)",
                                                 ui.cost_usd
                                             )
                                         ));

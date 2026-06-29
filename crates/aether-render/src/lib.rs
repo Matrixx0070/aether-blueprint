@@ -1304,6 +1304,27 @@ pub fn draw_frame(
                     Style::default().fg(C_DIM).bg(C_HDR_BG),
                 ));
             }
+            // Active feature badges: TS / RAW / HL
+            if state.show_timestamps {
+                hints_spans.push(Span::styled("  [TS]".to_string(), Style::default().fg(C_BRAND).bg(C_HDR_BG)));
+            }
+            if state.raw_mode {
+                hints_spans.push(Span::styled("  [RAW]".to_string(), Style::default().fg(C_WARN).bg(C_HDR_BG)));
+            }
+            if let Some(ref term) = state.search_highlight {
+                let label: String = term.chars().take(8).collect();
+                hints_spans.push(Span::styled(
+                    format!("  [HL:{label}]"),
+                    Style::default().fg(Color::Rgb(253, 224, 71)).bg(Color::Rgb(20, 14, 0)).add_modifier(Modifier::BOLD),
+                ));
+            }
+            // "● live" tail indicator
+            if state.follow_tail && !state.status_running {
+                hints_spans.push(Span::styled(
+                    "  ● live".to_string(),
+                    Style::default().fg(C_OK).bg(C_HDR_BG),
+                ));
+            }
             // Reverse-i-search mode indicator overrides the right side of hints
             let hints_line = if let Some(ref q) = state.history_search {
                 Line::from(vec![
