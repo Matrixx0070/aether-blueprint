@@ -4706,6 +4706,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                          /search <term>  search chat history\n\
                                          /sessions       list saved sessions\n\
                                          /stats          session statistics\n\
+                                         /doctor         config + auth health check\n\
                                          /undo           remove last exchange from display\n\
                                          /quit           exit\n\
                                          \n\
@@ -4847,6 +4848,62 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                         }
                                     }
                                     ui.chat_lines.push(ChatLine::SystemNote(stat));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/doctor" => {
+                                    let mut report = "Aether diagnostics\n".to_string();
+                                    // 1. API key / auth
+                                    let api_key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
+                                    let oauth_tok = std::env::var("CLAUDE_CODE_OAUTH_TOKEN").unwrap_or_default();
+                                    let creds_path = std::env::var("HOME").ok()
+                                        .map(|h| std::path::PathBuf::from(h).join(".claude").join(".credentials.json"))
+                                        .filter(|p| p.exists());
+                                    let auth_status = if !api_key.is_empty() {
+                                        let preview = if api_key.len() > 8 {
+                                            format!("sk-…{}", &api_key[api_key.len() - 4..])
+                                        } else { "***".to_string() };
+                                        format!("✓  ANTHROPIC_API_KEY ({preview})")
+                                    } else if !oauth_tok.is_empty() {
+                                        "✓  CLAUDE_CODE_OAUTH_TOKEN set".to_string()
+                                    } else if creds_path.is_some() {
+                                        "✓  ~/.claude/.credentials.json found".to_string()
+                                    } else {
+                                        "✗  No auth: set ANTHROPIC_API_KEY or run `claude login`".to_string()
+                                    };
+                                    report.push_str(&format!("  Auth:     {auth_status}\n"));
+                                    // 2. Model
+                                    report.push_str(&format!("  Model:    {}\n", ui.model));
+                                    // 3. Permission mode
+                                    report.push_str(&format!("  Mode:     {}\n", ui.perm_mode));
+                                    // 4. Session dir
+                                    let sess_dir = session_dir();
+                                    let sess_ok = sess_dir.exists() && {
+                                        let test = sess_dir.join(".write_test");
+                                        std::fs::write(&test, "").is_ok() && std::fs::remove_file(&test).is_ok()
+                                    };
+                                    report.push_str(&format!("  Sessions: {} ({})\n",
+                                        if sess_ok { "✓" } else { "✗" },
+                                        sess_dir.display()
+                                    ));
+                                    // 5. CWD
+                                    report.push_str(&format!("  CWD:      {}\n", ui.cwd));
+                                    // 6. Git branch
+                                    if let Some(ref b) = ui.git_branch {
+                                        report.push_str(&format!("  Git:      ⎇ {b}\n"));
+                                    } else {
+                                        report.push_str("  Git:      (not in a git repo)\n");
+                                    }
+                                    // 7. Context usage
+                                    if ui.tokens_total > 0 {
+                                        report.push_str(&format!("  Context:  {} / {} tokens  ({:.0}%)\n",
+                                            ui.tokens_total,
+                                            aether_render::model_context_window(&ui.model),
+                                            (ui.tokens_total as f64 / aether_render::model_context_window(&ui.model) as f64) * 100.0
+                                        ));
+                                    }
+                                    report.push_str("  Version:  v0.35.0  (use /model to switch)");
+                                    ui.chat_lines.push(ChatLine::SystemNote(report));
                                     ui.follow_tail = true;
                                     continue;
                                 }
@@ -5041,7 +5098,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     KeyCode::Tab => {
                         // Slash command completion: Tab while buffer starts with '/'
                         const SLASH_CMDS: &[&str] = &[
-                            "/clear", "/compact", "/cost", "/export", "/help",
+                            "/clear", "/compact", "/cost", "/doctor", "/export", "/help",
                             "/load ", "/model ", "/pin ", "/quit", "/search ",
                             "/sessions", "/stats", "/undo",
                         ];

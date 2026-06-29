@@ -1968,7 +1968,7 @@ fn model_display_name(model: &str) -> String {
 }
 
 /// Returns the context window size (input tokens) for the given model.
-fn model_context_window(model: &str) -> u64 {
+pub fn model_context_window(model: &str) -> u64 {
     let m = model.to_lowercase();
     if m.contains("claude") {
         200_000 // all current Claude models have 200k context
