@@ -6411,6 +6411,144 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /share — export current chat as markdown to /tmp
+                                "/share" => {
+                                    let ts_now = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    let path = format!("/tmp/aether-chat-{ts_now}.md");
+                                    let mut md = String::from("# Aether Chat Export\n\n");
+                                    md.push_str(&format!("*Exported: {}*\n\n---\n\n", ts_now));
+                                    for cl in &ui.chat_lines {
+                                        match cl {
+                                            ChatLine::User(body, _ts) => {
+                                                md.push_str(&format!("**You:** {}\n\n", body));
+                                            }
+                                            ChatLine::Assistant(body, _, _) => {
+                                                md.push_str(&format!("**Aether:**\n\n{}\n\n---\n\n", body));
+                                            }
+                                            ChatLine::AssistantPartial(body) => {
+                                                md.push_str(&format!("**Aether (partial):**\n\n{}\n\n---\n\n", body));
+                                            }
+                                            ChatLine::SystemNote(note) => {
+                                                md.push_str(&format!("> _{}_\n\n", note.replace('\n', "\n> ")));
+                                            }
+                                            ChatLine::SplashRow { logo, info, .. } => {
+                                                md.push_str(&format!("> {} {}\n\n", logo, info));
+                                            }
+                                        }
+                                    }
+                                    let note = match std::fs::write(&path, &md) {
+                                        Ok(_) => format!("Chat exported → {}  ({} chars)", path, md.len()),
+                                        Err(e) => format!("Export failed: {e}"),
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(note));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /find <pattern> — highlight first chat line matching pattern
+                                cmd if cmd.starts_with("/find ") => {
+                                    let pattern = cmd.trim_start_matches("/find").trim();
+                                    if pattern.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /find <pattern>  — highlights matches in chat".to_string()
+                                        ));
+                                    } else {
+                                        let pat_lower = pattern.to_lowercase();
+                                        let chatline_text = |cl: &ChatLine| -> String {
+                                            match cl {
+                                                ChatLine::User(b, _) => b.clone(),
+                                                ChatLine::Assistant(b, _, _) => b.clone(),
+                                                ChatLine::AssistantPartial(b) => b.clone(),
+                                                ChatLine::SystemNote(b) => b.clone(),
+                                                ChatLine::SplashRow { info, .. } => info.clone(),
+                                            }
+                                        };
+                                        let match_count = ui.chat_lines.iter().filter(|cl| {
+                                            chatline_text(cl).to_lowercase().contains(&pat_lower)
+                                        }).count();
+                                        if match_count == 0 {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("No matches for «{pattern}»")
+                                            ));
+                                        } else {
+                                            // Set search highlight so renderer marks matches
+                                            ui.search_highlight = Some(pattern.to_string());
+                                            // Scroll to first match
+                                            let first_match_line: Option<u16> = {
+                                                let mut rendered_line: u16 = 0;
+                                                let mut found = None;
+                                                for cl in &ui.chat_lines {
+                                                    let body = chatline_text(cl);
+                                                    if body.to_lowercase().contains(&pat_lower) {
+                                                        found = Some(rendered_line);
+                                                        break;
+                                                    }
+                                                    rendered_line += (body.lines().count() as u16).max(1) + 1;
+                                                }
+                                                found
+                                            };
+                                            if let Some(line) = first_match_line {
+                                                ui.chat_scroll = line.saturating_sub(2);
+                                                ui.follow_tail = false;
+                                            }
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("Found {match_count} match{} for «{pattern}»  (highlighted)", if match_count == 1 { "" } else { "es" })
+                                            ));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /goto N — scroll to Nth user exchange
+                                cmd if cmd == "/goto" || cmd.starts_with("/goto ") => {
+                                    let n: usize = cmd.split_whitespace().nth(1)
+                                        .and_then(|s| s.parse().ok())
+                                        .unwrap_or(0);
+                                    if n == 0 {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /goto N  — jump to exchange N  (1-based)".to_string()
+                                        ));
+                                    } else {
+                                        let total_exchanges = ui.chat_lines.iter()
+                                            .filter(|cl| matches!(cl, ChatLine::User(_, _)))
+                                            .count();
+                                        if n > total_exchanges {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("No exchange #{n} — session has {total_exchanges} exchange{}.",
+                                                    if total_exchanges == 1 { "" } else { "s" })
+                                            ));
+                                        } else {
+                                            // Find the line offset of the Nth user message
+                                            let mut rendered_line: u16 = 0;
+                                            let mut exchange_idx = 0usize;
+                                            for cl in &ui.chat_lines {
+                                                if let ChatLine::User(_, _) = cl {
+                                                    exchange_idx += 1;
+                                                    if exchange_idx == n {
+                                                        ui.chat_scroll = rendered_line.saturating_sub(1);
+                                                        ui.follow_tail = false;
+                                                        break;
+                                                    }
+                                                }
+                                                let body_lines = match cl {
+                                                    ChatLine::User(b, _) => b.lines().count(),
+                                                    ChatLine::Assistant(b, _, _) => b.lines().count(),
+                                                    ChatLine::AssistantPartial(b) => b.lines().count(),
+                                                    ChatLine::SystemNote(b) => b.lines().count(),
+                                                    ChatLine::SplashRow { info, .. } => info.lines().count(),
+                                                };
+                                                rendered_line += (body_lines as u16).max(1) + 1;
+                                            }
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("→ Exchange #{n} of {total_exchanges}")
+                                            ));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -6514,8 +6652,8 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         const SLASH_CMDS: &[&str] = &[
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy code ", "/cost", "/count", "/ctx", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
-                            "/go ", "/grep ", "/help", "/hist", "/history", "/last", "/linenums", "/load ", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/outline", "/raw", "/replay ", "/reset-cost", "/retry", "/search ", "/sessions", "/speed", "/stats", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/undo", "/unpin", "/version", "/wc", "/wrap",
+                            "/find ", "/go ", "/goto ", "/grep ", "/help", "/hist", "/history", "/last", "/linenums", "/load ", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
+                            "/outline", "/raw", "/replay ", "/reset-cost", "/retry", "/search ", "/sessions", "/share", "/speed", "/stats", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

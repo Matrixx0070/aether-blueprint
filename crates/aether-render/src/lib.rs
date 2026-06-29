@@ -1496,6 +1496,20 @@ pub fn draw_frame(
             if state.show_line_numbers {
                 hints_spans.push(Span::styled("  [LN]".to_string(), Style::default().fg(Color::Rgb(100, 116, 139)).bg(C_HDR_BG)));
             }
+            // Context pressure warning: flashing badge at 85%+
+            if ctx_pct >= 0.85 && !state.status_running {
+                let ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis();
+                let visible = (ms / 800) % 2 == 0;
+                if visible {
+                    hints_spans.push(Span::styled(
+                        "  ⚠ context full — /compact".to_string(),
+                        Style::default().fg(C_ERR).bg(C_HDR_BG).add_modifier(Modifier::BOLD),
+                    ));
+                }
+            }
             // "● live" tail indicator
             if state.follow_tail && !state.status_running {
                 hints_spans.push(Span::styled(
