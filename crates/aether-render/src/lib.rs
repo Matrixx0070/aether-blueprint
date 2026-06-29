@@ -240,6 +240,9 @@ pub struct UiState {
     pub history_search: Option<String>,
     /// Saved input buffer before entering search mode (restored on Escape).
     pub history_presearch_buf: String,
+    /// Count of assistant messages received while the user was manually scrolled up.
+    /// Shown as "↓ N new" in the hints bar. Reset when the user returns to tail.
+    pub new_msgs_while_scrolled: u32,
 }
 
 impl UiState {
@@ -318,6 +321,7 @@ impl UiState {
             side_panel_hidden: false,
             history_search: None,
             history_presearch_buf: String::new(),
+            new_msgs_while_scrolled: 0,
         }
     }
 
@@ -365,6 +369,10 @@ impl UiState {
                     }
                 } else {
                     self.chat_lines.push(ChatLine::Assistant(final_text, response_dur, 0.0));
+                }
+                // Track new messages while user is scrolled up
+                if !self.follow_tail {
+                    self.new_msgs_while_scrolled += 1;
                 }
             }
             UiEvent::ToolStart { name, summary } => {
@@ -1164,8 +1172,13 @@ pub fn draw_frame(
             ));
             // Scroll mode indicator: amber badge when user has scrolled up from tail
             if !state.follow_tail {
+                let new_badge = if state.new_msgs_while_scrolled > 0 {
+                    format!("  ↑SCROLL  ↓ {} new  (End to jump)", state.new_msgs_while_scrolled)
+                } else {
+                    "  ↑SCROLL  (End to resume)".to_string()
+                };
                 hints_spans.push(Span::styled(
-                    "  ↑SCROLL".to_string(),
+                    new_badge,
                     Style::default().fg(C_WARN).bg(C_HDR_BG).add_modifier(Modifier::BOLD),
                 ));
             }

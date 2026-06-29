@@ -4647,6 +4647,17 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         ));
                         ui.chat_scroll = 0;
                     }
+                    KeyCode::Char('y') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Ctrl+Y: yank last assistant response into input buffer
+                        let last_asst = ui.chat_lines.iter().rev().find_map(|cl| {
+                            if let ChatLine::Assistant(body, _, _) = cl { Some(body.clone()) } else { None }
+                        });
+                        if let Some(text) = last_asst {
+                            let insert: String = text.chars().take(500).collect();
+                            ui.input_buffer.insert_str(ui.input_cursor, &insert);
+                            ui.input_cursor += insert.len();
+                        }
+                    }
                     KeyCode::Char('n') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         // Ctrl+N: new conversation — save current session, clear display + counters
                         let _ = session_save(&ui);
@@ -4808,6 +4819,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                          /sessions       list saved sessions\n\
                                          /stats          session statistics\n\
                                          /doctor         config + auth health check\n\
+                                         /retry          resend last message (removes last AI response)\n\
                                          /undo           remove last exchange from display\n\
                                          /quit           exit\n\
                                          \n\
@@ -4827,6 +4839,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                          Ctrl+C          cancel / clear / exit\n\
                                          Ctrl+L          clear chat display\n\
                                          Ctrl+N          new conversation (saves current)\n\
+                                         Ctrl+Y          yank last AI response into input\n\
                                          PgUp/Dn         scroll chat\n\
                                          End             resume tail (follow latest)\n\
                                          F2              toggle side panel (full-width chat)\n\
@@ -5144,6 +5157,33 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     }
                                     continue;
                                 }
+                                "/retry" | "/r" => {
+                                    // Resend the last user message (remove last assistant response + resend)
+                                    let last_user_msg = ui.chat_lines.iter().rev().find_map(|cl| {
+                                        if let ChatLine::User(msg, _) = cl { Some(msg.clone()) } else { None }
+                                    });
+                                    if let Some(retry_msg) = last_user_msg {
+                                        // Pop the last assistant block from display
+                                        while matches!(ui.chat_lines.last(), Some(
+                                            ChatLine::Assistant(_, _, _) | ChatLine::AssistantPartial(_) | ChatLine::SystemNote(_)
+                                        )) {
+                                            ui.chat_lines.pop();
+                                        }
+                                        ui.follow_tail = true;
+                                        ui.status_running = true;
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("↺ Retrying: \"{}\"", retry_msg.chars().take(50).collect::<String>())
+                                        ));
+                                        if _ctx.send(UiCommand::UserMessage(retry_msg)).is_err() {
+                                            break 'outer;
+                                        }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Nothing to retry — send a message first.".to_string()
+                                        ));
+                                    }
+                                    continue;
+                                }
                                 "/copy" | "/cp" => {
                                     // Copy last assistant response to clipboard via xclip
                                     let last_asst = ui.chat_lines.iter().rev().find_map(|cl| {
@@ -5248,7 +5288,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         // Slash command completion: Tab while buffer starts with '/'
                         const SLASH_CMDS: &[&str] = &[
                             "/clear", "/compact", "/copy", "/cost", "/doctor", "/export", "/help",
-                            "/load ", "/model ", "/pin ", "/quit", "/search ",
+                            "/load ", "/model ", "/pin ", "/quit", "/retry", "/search ",
                             "/sessions", "/stats", "/undo",
                         ];
                         let buf = ui.input_buffer.trim_end().to_string();
@@ -5342,6 +5382,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     KeyCode::End => {
                         ui.chat_scroll = 9999;
                         ui.follow_tail = true;
+                        ui.new_msgs_while_scrolled = 0;
                     }
                     KeyCode::F(2) => {
                         ui.side_panel_hidden = !ui.side_panel_hidden;
