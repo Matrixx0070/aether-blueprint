@@ -4551,12 +4551,63 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                 }
                                 "/help" | "/h" => {
                                     ui.chat_lines.push(ChatLine::SystemNote(
-                                        "Commands:\n  /clear   clear chat\n  /cost    token usage + cost\n  /export  save transcript\n  /help    this list\n  /model <name>  switch model (opus/sonnet/haiku)\n  /quit    exit\n  /search <term>  search chat history\n  /sessions  list saved sessions\n  /load <n>  restore session n\n\nKeys:\n  ↑↓       message history\n  ⇧↵       newline\n  ⇥        tab-complete slash commands\n  ^L       clear screen\n  ^C       cancel / clear / exit\n  PgUp/Dn  scroll chat\n  Home/End  scroll to top/bottom\n\nSessions auto-saved to ~/.aether/sessions/ on exit".to_string()
+                                        "Commands:\n  /clear        clear chat display\n  /compact      compress old exchanges (keep last 4)\n  /cost         token usage + cost\n  /export       save transcript to file\n  /help         this list\n  /load <n>     restore session n\n  /model <name> switch model (opus/sonnet/haiku)\n  /quit         exit\n  /search <t>   search chat history\n  /sessions     list saved sessions\n  /undo         remove last exchange from display\n\nKeys:\n  ↑↓       message history recall\n  ⇧↵       newline in input\n  ⇥        tab-complete slash commands\n  ^L       clear screen\n  ^C       cancel in-flight / clear / exit\n  PgUp/Dn  scroll chat\n  Home/End  scroll to top/bottom\n\nSessions auto-saved to ~/.aether/sessions/ on exit".to_string()
                                     ));
                                     continue;
                                 }
                                 "/quit" | "/q" | "/exit" => {
                                     break 'outer;
+                                }
+                                "/undo" => {
+                                    // Remove the last User + Assistant/AssistantPartial exchange.
+                                    // Walk from end: remove trailing assistant blocks, then trailing user block.
+                                    let mut removed = 0usize;
+                                    while matches!(ui.chat_lines.last(), Some(ChatLine::Assistant(_) | ChatLine::AssistantPartial(_) | ChatLine::SystemNote(_))) {
+                                        ui.chat_lines.pop();
+                                        removed += 1;
+                                    }
+                                    if matches!(ui.chat_lines.last(), Some(ChatLine::User(_))) {
+                                        ui.chat_lines.pop();
+                                        removed += 1;
+                                    }
+                                    let msg = if removed > 0 {
+                                        "Undid last exchange. History context is unchanged — only display was rolled back.".to_string()
+                                    } else {
+                                        "Nothing to undo.".to_string()
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/compact" => {
+                                    // Count messages, keep last 4 exchanges, summarize older ones.
+                                    let user_msgs: Vec<usize> = ui.chat_lines.iter().enumerate()
+                                        .filter(|(_, cl)| matches!(cl, ChatLine::User(_)))
+                                        .map(|(i, _)| i)
+                                        .collect();
+                                    if user_msgs.len() <= 4 {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("Conversation has only {} message(s) — nothing to compact.", user_msgs.len())
+                                        ));
+                                    } else {
+                                        // Keep splash rows + last 4 user+ai pairs
+                                        let keep_from = user_msgs[user_msgs.len() - 4];
+                                        let removed = user_msgs.len() - 4;
+                                        let mut new_lines: Vec<ChatLine> = ui.chat_lines.iter()
+                                            .filter(|cl| matches!(cl, ChatLine::SplashRow { .. }))
+                                            .cloned()
+                                            .collect();
+                                        new_lines.push(ChatLine::SystemNote(
+                                            format!("── {removed} earlier exchange(s) compacted ── (use /sessions to reload full history)")
+                                        ));
+                                        new_lines.extend(ui.chat_lines.drain(keep_from..));
+                                        ui.chat_lines = new_lines;
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("Compacted: removed {removed} exchanges, keeping last 4.")
+                                        ));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
                                 }
                                 "/sessions" | "/ls" => {
                                     let files = session_list();
@@ -4778,8 +4829,8 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     KeyCode::Tab => {
                         // Slash command completion: Tab while buffer starts with '/'
                         const SLASH_CMDS: &[&str] = &[
-                            "/clear", "/cost", "/export", "/help", "/load ", "/model ",
-                            "/quit", "/search ", "/sessions",
+                            "/clear", "/compact", "/cost", "/export", "/help",
+                            "/load ", "/model ", "/quit", "/search ", "/sessions", "/undo",
                         ];
                         let buf = ui.input_buffer.trim_end().to_string();
                         if buf.starts_with('/') && !buf.contains(' ') {

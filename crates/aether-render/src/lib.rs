@@ -462,10 +462,14 @@ pub fn draw_frame(
             );
         }
 
-        // ── 2. Main area: chat (full-width) + side panel (only when active) ─
-        // The tools/fleet panel is hidden when there is no activity so the
-        // chat and splash card get the full width, matching CC's clean startup.
-        let has_side = !state.tool_log.is_empty() || !state.fleet.is_empty();
+        // ── 2. Main area: chat + side panel ─────────────────────────────
+        // Side panel shows Tools when active, cheat-sheet when in convo but idle,
+        // or nothing (100% chat) on the pre-convo splash screen.
+        let has_tools = !state.tool_log.is_empty() || !state.fleet.is_empty();
+        let has_convo_for_layout = state.chat_lines.iter().any(|cl| {
+            matches!(cl, ChatLine::User(_) | ChatLine::Assistant(_) | ChatLine::AssistantPartial(_))
+        });
+        let has_side = has_tools || has_convo_for_layout;
         let main = Layout::default()
             .direction(Direction::Horizontal)
             .constraints(if has_side {
@@ -535,10 +539,46 @@ pub fn draw_frame(
             );
         }
 
-        // Side panel: tools + fleet — rendered only when there is activity.
+        // Side panel: tools+fleet when active, keyboard cheat-sheet when idle.
         if has_side {
             let border_style = Style::default().fg(C_BORDER);
             let title_style = Style::default().fg(C_DIM).add_modifier(Modifier::BOLD);
+
+            // When no tool activity, render keyboard cheat sheet in the right panel.
+            if !has_tools {
+                let km_lines: Vec<Line<'static>> = vec![
+                    Line::from(Span::styled("  Keyboard", Style::default().fg(C_BRAND).add_modifier(Modifier::BOLD))),
+                    Line::from(""),
+                    Line::from(vec![Span::styled("  ↵ ", Style::default().fg(C_DIM)), Span::styled("send message", Style::default().fg(C_BODY))]),
+                    Line::from(vec![Span::styled("  ⇧↵ ", Style::default().fg(C_DIM)), Span::styled("newline", Style::default().fg(C_BODY))]),
+                    Line::from(vec![Span::styled("  ↑↓ ", Style::default().fg(C_DIM)), Span::styled("history", Style::default().fg(C_BODY))]),
+                    Line::from(vec![Span::styled("  ⇥  ", Style::default().fg(C_DIM)), Span::styled("tab complete", Style::default().fg(C_BODY))]),
+                    Line::from(vec![Span::styled("  ^C ", Style::default().fg(C_DIM)), Span::styled("cancel / exit", Style::default().fg(C_BODY))]),
+                    Line::from(vec![Span::styled("  ^L ", Style::default().fg(C_DIM)), Span::styled("clear screen", Style::default().fg(C_BODY))]),
+                    Line::from(vec![Span::styled("  Pg↑↓ ", Style::default().fg(C_DIM)), Span::styled("scroll", Style::default().fg(C_BODY))]),
+                    Line::from(vec![Span::styled("  H/E ", Style::default().fg(C_DIM)), Span::styled("top / bottom", Style::default().fg(C_BODY))]),
+                    Line::from(""),
+                    Line::from(Span::styled("  Commands", Style::default().fg(C_BRAND).add_modifier(Modifier::BOLD))),
+                    Line::from(""),
+                    Line::from(vec![Span::styled("  /help ", Style::default().fg(C_DIM)), Span::styled("all commands", Style::default().fg(C_BODY))]),
+                    Line::from(vec![Span::styled("  /search ", Style::default().fg(C_DIM)), Span::styled("<term>", Style::default().fg(C_BODY))]),
+                    Line::from(vec![Span::styled("  /sessions ", Style::default().fg(C_DIM)), Span::styled("history", Style::default().fg(C_BODY))]),
+                    Line::from(vec![Span::styled("  /cost ", Style::default().fg(C_DIM)), Span::styled("usage stats", Style::default().fg(C_BODY))]),
+                    Line::from(vec![Span::styled("  /export ", Style::default().fg(C_DIM)), Span::styled("save transcript", Style::default().fg(C_BODY))]),
+                    Line::from(vec![Span::styled("  /model ", Style::default().fg(C_DIM)), Span::styled("<name>", Style::default().fg(C_BODY))]),
+                    Line::from(vec![Span::styled("  /clear ", Style::default().fg(C_DIM)), Span::styled("clear chat", Style::default().fg(C_BODY))]),
+                ];
+                f.render_widget(
+                    Paragraph::new(km_lines)
+                        .block(
+                            Block::default()
+                                .borders(Borders::LEFT)
+                                .border_style(Style::default().fg(Color::Rgb(30, 41, 59))),
+                        )
+                        .wrap(Wrap { trim: false }),
+                    main[1],
+                );
+            } else {
 
             let (tools_area, fleet_area) = if !state.fleet.is_empty() {
                 let split = Layout::default()
@@ -602,6 +642,8 @@ pub fn draw_frame(
                     area,
                 );
             }
+
+            } // end else has_tools
         }
 
         // ── 3. Input area ─────────────────────────────────────────────
