@@ -4690,6 +4690,29 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                             }
                         }
                     }
+                    KeyCode::Char('b') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Ctrl+B: bold-wrap — surround word at/before cursor with **...**
+                        let buf = ui.input_buffer.clone();
+                        let cur = ui.input_cursor.min(buf.len());
+                        // Find word start (scan left from cursor skipping whitespace then word chars)
+                        let before = &buf[..cur];
+                        let word_start = before.rfind(|c: char| c.is_whitespace())
+                            .map(|i| i + 1)
+                            .unwrap_or(0);
+                        // Find word end (scan right from cursor)
+                        let after = &buf[cur..];
+                        let word_end = cur + after.find(|c: char| c.is_whitespace()).unwrap_or(after.len());
+                        if word_end > word_start {
+                            ui.input_undo = Some((buf.clone(), cur));
+                            let word = buf[word_start..word_end].to_string();
+                            let wrapped = format!("**{word}**");
+                            let mut new_buf = buf[..word_start].to_string();
+                            new_buf.push_str(&wrapped);
+                            new_buf.push_str(&buf[word_end..]);
+                            ui.input_cursor = word_start + wrapped.len();
+                            ui.input_buffer = new_buf;
+                        }
+                    }
                     KeyCode::Char('g') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         // Ctrl+G: abort / cancel (Emacs-style)
                         if ui.history_search.is_some() {
@@ -4884,6 +4907,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                          /retry             resend last message (removes last AI response)\n\
                                          /search <term>     search + scroll to match; highlights hits\n\
                                          /sessions          list saved sessions\n\
+                                         /history  /hist    show recent input history with indices\n\
                                          /stats             session statistics (words, cost, speed)\n\
                                          /timestamps  /ts   toggle per-message timestamps  (F3)\n\
                                          /doctor            config + auth health check\n\
@@ -4900,6 +4924,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                          Ctrl+W          delete word backward\n\
                                          Ctrl+K / U      kill to end / start of line\n\
                                          Ctrl+T          transpose chars (Emacs)\n\
+                                         Ctrl+B          bold-wrap word at cursor (**word**)\n\
                                          Ctrl+Y          yank last AI response into input\n\
                                          Ctrl+Z          undo last input change\n\
                                          Ctrl+G          abort / cancel (Emacs)\n\
@@ -5005,6 +5030,26 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                             note.push_str(&format!("\n  [{i}] {age_str}  \"{preview}\""));
                                         }
                                         ui.chat_lines.push(ChatLine::SystemNote(note));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history" | "/hist" => {
+                                    if ui.input_history.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "No input history yet — commands are recorded as you send them.".to_string()
+                                        ));
+                                    } else {
+                                        let total = ui.input_history.len();
+                                        let show_n = total.min(20);
+                                        let mut msg = format!("Input history  ({total} total, last {show_n} shown)  — ↑/↓ to cycle\n");
+                                        for (offset, entry) in ui.input_history.iter().rev().take(show_n).enumerate() {
+                                            let idx = total - offset;
+                                            let preview: String = entry.chars().take(72).collect();
+                                            let ellipsis = if entry.len() > 72 { "…" } else { "" };
+                                            msg.push_str(&format!("  [{idx:>3}]  {preview}{ellipsis}\n"));
+                                        }
+                                        ui.chat_lines.push(ChatLine::SystemNote(msg));
                                     }
                                     ui.follow_tail = true;
                                     continue;
@@ -5238,9 +5283,18 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                 cmd if cmd.starts_with("/model") => {
                                     let new_model = cmd.trim_start_matches("/model").trim();
                                     if new_model.is_empty() {
-                                        ui.chat_lines.push(ChatLine::SystemNote(
-                                            format!("Current model: {}  |  Usage: /model <opus|sonnet|haiku|claude-*>", ui.model)
-                                        ));
+                                        let models: &[(&str, &str, &str)] = &[
+                                            ("claude-opus-4-7",         "$15 / $75 per M tok",   "most capable · best for complex reasoning"),
+                                            ("claude-sonnet-4-6",       " $3 / $15 per M tok",   "balanced speed + quality"),
+                                            ("claude-haiku-4-5-20251001","$0.25 / $1.25 per M tok","fastest · lowest cost"),
+                                        ];
+                                        let mut menu = format!("Models  (current: {})\n", ui.model);
+                                        for (id, pricing, desc) in models {
+                                            let marker = if ui.model == *id { "→" } else { " " };
+                                            menu.push_str(&format!("  {marker} {id:<38} {pricing:<24} {desc}\n"));
+                                        }
+                                        menu.push_str("\n  /model opus|sonnet|haiku  or  /model claude-<id>  to switch");
+                                        ui.chat_lines.push(ChatLine::SystemNote(menu));
                                     } else {
                                         let full = if new_model.starts_with("claude-") {
                                             new_model.to_string()
@@ -5553,7 +5607,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         // Slash command completion: Tab while buffer starts with '/'
                         const SLASH_CMDS: &[&str] = &[
                             "/clear", "/compact", "/copy", "/cost", "/doctor", "/export", "/format",
-                            "/help", "/linenums", "/load ", "/model ", "/note ", "/pin ", "/quit",
+                            "/help", "/hist", "/history", "/linenums", "/load ", "/model ", "/note ", "/pin ", "/quit",
                             "/raw", "/retry", "/search ", "/sessions", "/stats", "/timestamps", "/undo",
                         ];
                         let buf = ui.input_buffer.trim_end().to_string();
