@@ -471,6 +471,12 @@ impl UiState {
                 }
                 // Stamp completion time so draw_frame can flash the input border
                 self.response_done_at = Some(std::time::Instant::now());
+                // Auto-bookmark long responses (> 400 words) so they're easy to find
+                if self.last_response_words > 400 {
+                    let idx = self.chat_lines.len().saturating_sub(1) as u16;
+                    let bm_name = format!("long-{}", self.bookmarks.len() + 1);
+                    self.bookmarks.push((bm_name, idx));
+                }
             }
             UiEvent::ToolStart { name, summary } => {
                 self.tool_log.push(ToolEntry {

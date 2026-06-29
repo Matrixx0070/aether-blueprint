@@ -6288,6 +6288,50 @@ Input shortcuts\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                cmd if cmd.starts_with("/shell ") || cmd == "/shell" => {
+                                    let shell_cmd = cmd.trim_start_matches("/shell").trim();
+                                    if shell_cmd.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /shell <command>  — run command and paste output into input\n  e.g. /shell git status\n       /shell cat Cargo.toml".to_string()
+                                        ));
+                                    } else {
+                                        let result = std::process::Command::new("sh")
+                                            .args(["-c", shell_cmd])
+                                            .output();
+                                        match result {
+                                            Ok(out) => {
+                                                let stdout = String::from_utf8_lossy(&out.stdout);
+                                                let stderr = String::from_utf8_lossy(&out.stderr);
+                                                let mut combined = stdout.trim_end().to_string();
+                                                if !stderr.trim().is_empty() && combined.is_empty() {
+                                                    combined = stderr.trim_end().to_string();
+                                                }
+                                                let lines = combined.lines().count();
+                                                let chars = combined.chars().count();
+                                                if combined.is_empty() {
+                                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                                        format!("$ {shell_cmd}\n  (no output)")
+                                                    ));
+                                                } else {
+                                                    // Insert into input buffer
+                                                    let insert = format!("\n```\n$ {shell_cmd}\n{combined}\n```");
+                                                    ui.input_buffer.insert_str(ui.input_cursor, &insert);
+                                                    ui.input_cursor += insert.len();
+                                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                                        format!("$ {shell_cmd}  →  {lines}L {chars}c  (appended to input)")
+                                                    ));
+                                                }
+                                            }
+                                            Err(e) => {
+                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                    format!("Shell error: {e}")
+                                                ));
+                                            }
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 cmd if cmd == "/todo" || cmd.starts_with("/todo ") => {
                                     let todo_path = std::env::var("HOME").ok()
                                         .map(|h| std::path::PathBuf::from(h).join(".aether").join("todo.md"))
@@ -6877,6 +6921,55 @@ Input shortcuts\n\
                             ui.status_running = true;
                             ui.waiting_since = Some(std::time::Instant::now());
                             ui.msg_times_secs.push(ts);
+                            // @file injection — expand @path tokens into inlined file content
+                            let msg = {
+                                let mut injections: Vec<(String, String)> = Vec::new(); // (token, content)
+                                let cwd_for_at = std::env::current_dir().unwrap_or_default();
+                                // Find @word patterns that look like paths
+                                let mut scan = msg.as_str();
+                                while let Some(at_pos) = scan.find('@') {
+                                    let after = &scan[at_pos + 1..];
+                                    let path_end = after.find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '`').unwrap_or(after.len());
+                                    let raw_path = &after[..path_end];
+                                    if !raw_path.is_empty() && (raw_path.starts_with('/') || raw_path.starts_with('.') || raw_path.chars().next().map(|c| c.is_alphanumeric() || c == '_').unwrap_or(false)) {
+                                        let full = if raw_path.starts_with('/') {
+                                            std::path::PathBuf::from(raw_path)
+                                        } else {
+                                            cwd_for_at.join(raw_path)
+                                        };
+                                        if full.is_file() {
+                                            if let Ok(content) = std::fs::read_to_string(&full) {
+                                                let token = format!("@{raw_path}");
+                                                if !injections.iter().any(|(t, _)| t == &token) {
+                                                    injections.push((token, content));
+                                                }
+                                            }
+                                        }
+                                    }
+                                    scan = &scan[at_pos + 1..];
+                                }
+                                if injections.is_empty() {
+                                    msg
+                                } else {
+                                    let mut expanded = msg.clone();
+                                    let mut appendix = String::new();
+                                    for (token, content) in &injections {
+                                        let fname = token.trim_start_matches('@');
+                                        let ext = std::path::Path::new(fname).extension()
+                                            .and_then(|e| e.to_str()).unwrap_or("").to_string();
+                                        appendix.push_str(&format!("\n\n--- {fname} ---\n```{ext}\n{content}\n```"));
+                                        expanded = expanded.replace(token.as_str(), &format!("[{fname}]"));
+                                    }
+                                    let files_note = injections.iter().map(|(t, c)| {
+                                        let lines = c.lines().count();
+                                        format!("{} ({lines}L)", t.trim_start_matches('@'))
+                                    }).collect::<Vec<_>>().join(", ");
+                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                        format!("@-file inject: {files_note}")
+                                    ));
+                                    expanded + &appendix
+                                }
+                            };
                             // Prepend prompt_prefix silently to the API message (not shown in chat)
                             let api_msg = match &ui.prompt_prefix {
                                 Some(pfx) => format!("{pfx}\n\n{msg}"),
@@ -6951,7 +7044,7 @@ Input shortcuts\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/last", "/linenums", "/load ", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/outline", "/raw", "/replay ", "/reset-cost", "/retry ", "/search ", "/sessions", "/share", "/speed", "/stats", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/undo", "/unpin", "/version", "/wc", "/wrap",
+                            "/outline", "/raw", "/replay ", "/reset-cost", "/retry ", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
