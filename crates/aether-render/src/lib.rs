@@ -924,7 +924,8 @@ pub fn draw_frame(
 
             // Right stats segment
             let thinking_part = if state.status_running && state.stream_chars > 0 {
-                format!("{spin}  ~{}c  ", state.stream_chars)
+                let words = (state.stream_chars / 5).max(1);
+                format!("{spin}  ~{}w ~{}c  ", words, state.stream_chars)
             } else if state.status_running {
                 format!("{spin}  ")
             } else {
@@ -1162,6 +1163,39 @@ fn render_message(
                     li_spans
                 } else {
                     inline_markdown_spans(line, body_color)
+                }
+            // Markdown table row: | col | col | col |
+            } else if trimmed.starts_with('|') {
+                // Detect separator row: |---|---|  or  |:---:|---|
+                let is_sep = trimmed.split('|').filter(|s| !s.is_empty()).all(|cell| {
+                    cell.trim().chars().all(|c| c == '-' || c == ':' || c == ' ')
+                });
+                if is_sep {
+                    vec![Span::styled(
+                        "  ─────────────────────────────────────────────────".to_string(),
+                        Style::default().fg(C_DIM),
+                    )]
+                } else {
+                    // Data/header row: color pipe separators in accent, cells bold
+                    let cells: Vec<&str> = trimmed.split('|').collect();
+                    // cells[0] and cells[last] are empty (surrounding pipes) — skip them
+                    let inner = if cells.first() == Some(&"") && cells.last() == Some(&"") {
+                        &cells[1..cells.len() - 1]
+                    } else {
+                        &cells[..]
+                    };
+                    let mut spans: Vec<Span<'static>> = Vec::new();
+                    for cell in inner {
+                        spans.push(Span::styled(" │ ".to_string(), Style::default().fg(C_ASST_PFX)));
+                        if !cell.trim().is_empty() {
+                            spans.push(Span::styled(
+                                cell.trim().to_string(),
+                                Style::default().fg(C_BODY).add_modifier(Modifier::BOLD),
+                            ));
+                        }
+                    }
+                    spans.push(Span::styled(" │".to_string(), Style::default().fg(C_ASST_PFX)));
+                    spans
                 }
             } else {
                 inline_markdown_spans(line, body_color)
@@ -1532,8 +1566,19 @@ fn tool_entry_to_lines(t: &ToolEntry, spin: &str) -> Vec<Line<'static>> {
     };
     let timing = match t.elapsed_ms {
         Some(ms) if ms >= 1000 => format!("  {:.1}s", ms as f64 / 1000.0),
-        Some(ms) if ms >= 10 => format!("  {}ms", ms),
-        _ => String::new(), // skip sub-10ms noise and Running
+        Some(ms) if ms >= 10   => format!("  {}ms", ms),
+        Some(_)                => String::new(), // sub-10ms: omit noise
+        None => {
+            // Still running: live elapsed ticker (recomputed every frame)
+            let live_ms = t.start.elapsed().as_millis() as u64;
+            if live_ms >= 1000 {
+                format!("  {:.1}s…", live_ms as f64 / 1000.0)
+            } else if live_ms >= 10 {
+                format!("  {}ms…", live_ms)
+            } else {
+                String::new()
+            }
+        }
     };
 
     // Header line (always one line)

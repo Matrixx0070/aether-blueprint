@@ -4515,6 +4515,10 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     KeyCode::Char('q') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         break 'outer;
                     }
+                    KeyCode::Char('k') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Kill-line: clear the input buffer
+                        ui.input_buffer.clear();
+                    }
                     KeyCode::Char('l') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         // Clear visible chat (keeps session context intact)
                         ui.chat_lines.retain(|cl| !matches!(cl,
