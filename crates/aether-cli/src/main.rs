@@ -4435,6 +4435,19 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
         }
     }
 
+    // Load persistent aliases from ~/.aether/aliases
+    {
+        let saved = aliases_load();
+        if !saved.is_empty() {
+            ui.chat_lines.push(ChatLine::SplashRow {
+                logo: String::new(),
+                info: format!("{} alias{} restored  (/alias to list)", saved.len(), if saved.len() == 1 { "" } else { "es" }),
+                style: SplashStyle::Dim,
+            });
+        }
+        ui.aliases = saved;
+    }
+
     // Load persistent TUI input history from ~/.aether/input_history
     let input_history_path = std::env::var("HOME").ok()
         .map(|h| std::path::PathBuf::from(h).join(".aether").join("input_history"));
@@ -5084,98 +5097,131 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     ui.chat_lines.push(ChatLine::SystemNote(note));
                                     continue;
                                 }
-                                "/help" | "/h" => {
-                                    ui.chat_lines.push(ChatLine::SystemNote(
-                                        "── Aether commands ──────────────────────────────────\n\
-                                         \n\
-                                         Chat\n\
-                                         /clear                  clear display  (Ctrl+L)\n\
-                                         /compact [N]            keep last N=5 exchange pairs\n\
-                                         /drop [N]               remove last N pairs\n\
-                                         /undo                   remove last exchange\n\
-                                         /retry                  resend last message\n\
-                                         /replay N               resend Nth exchange\n\
-                                         /diff                   diff last two AI responses\n\
-                                         /search <term>          highlight + scroll to match\n\
-                                         /find <pattern>         highlight all matches in chat\n\
-                                         /grep <pattern>         regex search across messages\n\
-                                         /goto N                 jump to exchange N\n\
-                                         /last                   jump to latest response\n\
-                                         \n\
-                                         View\n\
-                                         /format  /raw           toggle markdown rendering\n\
-                                         /linenums  /ln          toggle code block line numbers\n\
-                                         /numbers  /num          toggle exchange [N] labels  (F5)\n\
-                                         /timestamps  /ts        toggle timestamps  (F3)\n\
-                                         /wrap                   toggle word-wrap (wide code mode)\n\
-                                         /theme                  cycle accent colour: sky/emerald/rose  (F7)\n\
-                                         /focus                  zen mode — hide hints bar  (F6, Ctrl+F)\n\
-                                         /outline                extract headings as TOC\n\
-                                         F2                      toggle side panel\n\
-                                         \n\
-                                         Compose\n\
-                                         /template [name]        load prompt template  (/tmpl)\n\
-                                         /pin-cmd <text>         prepend instruction to every AI request\n\
-                                         /pin-cmd clear          clear prompt prefix\n\
-                                         /pin <text>             sticky note at top of chat\n\
-                                         /unpin                  clear pin\n\
-                                         /alias <key> <exp>      session-local command alias\n\
-                                         /alias rm <key>         remove alias\n\
-                                         \n\
-                                         Files & sessions\n\
-                                         /export [file]          save transcript to markdown\n\
-                                         /share                  quick export to /tmp/aether-chat-*.md\n\
-                                         /load <n>               restore saved session\n\
-                                         /sessions               list saved sessions\n\
-                                         Ctrl+S                  save session now\n\
-                                         \n\
-                                         Code & extraction\n\
-                                         /copy [N]               copy Nth AI response to clipboard\n\
-                                         /copy code [N]          copy Nth code block to clipboard\n\
-                                         /extract [code]         write code blocks to /tmp files\n\
-                                         \n\
-                                         Info\n\
-                                         /cost                   token usage + per-message cost\n\
-                                         /context  /ctx          context window breakdown + bar\n\
-                                         /wc  /count             word/char/sentence/read-time stats\n\
-                                         /stats                  timing + cost summary\n\
-                                         /speed                  per-response t/s + median history\n\
-                                         /history  /hist         recent input history  (↑↓ to cycle)\n\
-                                         /model [name]           switch model (opus/sonnet/haiku)\n\
-                                         /version                Aether build info\n\
-                                         /doctor                 auth + config health check\n\
-                                         /quit                   exit  (Ctrl+Q)\n\
-                                         \n\
-                                         Tools & notes\n\
-                                         /clear-tools            clear tool log panel  (/cltools)\n\
-                                         /todo [+ task | done N] manage ~/.aether/todo.md checklist\n\
-                                         /note <text>            append to ~/.aether/notes.md\n\
-                                         /bookmark <name>        mark scroll position  (/bm)\n\
-                                         /bookmarks [N]          list or jump-to bookmark N\n\
-                                         /go <name>              jump to bookmark\n\
-                                         \n\
-                                         Input shortcuts\n\
-                                         ↑↓  /  Ctrl+R          history recall / reverse-i-search\n\
-                                         Alt+←/→                 word jump\n\
-                                         Ctrl+A / E              line start / end\n\
-                                         Ctrl+W / Alt+D          kill word backward / forward\n\
-                                         Ctrl+K / U              kill to end / start\n\
-                                         Ctrl+T                  transpose chars\n\
-                                         Ctrl+B                  bold-wrap word at cursor (**word**)\n\
-                                         Alt+.                   insert last word from AI response\n\
-                                         Right (at end)          accept ghost-text suggestion\n\
-                                         Ctrl+X e                open $EDITOR to compose\n\
-                                         Ctrl+G                  find using input buffer as pattern\n\
-                                         Ctrl+O                  open last URL from AI\n\
-                                         Ctrl+Y                  yank last AI response into input\n\
-                                         Ctrl+Z / /undo          undo last input edit / exchange\n\
-                                         Ctrl+D                  clear buffer (twice = exit)\n\
-                                         Shift+↵ / Ctrl+↵        newline in input\n\
-                                         Tab                     complete slash command / subcommand\n\
-                                         Ctrl+`                  insert code fence\n\
-                                         \n\
-                                         Auto-save every 5 min → ~/.aether/sessions/".to_string()
-                                    ));
+                                cmd if cmd == "/help" || cmd == "/h" || cmd.starts_with("/help ") => {
+                                    let topic = cmd.trim_start_matches("/help").trim().trim_start_matches('/');
+                                    let sections: &[(&str, &[&str], &str)] = &[
+                                        ("chat", &["chat", "c"], "\
+Chat\n\
+  /clear                  clear display  (Ctrl+L)\n\
+  /compact [N]            keep last N=5 exchange pairs\n\
+  /drop [N]               remove last N pairs\n\
+  /undo                   remove last exchange from display\n\
+  /retry [new text]       resend or replace last message\n\
+  /replay N               resend Nth exchange\n\
+  /diff                   diff last two AI responses\n\
+  /search <term>          highlight + scroll to first match\n\
+  /find <pattern>         highlight all matches\n\
+  /grep <regex>           regex search with context across messages\n\
+  /goto N                 jump to Nth exchange\n\
+  /last                   show last response metadata + scroll to it\n\
+  /clear-history          clear input history"),
+                                        ("view", &["view", "v", "display"], "\
+View\n\
+  /format  /raw           toggle markdown rendering\n\
+  /linenums  /ln          toggle code block line numbers\n\
+  /numbers  /num          toggle exchange [N] labels  (F5)\n\
+  /timestamps  /ts        toggle timestamps  (F3)\n\
+  /wrap                   toggle word-wrap / wide-code mode\n\
+  /theme                  cycle accent: sky / emerald / rose  (F7)\n\
+  /focus                  zen mode — hide hints bar  (F6 / Ctrl+F)\n\
+  /outline                extract headings as indented TOC\n\
+  F2                      toggle side tools panel"),
+                                        ("compose", &["compose", "input", "write"], "\
+Compose\n\
+  /template [name]        load prompt template  (/tmpl)\n\
+  /pin-cmd <text>         prepend instruction to every AI request\n\
+  /pin-cmd clear          clear prompt prefix\n\
+  /pin <text>             sticky note visible in tools panel\n\
+  /unpin                  clear pin\n\
+  /alias <key> <exp>      persistent command alias  (saved to disk)\n\
+  /alias rm <key>         remove alias\n\
+  /alias clear            remove all aliases\n\
+  /note <text>            append to ~/.aether/notes.md"),
+                                        ("files", &["files", "sessions", "export", "save"], "\
+Files & sessions\n\
+  /export [file]          save transcript as Markdown\n\
+  /share                  quick export to /tmp/aether-chat-*.md\n\
+  /load <n>               restore saved session by index\n\
+  /sessions               list all saved sessions\n\
+  Ctrl+S                  save session now → /tmp/aether-chat-*.md"),
+                                        ("code", &["code", "copy", "clip", "extract"], "\
+Code & extraction\n\
+  /copy [N]               copy Nth AI response to clipboard\n\
+  /copy code [N]          copy Nth code block to clipboard\n\
+  /copy all               copy full conversation to clipboard\n\
+  /extract [code]         write all code blocks to /tmp/aether-code-N.ext\n\
+  /diff                   diff last two AI responses"),
+                                        ("info", &["info", "stats", "cost", "tokens", "model"], "\
+Info\n\
+  /cost                   token usage + per-message cost table\n\
+  /context  /ctx          context window usage bar + breakdown\n\
+  /wc                     word count + read time + sentence stats\n\
+  /count                  message / word / code-block counts\n\
+  /stats                  timing + cost + word-count summary\n\
+  /speed                  per-response t/s + sparkline + median\n\
+  /last                   metadata for last response (words, cost, time)\n\
+  /history  /hist         input history list  (↑↓ to cycle)\n\
+  /model [name]           switch model: opus / sonnet / haiku\n\
+  /version                full Aether feature list\n\
+  /doctor                 auth + config health check\n\
+  /reset-cost             zero cost + token counters"),
+                                        ("tools", &["tools", "todo", "notes", "bm", "bookmarks"], "\
+Tools & notes\n\
+  /clear-tools            clear tool log panel  (/cltools)\n\
+  /todo [+ task | done N | rm N]  manage ~/.aether/todo.md checklist\n\
+  /note <text>            append to ~/.aether/notes.md\n\
+  /bookmark <name>        mark scroll position  (/bm)\n\
+  /bookmarks [N]          list or jump-to bookmark N\n\
+  /go <name>              jump to named bookmark"),
+                                        ("keys", &["keys", "keyboard", "shortcuts", "bindings"], "\
+Input shortcuts\n\
+  ↑ ↓  / Ctrl+R           history recall / reverse-i-search\n\
+  Alt+← / Alt+→           word jump\n\
+  Ctrl+A / Ctrl+E         line start / end\n\
+  Ctrl+W / Alt+D          kill word backward / forward\n\
+  Ctrl+K / Ctrl+U         kill to end / start of line\n\
+  Ctrl+T                  transpose chars\n\
+  Ctrl+B                  bold-wrap word at cursor (**word**)\n\
+  Alt+.                   insert last word from AI response\n\
+  Right (at end)          accept ghost-text suggestion\n\
+  Ctrl+X e                open $EDITOR to compose\n\
+  Ctrl+G                  find using input buffer as pattern\n\
+  Ctrl+O                  open last URL from AI response\n\
+  Ctrl+Y                  yank last AI response into input\n\
+  Ctrl+Z                  undo last input edit\n\
+  Ctrl+D                  clear buffer (on empty buffer: exit)\n\
+  Shift+↵ / Ctrl+↵        newline in input\n\
+  Tab                     complete slash command\n\
+  Ctrl+`                  insert code fence\n\
+  Ctrl+S                  quick-save session\n\
+  Ctrl+C                  cancel running response\n\
+  F2                      toggle tools panel\n\
+  F3                      toggle timestamps\n\
+  F5                      toggle exchange labels\n\
+  F6                      toggle focus mode\n\
+  F7                      cycle theme\n\
+  Auto-save every 5 min → ~/.aether/sessions/"),
+                                    ];
+                                    let body = if topic.is_empty() {
+                                        let mut all = "── Aether commands ─────────────────────────────────\n\n".to_string();
+                                        for (_, _, text) in sections {
+                                            all.push_str(text);
+                                            all.push_str("\n\n");
+                                        }
+                                        all.push_str("  /help <topic>  for focused help: chat view compose files code info tools keys");
+                                        all
+                                    } else {
+                                        let found = sections.iter().find(|(_, aliases, _)| {
+                                            aliases.iter().any(|&a| a.eq_ignore_ascii_case(topic))
+                                        });
+                                        if let Some((_, _, text)) = found {
+                                            format!("── help: {topic} ──\n\n{text}")
+                                        } else {
+                                            format!("Unknown topic: '{topic}'\nTopics: chat  view  compose  files  code  info  tools  keys")
+                                        }
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
                                     continue;
                                 }
                                 "/version" => {
@@ -5831,14 +5877,16 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     } else if arg == "clear" {
                                         let n = ui.aliases.len();
                                         ui.aliases.clear();
+                                        aliases_save(&ui.aliases);
                                         ui.chat_lines.push(ChatLine::SystemNote(
-                                            format!("All aliases cleared ({n} removed).")
+                                            format!("All aliases cleared ({n} removed). Saved to ~/.aether/aliases.")
                                         ));
                                     } else if let Some(key) = arg.strip_prefix("rm ").map(str::trim) {
                                         let before = ui.aliases.len();
                                         ui.aliases.retain(|(k, _)| k != key);
                                         if ui.aliases.len() < before {
-                                            ui.chat_lines.push(ChatLine::SystemNote(format!("Alias /{key} removed.")));
+                                            aliases_save(&ui.aliases);
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("Alias /{key} removed. Saved.")));
                                         } else {
                                             ui.chat_lines.push(ChatLine::SystemNote(format!("No alias /{key} found.")));
                                         }
@@ -5854,8 +5902,9 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                         } else {
                                             ui.aliases.retain(|(k, _)| k != key);
                                             ui.aliases.push((key.to_string(), expansion.to_string()));
+                                            aliases_save(&ui.aliases);
                                             ui.chat_lines.push(ChatLine::SystemNote(
-                                                format!("Alias set: /{key} → {expansion}")
+                                                format!("Alias set: /{key} → {expansion}  (saved to ~/.aether/aliases)")
                                             ));
                                         }
                                     }
@@ -6901,7 +6950,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         const SLASH_CMDS: &[&str] = &[
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
-                            "/find ", "/go ", "/goto ", "/grep ", "/help", "/hist", "/history", "/last", "/linenums", "/load ", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
+                            "/find ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/last", "/linenums", "/load ", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
                             "/outline", "/raw", "/replay ", "/reset-cost", "/retry ", "/search ", "/sessions", "/share", "/speed", "/stats", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
@@ -7352,6 +7401,36 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
     drop(guard); // cooks the terminal
     let _ = driver_handle.await;
     Ok(())
+}
+
+// ── alias persistence ─────────────────────────────────────────────────────────
+
+fn alias_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    std::path::Path::new(&home).join(".aether").join("aliases")
+}
+
+fn aliases_save(aliases: &[(String, String)]) {
+    let path = alias_path();
+    let content: String = aliases.iter()
+        .map(|(k, v)| format!("{}={}\n", k.replace('=', "\\="), v))
+        .collect();
+    let _ = std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new("/")));
+    let _ = std::fs::write(&path, content);
+}
+
+fn aliases_load() -> Vec<(String, String)> {
+    let path = alias_path();
+    let Ok(content) = std::fs::read_to_string(&path) else { return vec![] };
+    content.lines()
+        .filter_map(|line| {
+            let eq = line.find('=')?;
+            let key = line[..eq].replace("\\=", "=");
+            let val = line[eq + 1..].to_string();
+            if key.is_empty() { return None; }
+            Some((key, val))
+        })
+        .collect()
 }
 
 // ── session persistence ───────────────────────────────────────────────────────
