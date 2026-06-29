@@ -255,6 +255,10 @@ pub struct UiState {
     pub show_msg_numbers: bool,
     /// When true, the next keypress is interpreted as the Ctrl+X chord target.
     pub ctrl_x_pending: bool,
+    /// Session-local command aliases: (alias_prefix, expansion).
+    pub aliases: Vec<(String, String)>,
+    /// When true, chat pane renders without word-wrap (useful for wide code).
+    pub wrap_disabled: bool,
     /// When true, full timestamps are shown on each message header.
     pub show_timestamps: bool,
     /// Auto-extracted from the first user message (first 5 words, up to 40 chars).
@@ -356,6 +360,8 @@ impl UiState {
             last_autosave: None,
             show_msg_numbers: false,
             ctrl_x_pending: false,
+            aliases: Vec::new(),
+            wrap_disabled: false,
             show_timestamps: false,
             session_title: None,
             search_highlight: None,
@@ -795,12 +801,11 @@ pub fn draw_frame(
                 state.chat_scroll
             };
 
-            f.render_widget(
-                Paragraph::new(chat.clone())
-                    .wrap(Wrap { trim: false })
-                    .scroll((effective_scroll, 0)),
-                main[0],
-            );
+            let chat_para = {
+                let p = Paragraph::new(chat.clone()).scroll((effective_scroll, 0));
+                if state.wrap_disabled { p } else { p.wrap(Wrap { trim: false }) }
+            };
+            f.render_widget(chat_para, main[0]);
 
             // Vertical scrollbar on the right edge of the chat pane.
             let total_chat_lines = chat.len();

@@ -4853,9 +4853,28 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                             ui.input_buffer.insert(ui.input_cursor, '\n');
                             ui.input_cursor += 1;
                         } else if !ui.input_buffer.trim().is_empty() && !ui.status_running {
-                            let msg = std::mem::take(&mut ui.input_buffer);
+                            let raw = std::mem::take(&mut ui.input_buffer);
                             ui.input_cursor = 0;
                             ui.history_idx = None;
+                            // Expand session-local alias if the typed text matches one.
+                            // /alias stores (key_without_slash, expansion) pairs.
+                            let msg = if raw.trim().starts_with('/') {
+                                let trimmed = raw.trim();
+                                let expanded = ui.aliases.iter().find_map(|(k, v)| {
+                                    let cmd_part = format!("/{k}");
+                                    if trimmed == cmd_part {
+                                        Some(v.clone())
+                                    } else if trimmed.starts_with(&format!("{cmd_part} ")) {
+                                        let rest = &trimmed[cmd_part.len()..];
+                                        Some(format!("{v}{rest}"))
+                                    } else {
+                                        None
+                                    }
+                                });
+                                expanded.unwrap_or(raw)
+                            } else {
+                                raw
+                            };
                             // Handle built-in slash commands
                             match msg.trim() {
                                 "/clear" | "/c" => {
@@ -5376,6 +5395,65 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     ui.chat_lines.push(ChatLine::SystemNote(format!(
                                         "Conversation counts\n  Messages:    {user_msgs} you  ·  {asst_msgs} AI\n  Words:       {user_words} you  ·  {asst_words} AI  ·  {total_words} total\n  Chars:       {user_chars} you  ·  {asst_chars} AI\n  Avg AI resp: ~{avg_asst}w\n  Code blocks: {code_blocks}"
                                     )));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/wrap" => {
+                                    ui.wrap_disabled = !ui.wrap_disabled;
+                                    let state = if ui.wrap_disabled { "off (horizontal scroll mode)" } else { "on" };
+                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                        format!("Word wrap {state}  (/wrap to toggle)")
+                                    ));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/alias" || cmd.starts_with("/alias ") => {
+                                    let arg = cmd.trim_start_matches("/alias").trim();
+                                    if arg.is_empty() {
+                                        // list aliases
+                                        if ui.aliases.is_empty() {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                "No aliases set.\n  /alias <key> <expansion>  — define a shortcut\n  /alias rm <key>           — remove one\n  /alias clear              — remove all".to_string()
+                                            ));
+                                        } else {
+                                            let mut msg = format!("Aliases  ({} defined)\n", ui.aliases.len());
+                                            for (k, v) in &ui.aliases {
+                                                msg.push_str(&format!("  /{k:<12} → {v}\n"));
+                                            }
+                                            msg.push_str("\n  /alias rm <key> to remove  ·  /alias clear to remove all");
+                                            ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                        }
+                                    } else if arg == "clear" {
+                                        let n = ui.aliases.len();
+                                        ui.aliases.clear();
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("All aliases cleared ({n} removed).")
+                                        ));
+                                    } else if let Some(key) = arg.strip_prefix("rm ").map(str::trim) {
+                                        let before = ui.aliases.len();
+                                        ui.aliases.retain(|(k, _)| k != key);
+                                        if ui.aliases.len() < before {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("Alias /{key} removed.")));
+                                        } else {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("No alias /{key} found.")));
+                                        }
+                                    } else {
+                                        // /alias <key> <expansion>
+                                        let mut parts = arg.splitn(2, ' ');
+                                        let key = parts.next().unwrap_or("").trim().trim_start_matches('/');
+                                        let expansion = parts.next().unwrap_or("").trim();
+                                        if key.is_empty() || expansion.is_empty() {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                "Usage: /alias <key> <expansion>  (e.g. /alias rr /retry)".to_string()
+                                            ));
+                                        } else {
+                                            ui.aliases.retain(|(k, _)| k != key);
+                                            ui.aliases.push((key.to_string(), expansion.to_string()));
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("Alias set: /{key} → {expansion}")
+                                            ));
+                                        }
+                                    }
                                     ui.follow_tail = true;
                                     continue;
                                 }
@@ -5996,13 +6074,61 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     KeyCode::Tab => {
                         // Slash command completion: Tab while buffer starts with '/'
                         const SLASH_CMDS: &[&str] = &[
-                            "/bm ", "/bookmark ", "/bookmarks",
+                            "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clh", "/compact", "/copy", "/cost", "/count", "/doctor", "/drop ", "/export", "/format",
                             "/go ", "/grep ", "/help", "/hist", "/history", "/linenums", "/load ", "/model ", "/note ", "/num", "/numbers", "/pin ", "/quit",
-                            "/raw", "/reset-cost", "/retry", "/search ", "/sessions", "/stats", "/template ", "/tmpl ", "/timestamps", "/todo ", "/undo", "/unpin",
+                            "/raw", "/reset-cost", "/retry", "/search ", "/sessions", "/stats", "/template ", "/tmpl ", "/timestamps", "/todo ", "/undo", "/unpin", "/wrap",
                         ];
+                        // Subcommand completions for commands that take a known keyword argument.
+                        const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
+                        const TEMPLATE_SUBS: &[&str] = &["review", "explain", "refactor", "test", "debug", "plan", "optimize", "docs"];
                         let buf = ui.input_buffer.trim_end().to_string();
-                        if buf.starts_with('/') && !buf.contains(' ') {
+                        // Subcommand completion: "/model <tab>", "/template <tab>", "/load <tab>"
+                        let subcomp_handled = if buf == "/model " || (buf.starts_with("/model ") && !buf.trim_end().contains("  ")) {
+                            let prefix = buf.trim_start_matches("/model").trim();
+                            let subs: Vec<&&str> = MODEL_SUBS.iter().filter(|s| s.starts_with(prefix)).collect();
+                            if !subs.is_empty() {
+                                let next = ui.tab_cycle % subs.len();
+                                ui.input_buffer = format!("/model {}", subs[next]);
+                                ui.input_cursor = ui.input_buffer.len();
+                                ui.tab_cycle += 1;
+                                true
+                            } else { false }
+                        } else if buf.starts_with("/template ") || buf.starts_with("/tmpl ") {
+                            let prefix_len = if buf.starts_with("/template ") { "/template ".len() } else { "/tmpl ".len() };
+                            let cmd_base = if buf.starts_with("/template ") { "/template " } else { "/tmpl " };
+                            let prefix = buf[prefix_len..].trim();
+                            let subs: Vec<&&str> = TEMPLATE_SUBS.iter().filter(|s| s.starts_with(prefix)).collect();
+                            if !subs.is_empty() {
+                                let next = ui.tab_cycle % subs.len();
+                                ui.input_buffer = format!("{cmd_base}{}", subs[next]);
+                                ui.input_cursor = ui.input_buffer.len();
+                                ui.tab_cycle += 1;
+                                true
+                            } else { false }
+                        } else if buf.starts_with("/load ") {
+                            // complete filenames from ~/.aether/sessions/
+                            let prefix = buf.trim_start_matches("/load").trim().to_string();
+                            let sess_dir = std::env::var("HOME").ok()
+                                .map(|h| std::path::PathBuf::from(h).join(".aether").join("sessions"))
+                                .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+                            if let Ok(entries) = std::fs::read_dir(&sess_dir) {
+                                let files: Vec<String> = entries
+                                    .filter_map(|e| e.ok())
+                                    .filter_map(|e| e.file_name().into_string().ok())
+                                    .filter(|f| f.ends_with(".md") && f.starts_with(prefix.as_str()))
+                                    .collect();
+                                if !files.is_empty() {
+                                    let next = ui.tab_cycle % files.len();
+                                    ui.input_buffer = format!("/load {}", files[next]);
+                                    ui.input_cursor = ui.input_buffer.len();
+                                    ui.tab_cycle += 1;
+                                    true
+                                } else { false }
+                            } else { false }
+                        } else { false };
+
+                        if !subcomp_handled && buf.starts_with('/') && !buf.contains(' ') {
                             // Find all commands matching the current prefix
                             let matches: Vec<&&str> = SLASH_CMDS
                                 .iter()
