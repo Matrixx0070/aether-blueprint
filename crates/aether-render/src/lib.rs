@@ -748,18 +748,30 @@ pub fn draw_frame(
                     Style::default().fg(C_DIM),
                 )));
             }
-            for t in &state.tool_log[skip..] {
+            let sep_line = Line::from(Span::styled(
+                "  ─────────────────────────────".to_string(),
+                Style::default().fg(Color::Rgb(30, 41, 59)), // nearly-black: very subtle
+            ));
+            for (idx, t) in state.tool_log[skip..].iter().enumerate() {
+                if idx > 0 {
+                    tool_lines.push(sep_line.clone());
+                }
                 tool_lines.extend(tool_entry_to_lines(t, spin));
             }
+            let tps_part = if state.status_running && state.last_tps > 0.5 {
+                format!("  {:.0}t/s", state.last_tps)
+            } else {
+                String::new()
+            };
             let tools_title = {
                 let ok = state.tools_ok;
                 let err = state.tools_err;
                 if err > 0 {
-                    format!(" Tools  {}✓  {}✗ ", ok, err)
+                    format!(" Tools  {}✓  {}✗{} ", ok, err, tps_part)
                 } else if ok > 0 {
-                    format!(" Tools  {}✓ ", ok)
+                    format!(" Tools  {}✓{} ", ok, tps_part)
                 } else {
-                    " Tools ".to_string()
+                    format!(" Tools{} ", tps_part)
                 }
             };
             let tools_title_color = if state.tools_err > 0 { C_ERR } else if state.tools_ok > 0 { C_OK } else { C_DIM };
@@ -1678,11 +1690,17 @@ fn tool_entry_to_lines(t: &ToolEntry, spin: &str) -> Vec<Line<'static>> {
         }
     };
 
+    let is_running = matches!(t.status, ToolStatus::Running);
+    let name_style = if is_running {
+        Style::default().fg(color).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(color)
+    };
     // Header line (always one line)
     let mut lines: Vec<Line<'static>> = vec![Line::from(vec![
         Span::styled(
             format!("  {sym} {icon} {}{}", t.name, summary),
-            Style::default().fg(color),
+            name_style,
         ),
         Span::styled(timing, Style::default().fg(C_DIM)),
     ])];
