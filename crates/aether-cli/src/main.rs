@@ -5398,6 +5398,19 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                "/theme" => {
+                                    ui.theme = (ui.theme + 1) % 3;
+                                    let name = match ui.theme {
+                                        0 => "sky (default)",
+                                        1 => "emerald",
+                                        _ => "rose",
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                        format!("Theme → {name}  (/theme to cycle)")
+                                    ));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/wrap" => {
                                     ui.wrap_disabled = !ui.wrap_disabled;
                                     let state = if ui.wrap_disabled { "off (horizontal scroll mode)" } else { "on" };
@@ -6077,7 +6090,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clh", "/compact", "/copy", "/cost", "/count", "/doctor", "/drop ", "/export", "/format",
                             "/go ", "/grep ", "/help", "/hist", "/history", "/linenums", "/load ", "/model ", "/note ", "/num", "/numbers", "/pin ", "/quit",
-                            "/raw", "/reset-cost", "/retry", "/search ", "/sessions", "/stats", "/template ", "/tmpl ", "/timestamps", "/todo ", "/undo", "/unpin", "/wrap",
+                            "/raw", "/reset-cost", "/retry", "/search ", "/sessions", "/stats", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/undo", "/unpin", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
@@ -6193,6 +6206,42 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                             ui.input_buffer.drain(ui.input_cursor..ui.input_cursor + word_end);
                         }
                     }
+                    KeyCode::Char('w') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Ctrl+W: kill word backward (Emacs unix-word-rubout)
+                        if ui.input_cursor > 0 {
+                            ui.input_undo = Some((ui.input_buffer.clone(), ui.input_cursor));
+                            let before = &ui.input_buffer[..ui.input_cursor];
+                            // Skip trailing whitespace, then skip non-whitespace word
+                            let trimmed_end = before.trim_end().len();
+                            let word_start = before[..trimmed_end]
+                                .rfind(|c: char| c.is_whitespace())
+                                .map(|i| i + 1)
+                                .unwrap_or(0);
+                            ui.input_buffer.drain(word_start..ui.input_cursor);
+                            ui.input_cursor = word_start;
+                            ui.history_idx = None;
+                            ui.tab_cycle = 0;
+                        }
+                    }
+                    KeyCode::Char('.') if k.modifiers.contains(KeyModifiers::ALT) => {
+                        // Alt+. (zsh-style): insert the last word from the most recent AI response
+                        let last_word = ui.chat_lines.iter().rev().find_map(|cl| {
+                            if let aether_render::ChatLine::Assistant(body, _, _) = cl {
+                                body.split_whitespace()
+                                    .last()
+                                    .map(|w| w.trim_end_matches(|c: char| ".,;:\"')}`".contains(c)).to_string())
+                            } else {
+                                None
+                            }
+                        });
+                        if let Some(word) = last_word {
+                            if !word.is_empty() {
+                                ui.input_undo = Some((ui.input_buffer.clone(), ui.input_cursor));
+                                ui.input_buffer.insert_str(ui.input_cursor, &word);
+                                ui.input_cursor += word.len();
+                            }
+                        }
+                    }
                     KeyCode::Left => {
                         if ui.input_cursor > 0 {
                             let ch_len = ui.input_buffer[..ui.input_cursor]
@@ -6205,6 +6254,10 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                             let ch_len = ui.input_buffer[ui.input_cursor..]
                                 .chars().next().map(|c| c.len_utf8()).unwrap_or(0);
                             ui.input_cursor += ch_len;
+                        } else if let Some(ghost) = ui.input_ghost.take() {
+                            // Accept ghost-text suggestion: append suffix to buffer
+                            ui.input_buffer.push_str(&ghost);
+                            ui.input_cursor = ui.input_buffer.len();
                         }
                     }
                     KeyCode::Delete => {
@@ -6337,6 +6390,24 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 _ => {}
             }
         }
+        // Recompute ghost-text suggestion after every event tick.
+        // Show the suffix of the most-recent history entry that starts with the
+        // current buffer — only when cursor is at end, buffer ≥ 2 chars, single-line.
+        ui.input_ghost = if ui.input_cursor == ui.input_buffer.len()
+            && ui.input_buffer.len() >= 2
+            && !ui.input_buffer.contains('\n')
+        {
+            let buf = ui.input_buffer.as_str();
+            ui.input_history.iter().rev().find_map(|h| {
+                if h.len() > buf.len() && h.starts_with(buf) {
+                    Some(h[buf.len()..].to_string())
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
     }
     // Auto-save session on exit if there's any conversation
     let _ = session_save(&ui);

@@ -275,6 +275,12 @@ pub struct UiState {
     /// When true, code blocks show line numbers on the left margin.
     /// Toggled by /linenums command.
     pub show_line_numbers: bool,
+    /// Ghost-text suggestion shown in dim after the cursor (first history match).
+    /// Populated by the event loop; accepted with Right/End when cursor is at end.
+    pub input_ghost: Option<String>,
+    /// Active colour-theme index (0=sky, 1=emerald, 2=rose).
+    /// Affects brand + accent colours. Cycled by /theme command.
+    pub theme: u8,
 }
 
 impl UiState {
@@ -368,6 +374,8 @@ impl UiState {
             input_undo: None,
             raw_mode: false,
             show_line_numbers: false,
+            input_ghost: None,
+            theme: 0,
         }
     }
 
@@ -578,6 +586,19 @@ pub fn draw_frame(
     let spin = spin_owned.as_str();
 
     terminal.draw(|f| {
+        // Theme accent override — only brand glyph + input cursor use t_brand.
+        // Rest of the palette stays constant so the chat is readable across themes.
+        let t_brand: Color = match state.theme {
+            1 => Color::Rgb(52, 211, 153),  // emerald-400
+            2 => Color::Rgb(251, 113, 133), // rose-400
+            _ => C_BRAND,                   // default sky-300
+        };
+        let t_accent: Color = match state.theme {
+            1 => Color::Rgb(167, 243, 208), // emerald-200
+            2 => Color::Rgb(253, 164, 175), // rose-300
+            _ => C_ASST_PFX,               // default indigo-400
+        };
+
         // Precompute message count (used in side panel + hints bar)
         let msg_count = state.chat_lines.iter()
             .filter(|cl| matches!(cl, ChatLine::User(_, _)))
@@ -622,18 +643,18 @@ pub fn draw_frame(
                 Span::styled(
                     "◆ Aether",
                     Style::default()
-                        .fg(C_BRAND)
+                        .fg(t_brand)
                         .bg(C_HDR_BG)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("  ·  ", Style::default().fg(C_DIM).bg(C_HDR_BG)),
                 Span::styled(
                     model_display.clone(),
-                    // Opus = amber, Sonnet = sky-blue (brand), Haiku = green
+                    // Opus = amber, Sonnet = brand, Haiku = green
                     Style::default().fg(
                         if model_display.contains("opus") { C_WARN }
                         else if model_display.contains("haiku") { C_OK }
-                        else { C_BRAND }
+                        else { t_brand }
                     ).bg(C_HDR_BG).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("  ·  ", Style::default().fg(C_DIM).bg(C_HDR_BG)),
@@ -643,7 +664,7 @@ pub fn draw_frame(
                 hdr_spans.push(Span::styled("  ", Style::default().bg(C_HDR_BG)));
                 hdr_spans.push(Span::styled(
                     format!("⎇ {branch}"),
-                    Style::default().fg(C_ASST_PFX).bg(C_HDR_BG),
+                    Style::default().fg(t_accent).bg(C_HDR_BG),
                 ));
             }
             // Session title (auto-extracted from first user message)
@@ -1071,7 +1092,7 @@ pub fn draw_frame(
                             .fg(pfx_color)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(cursor.to_string(), Style::default().fg(C_BRAND).add_modifier(Modifier::BOLD)),
+                    Span::styled(cursor.to_string(), Style::default().fg(t_brand).add_modifier(Modifier::BOLD)),
                     Span::styled(placeholder, Style::default().fg(C_DIM)),
                 ])]
             } else {
@@ -1123,8 +1144,17 @@ pub fn draw_frame(
                                 let curs = if cursor_on { "│" } else { " " };
                                 spans.push(Span::styled(
                                     curs.to_string(),
-                                    Style::default().fg(C_BRAND).add_modifier(Modifier::BOLD),
+                                    Style::default().fg(t_brand).add_modifier(Modifier::BOLD),
                                 ));
+                                // Ghost-text suggestion (dim, only on last line when cursor is at end)
+                                if is_last {
+                                    if let Some(ref ghost) = state.input_ghost {
+                                        spans.push(Span::styled(
+                                            ghost.clone(),
+                                            Style::default().fg(C_DIM),
+                                        ));
+                                    }
+                                }
                             } else {
                                 // Cursor inside text — block highlight at cursor char
                                 let ch_end = line[cursor_in_line..].chars().next()
@@ -1137,7 +1167,7 @@ pub fn draw_frame(
                                     spans.push(Span::styled(before, Style::default().fg(C_BODY)));
                                 }
                                 let curs_style = if cursor_on {
-                                    Style::default().fg(C_HDR_BG).bg(C_BRAND)
+                                    Style::default().fg(C_HDR_BG).bg(t_brand)
                                 } else {
                                     Style::default().fg(C_BODY)
                                 };
