@@ -15,7 +15,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
 use ratatui::Terminal;
 use std::io::{self, Stdout};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -765,6 +765,23 @@ pub fn draw_frame(
                     .scroll((effective_scroll, 0)),
                 main[0],
             );
+
+            // Vertical scrollbar on the right edge of the chat pane.
+            let total_chat_lines = chat.len();
+            if total_chat_lines > viewport_h {
+                let scroll_range = total_chat_lines.saturating_sub(viewport_h);
+                let mut sb_state = ScrollbarState::new(scroll_range)
+                    .position(effective_scroll as usize);
+                f.render_stateful_widget(
+                    Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                        .begin_symbol(None)
+                        .end_symbol(None)
+                        .track_symbol(Some("│"))
+                        .thumb_symbol("█"),
+                    main[0],
+                    &mut sb_state,
+                );
+            }
 
             // Scroll-back indicator: when user has scrolled up, show lines-below count.
             if !state.follow_tail {

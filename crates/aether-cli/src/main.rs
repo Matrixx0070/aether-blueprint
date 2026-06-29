@@ -4570,8 +4570,15 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
         if event::poll(std::time::Duration::from_millis(80))? {
             match event::read()? {
                 Event::Paste(s) => {
-                    ui.input_buffer.insert_str(ui.input_cursor, &s);
-                    ui.input_cursor += s.len();
+                    // Save undo before paste so the whole insert is revertible.
+                    ui.input_undo = Some((ui.input_buffer.clone(), ui.input_cursor));
+                    // Strip leading "> " quote markers (common from GitHub/markdown copy)
+                    let cleaned: String = s.lines()
+                        .map(|l| l.strip_prefix("> ").unwrap_or(l))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    ui.input_buffer.insert_str(ui.input_cursor, &cleaned);
+                    ui.input_cursor += cleaned.len();
                 }
                 Event::Key(k) if k.kind == KeyEventKind::Press => match k.code {
                     KeyCode::Esc => {
@@ -4806,6 +4813,16 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     ui.search_highlight = None;
                                     continue;
                                 }
+                                "/clear-history" | "/clh" => {
+                                    let n = ui.input_history.len();
+                                    ui.input_history.clear();
+                                    ui.history_idx = None;
+                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                        format!("Input history cleared  ({n} entries removed).")
+                                    ));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 cmd if cmd == "/compact" || cmd.starts_with("/compact ") => {
                                     // Keep last N user+assistant exchange pairs, collapse the rest.
                                     let keep_pairs: usize = cmd
@@ -4894,6 +4911,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                         "Aether — slash commands\n\
                                          \n\
                                          /clear             clear chat display\n\
+                                         /clear-history     wipe in-session input history  (/clh)\n\
                                          /compact [N]       compress history (keep last N=5 exchanges)\n\
                                          /copy              copy last AI response to clipboard\n\
                                          /cost              token usage + per-message cost table\n\
@@ -5606,7 +5624,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     KeyCode::Tab => {
                         // Slash command completion: Tab while buffer starts with '/'
                         const SLASH_CMDS: &[&str] = &[
-                            "/clear", "/compact", "/copy", "/cost", "/doctor", "/export", "/format",
+                            "/clear", "/clear-history", "/clh", "/compact", "/copy", "/cost", "/doctor", "/export", "/format",
                             "/help", "/hist", "/history", "/linenums", "/load ", "/model ", "/note ", "/pin ", "/quit",
                             "/raw", "/retry", "/search ", "/sessions", "/stats", "/timestamps", "/undo",
                         ];
