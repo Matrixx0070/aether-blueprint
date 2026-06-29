@@ -5329,9 +5329,26 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                 cmd if cmd.starts_with("/note") => {
                                     let text = cmd.trim_start_matches("/note").trim();
                                     if text.is_empty() {
-                                        ui.chat_lines.push(ChatLine::SystemNote(
-                                            "Usage: /note <text>  — saves a quick note to ~/.aether/notes.md".to_string()
-                                        ));
+                                        // No arg: show recent notes (same as F4)
+                                        let note_path = std::env::var("HOME").ok()
+                                            .map(|h| std::path::PathBuf::from(h).join(".aether").join("notes.md"))
+                                            .unwrap_or_else(|| std::path::PathBuf::from("/tmp/aether-notes.md"));
+                                        let content = std::fs::read_to_string(&note_path).unwrap_or_default();
+                                        let msg = if content.trim().is_empty() {
+                                            format!("Notes empty. Usage: /note <text>  (saved to {})", note_path.display())
+                                        } else {
+                                            let note_lines: Vec<&str> = content.lines()
+                                                .filter(|l| !l.is_empty())
+                                                .collect();
+                                            let show = note_lines.len().min(15);
+                                            let start = note_lines.len().saturating_sub(show);
+                                            let mut out = format!("Recent notes ({} total):\n", note_lines.len());
+                                            out.push_str(&note_lines[start..].join("\n"));
+                                            out
+                                        };
+                                        ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                        ui.follow_tail = true;
+                                        continue;
                                     } else {
                                         let note_path = std::env::var("HOME").ok()
                                             .map(|h| std::path::PathBuf::from(h).join(".aether").join("notes.md"))
@@ -5628,6 +5645,29 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         ui.show_timestamps = !ui.show_timestamps;
                         let state = if ui.show_timestamps { "on" } else { "off" };
                         ui.chat_lines.push(ChatLine::SystemNote(format!("Timestamps {state}  (F3 or /timestamps to toggle)")));
+                    }
+                    KeyCode::F(4) => {
+                        // F4: open notes viewer — shows ~/.aether/notes.md inline
+                        let note_path = std::env::var("HOME").ok()
+                            .map(|h| std::path::PathBuf::from(h).join(".aether").join("notes.md"))
+                            .unwrap_or_else(|| std::path::PathBuf::from("/tmp/aether-notes.md"));
+                        let content = std::fs::read_to_string(&note_path).unwrap_or_default();
+                        let msg = if content.trim().is_empty() {
+                            "Notes are empty — use /note <text> to add one.".to_string()
+                        } else {
+                            let lines: Vec<&str> = content.lines().collect();
+                            let show = lines.len().min(20);
+                            let mut out = format!("Notes ({} entries, {})\n",
+                                lines.iter().filter(|l| l.starts_with("- [")).count(),
+                                note_path.display());
+                            out.push_str(&lines[..show].join("\n"));
+                            if lines.len() > show {
+                                out.push_str(&format!("\n  ... {} more lines", lines.len() - show));
+                            }
+                            out
+                        };
+                        ui.chat_lines.push(ChatLine::SystemNote(msg));
+                        ui.follow_tail = true;
                     }
                     KeyCode::Char(c) => {
                         if let Some(ref mut q) = ui.history_search {

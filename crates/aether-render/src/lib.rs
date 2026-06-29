@@ -828,6 +828,7 @@ pub fn draw_frame(
                     kh("^H", "jump to oldest"),
                     kh("F2", "toggle side panel"),
                     kh("F3", "toggle timestamps"),
+                    kh("F4", "open notes"),
                     kh("^L", "clear display"),
                     kh("^N", "new session"),
                     kh("^P", "pin last response"),
@@ -1321,6 +1322,9 @@ pub fn draw_frame(
                     format!("  [HL:{label}]"),
                     Style::default().fg(Color::Rgb(253, 224, 71)).bg(Color::Rgb(20, 14, 0)).add_modifier(Modifier::BOLD),
                 ));
+            }
+            if state.show_line_numbers {
+                hints_spans.push(Span::styled("  [LN]".to_string(), Style::default().fg(Color::Rgb(100, 116, 139)).bg(C_HDR_BG)));
             }
             // "● live" tail indicator
             if state.follow_tail && !state.status_running {
