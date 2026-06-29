@@ -639,13 +639,19 @@ pub fn draw_frame(
             if state.status_running
                 && !matches!(state.chat_lines.last(), Some(ChatLine::AssistantPartial(_)))
             {
+                let wait_timer = if let Some(t0) = state.stream_start {
+                    let secs = t0.elapsed().as_secs_f64();
+                    if secs >= 0.5 { format!("  ⏱{:.1}s", secs) } else { String::new() }
+                } else {
+                    String::new()
+                };
                 chat.push(Line::from(vec![
                     Span::styled(
                         "  ◆  ",
                         Style::default().fg(C_ASST_PFX).add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
-                        format!("{spin}  thinking…"),
+                        format!("{spin}  thinking…{wait_timer}"),
                         Style::default().fg(C_DIM),
                     ),
                 ]));
