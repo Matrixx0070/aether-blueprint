@@ -4503,37 +4503,190 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 Event::Key(k) if k.kind == KeyEventKind::Press => match k.code {
                     KeyCode::Esc => break 'outer,
                     KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                        if ui.input_buffer.is_empty() && !ui.status_running {
+                        if ui.status_running {
+                            // Cancel in-flight request
+                            let _ = _ctx.send(UiCommand::Cancel);
+                        } else if ui.input_buffer.is_empty() {
                             break 'outer;
+                        } else {
+                            ui.input_buffer.clear();
                         }
-                        ui.input_buffer.clear();
                     }
                     KeyCode::Char('q') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         break 'outer;
+                    }
+                    KeyCode::Char('l') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Clear visible chat (keeps session context intact)
+                        ui.chat_lines.retain(|cl| !matches!(cl,
+                            ChatLine::User(_) | ChatLine::Assistant(_) |
+                            ChatLine::AssistantPartial(_) | ChatLine::SystemNote(_)
+                        ));
+                        ui.chat_scroll = 0;
                     }
                     KeyCode::Enter => {
                         if k.modifiers.contains(KeyModifiers::SHIFT) {
                             ui.input_buffer.push('\n');
                         } else if !ui.input_buffer.trim().is_empty() && !ui.status_running {
                             let msg = std::mem::take(&mut ui.input_buffer);
+                            ui.history_idx = None;
+                            // Handle built-in slash commands
+                            match msg.trim() {
+                                "/clear" | "/c" => {
+                                    ui.chat_lines.retain(|cl| !matches!(cl,
+                                        ChatLine::User(_) | ChatLine::Assistant(_) |
+                                        ChatLine::AssistantPartial(_) | ChatLine::SystemNote(_)
+                                    ));
+                                    ui.chat_scroll = 0;
+                                    continue;
+                                }
+                                "/cost" => {
+                                    let note = if ui.cost_usd > 0.0 {
+                                        format!("Session cost: ${:.4}  ↑{} tokens  ↓{} tokens  total {}",
+                                            ui.cost_usd, ui.tokens_in, ui.tokens_out, ui.tokens_total)
+                                    } else {
+                                        "No cost data yet.".to_string()
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(note));
+                                    continue;
+                                }
+                                "/help" | "/h" => {
+                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                        "Commands: /clear  /cost  /help  /quit  /model <name>  /export [file]  |  Keys: ↑↓ history  ⇧↵ newline  ^L clear  ^C cancel  pgup/dn scroll  home/end".to_string()
+                                    ));
+                                    continue;
+                                }
+                                "/quit" | "/q" | "/exit" => {
+                                    break 'outer;
+                                }
+                                cmd if cmd.starts_with("/model") => {
+                                    let new_model = cmd.trim_start_matches("/model").trim();
+                                    if new_model.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("Current model: {}  |  Usage: /model <opus|sonnet|haiku|claude-*>", ui.model)
+                                        ));
+                                    } else {
+                                        let full = if new_model.starts_with("claude-") {
+                                            new_model.to_string()
+                                        } else if new_model.contains("opus") {
+                                            "claude-opus-4-7".to_string()
+                                        } else if new_model.contains("sonnet") {
+                                            "claude-sonnet-4-6".to_string()
+                                        } else if new_model.contains("haiku") {
+                                            "claude-haiku-4-5-20251001".to_string()
+                                        } else {
+                                            new_model.to_string()
+                                        };
+                                        ui.model = full.clone();
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("Switched to model: {full}  (takes effect on next message)")
+                                        ));
+                                    }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/export") => {
+                                    let fname = cmd.trim_start_matches("/export").trim();
+                                    let out_path = if fname.is_empty() {
+                                        format!("/tmp/aether-chat-{}.md",
+                                            std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs())
+                                    } else {
+                                        fname.to_string()
+                                    };
+                                    let mut content = String::new();
+                                    for line in &ui.chat_lines {
+                                        match line {
+                                            ChatLine::User(m) => {
+                                                content.push_str("**You:** ");
+                                                content.push_str(m);
+                                                content.push_str("\n\n");
+                                            }
+                                            ChatLine::Assistant(m) | ChatLine::AssistantPartial(m) => {
+                                                content.push_str("**Aether:** ");
+                                                content.push_str(m);
+                                                content.push_str("\n\n");
+                                            }
+                                            ChatLine::SystemNote(m) => {
+                                                content.push_str("> ");
+                                                content.push_str(m);
+                                                content.push('\n');
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    match std::fs::write(&out_path, &content) {
+                                        Ok(()) => ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("Exported to {out_path}")
+                                        )),
+                                        Err(e) => ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("Export failed: {e}")
+                                        )),
+                                    }
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                            // Push to history (deduplicate consecutive identical entries)
+                            if ui.input_history.last().map(|s| s.as_str()) != Some(&msg) {
+                                ui.input_history.push(msg.clone());
+                            }
                             ui.chat_lines.push(ChatLine::User(msg.clone()));
+                            ui.chat_scroll = 9999;
+                            ui.follow_tail = true;
                             ui.status_running = true;
                             if _ctx.send(UiCommand::UserMessage(msg)).is_err() {
                                 break 'outer;
                             }
                         }
                     }
+                    KeyCode::Up => {
+                        // Walk backwards through history
+                        if !ui.input_history.is_empty() {
+                            let new_idx = match ui.history_idx {
+                                None => ui.input_history.len() - 1,
+                                Some(i) => i.saturating_sub(1),
+                            };
+                            ui.history_idx = Some(new_idx);
+                            ui.input_buffer = ui.input_history[new_idx].clone();
+                        }
+                    }
+                    KeyCode::Down => {
+                        match ui.history_idx {
+                            None => {}
+                            Some(i) if i + 1 >= ui.input_history.len() => {
+                                ui.history_idx = None;
+                                ui.input_buffer.clear();
+                            }
+                            Some(i) => {
+                                ui.history_idx = Some(i + 1);
+                                ui.input_buffer = ui.input_history[i + 1].clone();
+                            }
+                        }
+                    }
                     KeyCode::Backspace => {
                         ui.input_buffer.pop();
+                        ui.history_idx = None; // editing breaks history nav
                     }
                     KeyCode::PageUp => {
                         ui.chat_scroll = ui.chat_scroll.saturating_sub(5);
+                        ui.follow_tail = false;
                     }
                     KeyCode::PageDown => {
                         ui.chat_scroll = ui.chat_scroll.saturating_add(5);
+                        if ui.chat_scroll >= 9990 { ui.follow_tail = true; }
+                    }
+                    KeyCode::Home => {
+                        ui.chat_scroll = 0;
+                        ui.follow_tail = false;
+                    }
+                    KeyCode::End => {
+                        ui.chat_scroll = 9999;
+                        ui.follow_tail = true;
                     }
                     KeyCode::Char(c) => {
                         ui.input_buffer.push(c);
+                        ui.history_idx = None; // typing breaks history nav
                     }
                     _ => {}
                 },

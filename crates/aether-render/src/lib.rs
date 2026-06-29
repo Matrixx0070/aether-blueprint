@@ -118,9 +118,12 @@ pub enum UiCommand {
 /// Style for the info column of a [`ChatLine::SplashRow`].
 #[derive(Debug, Clone)]
 pub enum SplashStyle {
-    Title,  // slate-200 bold  — "Aether v0.35.0"
-    Accent, // indigo-400      — model · perm
-    Dim,    // slate-500       — cwd path
+    Brand,  // sky-300 BOLD    — "Aether" hero title
+    Title,  // slate-200 bold  — version number
+    Accent, // indigo-400      — model name
+    Ok,     // green-400       — auto-edit perm
+    Warn,   // amber-400       — bypass perm
+    Dim,    // slate-500       — cwd / hints
 }
 
 #[derive(Debug, Clone)]
@@ -181,37 +184,52 @@ pub struct UiState {
     pub cost_usd: f64,
     pub chat_scroll: u16,
     pub last_error: Option<String>,
+    /// When the TUI session started (for elapsed-time display).
+    pub session_start: std::time::Instant,
+    /// Submitted message history for Up/Down recall.
+    pub input_history: Vec<String>,
+    /// Index into `input_history` while navigating (None = live buffer).
+    pub history_idx: Option<usize>,
+    /// True while the user hasn't manually scrolled up (auto-follow the tail).
+    pub follow_tail: bool,
 }
 
 impl UiState {
     pub fn new(model: String, session_id: String, perm_mode: String, cwd: String) -> Self {
-        let model_short = model.split('/').last().unwrap_or(&model).to_string();
+        let model_display = model_display_name(&model);
         let version = env!("CARGO_PKG_VERSION");
         let perm = perm_label(&perm_mode);
-        // Startup splash: 7-row double-edge diamond, no top margin.
-        // Info starts at logo row 2 (same vertical position as CC's "Claude Code" text).
+        let perm_style = match perm {
+            "bypass"    => SplashStyle::Warn,
+            "auto-edit" => SplashStyle::Ok,
+            _           => SplashStyle::Accent,
+        };
+        // Startup splash: 13-row SOLID filled diamond.
+        // Diamond grows +4 ◆ per row then shrinks; all rows padded to 28 chars.
+        // Info appears on rows 2–6 (right of the logo column).
         //
-        //     ◆◆◆◆◆                          ← row 1: solid top cap (no info)
-        //   ◆◆     ◆◆   Aether  v0.35.0     ← row 2: upper + bold white title
-        //  ◆◆       ◆◆  model · perm        ← row 3: widening + indigo model
-        // ◆◆         ◆◆ ~/cwd              ← row 4: widest + dim cwd
-        //  ◆◆       ◆◆                      ← row 5: narrowing  (no info)
-        //   ◆◆     ◆◆                        ← row 6: lower      (no info)
-        //     ◆◆◆◆◆                          ← row 7: solid bottom cap (no info)
-        //
-        //    Try "…"                          ← dim, no · prefix
-        //
-        // All logo strings are 15 visible columns so the info column aligns.
+        //   Row 1 (cap):  "           ◆◆           "  — no info
+        //   Row 2:        "         ◆◆◆◆◆◆         "  — "Aether"   (Brand)
+        //   Row 3:        "       ◆◆◆◆◆◆◆◆◆◆       "  — "v{version}" (Title)
+        //   Row 4:        "     ◆◆◆◆◆◆◆◆◆◆◆◆◆◆     "  — model     (Accent)
+        //   Row 5:        "   ◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆   "  — perm mode  (Warn/Ok/Dim)
+        //   Row 6:        "  ◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆  "  — cwd       (Dim)
+        //   Row 7 (wide): " ◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆ "  — no info
+        //   Rows 8–13:    mirror rows 6–1            — no info
         let chat_lines = vec![
-            ChatLine::SplashRow { logo: "     ◆◆◆◆◆     ".to_string(), info: String::new(),                       style: SplashStyle::Title  },
-            ChatLine::SplashRow { logo: "   ◆◆     ◆◆   ".to_string(), info: format!("Aether  v{version}"),       style: SplashStyle::Title  },
-            ChatLine::SplashRow { logo: "  ◆◆       ◆◆  ".to_string(), info: format!("{model_short}  ·  {perm}"), style: SplashStyle::Accent },
-            ChatLine::SplashRow { logo: " ◆◆         ◆◆ ".to_string(), info: cwd.clone(),                         style: SplashStyle::Dim    },
-            ChatLine::SplashRow { logo: "  ◆◆       ◆◆  ".to_string(), info: String::new(),                       style: SplashStyle::Title  },
-            ChatLine::SplashRow { logo: "   ◆◆     ◆◆   ".to_string(), info: String::new(),                       style: SplashStyle::Title  },
-            ChatLine::SplashRow { logo: "     ◆◆◆◆◆     ".to_string(), info: String::new(),                       style: SplashStyle::Title  },
-            ChatLine::SplashRow { logo: String::new(),                  info: String::new(),                       style: SplashStyle::Dim    }, // blank
-            ChatLine::SplashRow { logo: "  ".to_string(),              info: "Try \"summarize this codebase\" or ask anything".to_string(), style: SplashStyle::Dim },
+            ChatLine::SplashRow { logo: "           ◆◆           ".to_string(), info: String::new(),                    style: SplashStyle::Title },
+            ChatLine::SplashRow { logo: "         ◆◆◆◆◆◆         ".to_string(), info: "Aether".to_string(),             style: SplashStyle::Brand },
+            ChatLine::SplashRow { logo: "       ◆◆◆◆◆◆◆◆◆◆       ".to_string(), info: format!("v{version}"),           style: SplashStyle::Title },
+            ChatLine::SplashRow { logo: "     ◆◆◆◆◆◆◆◆◆◆◆◆◆◆     ".to_string(), info: model_display.clone(),           style: SplashStyle::Accent },
+            ChatLine::SplashRow { logo: "   ◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆   ".to_string(), info: format!("{perm} mode"),          style: perm_style },
+            ChatLine::SplashRow { logo: "  ◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆  ".to_string(), info: cwd.clone(),                    style: SplashStyle::Dim },
+            ChatLine::SplashRow { logo: " ◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆ ".to_string(), info: String::new(),                  style: SplashStyle::Title },
+            ChatLine::SplashRow { logo: "  ◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆  ".to_string(), info: String::new(),                  style: SplashStyle::Title },
+            ChatLine::SplashRow { logo: "   ◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆◆   ".to_string(), info: String::new(),                  style: SplashStyle::Title },
+            ChatLine::SplashRow { logo: "     ◆◆◆◆◆◆◆◆◆◆◆◆◆◆     ".to_string(), info: String::new(),                  style: SplashStyle::Title },
+            ChatLine::SplashRow { logo: "       ◆◆◆◆◆◆◆◆◆◆       ".to_string(), info: String::new(),                  style: SplashStyle::Title },
+            ChatLine::SplashRow { logo: "         ◆◆◆◆◆◆         ".to_string(), info: String::new(),                  style: SplashStyle::Title },
+            ChatLine::SplashRow { logo: "           ◆◆           ".to_string(), info: String::new(),                  style: SplashStyle::Title },
         ];
         Self {
             model,
@@ -229,15 +247,24 @@ impl UiState {
             cost_usd: 0.0,
             chat_scroll: 0,
             last_error: None,
+            session_start: std::time::Instant::now(),
+            input_history: Vec::new(),
+            history_idx: None,
+            follow_tail: true,
         }
     }
 
     pub fn apply(&mut self, ev: UiEvent) {
         match ev {
-            UiEvent::AssistantDelta(d) => match self.chat_lines.last_mut() {
-                Some(ChatLine::AssistantPartial(s)) => s.push_str(&d),
-                _ => self.chat_lines.push(ChatLine::AssistantPartial(d)),
-            },
+            UiEvent::AssistantDelta(d) => {
+                match self.chat_lines.last_mut() {
+                    Some(ChatLine::AssistantPartial(s)) => s.push_str(&d),
+                    _ => self.chat_lines.push(ChatLine::AssistantPartial(d)),
+                }
+                if self.follow_tail {
+                    self.chat_scroll = 9999;
+                }
+            }
             UiEvent::AssistantDone(final_text) => {
                 if matches!(self.chat_lines.last(), Some(ChatLine::AssistantPartial(_))) {
                     if let Some(last) = self.chat_lines.last_mut() {
@@ -369,9 +396,14 @@ pub fn draw_frame(
 
         // ── 1. Header bar ─────────────────────────────────────────────
         {
-            let model_short = state.model.split('/').last().unwrap_or(&state.model);
+            let model_display = model_display_name(&state.model);
             let cwd = shorten_path(&state.cwd, 36);
             let perm = perm_label(&state.perm_mode);
+            let (perm_hdr_color, perm_sym) = match perm {
+                "bypass"    => (C_WARN, "⚡"),
+                "auto-edit" => (C_OK,   "✓"),
+                _           => (C_DIM,  "◆"),
+            };
 
             let hdr = Line::from(vec![
                 Span::raw("  "),
@@ -384,15 +416,15 @@ pub fn draw_frame(
                 ),
                 Span::styled("  ·  ", Style::default().fg(C_DIM).bg(C_HDR_BG)),
                 Span::styled(
-                    model_short.to_string(),
+                    model_display,
                     Style::default().fg(C_BODY).bg(C_HDR_BG),
                 ),
                 Span::styled("  ·  ", Style::default().fg(C_DIM).bg(C_HDR_BG)),
                 Span::styled(cwd, Style::default().fg(C_DIM).bg(C_HDR_BG)),
                 Span::styled("  ·  ", Style::default().fg(C_DIM).bg(C_HDR_BG)),
                 Span::styled(
-                    perm.to_string(),
-                    Style::default().fg(C_WARN).bg(C_HDR_BG),
+                    format!("{perm_sym} {perm}"),
+                    Style::default().fg(perm_hdr_color).bg(C_HDR_BG),
                 ),
             ]);
             f.render_widget(
@@ -575,33 +607,82 @@ pub fn draw_frame(
         {
             let perm = perm_label(&state.perm_mode);
             let (perm_color, perm_sym) = match perm {
-                "bypass" => (C_WARN, "⚡"),
-                "auto-edit" => (C_OK, "✓"),
-                _ => (C_DIM, "◆"),
+                "bypass"    => (C_WARN, "⚡"),
+                "auto-edit" => (C_OK,   "✓"),
+                _           => (C_DIM,  "◆"),
             };
+
+            // Elapsed time
+            let elapsed = state.session_start.elapsed().as_secs();
+            let elapsed_str = if elapsed < 60 {
+                format!("{elapsed}s")
+            } else if elapsed < 3600 {
+                format!("{}m{}s", elapsed / 60, elapsed % 60)
+            } else {
+                format!("{}h{}m", elapsed / 3600, (elapsed % 3600) / 60)
+            };
+
+            // Context window usage mini-bar (10 blocks)
+            let ctx_max = model_context_window(&state.model);
+            let ctx_pct = if ctx_max > 0 && state.tokens_total > 0 {
+                (state.tokens_total as f64 / ctx_max as f64).min(1.0)
+            } else {
+                0.0
+            };
+            let filled = (ctx_pct * 10.0).round() as usize;
+            let ctx_bar: String = (0..10)
+                .map(|i| if i < filled { '█' } else { '░' })
+                .collect();
+            let ctx_color = if ctx_pct > 0.85 {
+                C_ERR
+            } else if ctx_pct > 0.65 {
+                C_WARN
+            } else {
+                Color::Rgb(51, 65, 85) // slate-700
+            };
+
+            // Right stats segment
             let thinking_part = if state.status_running {
-                format!("{spin}  thinking   ")
+                format!("{spin}  ")
             } else {
                 String::new()
             };
-            let cost_part = if state.cost_usd > 0.0 {
-                format!("   ~${:.4}", state.cost_usd)
-            } else {
-                String::new()
-            };
-            let hints_line = Line::from(vec![
+
+            let mut right_parts: Vec<String> = vec![elapsed_str];
+            if state.tokens_in > 0 || state.tokens_out > 0 {
+                right_parts.push(format!("↑{} ↓{}", fmt_tokens(state.tokens_in), fmt_tokens(state.tokens_out)));
+            }
+            if state.cost_usd > 0.0 {
+                right_parts.push(format!("${:.4}", state.cost_usd));
+            }
+            let right_str = right_parts.join("  ·  ");
+
+            let mut hints_spans = vec![
                 Span::styled(
-                    format!("  {perm_sym} {perm} mode  ·  "),
+                    format!("  {perm_sym} {perm}  ·  "),
                     Style::default().fg(perm_color).bg(C_HDR_BG),
                 ),
                 Span::styled(
-                    format!(
-                        "{}↵ send  ⇧↵ newline  pgup/pgdn scroll  esc quit{}",
-                        thinking_part, cost_part
-                    ),
+                    format!("{}↵ send  ⇧↵ nl  ↑↓ hist  ^L clear  /help", thinking_part),
                     Style::default().fg(C_DIM).bg(C_HDR_BG),
                 ),
-            ]);
+            ];
+            if ctx_pct > 0.0 {
+                hints_spans.push(Span::styled(
+                    format!("  ·  {ctx_bar}"),
+                    Style::default().fg(ctx_color).bg(C_HDR_BG),
+                ));
+                hints_spans.push(Span::styled(
+                    format!("  {:.0}%", ctx_pct * 100.0),
+                    Style::default().fg(ctx_color).bg(C_HDR_BG),
+                ));
+            }
+            hints_spans.push(Span::styled(
+                format!("  ·  {right_str}"),
+                Style::default().fg(Color::Rgb(71, 85, 105)).bg(C_HDR_BG),
+            ));
+
+            let hints_line = Line::from(hints_spans);
             f.render_widget(
                 Paragraph::new(hints_line).style(Style::default().bg(C_HDR_BG)),
                 outer[3],
@@ -629,8 +710,11 @@ fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str) -> Vec<Line<'
         }
         ChatLine::SplashRow { logo, info, style } => {
             let (info_color, info_mod) = match style {
+                SplashStyle::Brand  => (C_BRAND,    Modifier::BOLD),
                 SplashStyle::Title  => (C_BODY,     Modifier::BOLD),
                 SplashStyle::Accent => (C_ASST_PFX, Modifier::empty()),
+                SplashStyle::Ok     => (C_OK,        Modifier::BOLD),
+                SplashStyle::Warn   => (C_WARN,      Modifier::BOLD),
                 SplashStyle::Dim    => (C_DIM,       Modifier::empty()),
             };
             let mut spans = vec![Span::styled(
@@ -639,7 +723,7 @@ fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str) -> Vec<Line<'
             )];
             if !info.is_empty() {
                 spans.push(Span::styled(
-                    info.clone(),
+                    format!("  {}", info),
                     Style::default().fg(info_color).add_modifier(info_mod),
                 ));
             }
@@ -911,6 +995,54 @@ fn shorten_path(path: &str, max: usize) -> String {
     } else {
         let keep = max.saturating_sub(1);
         format!("…{}", &path[path.len().saturating_sub(keep)..])
+    }
+}
+
+/// Returns a short human-friendly model name.
+fn model_display_name(model: &str) -> String {
+    let m = model.split('/').last().unwrap_or(model);
+    // Map well-known Claude model IDs to friendly labels
+    if m.contains("opus-4-7") || m.contains("opus-4.7") {
+        return "Claude Opus 4.7".to_string();
+    }
+    if m.contains("opus-4") {
+        return "Claude Opus 4".to_string();
+    }
+    if m.contains("sonnet-4-6") || m.contains("sonnet-4.6") {
+        return "Claude Sonnet 4.6".to_string();
+    }
+    if m.contains("sonnet-4") {
+        return "Claude Sonnet 4".to_string();
+    }
+    if m.contains("haiku-4-5") || m.contains("haiku-4.5") {
+        return "Claude Haiku 4.5".to_string();
+    }
+    if m.contains("haiku-4") {
+        return "Claude Haiku 4".to_string();
+    }
+    // Unknown model: strip vendor prefix, truncate
+    m.chars().take(32).collect()
+}
+
+/// Returns the context window size (input tokens) for the given model.
+fn model_context_window(model: &str) -> u64 {
+    let m = model.to_lowercase();
+    if m.contains("claude") {
+        200_000 // all current Claude models have 200k context
+    } else if m.contains("gpt-4") {
+        128_000
+    } else {
+        200_000 // safe default
+    }
+}
+
+fn fmt_tokens(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1000 {
+        format!("{:.1}k", n as f64 / 1000.0)
+    } else {
+        n.to_string()
     }
 }
 
