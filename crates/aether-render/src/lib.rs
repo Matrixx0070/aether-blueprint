@@ -1281,10 +1281,16 @@ pub fn draw_frame(
                 } else {
                     String::new()
                 };
-                if pos_part.is_empty() && words_part.is_empty() && tokens_part.is_empty() {
+                let char_count = state.input_buffer.chars().count();
+                let chars_part = if char_count > 200 {
+                    format!("{}c ", char_count)
+                } else {
+                    String::new()
+                };
+                if pos_part.is_empty() && words_part.is_empty() && tokens_part.is_empty() && chars_part.is_empty() {
                     String::new()
                 } else {
-                    format!(" {}{}{}", pos_part, words_part, tokens_part)
+                    format!(" {}{}{}{}", pos_part, words_part, tokens_part, chars_part)
                 }
             };
             // Flash bright brand-blue for 1.2s after a response completes

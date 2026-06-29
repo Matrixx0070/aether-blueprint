@@ -4586,8 +4586,16 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         .map(|l| l.strip_prefix("> ").unwrap_or(l))
                         .collect::<Vec<_>>()
                         .join("\n");
+                    let line_count = cleaned.lines().count();
                     ui.input_buffer.insert_str(ui.input_cursor, &cleaned);
                     ui.input_cursor += cleaned.len();
+                    // Notify for multi-line paste so user knows newlines were preserved
+                    if line_count > 1 {
+                        ui.chat_lines.push(ChatLine::SystemNote(
+                            format!("Pasted {} lines ({} chars) — ⇧↵ to add more, ↵ to send", line_count, cleaned.len())
+                        ));
+                        ui.follow_tail = true;
+                    }
                 }
                 Event::Key(k) if k.kind == KeyEventKind::Press => match k.code {
                     KeyCode::Esc => {
@@ -4610,6 +4618,23 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         } else {
                             ui.input_buffer.clear();
                             ui.input_cursor = 0;
+                        }
+                    }
+                    KeyCode::Char('d') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        if ui.status_running {
+                            // Ctrl+D during stream = cancel (same as Ctrl+C)
+                            let _ = _ctx.send(UiCommand::Cancel);
+                        } else if ui.input_buffer.is_empty() {
+                            break 'outer;
+                        } else {
+                            // Non-empty buffer: clear and warn instead of exiting
+                            ui.input_undo = Some((ui.input_buffer.clone(), ui.input_cursor));
+                            ui.input_buffer.clear();
+                            ui.input_cursor = 0;
+                            ui.chat_lines.push(ChatLine::SystemNote(
+                                "Input cleared (Ctrl+D on empty buffer exits, /quit or Esc to quit now)".to_string()
+                            ));
+                            ui.follow_tail = true;
                         }
                     }
                     KeyCode::Char('q') if k.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -4934,9 +4959,11 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                         ("docs",      "write docs",    "Write clear documentation/docstring for this code. Include parameters, return values, and usage examples:\n\n```\n\n```"),
                                     ];
                                     if arg.is_empty() {
-                                        let mut list = "Templates — /template <name> to load:\n".to_string();
-                                        for (name, desc, _) in TEMPLATES {
-                                            list.push_str(&format!("  {name:<10}  {desc}\n"));
+                                        let mut list = "Templates — /template <name> to load into input:\n".to_string();
+                                        for (name, desc, body) in TEMPLATES {
+                                            let preview: String = body.lines().next().unwrap_or("").chars().take(48).collect();
+                                            let ellipsis = if body.len() > 48 { "…" } else { "" };
+                                            list.push_str(&format!("  {name:<10}  {desc:<14}  \u{201c}{preview}{ellipsis}\u{201d}\n"));
                                         }
                                         ui.chat_lines.push(ChatLine::SystemNote(list));
                                         ui.follow_tail = true;
