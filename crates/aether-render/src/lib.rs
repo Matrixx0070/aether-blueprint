@@ -1005,7 +1005,7 @@ pub fn draw_frame(
                     Style::default().fg(perm_color).bg(C_HDR_BG),
                 ),
                 Span::styled(
-                    format!("{}↵ send  ⇧↵ nl  ↑↓ hist  ^L clear  /help", thinking_part),
+                    format!("{}↵ send  ⇧↵ nl  ↑↓ hist  ←→ move  ^A/E line  ^W del-word  ^L clear  /help", thinking_part),
                     Style::default().fg(C_DIM).bg(C_HDR_BG),
                 ),
                 Span::styled(

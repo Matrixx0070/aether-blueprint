@@ -4533,10 +4533,14 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                             ui.input_cursor = word_start;
                         }
                     }
-                    KeyCode::Char('k') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                        // Kill-line: clear the input buffer
-                        ui.input_buffer.clear();
+                    KeyCode::Char('u') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Delete from start of buffer to cursor
+                        ui.input_buffer.drain(..ui.input_cursor);
                         ui.input_cursor = 0;
+                    }
+                    KeyCode::Char('k') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Kill-line: delete from cursor to end of buffer
+                        ui.input_buffer.truncate(ui.input_cursor);
                     }
                     KeyCode::Char('l') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         // Clear visible chat (keeps session context intact)
@@ -4947,6 +4951,21 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         ui.history_idx = None;
                         ui.tab_cycle = 0;
                     }
+                    KeyCode::Left if k.modifiers.contains(KeyModifiers::ALT) => {
+                        // Word-jump left: skip whitespace then non-whitespace
+                        let s = &ui.input_buffer[..ui.input_cursor];
+                        let trimmed = s.trim_end().len();
+                        ui.input_cursor = s[..trimmed].rfind(|c: char| !c.is_alphanumeric() && c != '_')
+                            .map(|i| i + 1).unwrap_or(0);
+                    }
+                    KeyCode::Right if k.modifiers.contains(KeyModifiers::ALT) => {
+                        // Word-jump right
+                        let s = &ui.input_buffer[ui.input_cursor..];
+                        let trimmed = s.len() - s.trim_start().len();
+                        let word_end = s[trimmed..].find(|c: char| !c.is_alphanumeric() && c != '_')
+                            .map(|i| trimmed + i).unwrap_or(s.len());
+                        ui.input_cursor += word_end;
+                    }
                     KeyCode::Left => {
                         if ui.input_cursor > 0 {
                             let ch_len = ui.input_buffer[..ui.input_cursor]
@@ -4960,6 +4979,14 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                 .chars().next().map(|c| c.len_utf8()).unwrap_or(0);
                             ui.input_cursor += ch_len;
                         }
+                    }
+                    KeyCode::Delete => {
+                        // Forward delete: remove char after cursor
+                        if ui.input_cursor < ui.input_buffer.len() {
+                            ui.input_buffer.remove(ui.input_cursor);
+                        }
+                        ui.history_idx = None;
+                        ui.tab_cycle = 0;
                     }
                     KeyCode::PageUp => {
                         ui.chat_scroll = ui.chat_scroll.saturating_sub(10);
