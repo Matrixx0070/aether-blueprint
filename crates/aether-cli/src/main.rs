@@ -5420,6 +5420,12 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         ui.chat_scroll = 0;
                         ui.follow_tail = false;
                     }
+                    KeyCode::Char('`') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Ctrl+`: insert a code fence template and position cursor inside
+                        let fence = "```\n\n```";
+                        ui.input_buffer.insert_str(ui.input_cursor, fence);
+                        ui.input_cursor += 4; // "```\n" = 4 bytes; cursor lands on blank line inside fence
+                    }
                     KeyCode::End => {
                         ui.chat_scroll = 9999;
                         ui.follow_tail = true;
