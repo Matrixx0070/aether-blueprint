@@ -210,6 +210,8 @@ pub struct UiState {
     pub stream_start: Option<std::time::Instant>,
     /// Tokens/second for the last completed response.
     pub last_tps: f64,
+    /// Ring-buffer of the last 8 t/s readings for the sparkline in the hints bar.
+    pub tps_history: Vec<f64>,
     /// Total tool ok/err counts for the side-panel title.
     pub tools_ok: u32,
     pub tools_err: u32,
@@ -290,6 +292,7 @@ impl UiState {
             tab_cycle: 0,
             stream_start: None,
             last_tps: 0.0,
+            tps_history: Vec::new(),
             tools_ok: 0,
             tools_err: 0,
             stream_chars: 0,
@@ -319,11 +322,16 @@ impl UiState {
                 // follow_tail scrolling is handled in draw_frame() using real line counts
             }
             UiEvent::AssistantDone(final_text) => {
-                // Compute tokens/second from stream duration and output tokens
+                // Compute tokens/second from stream duration and output tokens.
+                // Use max(0.01) floor so very fast responses still get a t/s reading.
                 if let Some(t0) = self.stream_start.take() {
-                    let secs = t0.elapsed().as_secs_f64();
-                    if secs > 0.1 && self.tokens_out > 0 {
+                    let secs = t0.elapsed().as_secs_f64().max(0.01);
+                    if self.tokens_out > 0 {
                         self.last_tps = self.tokens_out as f64 / secs;
+                        self.tps_history.push(self.last_tps);
+                        if self.tps_history.len() > 8 {
+                            self.tps_history.remove(0);
+                        }
                     }
                 }
                 self.stream_chars = 0;
@@ -462,6 +470,11 @@ pub fn draw_frame(
     let spin = spinner_frame();
 
     terminal.draw(|f| {
+        // Precompute message count (used in side panel + hints bar)
+        let msg_count = state.chat_lines.iter()
+            .filter(|cl| matches!(cl, ChatLine::User(_, _)))
+            .count();
+
         // Dynamic input height: 1 border + content lines, clamped 2..=8
         let input_content_lines = state.input_buffer.lines().count().max(1);
         let input_height = (input_content_lines + 1).min(8) as u16;
@@ -624,9 +637,30 @@ pub fn draw_frame(
             let border_style = Style::default().fg(C_BORDER);
             let title_style = Style::default().fg(C_DIM).add_modifier(Modifier::BOLD);
 
-            // When no tool activity, render keyboard cheat sheet in the right panel.
+            // When no tool activity, render session stats + keyboard cheat sheet.
             if !has_tools {
-                let km_lines: Vec<Line<'static>> = vec![
+                // Session stats summary (shown when conversation is active)
+                let stats_row = if msg_count > 0 {
+                    let msg_label = format!("  {} msg{}", msg_count, if msg_count == 1 { "" } else { "s" });
+                    let cost_part = if state.cost_usd > 0.0 { format!("  ·  ${:.4}", state.cost_usd) } else { String::new() };
+                    let dur_part = if !state.response_durations.is_empty() {
+                        let avg = state.response_durations.iter().sum::<f64>() / state.response_durations.len() as f64;
+                        format!("  ·  {:.1}s avg", avg)
+                    } else { String::new() };
+                    let tps_part = if state.last_tps > 0.5 { format!("  ·  {:.0}t/s", state.last_tps) } else { String::new() };
+                    Some(Line::from(Span::styled(
+                        format!("{msg_label}{cost_part}{dur_part}{tps_part}"),
+                        Style::default().fg(C_DIM),
+                    )))
+                } else { None };
+
+                let mut km_lines: Vec<Line<'static>> = Vec::new();
+                if let Some(sr) = stats_row {
+                    km_lines.push(sr);
+                    km_lines.push(Line::from(Span::styled("  ─────────────────────────", Style::default().fg(Color::Rgb(30, 41, 59)))));
+                    km_lines.push(Line::from(""));
+                }
+                km_lines.extend(vec![
                     Line::from(Span::styled("  Keyboard", Style::default().fg(C_BRAND).add_modifier(Modifier::BOLD))),
                     Line::from(""),
                     Line::from(vec![Span::styled("  ↵ ", Style::default().fg(C_DIM)), Span::styled("send message", Style::default().fg(C_BODY))]),
@@ -647,7 +681,7 @@ pub fn draw_frame(
                     Line::from(vec![Span::styled("  /export ", Style::default().fg(C_DIM)), Span::styled("save transcript", Style::default().fg(C_BODY))]),
                     Line::from(vec![Span::styled("  /model ", Style::default().fg(C_DIM)), Span::styled("<name>", Style::default().fg(C_BODY))]),
                     Line::from(vec![Span::styled("  /clear ", Style::default().fg(C_DIM)), Span::styled("clear chat", Style::default().fg(C_BODY))]),
-                ];
+                ]);
                 f.render_widget(
                     Paragraph::new(km_lines)
                         .block(
@@ -799,10 +833,21 @@ pub fn draw_frame(
                         } else {
                             Span::raw("       ")
                         };
-                        let mut spans = vec![
-                            prefix_span,
-                            Span::styled(line.to_string(), Style::default().fg(C_BODY)),
-                        ];
+                        // Slash command coloring: /word in accent, rest in body
+                        let content_spans: Vec<Span<'static>> = if i == 0 && line.starts_with('/') {
+                            let split = line.find(' ').unwrap_or(line.len());
+                            let cmd = line[..split].to_string();
+                            let rest = line[split..].to_string();
+                            let mut cs = vec![Span::styled(cmd, Style::default().fg(C_ASST_PFX).add_modifier(Modifier::BOLD))];
+                            if !rest.is_empty() {
+                                cs.push(Span::styled(rest, Style::default().fg(C_BODY)));
+                            }
+                            cs
+                        } else {
+                            vec![Span::styled(line.to_string(), Style::default().fg(C_BODY))]
+                        };
+                        let mut spans = vec![prefix_span];
+                        spans.extend(content_spans);
                         if is_last {
                             let cursor = if cursor_on { "│" } else { " " };
                             spans.push(Span::styled(
@@ -841,11 +886,7 @@ pub fn draw_frame(
                 "auto-edit" => (C_OK,   "✓"),
                 _           => (C_DIM,  "◆"),
             };
-
-            // Message counter: count User lines
-            let msg_count = state.chat_lines.iter()
-                .filter(|cl| matches!(cl, ChatLine::User(_, _)))
-                .count();
+            // msg_count precomputed at top of draw_frame closure
 
             // Elapsed time
             let elapsed = state.session_start.elapsed().as_secs();
@@ -896,6 +937,16 @@ pub fn draw_frame(
             }
             if state.last_tps > 0.5 {
                 right_parts.push(format!("{:.0} t/s", state.last_tps));
+            }
+            // t/s sparkline: 8-char bar chart of recent response speeds
+            if state.tps_history.len() >= 2 {
+                let max_tps = state.tps_history.iter().cloned().fold(0.0_f64, f64::max).max(1.0);
+                let bars: String = state.tps_history.iter().map(|&v| {
+                    match ((v / max_tps) * 7.0).round() as usize {
+                        0 => '▁', 1 => '▂', 2 => '▃', 3 => '▄', 4 => '▅', 5 => '▆', 6 => '▇', _ => '█',
+                    }
+                }).collect();
+                right_parts.push(bars);
             }
             if state.cost_usd > 0.0 {
                 right_parts.push(format!("${:.4}", state.cost_usd));
