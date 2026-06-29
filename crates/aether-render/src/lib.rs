@@ -258,6 +258,9 @@ pub struct UiState {
     /// When true, assistant messages render as plain text (no markdown).
     /// Toggled by /format command.
     pub raw_mode: bool,
+    /// When true, code blocks show line numbers on the left margin.
+    /// Toggled by /linenums command.
+    pub show_line_numbers: bool,
 }
 
 impl UiState {
@@ -343,6 +346,7 @@ impl UiState {
             search_highlight: None,
             input_undo: None,
             raw_mode: false,
+            show_line_numbers: false,
         }
     }
 
@@ -696,7 +700,7 @@ pub fn draw_frame(
                     let trail_spin = i + 1 == total
                         && state.status_running
                         && matches!(cl, ChatLine::AssistantPartial(_));
-                    chat_line_to_lines(cl, trail_spin, spin, state.show_timestamps, state.search_highlight.as_deref(), state.raw_mode)
+                    chat_line_to_lines(cl, trail_spin, spin, state.show_timestamps, state.search_highlight.as_deref(), state.raw_mode, state.show_line_numbers)
                 })
                 .collect();
 
@@ -1419,7 +1423,7 @@ fn apply_search_highlight(mut lines: Vec<Line<'static>>, term: &str) -> Vec<Line
 
 // ── chat line → ratatui Lines ─────────────────────────────────────────────────
 
-fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str, show_timestamps: bool, highlight: Option<&str>, raw_mode: bool) -> Vec<Line<'static>> {
+fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str, show_timestamps: bool, highlight: Option<&str>, raw_mode: bool, show_line_numbers: bool) -> Vec<Line<'static>> {
     match cl {
         ChatLine::User(body, ts) => {
             let mut lines: Vec<Line<'static>> = Vec::new();
@@ -1440,17 +1444,17 @@ fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str, show_timestam
                     ),
                 ]));
             }
-            let rendered = render_message("  >  ", C_USER_PFX, body, C_BODY, false, trail_spin, spin, 0.0, 0.0);
+            let rendered = render_message("  >  ", C_USER_PFX, body, C_BODY, false, trail_spin, spin, 0.0, 0.0, false);
             lines.extend(if let Some(term) = highlight { apply_search_highlight(rendered, term) } else { rendered });
             lines
         }
         ChatLine::Assistant(body, dur, cost) => {
             // raw_mode disables markdown/syntax rendering — plain text only
-            let rendered = render_message("  ◆  ", C_ASST_PFX, body, C_BODY, !raw_mode, false, spin, *dur, *cost);
+            let rendered = render_message("  ◆  ", C_ASST_PFX, body, C_BODY, !raw_mode, false, spin, *dur, *cost, show_line_numbers);
             if let Some(term) = highlight { apply_search_highlight(rendered, term) } else { rendered }
         }
         ChatLine::AssistantPartial(body) => {
-            let rendered = render_message("  ◆  ", C_ASST_PFX, body, C_BODY, !raw_mode, trail_spin, spin, 0.0, 0.0);
+            let rendered = render_message("  ◆  ", C_ASST_PFX, body, C_BODY, !raw_mode, trail_spin, spin, 0.0, 0.0, show_line_numbers);
             if let Some(term) = highlight { apply_search_highlight(rendered, term) } else { rendered }
         }
         ChatLine::SystemNote(body) => {
@@ -1513,6 +1517,7 @@ fn render_message(
     spin: &str,
     duration_secs: f64,
     cost_delta_usd: f64,
+    show_line_numbers: bool,
 ) -> Vec<Line<'static>> {
     let pfx_style = Style::default()
         .fg(prefix_color)
@@ -1528,6 +1533,8 @@ fn render_message(
     let mut diff_plus: u32 = 0;
     let mut diff_minus: u32 = 0;
     let mut block_is_diff = false;
+    // Line number counter within code blocks (reset per block)
+    let mut code_line_num: u32 = 0;
 
     let raw_lines: Vec<&str> = body.lines().collect();
     let n = raw_lines.len();
@@ -1555,6 +1562,7 @@ fn render_message(
                 in_code_block = true;
                 code_lang = trimmed.trim_start_matches('`').trim().to_lowercase();
                 block_is_diff = matches!(code_lang.as_str(), "diff" | "patch" | "udiff");
+                code_line_num = 0; // reset line counter for new block
             }
         } else if in_code_block && block_is_diff {
             // Count meaningful diff lines (skip file headers +++ and ---)
@@ -1592,8 +1600,18 @@ fn render_message(
                 Style::default().fg(C_DIM),
             )]
         } else if in_code_block {
-            // Inside a fenced code block: syntax-highlighted spans
-            highlight_code_line(line, &code_lang)
+            // Inside a fenced code block: syntax-highlighted spans (with optional line numbers)
+            code_line_num += 1;
+            let mut spans = if show_line_numbers {
+                vec![Span::styled(
+                    format!("{:3}│ ", code_line_num),
+                    Style::default().fg(Color::Rgb(71, 85, 105)).bg(C_CODE_BG), // slate-600
+                )]
+            } else {
+                Vec::new()
+            };
+            spans.extend(highlight_code_line(line, &code_lang));
+            spans
         } else {
             // Normal assistant prose: check for block-level markdown patterns first.
             // Horizontal rule: --- / *** / ___

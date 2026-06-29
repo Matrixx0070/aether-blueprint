@@ -4673,6 +4673,23 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                             ui.input_undo = Some((cur_buf, cur_cur));
                         }
                     }
+                    KeyCode::Char('t') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Ctrl+T: transpose — swap char at cursor with the one before it (Emacs)
+                        let buf = &mut ui.input_buffer;
+                        let cur = ui.input_cursor;
+                        if cur > 0 && cur < buf.len() {
+                            // Find the two chars around the cursor
+                            let prev_start = buf[..cur].char_indices().last().map(|(i, _)| i);
+                            let next_end = buf[cur..].chars().next().map(|c| cur + c.len_utf8());
+                            if let (Some(ps), Some(ne)) = (prev_start, next_end) {
+                                ui.input_undo = Some((buf.clone(), cur));
+                                let prev_ch: String = buf[ps..cur].to_string();
+                                let next_ch: String = buf[cur..ne].to_string();
+                                buf.replace_range(ps..ne, &format!("{next_ch}{prev_ch}"));
+                                ui.input_cursor = ne;
+                            }
+                        }
+                    }
                     KeyCode::Char('g') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         // Ctrl+G: abort / cancel (Emacs-style)
                         if ui.history_search.is_some() {
@@ -4853,42 +4870,50 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     ui.chat_lines.push(ChatLine::SystemNote(
                                         "Aether — slash commands\n\
                                          \n\
-                                         /clear          clear chat display\n\
-                                         /compact [N]    compress history (keep last N=5 exchange pairs)\n\
-                                         /copy           copy last AI response to clipboard\n\
-                                         /cost           token usage + cost\n\
-                                         /export [file]  save transcript to markdown\n\
-                                         /load <n>       restore saved session n\n\
-                                         /model <name>   switch model (opus/sonnet/haiku)\n\
-                                         /pin <text>     pin a sticky note at top\n\
-                                         /search <term>  search chat history\n\
-                                         /sessions       list saved sessions\n\
-                                         /stats          session statistics\n\
-                                         /doctor         config + auth health check\n\
-                                         /retry          resend last message (removes last AI response)\n\
-                                         /undo           remove last exchange from display\n\
-                                         /quit           exit\n\
+                                         /clear             clear chat display\n\
+                                         /compact [N]       compress history (keep last N=5 exchanges)\n\
+                                         /copy              copy last AI response to clipboard\n\
+                                         /cost              token usage + per-message cost table\n\
+                                         /export [file]     save transcript to markdown with frontmatter\n\
+                                         /format  /raw      toggle markdown rendering on/off\n\
+                                         /linenums  /ln     toggle code block line numbers\n\
+                                         /load <n>          restore saved session n\n\
+                                         /model <name>      switch model (opus/sonnet/haiku)\n\
+                                         /note <text>       append to ~/.aether/notes.md\n\
+                                         /pin <text>        pin sticky note at top of chat\n\
+                                         /retry             resend last message (removes last AI response)\n\
+                                         /search <term>     search + scroll to match; highlights hits\n\
+                                         /sessions          list saved sessions\n\
+                                         /stats             session statistics (words, cost, speed)\n\
+                                         /timestamps  /ts   toggle per-message timestamps  (F3)\n\
+                                         /doctor            config + auth health check\n\
+                                         /undo              remove last exchange from display\n\
+                                         /quit              exit\n\
                                          \n\
                                          Input shortcuts\n\
                                          \n\
-                                         ↑↓              history recall (in/out)\n\
-                                         Ctrl+R          reverse history search\n\
-                                         ←→              move cursor\n\
-                                         Alt+←/→         word jump\n\
+                                         ↑↓              history recall\n\
+                                         Ctrl+R          reverse-i-search history\n\
+                                         ←→ / Alt+←/→   move cursor / word jump\n\
+                                         Alt+D           delete word forward\n\
                                          Ctrl+A / E      start / end of line\n\
-                                         Ctrl+W          delete word backwards\n\
-                                         Ctrl+K          kill to end of line\n\
-                                         Ctrl+U          kill to start of line\n\
+                                         Ctrl+W          delete word backward\n\
+                                         Ctrl+K / U      kill to end / start of line\n\
+                                         Ctrl+T          transpose chars (Emacs)\n\
+                                         Ctrl+Y          yank last AI response into input\n\
+                                         Ctrl+Z          undo last input change\n\
+                                         Ctrl+G          abort / cancel (Emacs)\n\
+                                         Ctrl+`          insert code fence\n\
                                          Del             forward delete\n\
                                          Shift+↵         newline in input\n\
                                          Tab             complete slash command\n\
                                          Ctrl+C          cancel / clear / exit\n\
                                          Ctrl+L          clear chat display\n\
                                          Ctrl+N          new conversation (saves current)\n\
-                                         Ctrl+Y          yank last AI response into input\n\
-                                         PgUp/Dn         scroll chat\n\
-                                         End             resume tail (follow latest)\n\
-                                         F2              toggle side panel (full-width chat)\n\
+                                         Ctrl+H          scroll to top\n\
+                                         PgUp/Dn / End   scroll / jump to tail\n\
+                                         F2              toggle side panel\n\
+                                         F3              toggle timestamps\n\
                                          \n\
                                          Sessions auto-saved to ~/.aether/sessions/".to_string()
                                     ));
@@ -4929,6 +4954,13 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     ui.raw_mode = !ui.raw_mode;
                                     let state = if ui.raw_mode { "raw (markdown off)" } else { "rendered (markdown on)" };
                                     ui.chat_lines.push(ChatLine::SystemNote(format!("Format: {state}  (/format to toggle)")));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/linenums" | "/ln" => {
+                                    ui.show_line_numbers = !ui.show_line_numbers;
+                                    let state = if ui.show_line_numbers { "on" } else { "off" };
+                                    ui.chat_lines.push(ChatLine::SystemNote(format!("Code line numbers: {state}  (/linenums to toggle)")));
                                     ui.follow_tail = true;
                                     continue;
                                 }
@@ -5471,8 +5503,8 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         // Slash command completion: Tab while buffer starts with '/'
                         const SLASH_CMDS: &[&str] = &[
                             "/clear", "/compact", "/copy", "/cost", "/doctor", "/export", "/format",
-                            "/help", "/load ", "/model ", "/note ", "/pin ", "/quit", "/raw",
-                            "/retry", "/search ", "/sessions", "/stats", "/timestamps", "/undo",
+                            "/help", "/linenums", "/load ", "/model ", "/note ", "/pin ", "/quit",
+                            "/raw", "/retry", "/search ", "/sessions", "/stats", "/timestamps", "/undo",
                         ];
                         let buf = ui.input_buffer.trim_end().to_string();
                         if buf.starts_with('/') && !buf.contains(' ') {
