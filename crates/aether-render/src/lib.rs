@@ -230,6 +230,7 @@ impl UiState {
             ChatLine::SplashRow { logo: "       ◆◆◆◆◆◆◆◆◆◆       ".to_string(), info: String::new(),                  style: SplashStyle::Title },
             ChatLine::SplashRow { logo: "         ◆◆◆◆◆◆         ".to_string(), info: String::new(),                  style: SplashStyle::Title },
             ChatLine::SplashRow { logo: "           ◆◆           ".to_string(), info: String::new(),                  style: SplashStyle::Title },
+            ChatLine::SplashRow { logo: String::new(), info: "type /help for commands, /model to switch, /cost for usage".to_string(), style: SplashStyle::Dim },
         ];
         Self {
             model,
@@ -925,25 +926,39 @@ fn inline_markdown_spans(line: &str, body_color: Color) -> Vec<Span<'static>> {
 
 // ── tool / fleet line rendering ───────────────────────────────────────────────
 
+fn tool_type_icon(name: &str) -> &'static str {
+    let n = name.to_lowercase();
+    if n.contains("bash") || n.contains("exec") || n.contains("run") { return "⚡"; }
+    if n.contains("write") || n.contains("edit") || n.contains("patch") { return "✎"; }
+    if n.contains("read") || n.contains("cat") || n.contains("view") { return "◉"; }
+    if n.contains("grep") || n.contains("search") || n.contains("find") { return "⌕"; }
+    if n.contains("glob") || n.contains("ls") || n.contains("list") { return "⊞"; }
+    if n.contains("web") || n.contains("fetch") || n.contains("http") { return "↗"; }
+    if n.contains("sandbox") { return "⬡"; }
+    if n.contains("agent") || n.contains("task") { return "◈"; }
+    "◦"
+}
+
 fn tool_entry_to_line(t: &ToolEntry, spin: &str) -> Line<'static> {
     let (sym, color) = match &t.status {
         ToolStatus::Running => (spin.to_string(), C_WARN),
         ToolStatus::Ok(_) => ("✓".to_string(), C_OK),
         ToolStatus::Err(_) => ("✗".to_string(), C_ERR),
     };
+    let icon = tool_type_icon(&t.name);
     let result_preview = match &t.status {
         ToolStatus::Ok(p) | ToolStatus::Err(p) if !p.is_empty() => {
-            format!("  —  {}", truncate_chars(p, 26))
+            format!("  —  {}", truncate_chars(p, 24))
         }
         _ => String::new(),
     };
     let summary = if t.summary.is_empty() {
         String::new()
     } else {
-        format!("  {}", truncate_chars(&t.summary, 22))
+        format!("  {}", truncate_chars(&t.summary, 20))
     };
     Line::from(Span::styled(
-        format!("  {sym}  {}{}{}", t.name, summary, result_preview),
+        format!("  {sym} {icon} {}{}{}", t.name, summary, result_preview),
         Style::default().fg(color),
     ))
 }
