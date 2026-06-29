@@ -4654,6 +4654,20 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                cmd if cmd.starts_with("/pin") => {
+                                    let text = cmd.trim_start_matches("/pin").trim();
+                                    if text.is_empty() {
+                                        ui.pinned_note = None;
+                                        ui.chat_lines.push(ChatLine::SystemNote("Pin cleared.".to_string()));
+                                    } else {
+                                        ui.pinned_note = Some(text.to_string());
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("Pinned: \"{text}\"")
+                                        ));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/stats" => {
                                     let msg_count = ui.msg_times_secs.len();
                                     let elapsed = ui.session_start.elapsed().as_secs();
@@ -4877,8 +4891,8 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         // Slash command completion: Tab while buffer starts with '/'
                         const SLASH_CMDS: &[&str] = &[
                             "/clear", "/compact", "/cost", "/export", "/help",
-                            "/load ", "/model ", "/quit", "/search ", "/sessions",
-                            "/stats", "/undo",
+                            "/load ", "/model ", "/pin ", "/quit", "/search ",
+                            "/sessions", "/stats", "/undo",
                         ];
                         let buf = ui.input_buffer.trim_end().to_string();
                         if buf.starts_with('/') && !buf.contains(' ') {

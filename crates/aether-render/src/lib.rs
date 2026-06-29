@@ -141,6 +141,10 @@ pub struct ToolEntry {
     pub name: String,
     pub summary: String,
     pub status: ToolStatus,
+    /// Wall time from ToolStart to ToolDone (None while still Running).
+    pub elapsed_ms: Option<u64>,
+    /// Instant when this tool started (used to compute elapsed_ms).
+    pub start: std::time::Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -213,6 +217,8 @@ pub struct UiState {
     pub response_start: Option<std::time::Instant>,
     /// True after AssistantDone — take cost snapshot on next Usage event.
     pending_cost_snap: bool,
+    /// Pinned note shown at top of chat — set by /pin command.
+    pub pinned_note: Option<String>,
 }
 
 impl UiState {
@@ -284,6 +290,7 @@ impl UiState {
             response_durations: Vec::new(),
             response_start: None,
             pending_cost_snap: false,
+            pinned_note: None,
         }
     }
 
@@ -331,6 +338,8 @@ impl UiState {
                     name,
                     summary,
                     status: ToolStatus::Running,
+                    elapsed_ms: None,
+                    start: std::time::Instant::now(),
                 });
             }
             UiEvent::ToolDone {
@@ -341,6 +350,7 @@ impl UiState {
             } => {
                 for entry in self.tool_log.iter_mut().rev() {
                     if entry.name == name && matches!(entry.status, ToolStatus::Running) {
+                        entry.elapsed_ms = Some(entry.start.elapsed().as_millis() as u64);
                         if is_error {
                             entry.status = ToolStatus::Err(preview.clone());
                             self.tools_err += 1;
@@ -522,6 +532,25 @@ pub fn draw_frame(
                     ChatLine::User(_) | ChatLine::Assistant(_) | ChatLine::AssistantPartial(_)
                 )
             });
+
+            // Pinned note: rendered as a sticky strip at the very top of the chat widget.
+            let pin_lines: Vec<Line<'static>> = if let Some(note) = &state.pinned_note {
+                let mut pl = vec![
+                    Line::from(Span::styled(
+                        format!("  ★  {}", note),
+                        Style::default().fg(C_WARN).add_modifier(Modifier::BOLD),
+                    )),
+                    Line::from(Span::styled(
+                        "  ─────────────────────────────",
+                        Style::default().fg(C_DIM),
+                    )),
+                ];
+                pl.push(Line::from(""));
+                pl
+            } else {
+                vec![]
+            };
+
             let total = state.chat_lines.len();
             let mut chat: Vec<Line> = state
                 .chat_lines
@@ -539,6 +568,13 @@ pub fn draw_frame(
                     chat_line_to_lines(cl, trail_spin, spin)
                 })
                 .collect();
+
+            // Prepend the pinned note strip
+            let mut chat = {
+                let mut v = pin_lines;
+                v.extend(chat);
+                v
+            };
 
             // When running but no partial response yet, show a "thinking" line in chat.
             if state.status_running
@@ -1185,14 +1221,22 @@ fn tool_entry_to_lines(t: &ToolEntry, spin: &str) -> Vec<Line<'static>> {
     let summary = if t.summary.is_empty() {
         String::new()
     } else {
-        format!("  {}", truncate_chars(&t.summary, 22))
+        format!("  {}", truncate_chars(&t.summary, 18))
+    };
+    let timing = match t.elapsed_ms {
+        Some(ms) if ms >= 1000 => format!("  {:.1}s", ms as f64 / 1000.0),
+        Some(ms) if ms >= 10 => format!("  {}ms", ms),
+        _ => String::new(), // skip sub-10ms noise and Running
     };
 
     // Header line (always one line)
-    let mut lines: Vec<Line<'static>> = vec![Line::from(Span::styled(
-        format!("  {sym} {icon} {}{}", t.name, summary),
-        Style::default().fg(color),
-    ))];
+    let mut lines: Vec<Line<'static>> = vec![Line::from(vec![
+        Span::styled(
+            format!("  {sym} {icon} {}{}", t.name, summary),
+            Style::default().fg(color),
+        ),
+        Span::styled(timing, Style::default().fg(C_DIM)),
+    ])];
 
     // Preview: show up to 5 sub-lines with diff coloring for completed tools
     match &t.status {
