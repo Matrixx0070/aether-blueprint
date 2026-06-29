@@ -249,6 +249,8 @@ pub struct UiState {
     pub waiting_since: Option<std::time::Instant>,
     /// Named scroll-position bookmarks: (name, scroll_line).
     pub bookmarks: Vec<(String, u16)>,
+    /// When the session was last auto-saved.
+    pub last_autosave: Option<std::time::Instant>,
     /// When true, full timestamps are shown on each message header.
     pub show_timestamps: bool,
     /// Auto-extracted from the first user message (first 5 words, up to 40 chars).
@@ -347,6 +349,7 @@ impl UiState {
             response_done_at: None,
             waiting_since: None,
             bookmarks: Vec::new(),
+            last_autosave: None,
             show_timestamps: false,
             session_title: None,
             search_highlight: None,

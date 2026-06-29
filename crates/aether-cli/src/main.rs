@@ -4566,6 +4566,15 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
             })
             .collect();
         draw_frame(guard.terminal(), &ui).ok();
+        // Auto-save every 5 minutes (silently — no chat notification)
+        let autosave_due = ui.last_autosave.map_or(true, |t: std::time::Instant| t.elapsed().as_secs() > 300);
+        if autosave_due && !ui.status_running {
+            let has_convo = ui.chat_lines.iter().any(|cl| matches!(cl, ChatLine::User(_, _) | ChatLine::Assistant(_, _, _)));
+            if has_convo {
+                let _ = session_save(&ui);
+                ui.last_autosave = Some(std::time::Instant::now());
+            }
+        }
         // Poll for input with a short timeout so the UI tick refreshes.
         if event::poll(std::time::Duration::from_millis(80))? {
             match event::read()? {
@@ -5025,6 +5034,8 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                          /template [name]   load a prompt template into input  (/tmpl)\n\
                                          /copy              copy last AI response to clipboard\n\
                                          /cost              token usage + per-message cost table\n\
+                                         /count             word/char/code-block counts for conversation\n\
+                                         /reset-cost        zero out cost + token counters\n\
                                          /export [file]     save transcript to markdown with frontmatter\n\
                                          /format  /raw      toggle markdown rendering on/off\n\
                                          /linenums  /ln     toggle code block line numbers\n\
@@ -5271,6 +5282,52 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                             format!("Pinned: \"{text}\"")
                                         ));
                                     }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/count" => {
+                                    let mut user_msgs = 0usize;
+                                    let mut asst_msgs = 0usize;
+                                    let mut user_words = 0usize;
+                                    let mut asst_words = 0usize;
+                                    let mut user_chars = 0usize;
+                                    let mut asst_chars = 0usize;
+                                    let mut code_blocks = 0usize;
+                                    for cl in &ui.chat_lines {
+                                        match cl {
+                                            ChatLine::User(body, _) => {
+                                                user_msgs += 1;
+                                                user_words += body.split_whitespace().count();
+                                                user_chars += body.len();
+                                            }
+                                            ChatLine::Assistant(body, _, _) => {
+                                                asst_msgs += 1;
+                                                asst_words += body.split_whitespace().count();
+                                                asst_chars += body.len();
+                                                // Count code fences (each pair = 1 block)
+                                                code_blocks += body.matches("```").count() / 2;
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    let total_words = user_words + asst_words;
+                                    let avg_asst = if asst_msgs > 0 { asst_words / asst_msgs } else { 0 };
+                                    ui.chat_lines.push(ChatLine::SystemNote(format!(
+                                        "Conversation counts\n  Messages:    {user_msgs} you  ·  {asst_msgs} AI\n  Words:       {user_words} you  ·  {asst_words} AI  ·  {total_words} total\n  Chars:       {user_chars} you  ·  {asst_chars} AI\n  Avg AI resp: ~{avg_asst}w\n  Code blocks: {code_blocks}"
+                                    )));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/reset-cost" | "/resetcost" => {
+                                    let old = ui.cost_usd;
+                                    ui.cost_usd = 0.0;
+                                    ui.tokens_in = 0;
+                                    ui.tokens_out = 0;
+                                    ui.tokens_total = 0;
+                                    ui.msg_cost_snapshots.clear();
+                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                        format!("Cost reset (was ${old:.4}). Tokens zeroed. Subsequent messages start fresh.")
+                                    ));
                                     ui.follow_tail = true;
                                     continue;
                                 }
@@ -5879,9 +5936,9 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         // Slash command completion: Tab while buffer starts with '/'
                         const SLASH_CMDS: &[&str] = &[
                             "/bm ", "/bookmark ", "/bookmarks",
-                            "/clear", "/clear-history", "/clh", "/compact", "/copy", "/cost", "/doctor", "/drop ", "/export", "/format",
+                            "/clear", "/clear-history", "/clh", "/compact", "/copy", "/cost", "/count", "/doctor", "/drop ", "/export", "/format",
                             "/go ", "/help", "/hist", "/history", "/linenums", "/load ", "/model ", "/note ", "/pin ", "/quit",
-                            "/raw", "/retry", "/search ", "/sessions", "/stats", "/template ", "/tmpl ", "/timestamps", "/todo ", "/undo", "/unpin",
+                            "/raw", "/reset-cost", "/retry", "/search ", "/sessions", "/stats", "/template ", "/tmpl ", "/timestamps", "/todo ", "/undo", "/unpin",
                         ];
                         let buf = ui.input_buffer.trim_end().to_string();
                         if buf.starts_with('/') && !buf.contains(' ') {
