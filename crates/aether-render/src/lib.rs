@@ -628,11 +628,33 @@ pub fn draw_frame(
             };
 
             f.render_widget(
-                Paragraph::new(chat)
+                Paragraph::new(chat.clone())
                     .wrap(Wrap { trim: false })
                     .scroll((effective_scroll, 0)),
                 main[0],
             );
+
+            // Scroll-back indicator: when user has scrolled up, show lines-below count.
+            if !state.follow_tail {
+                let lines_below = chat.len()
+                    .saturating_sub(effective_scroll as usize + viewport_h);
+                if lines_below > 0 {
+                    let label = format!("  ↓  {} more below  (End to resume tail)  ", lines_below);
+                    let ind_rect = ratatui::layout::Rect {
+                        x: main[0].x,
+                        y: main[0].y + main[0].height.saturating_sub(1),
+                        width: main[0].width,
+                        height: 1,
+                    };
+                    f.render_widget(
+                        Paragraph::new(Line::from(Span::styled(
+                            label,
+                            Style::default().fg(C_HDR_BG).bg(C_WARN),
+                        ))),
+                        ind_rect,
+                    );
+                }
+            }
         }
 
         // Side panel: tools+fleet when active, keyboard cheat-sheet when idle.
@@ -1027,6 +1049,13 @@ pub fn draw_frame(
                 format!("  ·  {right_str}"),
                 Style::default().fg(Color::Rgb(71, 85, 105)).bg(C_HDR_BG),
             ));
+            // Scroll mode indicator: amber badge when user has scrolled up from tail
+            if !state.follow_tail {
+                hints_spans.push(Span::styled(
+                    "  ↑SCROLL".to_string(),
+                    Style::default().fg(C_WARN).bg(C_HDR_BG).add_modifier(Modifier::BOLD),
+                ));
+            }
 
             let hints_line = Line::from(hints_spans);
             f.render_widget(
