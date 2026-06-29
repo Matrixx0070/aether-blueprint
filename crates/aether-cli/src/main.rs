@@ -4654,6 +4654,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                "/stats" => {
+                                    let msg_count = ui.msg_times_secs.len();
+                                    let elapsed = ui.session_start.elapsed().as_secs();
+                                    let elapsed_str = if elapsed < 60 { format!("{elapsed}s") }
+                                        else if elapsed < 3600 { format!("{}m{}s", elapsed/60, elapsed%60) }
+                                        else { format!("{}h{}m", elapsed/3600, (elapsed%3600)/60) };
+                                    let avg_tps = if ui.last_tps > 0.5 { format!("{:.0} t/s", ui.last_tps) } else { "—".to_string() };
+                                    let avg_dur = if !ui.response_durations.is_empty() {
+                                        let avg = ui.response_durations.iter().sum::<f64>() / ui.response_durations.len() as f64;
+                                        format!("{avg:.1}s avg")
+                                    } else { "—".to_string() };
+                                    let cost_str = if ui.cost_usd > 0.0 { format!("${:.4}", ui.cost_usd) } else { "—".to_string() };
+                                    let tok_in = ui.tokens_in;
+                                    let tok_out = ui.tokens_out;
+                                    let tools_total = ui.tools_ok + ui.tools_err;
+                                    let mut stat = format!(
+                                        "Session stats\n  Messages:   {msg_count} sent\n  Runtime:    {elapsed_str}\n  Speed:      {avg_tps}  response time: {avg_dur}\n  Tokens:     ↑{tok_in} ↓{tok_out}\n  Cost:       {cost_str}\n  Tools:      {}✓ {}✗ ({tools_total} total)",
+                                        ui.tools_ok, ui.tools_err
+                                    );
+                                    // Per-message cost breakdown (if we have cost snapshots)
+                                    if !ui.msg_cost_snapshots.is_empty() {
+                                        stat.push_str("\n  Per-msg:   ");
+                                        let mut prev = 0.0f64;
+                                        for (i, &snap) in ui.msg_cost_snapshots.iter().enumerate() {
+                                            let delta = snap - prev;
+                                            prev = snap;
+                                            stat.push_str(&format!(" [{i}] ${delta:.4}"));
+                                        }
+                                    }
+                                    ui.chat_lines.push(ChatLine::SystemNote(stat));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 cmd if cmd.starts_with("/load") => {
                                     let arg = cmd.trim_start_matches("/load").trim();
                                     let files = session_list();
@@ -4797,6 +4830,12 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                             ui.chat_lines.push(ChatLine::User(msg.clone()));
                             ui.follow_tail = true;
                             ui.status_running = true;
+                            // Record submission time for /stats
+                            let ts = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs();
+                            ui.msg_times_secs.push(ts);
                             if _ctx.send(UiCommand::UserMessage(msg)).is_err() {
                                 break 'outer;
                             }
@@ -4838,7 +4877,8 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         // Slash command completion: Tab while buffer starts with '/'
                         const SLASH_CMDS: &[&str] = &[
                             "/clear", "/compact", "/cost", "/export", "/help",
-                            "/load ", "/model ", "/quit", "/search ", "/sessions", "/undo",
+                            "/load ", "/model ", "/quit", "/search ", "/sessions",
+                            "/stats", "/undo",
                         ];
                         let buf = ui.input_buffer.trim_end().to_string();
                         if buf.starts_with('/') && !buf.contains(' ') {

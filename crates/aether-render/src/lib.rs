@@ -203,6 +203,16 @@ pub struct UiState {
     pub tools_err: u32,
     /// Character count of the in-progress response (for live streaming display).
     pub stream_chars: u32,
+    /// Wallclock seconds when each User message was submitted (for /stats).
+    pub msg_times_secs: Vec<u64>,
+    /// Cost snapshot at each AssistantDone (cumulative USD, for per-message delta).
+    pub msg_cost_snapshots: Vec<f64>,
+    /// Response durations in seconds for each completed exchange.
+    pub response_durations: Vec<f64>,
+    /// Response start instant for current in-flight request.
+    pub response_start: Option<std::time::Instant>,
+    /// True after AssistantDone — take cost snapshot on next Usage event.
+    pending_cost_snap: bool,
 }
 
 impl UiState {
@@ -269,6 +279,11 @@ impl UiState {
             tools_ok: 0,
             tools_err: 0,
             stream_chars: 0,
+            msg_times_secs: Vec::new(),
+            msg_cost_snapshots: Vec::new(),
+            response_durations: Vec::new(),
+            response_start: None,
+            pending_cost_snap: false,
         }
     }
 
@@ -277,6 +292,9 @@ impl UiState {
             UiEvent::AssistantDelta(d) => {
                 if self.stream_start.is_none() {
                     self.stream_start = Some(std::time::Instant::now());
+                }
+                if self.response_start.is_none() {
+                    self.response_start = Some(std::time::Instant::now());
                 }
                 self.stream_chars += d.chars().count() as u32;
                 match self.chat_lines.last_mut() {
@@ -294,6 +312,12 @@ impl UiState {
                     }
                 }
                 self.stream_chars = 0;
+                // Record response duration
+                if let Some(t0) = self.response_start.take() {
+                    self.response_durations.push(t0.elapsed().as_secs_f64());
+                }
+                // Schedule cost snapshot on next Usage event (which arrives after AssistantDone)
+                self.pending_cost_snap = true;
                 if matches!(self.chat_lines.last(), Some(ChatLine::AssistantPartial(_))) {
                     if let Some(last) = self.chat_lines.last_mut() {
                         *last = ChatLine::Assistant(final_text);
@@ -338,6 +362,11 @@ impl UiState {
                 self.tokens_out = output;
                 self.tokens_total = total;
                 self.cost_usd = cost_usd;
+                // Snapshot cost after AssistantDone (Usage arrives last in the event sequence)
+                if self.pending_cost_snap {
+                    self.pending_cost_snap = false;
+                    self.msg_cost_snapshots.push(cost_usd);
+                }
             }
             UiEvent::Error(e) => {
                 self.last_error = Some(e.clone());
