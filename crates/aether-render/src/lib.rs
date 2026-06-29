@@ -243,6 +243,8 @@ pub struct UiState {
     /// Count of assistant messages received while the user was manually scrolled up.
     /// Shown as "↓ N new" in the hints bar. Reset when the user returns to tail.
     pub new_msgs_while_scrolled: u32,
+    /// Instant when the last AssistantDone arrived — used to flash input border for ~1.2s.
+    pub response_done_at: Option<std::time::Instant>,
 }
 
 impl UiState {
@@ -322,6 +324,7 @@ impl UiState {
             history_search: None,
             history_presearch_buf: String::new(),
             new_msgs_while_scrolled: 0,
+            response_done_at: None,
         }
     }
 
@@ -374,6 +377,8 @@ impl UiState {
                 if !self.follow_tail {
                     self.new_msgs_while_scrolled += 1;
                 }
+                // Stamp completion time so draw_frame can flash the input border
+                self.response_done_at = Some(std::time::Instant::now());
             }
             UiEvent::ToolStart { name, summary } => {
                 self.tool_log.push(ToolEntry {
@@ -1040,14 +1045,20 @@ pub fn draw_frame(
                     .collect()
             };
 
+            let input_line_count = state.input_buffer.lines().count().max(1);
             let input_title = if ctx_pct > 0.75 {
                 format!(" ⚠ context {:.0}% full ", ctx_pct * 100.0)
             } else if let Some(note) = &state.pinned_note {
                 let preview: String = note.chars().take(40).collect();
                 format!(" ★ {} ", preview)
+            } else if input_line_count > 1 {
+                format!(" ↵ {} lines ", input_line_count)
             } else {
                 String::new()
             };
+            // Flash bright brand-blue for 1.2s after a response completes
+            let response_flash = state.response_done_at
+                .map_or(false, |t| t.elapsed().as_millis() < 1200);
             let input_border_color = if ctx_pct > 0.9 {
                 let ms = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -1058,6 +1069,13 @@ pub fn draw_frame(
                 C_WARN
             } else if state.pinned_note.is_some() {
                 C_WARN // amber for pinned
+            } else if response_flash {
+                // Pulse brand/dim alternating to draw attention without being disruptive
+                let ms = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis();
+                if (ms / 200) % 2 == 0 { C_BRAND } else { Color::Rgb(99, 102, 241) } // indigo-500
             } else {
                 C_BORDER
             };

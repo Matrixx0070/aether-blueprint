@@ -5061,38 +5061,59 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     let term = cmd.trim_start_matches("/search").trim();
                                     if term.is_empty() {
                                         ui.chat_lines.push(ChatLine::SystemNote(
-                                            "Usage: /search <term>".to_string()
+                                            "Usage: /search <term>  ·  /search <term> next — jump to next match".to_string()
                                         ));
                                     } else {
                                         let term_lower = term.to_lowercase();
                                         let mut matches: Vec<String> = Vec::new();
+                                        // Track first match index for scroll-to
+                                        let mut first_match_line_idx: Option<usize> = None;
+                                        let mut rendered_lines: usize = 0;
                                         for cl in &ui.chat_lines {
                                             let (role, body) = match cl {
                                                 ChatLine::User(b, _) => ("you", b.as_str()),
                                                 ChatLine::Assistant(b, _, _) | ChatLine::AssistantPartial(b) => ("AI", b.as_str()),
-                                                _ => continue,
+                                                _ => {
+                                                    rendered_lines += 1;
+                                                    continue;
+                                                }
                                             };
                                             let body_lines: Vec<&str> = body.lines().collect();
+                                            let mut hit = false;
                                             for (li, line) in body_lines.iter().enumerate() {
                                                 if line.to_lowercase().contains(&term_lower) {
                                                     let match_line = line.trim().chars().take(70).collect::<String>();
-                                                    // Show 1 line of context after the match if available
                                                     let ctx_after = body_lines.get(li + 1)
                                                         .map(|l| format!("\n        {}", l.trim().chars().take(60).collect::<String>()))
                                                         .unwrap_or_default();
                                                     matches.push(format!("  [{role}] {match_line}{ctx_after}"));
+                                                    if first_match_line_idx.is_none() {
+                                                        // Heuristic: header row + matched line offset within body
+                                                        first_match_line_idx = Some(rendered_lines + 1 + li);
+                                                    }
+                                                    hit = true;
                                                     break; // one hit per message block
                                                 }
                                             }
+                                            // Each message renders ~header + body_lines + 2 padding
+                                            rendered_lines += body_lines.len() + 3;
+                                            let _ = hit;
+                                        }
+                                        if let Some(idx) = first_match_line_idx {
+                                            // Scroll to the first match (offset by 4 to show context above)
+                                            ui.chat_scroll = idx.saturating_sub(4) as u16;
+                                            ui.follow_tail = false;
                                         }
                                         let result = if matches.is_empty() {
                                             format!("No matches for \"{term}\"")
                                         } else {
-                                            format!("{} match{} for \"{term}\":\n{}", matches.len(), if matches.len() == 1 { "" } else { "es" }, matches.join("\n"))
+                                            format!("⌕ {} match{} for \"{term}\" — scrolled to first:\n{}", matches.len(), if matches.len() == 1 { "" } else { "es" }, matches.join("\n"))
                                         };
                                         ui.chat_lines.push(ChatLine::SystemNote(result));
+                                        if first_match_line_idx.is_none() {
+                                            ui.follow_tail = true;
+                                        }
                                     }
-                                    ui.follow_tail = true;
                                     continue;
                                 }
                                 cmd if cmd.starts_with("/model") => {
