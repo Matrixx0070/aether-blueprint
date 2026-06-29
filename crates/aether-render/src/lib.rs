@@ -458,7 +458,7 @@ pub fn draw_frame(
                 )
             });
             let total = state.chat_lines.len();
-            let chat: Vec<Line> = state
+            let mut chat: Vec<Line> = state
                 .chat_lines
                 .iter()
                 .enumerate()
@@ -474,6 +474,22 @@ pub fn draw_frame(
                     chat_line_to_lines(cl, trail_spin, spin)
                 })
                 .collect();
+
+            // When running but no partial response yet, show a "thinking" line in chat.
+            if state.status_running
+                && !matches!(state.chat_lines.last(), Some(ChatLine::AssistantPartial(_)))
+            {
+                chat.push(Line::from(vec![
+                    Span::styled(
+                        "  ◆  ",
+                        Style::default().fg(C_ASST_PFX).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("{spin}  thinking…"),
+                        Style::default().fg(C_DIM),
+                    ),
+                ]));
+            }
 
             // Compute scroll: when follow_tail is set, scroll so the last line is visible.
             // We know how many rendered lines there are and the viewport height.
@@ -667,6 +683,11 @@ pub fn draw_frame(
                 _           => (C_DIM,  "◆"),
             };
 
+            // Message counter: count User lines
+            let msg_count = state.chat_lines.iter()
+                .filter(|cl| matches!(cl, ChatLine::User(_)))
+                .count();
+
             // Elapsed time
             let elapsed = state.session_start.elapsed().as_secs();
             let elapsed_str = if elapsed < 60 {
@@ -712,6 +733,11 @@ pub fn draw_frame(
             }
             let right_str = right_parts.join("  ·  ");
 
+            let msg_str = if msg_count > 0 {
+                format!("  ·  msg {msg_count}")
+            } else {
+                String::new()
+            };
             let mut hints_spans = vec![
                 Span::styled(
                     format!("  {perm_sym} {perm}  ·  "),
@@ -720,6 +746,10 @@ pub fn draw_frame(
                 Span::styled(
                     format!("{}↵ send  ⇧↵ nl  ↑↓ hist  ^L clear  /help", thinking_part),
                     Style::default().fg(C_DIM).bg(C_HDR_BG),
+                ),
+                Span::styled(
+                    msg_str,
+                    Style::default().fg(Color::Rgb(51, 65, 85)).bg(C_HDR_BG),
                 ),
             ];
             if ctx_pct > 0.0 {
