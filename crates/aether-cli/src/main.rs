@@ -4360,6 +4360,19 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
     };
     let mut ui = UiState::new(model.to_string(), session_id.clone(), perm_str, cwd);
 
+    // Read git branch (best-effort; None if not in a repo or git not found)
+    if let Ok(out) = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+    {
+        if out.status.success() {
+            let branch = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !branch.is_empty() && branch != "HEAD" {
+                ui.git_branch = Some(branch);
+            }
+        }
+    }
+
     let (etx, mut erx, _ctx, mut crx) = channels();
     let etx_for_driver = etx.clone();
 

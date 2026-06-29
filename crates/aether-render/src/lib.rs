@@ -185,6 +185,8 @@ pub struct UiState {
     pub session_id: String,
     pub perm_mode: String,
     pub cwd: String,
+    /// Current git branch, if we're inside a git repo (None otherwise).
+    pub git_branch: Option<String>,
     pub chat_lines: Vec<ChatLine>,
     pub tool_log: Vec<ToolEntry>,
     pub fleet: Vec<FleetEntry>,
@@ -276,6 +278,7 @@ impl UiState {
             session_id,
             perm_mode,
             cwd,
+            git_branch: None,
             chat_lines,
             tool_log: Vec::new(),
             fleet: Vec::new(),
@@ -513,7 +516,7 @@ pub fn draw_frame(
                 _           => (C_DIM,  "◆"),
             };
 
-            let hdr = Line::from(vec![
+            let mut hdr_spans: Vec<Span<'static>> = vec![
                 Span::raw("  "),
                 Span::styled(
                     "◆ Aether",
@@ -529,12 +532,22 @@ pub fn draw_frame(
                 ),
                 Span::styled("  ·  ", Style::default().fg(C_DIM).bg(C_HDR_BG)),
                 Span::styled(cwd, Style::default().fg(C_DIM).bg(C_HDR_BG)),
+            ];
+            if let Some(branch) = &state.git_branch {
+                hdr_spans.push(Span::styled("  ", Style::default().bg(C_HDR_BG)));
+                hdr_spans.push(Span::styled(
+                    format!("⎇ {branch}"),
+                    Style::default().fg(C_ASST_PFX).bg(C_HDR_BG),
+                ));
+            }
+            hdr_spans.extend([
                 Span::styled("  ·  ", Style::default().fg(C_DIM).bg(C_HDR_BG)),
                 Span::styled(
                     format!("{perm_sym} {perm}"),
                     Style::default().fg(perm_hdr_color).bg(C_HDR_BG),
                 ),
             ]);
+            let hdr = Line::from(hdr_spans);
             f.render_widget(
                 Paragraph::new(hdr).style(Style::default().bg(C_HDR_BG)),
                 outer[0],
