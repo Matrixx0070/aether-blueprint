@@ -6159,14 +6159,25 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                         .unwrap_or_else(|| std::path::PathBuf::from("/tmp/aether-todo.md"));
                                     let sub = cmd.trim_start_matches("/todo").trim();
                                     let msg = if sub.is_empty() || sub == "list" {
-                                        // List todos
+                                        // List todos with visual progress bar
                                         let content = std::fs::read_to_string(&todo_path).unwrap_or_default();
                                         if content.trim().is_empty() {
-                                            format!("No todos. Add with: /todo + <task>  |  done with: /todo done <N>")
+                                            "No todos. Add with: /todo + <task>  |  done with: /todo done <N>".to_string()
                                         } else {
-                                            let mut out = String::from("Todos:\n");
-                                            for (i, line) in content.lines().filter(|l| !l.is_empty()).enumerate() {
-                                                out.push_str(&format!("  [{:>2}] {line}\n", i + 1));
+                                            let lines: Vec<&str> = content.lines().filter(|l| !l.is_empty()).collect();
+                                            let total = lines.len();
+                                            let done = lines.iter().filter(|l| l.trim_start().starts_with("- [x]")).count();
+                                            let pending = total - done;
+                                            // Visual progress bar
+                                            let bar_filled = if total > 0 { (done * 10 + total / 2) / total } else { 0 };
+                                            let bar = "█".repeat(bar_filled) + &"░".repeat(10usize.saturating_sub(bar_filled));
+                                            let pct = if total > 0 { done * 100 / total } else { 0 };
+                                            let mut out = format!("Todos  [{bar}] {pct}%  ({done}/{total} done, {pending} pending)\n");
+                                            for (i, line) in lines.iter().enumerate() {
+                                                let is_done = line.trim_start().starts_with("- [x]");
+                                                let symbol = if is_done { "✓" } else { "□" };
+                                                let text = line.trim_start_matches("- [x]").trim_start_matches("- [ ]").trim();
+                                                out.push_str(&format!("  [{:>2}] {symbol} {text}\n", i + 1));
                                             }
                                             out.push_str("  /todo + <task>  |  /todo done <N>  |  /todo clear-done");
                                             out

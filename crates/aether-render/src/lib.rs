@@ -1036,12 +1036,19 @@ pub fn draw_frame(
                 } else {
                     String::new()
                 };
-                if err > 0 {
-                    format!(" Tools  {}✓  {}✗{}{} ", ok, err, tps_part, resp_badge)
-                } else if ok > 0 {
-                    format!(" Tools  {}✓{}{} ", ok, tps_part, resp_badge)
+                let pin_badge = if let Some(ref note) = state.pinned_note {
+                    let preview: String = note.chars().take(18).collect();
+                    let ellipsis = if note.chars().count() > 18 { "…" } else { "" };
+                    format!("  ★ {}{}", preview, ellipsis)
                 } else {
-                    format!(" Tools{}{} ", tps_part, resp_badge)
+                    String::new()
+                };
+                if err > 0 {
+                    format!(" Tools  {}✓  {}✗{}{}{} ", ok, err, tps_part, resp_badge, pin_badge)
+                } else if ok > 0 {
+                    format!(" Tools  {}✓{}{}{} ", ok, tps_part, resp_badge, pin_badge)
+                } else {
+                    format!(" Tools{}{}{} ", tps_part, resp_badge, pin_badge)
                 }
             };
             let tools_title_color = if state.tools_err > 0 { C_ERR } else if state.tools_ok > 0 { C_OK } else { C_DIM };
@@ -1374,19 +1381,19 @@ pub fn draw_frame(
 
             // Right stats segment
             let thinking_part = if state.status_running {
-                let timer_str = if let Some(t0) = state.stream_start {
+                let (timer_str, cps_str) = if let Some(t0) = state.stream_start {
                     let secs = t0.elapsed().as_secs_f64();
-                    if secs >= 1.0 {
-                        format!("  ⏱{:.1}s", secs)
-                    } else {
-                        String::new()
-                    }
+                    let timer = if secs >= 1.0 { format!("  ⏱{:.1}s", secs) } else { String::new() };
+                    let cps = if secs >= 0.5 && state.stream_chars > 0 {
+                        format!("  {:.0}c/s", state.stream_chars as f64 / secs)
+                    } else { String::new() };
+                    (timer, cps)
                 } else {
-                    String::new()
+                    (String::new(), String::new())
                 };
                 if state.stream_chars > 0 {
                     let words = (state.stream_chars / 5).max(1);
-                    format!("{spin}{timer_str}  ~{}w ~{}c  ", words, state.stream_chars)
+                    format!("{spin}{timer_str}{cps_str}  ~{}w ~{}c  ", words, state.stream_chars)
                 } else {
                     format!("{spin}{timer_str}  ")
                 }
