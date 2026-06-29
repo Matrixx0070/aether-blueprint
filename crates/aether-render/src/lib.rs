@@ -1526,11 +1526,21 @@ fn render_message(
         } else {
             String::new()
         };
+        // Color timing badge by response speed: green (<5s) → amber (<15s) → red (≥15s)
+        let timing_color = if !is_assistant {
+            C_DIM
+        } else if duration_secs < 5.0 {
+            C_OK
+        } else if duration_secs < 15.0 {
+            C_WARN
+        } else {
+            C_ERR
+        };
         out.push(Line::from(vec![
             Span::raw(CONT),
             Span::styled(
                 format!("  ─  {timing_str}{wc_str}{cost_str}"),
-                Style::default().fg(C_DIM),
+                Style::default().fg(timing_color),
             ),
         ]));
     } else {
