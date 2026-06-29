@@ -4518,7 +4518,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     KeyCode::Char('l') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         // Clear visible chat (keeps session context intact)
                         ui.chat_lines.retain(|cl| !matches!(cl,
-                            ChatLine::User(_) | ChatLine::Assistant(_) |
+                            ChatLine::User(_) | ChatLine::Assistant(_, _) |
                             ChatLine::AssistantPartial(_) | ChatLine::SystemNote(_)
                         ));
                         ui.chat_scroll = 0;
@@ -4533,7 +4533,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                             match msg.trim() {
                                 "/clear" | "/c" => {
                                     ui.chat_lines.retain(|cl| !matches!(cl,
-                                        ChatLine::User(_) | ChatLine::Assistant(_) |
+                                        ChatLine::User(_) | ChatLine::Assistant(_, _) |
                                         ChatLine::AssistantPartial(_) | ChatLine::SystemNote(_)
                                     ));
                                     ui.chat_scroll = 0;
@@ -4562,7 +4562,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     // Remove the last User + Assistant/AssistantPartial exchange.
                                     // Walk from end: remove trailing assistant blocks, then trailing user block.
                                     let mut removed = 0usize;
-                                    while matches!(ui.chat_lines.last(), Some(ChatLine::Assistant(_) | ChatLine::AssistantPartial(_) | ChatLine::SystemNote(_))) {
+                                    while matches!(ui.chat_lines.last(), Some(ChatLine::Assistant(_, _) | ChatLine::AssistantPartial(_) | ChatLine::SystemNote(_))) {
                                         ui.chat_lines.pop();
                                         removed += 1;
                                     }
@@ -4747,7 +4747,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                         for cl in &ui.chat_lines {
                                             let (role, body) = match cl {
                                                 ChatLine::User(b) => ("you", b.as_str()),
-                                                ChatLine::Assistant(b) | ChatLine::AssistantPartial(b) => ("AI", b.as_str()),
+                                                ChatLine::Assistant(b, _) | ChatLine::AssistantPartial(b) => ("AI", b.as_str()),
                                                 _ => continue,
                                             };
                                             for line in body.lines() {
@@ -4812,7 +4812,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                                 content.push_str(m);
                                                 content.push_str("\n\n");
                                             }
-                                            ChatLine::Assistant(m) | ChatLine::AssistantPartial(m) => {
+                                            ChatLine::Assistant(m, _) | ChatLine::AssistantPartial(m) => {
                                                 content.push_str("**Aether:** ");
                                                 content.push_str(m);
                                                 content.push_str("\n\n");
@@ -4959,7 +4959,7 @@ fn session_dir() -> std::path::PathBuf {
 fn session_save(ui: &aether_render::UiState) -> std::io::Result<std::path::PathBuf> {
     use aether_render::ChatLine;
     let has_convo = ui.chat_lines.iter().any(|cl| {
-        matches!(cl, ChatLine::User(_) | ChatLine::Assistant(_))
+        matches!(cl, ChatLine::User(_) | ChatLine::Assistant(_, _))
     });
     if !has_convo {
         return Err(std::io::Error::new(std::io::ErrorKind::Other, "no conversation"));
@@ -4982,7 +4982,7 @@ fn session_save(ui: &aether_render::UiState) -> std::io::Result<std::path::PathB
         use aether_render::ChatLine;
         let (role, text) = match cl {
             ChatLine::User(m) => ("user", m.as_str()),
-            ChatLine::Assistant(m) | ChatLine::AssistantPartial(m) => ("assistant", m.as_str()),
+            ChatLine::Assistant(m, _) | ChatLine::AssistantPartial(m) => ("assistant", m.as_str()),
             ChatLine::SystemNote(m) => ("system", m.as_str()),
             _ => continue,
         };
@@ -5044,7 +5044,7 @@ fn session_load(path: &std::path::Path) -> Vec<aether_render::ChatLine> {
             .replace("\\\\", "\\");
         match role {
             "user" => lines.push(ChatLine::User(body)),
-            "assistant" => lines.push(ChatLine::Assistant(body)),
+            "assistant" => lines.push(ChatLine::Assistant(body, 0.0)),
             "system" => lines.push(ChatLine::SystemNote(body)),
             _ => {}
         }

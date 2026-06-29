@@ -37,6 +37,12 @@ const C_WARN: Color = Color::Rgb(251, 191, 36); // amber-400 — running / warn
 const C_ERR: Color = Color::Rgb(248, 113, 113); // red-400   — error
 const C_BORDER: Color = Color::Rgb(51, 65, 85); // slate-700 — panel border
 
+// Syntax-highlighting palette (inside fenced code blocks)
+const C_SYN_KW:  Color = Color::Rgb(196, 181, 253); // violet-300 — keywords
+const C_SYN_STR: Color = Color::Rgb(110, 231, 183); // emerald-300 — strings
+const C_SYN_NUM: Color = Color::Rgb(253, 186, 116); // orange-300  — numbers
+const C_SYN_CMT: Color = Color::Rgb(100, 116, 139); // slate-500   — comments
+
 // Eight-frame braille spinner; advances at ~8 fps (125 ms / frame).
 const SPINNER_FRAMES: &[&str] = &["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
 
@@ -129,7 +135,8 @@ pub enum SplashStyle {
 #[derive(Debug, Clone)]
 pub enum ChatLine {
     User(String),
-    Assistant(String),
+    /// Completed assistant message. Second field is response wall-clock seconds (0.0 = no timing).
+    Assistant(String, f64),
     AssistantPartial(String),
     SystemNote(String),
     /// Startup splash row: `logo` in brand-blue bold, `info` in `style`-determined colour.
@@ -319,18 +326,20 @@ impl UiState {
                     }
                 }
                 self.stream_chars = 0;
-                // Record response duration
-                if let Some(t0) = self.response_start.take() {
-                    self.response_durations.push(t0.elapsed().as_secs_f64());
-                }
+                // Record response duration (used both for /stats and per-message badge)
+                let response_dur = self.response_start.take().map(|t0| {
+                    let d = t0.elapsed().as_secs_f64();
+                    self.response_durations.push(d);
+                    d
+                }).unwrap_or(0.0);
                 // Schedule cost snapshot on next Usage event (which arrives after AssistantDone)
                 self.pending_cost_snap = true;
                 if matches!(self.chat_lines.last(), Some(ChatLine::AssistantPartial(_))) {
                     if let Some(last) = self.chat_lines.last_mut() {
-                        *last = ChatLine::Assistant(final_text);
+                        *last = ChatLine::Assistant(final_text, response_dur);
                     }
                 } else {
-                    self.chat_lines.push(ChatLine::Assistant(final_text));
+                    self.chat_lines.push(ChatLine::Assistant(final_text, response_dur));
                 }
             }
             UiEvent::ToolStart { name, summary } => {
@@ -511,7 +520,7 @@ pub fn draw_frame(
         // or nothing (100% chat) on the pre-convo splash screen.
         let has_tools = !state.tool_log.is_empty() || !state.fleet.is_empty();
         let has_convo_for_layout = state.chat_lines.iter().any(|cl| {
-            matches!(cl, ChatLine::User(_) | ChatLine::Assistant(_) | ChatLine::AssistantPartial(_))
+            matches!(cl, ChatLine::User(_) | ChatLine::Assistant(_, _) | ChatLine::AssistantPartial(_))
         });
         let has_side = has_tools || has_convo_for_layout;
         let main = Layout::default()
@@ -529,7 +538,7 @@ pub fn draw_frame(
             let has_convo = state.chat_lines.iter().any(|cl| {
                 matches!(
                     cl,
-                    ChatLine::User(_) | ChatLine::Assistant(_) | ChatLine::AssistantPartial(_)
+                    ChatLine::User(_) | ChatLine::Assistant(_, _) | ChatLine::AssistantPartial(_)
                 )
             });
 
@@ -859,7 +868,12 @@ pub fn draw_frame(
                 .map(|i| if i < filled { '█' } else { '░' })
                 .collect();
             let ctx_color = if ctx_pct > 0.85 {
-                C_ERR
+                // Pulse red/amber when critically high context
+                let ms = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis();
+                if (ms / 500) % 2 == 0 { C_ERR } else { C_WARN }
             } else if ctx_pct > 0.65 {
                 C_WARN
             } else {
@@ -936,16 +950,16 @@ pub fn draw_frame(
 fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str) -> Vec<Line<'static>> {
     match cl {
         ChatLine::User(body) => {
-            render_message("  >  ", C_USER_PFX, body, C_BODY, false, trail_spin, spin)
+            render_message("  >  ", C_USER_PFX, body, C_BODY, false, trail_spin, spin, 0.0)
         }
-        ChatLine::Assistant(body) => {
-            render_message("  ◆  ", C_ASST_PFX, body, C_BODY, true, false, spin)
+        ChatLine::Assistant(body, dur) => {
+            render_message("  ◆  ", C_ASST_PFX, body, C_BODY, true, false, spin, *dur)
         }
         ChatLine::AssistantPartial(body) => {
-            render_message("  ◆  ", C_ASST_PFX, body, C_BODY, true, trail_spin, spin)
+            render_message("  ◆  ", C_ASST_PFX, body, C_BODY, true, trail_spin, spin, 0.0)
         }
         ChatLine::SystemNote(body) => {
-            render_message("  ─  ", C_DIM, body, C_BODY, false, false, spin)
+            render_message("  ─  ", C_DIM, body, C_BODY, false, false, spin, 0.0)
         }
         ChatLine::SplashRow { logo, info, style } => {
             let (info_color, info_mod) = match style {
@@ -980,6 +994,7 @@ fn chat_line_to_lines(cl: &ChatLine, trail_spin: bool, spin: &str) -> Vec<Line<'
 /// `is_assistant`— enables inline-markdown rendering and code-block colouring
 /// `trail_spin`  — append the live spinner to the very last line
 /// `spin`        — current spinner frame string
+/// `duration_secs` — response wall-clock time (0.0 = no badge)
 fn render_message(
     prefix: &'static str,
     prefix_color: Color,
@@ -988,6 +1003,7 @@ fn render_message(
     is_assistant: bool,
     trail_spin: bool,
     spin: &str,
+    duration_secs: f64,
 ) -> Vec<Line<'static>> {
     let pfx_style = Style::default()
         .fg(prefix_color)
@@ -998,6 +1014,7 @@ fn render_message(
     let mut out: Vec<Line<'static>> = Vec::new();
     let mut first = true;
     let mut in_code_block = false;
+    let mut code_lang = String::new();
 
     let raw_lines: Vec<&str> = body.lines().collect();
     let n = raw_lines.len();
@@ -1007,7 +1024,13 @@ fn render_message(
         let trimmed = line.trim_start();
 
         if trimmed.starts_with("```") {
-            in_code_block = !in_code_block;
+            if in_code_block {
+                in_code_block = false;
+                code_lang.clear();
+            } else {
+                in_code_block = true;
+                code_lang = trimmed.trim_start_matches('`').trim().to_lowercase();
+            }
         }
 
         let leader: Span<'static> = if first {
@@ -1030,11 +1053,8 @@ fn render_message(
                 Style::default().fg(C_DIM),
             )]
         } else if in_code_block {
-            // Inside a fenced code block: sky-300 on slate-800 background
-            vec![Span::styled(
-                line.to_string(),
-                Style::default().fg(C_CODE_FG).bg(C_CODE_BG),
-            )]
+            // Inside a fenced code block: syntax-highlighted spans
+            highlight_code_line(line, &code_lang)
         } else {
             // Normal assistant prose: check for block-level markdown patterns first.
             // Horizontal rule: --- / *** / ___
@@ -1100,8 +1120,23 @@ fn render_message(
         out.push(Line::from(row));
     }
 
-    // Blank separator line after each message
-    out.push(Line::from(""));
+    // Separator line after each message: show response time for completed assistant messages.
+    if duration_secs > 0.1 {
+        let timing_str = if duration_secs >= 10.0 {
+            format!("{:.0}s", duration_secs)
+        } else {
+            format!("{:.1}s", duration_secs)
+        };
+        out.push(Line::from(vec![
+            Span::raw(CONT),
+            Span::styled(
+                format!("  ─  {timing_str}"),
+                Style::default().fg(C_DIM),
+            ),
+        ]));
+    } else {
+        out.push(Line::from(""));
+    }
     out
 }
 
@@ -1192,6 +1227,195 @@ fn inline_markdown_spans(line: &str, body_color: Color) -> Vec<Span<'static>> {
     flush_buf(&mut buf, &mut out, body_color);
     if out.is_empty() {
         out.push(Span::raw(String::new()));
+    }
+    out
+}
+
+// ── syntax highlighting ───────────────────────────────────────────────────────
+
+/// Tokenize one line from a fenced code block into styled spans.
+/// Handles: line comments, quoted strings (with backslash escapes), numeric literals,
+/// and language keywords. Everything else gets the default code color (sky-300).
+fn highlight_code_line(line: &str, lang: &str) -> Vec<Span<'static>> {
+    // Full-line comment detection (cheaper than per-char scanning)
+    let trimmed = line.trim_start();
+    let is_line_comment = match lang {
+        "rust" | "js" | "ts" | "javascript" | "typescript" | "java" | "c" | "cpp"
+        | "go" | "swift" | "kotlin" | "cs" | "csharp" | "scala" =>
+            trimmed.starts_with("//"),
+        "python" | "ruby" | "rb" | "bash" | "sh" | "shell" | "toml" | "yaml"
+        | "yml" | "r" | "perl" | "pl" | "makefile" | "dockerfile" =>
+            trimmed.starts_with('#'),
+        "sql" | "lua" | "haskell" | "hs" => trimmed.starts_with("--"),
+        _ => trimmed.starts_with("//") || trimmed.starts_with('#'),
+    };
+    if is_line_comment {
+        return vec![Span::styled(line.to_string(), Style::default().fg(C_SYN_CMT).bg(C_CODE_BG))];
+    }
+
+    // Language keyword sets
+    let keywords: &[&str] = match lang {
+        "rust" => &[
+            "fn", "let", "mut", "const", "static", "use", "pub", "mod", "impl",
+            "struct", "enum", "trait", "type", "where", "for", "while", "loop",
+            "if", "else", "match", "return", "true", "false", "self", "Self",
+            "super", "crate", "move", "async", "await", "dyn", "ref", "in", "as",
+            "unsafe", "extern", "break", "continue", "Box", "Vec", "Option",
+            "Result", "Some", "None", "Ok", "Err",
+        ],
+        "python" => &[
+            "def", "class", "import", "from", "return", "if", "elif", "else",
+            "for", "while", "in", "not", "and", "or", "True", "False", "None",
+            "with", "as", "try", "except", "finally", "raise", "pass", "break",
+            "continue", "lambda", "yield", "global", "nonlocal", "assert", "del",
+            "async", "await", "is", "print",
+        ],
+        "js" | "javascript" | "ts" | "typescript" => &[
+            "function", "const", "let", "var", "return", "if", "else", "for",
+            "while", "class", "import", "export", "from", "async", "await", "new",
+            "this", "typeof", "instanceof", "true", "false", "null", "undefined",
+            "switch", "case", "break", "continue", "try", "catch", "finally",
+            "throw", "in", "of", "extends", "super", "static", "get", "set",
+        ],
+        "go" => &[
+            "func", "var", "const", "type", "package", "import", "return", "if",
+            "else", "for", "range", "switch", "case", "break", "continue", "go",
+            "defer", "chan", "map", "interface", "struct", "true", "false", "nil",
+            "make", "new", "append", "len", "cap", "select", "default",
+        ],
+        "bash" | "sh" | "shell" => &[
+            "if", "then", "else", "elif", "fi", "for", "while", "do", "done",
+            "case", "esac", "in", "function", "return", "exit", "echo", "export",
+            "source", "local", "readonly", "declare",
+        ],
+        "java" | "kotlin" => &[
+            "public", "private", "protected", "class", "interface", "extends",
+            "implements", "import", "package", "return", "if", "else", "for",
+            "while", "switch", "case", "break", "continue", "new", "this", "super",
+            "static", "final", "void", "true", "false", "null", "try", "catch",
+            "finally", "throw", "throws",
+        ],
+        _ => &[],
+    };
+
+    // Character-level scanner
+    let chars: Vec<char> = line.chars().collect();
+    let len = chars.len();
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut buf = String::new();
+    let mut i = 0;
+
+    macro_rules! flush_buf {
+        ($color:expr) => {
+            if !buf.is_empty() {
+                out.push(Span::styled(
+                    std::mem::take(&mut buf),
+                    Style::default().fg($color).bg(C_CODE_BG),
+                ));
+            }
+        };
+    }
+
+    while i < len {
+        let c = chars[i];
+
+        // Quoted string: " or ' (with backslash escape handling)
+        if c == '"' || c == '\'' {
+            flush_buf!(C_CODE_FG);
+            let quote = c;
+            let mut s = String::new();
+            s.push(c);
+            i += 1;
+            while i < len {
+                let sc = chars[i];
+                if sc == '\\' && i + 1 < len {
+                    s.push(sc);
+                    i += 1;
+                    s.push(chars[i]);
+                } else {
+                    s.push(sc);
+                    if sc == quote {
+                        break;
+                    }
+                }
+                i += 1;
+            }
+            i += 1;
+            out.push(Span::styled(s, Style::default().fg(C_SYN_STR).bg(C_CODE_BG)));
+            continue;
+        }
+
+        // Numeric literal: digit at start of token
+        if c.is_ascii_digit() {
+            let at_word_start = i == 0 || {
+                let p = chars[i - 1];
+                !p.is_alphanumeric() && p != '_'
+            };
+            if at_word_start {
+                flush_buf!(C_CODE_FG);
+                let mut s = String::new();
+                while i < len
+                    && (chars[i].is_ascii_alphanumeric()
+                        || chars[i] == '.'
+                        || chars[i] == '_'
+                        || chars[i] == 'x'
+                        || chars[i] == 'o'
+                        || chars[i] == 'b')
+                {
+                    s.push(chars[i]);
+                    i += 1;
+                }
+                out.push(Span::styled(s, Style::default().fg(C_SYN_NUM).bg(C_CODE_BG)));
+                continue;
+            }
+        }
+
+        // Keyword: alphabetic or underscore at word boundary
+        if (c.is_alphabetic() || c == '_') && !keywords.is_empty() {
+            let at_word_start = i == 0 || {
+                let p = chars[i - 1];
+                !p.is_alphanumeric() && p != '_'
+            };
+            if at_word_start {
+                let mut matched_kw: Option<&str> = None;
+                'kw: for &kw in keywords {
+                    let kw_c: Vec<char> = kw.chars().collect();
+                    let kl = kw_c.len();
+                    if i + kl > len {
+                        continue;
+                    }
+                    for (ki, &kch) in kw_c.iter().enumerate() {
+                        if chars[i + ki] != kch {
+                            continue 'kw;
+                        }
+                    }
+                    // Must be a word boundary after
+                    let after = i + kl;
+                    if after < len && (chars[after].is_alphanumeric() || chars[after] == '_') {
+                        continue 'kw;
+                    }
+                    matched_kw = Some(kw);
+                    break;
+                }
+                if let Some(kw) = matched_kw {
+                    flush_buf!(C_CODE_FG);
+                    out.push(Span::styled(
+                        kw.to_string(),
+                        Style::default().fg(C_SYN_KW).bg(C_CODE_BG).add_modifier(Modifier::BOLD),
+                    ));
+                    i += kw.len();
+                    continue;
+                }
+            }
+        }
+
+        buf.push(c);
+        i += 1;
+    }
+
+    flush_buf!(C_CODE_FG);
+    if out.is_empty() {
+        out.push(Span::styled(String::new(), Style::default().fg(C_CODE_FG).bg(C_CODE_BG)));
     }
     out
 }
