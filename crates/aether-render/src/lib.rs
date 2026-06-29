@@ -281,6 +281,9 @@ pub struct UiState {
     /// Active colour-theme index (0=sky, 1=emerald, 2=rose).
     /// Affects brand + accent colours. Cycled by /theme command.
     pub theme: u8,
+    /// When true, hints bar is hidden — maximises chat height (zen/focus mode).
+    /// Toggled by /focus command or Ctrl+F.
+    pub focus_mode: bool,
 }
 
 impl UiState {
@@ -376,6 +379,7 @@ impl UiState {
             show_line_numbers: false,
             input_ghost: None,
             theme: 0,
+            focus_mode: false,
         }
     }
 
@@ -617,13 +621,15 @@ pub fn draw_frame(
         let input_height = (input_content_lines + 1).min(8) as u16;
 
         // Outer vertical split: header | main | input | hints
+        // hints bar is collapsed to 0 in focus mode to maximise chat height.
+        let hints_height: u16 = if state.focus_mode { 0 } else { 1 };
         let outer = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1),            // header bar
                 Constraint::Min(5),               // chat + tools
                 Constraint::Length(input_height), // input (dynamic)
-                Constraint::Length(1),            // hints bar
+                Constraint::Length(hints_height), // hints bar (0 in focus mode)
             ])
             .split(f.area());
 
@@ -695,6 +701,25 @@ pub fn draw_frame(
                     format!("+{}h{}m", secs / 3600, (secs % 3600) / 60)
                 }
             };
+            // Exchange counter badge (only when conversation has started)
+            let exchange_count = state.chat_lines.iter()
+                .filter(|cl| matches!(cl, ChatLine::User(_, _)))
+                .count();
+            if exchange_count > 0 {
+                hdr_spans.push(Span::styled("  ·  ", Style::default().fg(C_DIM).bg(C_HDR_BG)));
+                hdr_spans.push(Span::styled(
+                    format!("{exchange_count}↵"),
+                    Style::default().fg(C_DIM).bg(C_HDR_BG),
+                ));
+            }
+            // Focus mode indicator
+            if state.focus_mode {
+                hdr_spans.push(Span::styled("  ·  ", Style::default().fg(C_DIM).bg(C_HDR_BG)));
+                hdr_spans.push(Span::styled(
+                    "[focus]",
+                    Style::default().fg(t_accent).bg(C_HDR_BG),
+                ));
+            }
             hdr_spans.extend([
                 Span::styled("  ·  ", Style::default().fg(C_DIM).bg(C_HDR_BG)),
                 Span::styled(wall_clock, Style::default().fg(C_DIM).bg(C_HDR_BG)),

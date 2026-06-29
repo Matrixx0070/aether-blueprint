@@ -4849,7 +4849,8 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         // Confirm search: exit search mode, keep matched buffer
                         ui.history_search = None;
                         ui.history_presearch_buf.clear();
-                        if k.modifiers.contains(KeyModifiers::SHIFT) {
+                        if k.modifiers.contains(KeyModifiers::SHIFT) || k.modifiers.contains(KeyModifiers::CONTROL) {
+                            // Shift+Enter or Ctrl+Enter: insert newline (multi-line input)
                             ui.input_buffer.insert(ui.input_cursor, '\n');
                             ui.input_cursor += 1;
                         } else if !ui.input_buffer.trim().is_empty() && !ui.status_running {
@@ -5408,6 +5409,59 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     ui.chat_lines.push(ChatLine::SystemNote(
                                         format!("Theme → {name}  (/theme to cycle)")
                                     ));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/focus" => {
+                                    ui.focus_mode = !ui.focus_mode;
+                                    let state = if ui.focus_mode { "on (hints bar hidden)" } else { "off" };
+                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                        format!("Focus mode {state}  (/focus or Ctrl+F to toggle)")
+                                    ));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/diff" => {
+                                    // Collect last two completed AI responses
+                                    let asst_texts: Vec<&str> = ui.chat_lines.iter().rev()
+                                        .filter_map(|cl| {
+                                            if let ChatLine::Assistant(body, _, _) = cl { Some(body.as_str()) } else { None }
+                                        })
+                                        .take(2)
+                                        .collect();
+                                    if asst_texts.len() < 2 {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Need at least 2 AI responses to diff.".to_string()
+                                        ));
+                                    } else {
+                                        let old_lines: Vec<&str> = asst_texts[1].lines().collect();
+                                        let new_lines: Vec<&str> = asst_texts[0].lines().collect();
+                                        let mut diff = String::from("diff  (prev → latest)\n");
+                                        // Simple LCS-free unified diff: mark lines removed/added
+                                        let old_set: std::collections::HashSet<&str> = old_lines.iter().copied().collect();
+                                        let new_set: std::collections::HashSet<&str> = new_lines.iter().copied().collect();
+                                        let mut changed = 0usize;
+                                        for line in &old_lines {
+                                            if !new_set.contains(*line) {
+                                                let preview: String = line.chars().take(70).collect();
+                                                diff.push_str(&format!("  - {preview}\n"));
+                                                changed += 1;
+                                            }
+                                        }
+                                        for line in &new_lines {
+                                            if !old_set.contains(*line) {
+                                                let preview: String = line.chars().take(70).collect();
+                                                diff.push_str(&format!("  + {preview}\n"));
+                                                changed += 1;
+                                        }
+                                        }
+                                        if changed == 0 {
+                                            diff.push_str("  (responses are identical)");
+                                        } else {
+                                            diff.push_str(&format!("\n  {changed} line(s) changed"));
+                                        }
+                                        ui.chat_lines.push(ChatLine::SystemNote(diff));
+                                    }
                                     ui.follow_tail = true;
                                     continue;
                                 }
@@ -6088,7 +6142,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         // Slash command completion: Tab while buffer starts with '/'
                         const SLASH_CMDS: &[&str] = &[
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
-                            "/clear", "/clear-history", "/clh", "/compact", "/copy", "/cost", "/count", "/doctor", "/drop ", "/export", "/format",
+                            "/clear", "/clear-history", "/clh", "/compact", "/copy", "/cost", "/count", "/diff", "/doctor", "/drop ", "/export", "/focus", "/format",
                             "/go ", "/grep ", "/help", "/hist", "/history", "/linenums", "/load ", "/model ", "/note ", "/num", "/numbers", "/pin ", "/quit",
                             "/raw", "/reset-cost", "/retry", "/search ", "/sessions", "/stats", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/undo", "/unpin", "/wrap",
                         ];
@@ -6330,6 +6384,15 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         ui.show_msg_numbers = !ui.show_msg_numbers;
                         let state = if ui.show_msg_numbers { "on" } else { "off" };
                         ui.chat_lines.push(ChatLine::SystemNote(format!("Message numbers {state}  (F5 or /numbers to toggle)")));
+                    }
+                    KeyCode::F(6) => {
+                        ui.focus_mode = !ui.focus_mode;
+                        let state = if ui.focus_mode { "on" } else { "off" };
+                        ui.chat_lines.push(ChatLine::SystemNote(format!("Focus mode {state}  (F6 or /focus to toggle)")));
+                    }
+                    KeyCode::Char('f') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Ctrl+F: toggle focus/zen mode (same as F6)
+                        ui.focus_mode = !ui.focus_mode;
                     }
                     KeyCode::Char('x') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         ui.ctrl_x_pending = true;
