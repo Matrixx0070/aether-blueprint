@@ -5482,6 +5482,95 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                     }
                                     continue;
                                 }
+                                "/wc" => {
+                                    // Alias for /count
+                                    let mut user_msgs = 0usize;
+                                    let mut asst_msgs = 0usize;
+                                    let mut user_words = 0usize;
+                                    let mut asst_words = 0usize;
+                                    let mut user_chars = 0usize;
+                                    let mut asst_chars = 0usize;
+                                    let mut code_blocks = 0usize;
+                                    for cl in &ui.chat_lines {
+                                        match cl {
+                                            ChatLine::User(body, _) => {
+                                                user_msgs += 1;
+                                                user_words += body.split_whitespace().count();
+                                                user_chars += body.len();
+                                            }
+                                            ChatLine::Assistant(body, _, _) => {
+                                                asst_msgs += 1;
+                                                asst_words += body.split_whitespace().count();
+                                                asst_chars += body.len();
+                                                code_blocks += body.matches("```").count() / 2;
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    let total_words = user_words + asst_words;
+                                    let avg_asst = if asst_msgs > 0 { asst_words / asst_msgs } else { 0 };
+                                    ui.chat_lines.push(ChatLine::SystemNote(format!(
+                                        "Conversation counts\n  Messages:    {user_msgs} you  ·  {asst_msgs} AI\n  Words:       {user_words} you  ·  {asst_words} AI  ·  {total_words} total\n  Chars:       {user_chars} you  ·  {asst_chars} AI\n  Avg AI resp: ~{avg_asst}w\n  Code blocks: {code_blocks}"
+                                    )));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/context" | "/ctx" => {
+                                    let user_chars: usize = ui.chat_lines.iter().filter_map(|cl| {
+                                        if let ChatLine::User(b, _) = cl { Some(b.len()) } else { None }
+                                    }).sum();
+                                    let asst_chars: usize = ui.chat_lines.iter().filter_map(|cl| {
+                                        if let ChatLine::Assistant(b, _, _) = cl { Some(b.len()) } else { None }
+                                    }).sum();
+                                    let user_tok = user_chars / 4;
+                                    let asst_tok = asst_chars / 4;
+                                    let total_tok = ui.tokens_total;
+                                    let ctx_max = aether_render::model_context_window(&ui.model);
+                                    let pct = if ctx_max > 0 { ((total_tok * 100) / ctx_max).min(100) } else { 0 };
+                                    let bar_filled = (pct * 20 / 100).min(20) as usize;
+                                    let bar: String = "█".repeat(bar_filled) + &"░".repeat(20usize.saturating_sub(bar_filled));
+                                    let msg = format!(
+                                        "Context window\n\n  [{bar}] {pct}%\n\n  Tokens in:  {}\n  Tokens out: {}\n  Total:      {} / {} ({}k ctx)\n\n  Estimated breakdown\n    user messages:    ~{user_tok}t\n    assistant msgs:   ~{asst_tok}t\n\n  /compact to compress  ·  /drop N to remove exchanges",
+                                        ui.tokens_in, ui.tokens_out, total_tok,
+                                        ctx_max, ctx_max / 1000,
+                                    );
+                                    ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/replay" || cmd.starts_with("/replay ") => {
+                                    // Resend the Nth user message (1-indexed by exchange number)
+                                    let n_str = cmd.trim_start_matches("/replay").trim();
+                                    let n: usize = n_str.parse().unwrap_or(0);
+                                    let user_msgs: Vec<String> = ui.chat_lines.iter().filter_map(|cl| {
+                                        if let ChatLine::User(b, _) = cl { Some(b.clone()) } else { None }
+                                    }).collect();
+                                    if n == 0 || n > user_msgs.len() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("Usage: /replay N  (1–{})  — resend the Nth user message", user_msgs.len().max(1))
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let replay_msg = user_msgs[n - 1].clone();
+                                    let ts = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(replay_msg.clone(), ts));
+                                    ui.follow_tail = true;
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.msg_times_secs.push(ts);
+                                    let api_msg = match &ui.prompt_prefix {
+                                        Some(pfx) => format!("{pfx}\n\n{replay_msg}"),
+                                        None => replay_msg,
+                                    };
+                                    if _ctx.send(UiCommand::UserMessage(api_msg)).is_err() {
+                                        break 'outer;
+                                    }
+                                    continue;
+                                }
                                 "/clear-tools" | "/cltools" => {
                                     let n = ui.tool_log.len();
                                     ui.tool_log.clear();
@@ -6246,9 +6335,9 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         // Slash command completion: Tab while buffer starts with '/'
                         const SLASH_CMDS: &[&str] = &[
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
-                            "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/copy", "/cost", "/count", "/diff", "/doctor", "/drop ", "/export", "/focus", "/format",
+                            "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/cost", "/count", "/ctx", "/diff", "/doctor", "/drop ", "/export", "/focus", "/format",
                             "/go ", "/grep ", "/help", "/hist", "/history", "/last", "/linenums", "/load ", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/raw", "/reset-cost", "/retry", "/search ", "/sessions", "/speed", "/stats", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/undo", "/unpin", "/version", "/wrap",
+                            "/raw", "/replay ", "/reset-cost", "/retry", "/search ", "/sessions", "/speed", "/stats", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

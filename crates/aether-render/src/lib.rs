@@ -1515,6 +1515,16 @@ pub fn draw_frame(
                     }
                 }
             }
+            // Live response timer: shows elapsed seconds once streaming starts
+            if state.status_running && state.stream_chars > 0 {
+                if let Some(t) = state.response_start {
+                    let secs = t.elapsed().as_secs_f64();
+                    hints_spans.push(Span::styled(
+                        format!("  ⏱ {:.1}s", secs),
+                        Style::default().fg(C_DIM).bg(C_HDR_BG),
+                    ));
+                }
+            }
             // Reverse-i-search mode indicator overrides the right side of hints
             let hints_line = if let Some(ref q) = state.history_search {
                 Line::from(vec![
