@@ -4663,9 +4663,30 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                             }
                         }
                     }
+                    KeyCode::Tab => {
+                        // Slash command completion: Tab while buffer starts with '/'
+                        const SLASH_CMDS: &[&str] = &[
+                            "/clear", "/cost", "/export", "/help", "/model ", "/quit",
+                        ];
+                        let buf = ui.input_buffer.trim_end().to_string();
+                        if buf.starts_with('/') && !buf.contains(' ') {
+                            // Find all commands matching the current prefix
+                            let matches: Vec<&&str> = SLASH_CMDS
+                                .iter()
+                                .filter(|c| c.trim_end().starts_with(buf.as_str()))
+                                .collect();
+                            if !matches.is_empty() {
+                                // Cycle through matches on repeated Tab
+                                let next = ui.tab_cycle % matches.len();
+                                ui.input_buffer = matches[next].trim_end().to_string();
+                                ui.tab_cycle += 1;
+                            }
+                        }
+                    }
                     KeyCode::Backspace => {
                         ui.input_buffer.pop();
                         ui.history_idx = None; // editing breaks history nav
+                        ui.tab_cycle = 0;
                     }
                     KeyCode::PageUp => {
                         ui.chat_scroll = ui.chat_scroll.saturating_sub(5);
@@ -4685,7 +4706,8 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     KeyCode::Char(c) => {
                         ui.input_buffer.push(c);
-                        ui.history_idx = None; // typing breaks history nav
+                        ui.history_idx = None;
+                        ui.tab_cycle = 0;
                     }
                     _ => {}
                 },

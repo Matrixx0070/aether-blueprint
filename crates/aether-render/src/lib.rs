@@ -192,6 +192,8 @@ pub struct UiState {
     pub history_idx: Option<usize>,
     /// True while the user hasn't manually scrolled up (auto-follow the tail).
     pub follow_tail: bool,
+    /// Cycles through Tab-completions for slash commands.
+    pub tab_cycle: usize,
 }
 
 impl UiState {
@@ -252,6 +254,7 @@ impl UiState {
             input_history: Vec::new(),
             history_idx: None,
             follow_tail: true,
+            tab_cycle: 0,
         }
     }
 
@@ -504,11 +507,21 @@ pub fn draw_frame(
                 (main[1], None)
             };
 
-            let tool_lines: Vec<Line> = state
-                .tool_log
-                .iter()
-                .map(|t| tool_entry_to_line(t, spin))
-                .collect();
+            const MAX_TOOL_SHOW: usize = 15;
+            let total_tools = state.tool_log.len();
+            let skip = total_tools.saturating_sub(MAX_TOOL_SHOW);
+            let mut tool_lines: Vec<Line> = Vec::new();
+            if skip > 0 {
+                tool_lines.push(Line::from(Span::styled(
+                    format!("  ── {skip} earlier ──"),
+                    Style::default().fg(C_DIM),
+                )));
+            }
+            tool_lines.extend(
+                state.tool_log[skip..]
+                    .iter()
+                    .map(|t| tool_entry_to_line(t, spin)),
+            );
             f.render_widget(
                 Paragraph::new(tool_lines)
                     .block(
@@ -546,6 +559,15 @@ pub fn draw_frame(
                 (">", C_USER_PFX)
             };
 
+            // Blinking cursor: 500ms on / 500ms off, disabled while thinking
+            let cursor_on = {
+                let ms = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis();
+                !state.status_running && (ms / 500) % 2 == 0
+            };
+
             const SUGGESTIONS: &[&str] = &[
                 "Try \"summarize this codebase\"",
                 "Try \"find all TODO comments\"",
@@ -563,7 +585,17 @@ pub fn draw_frame(
                 SUGGESTIONS[sugg_idx as usize % SUGGESTIONS.len()].to_string()
             };
 
+            // Show char count when buffer has content
+            let char_hint = if !state.input_buffer.is_empty() {
+                let chars = state.input_buffer.chars().count();
+                let lines = state.input_buffer.lines().count().max(1);
+                if lines > 1 { format!("  [{chars}c {lines}L]") } else { format!("  [{chars}c]") }
+            } else {
+                String::new()
+            };
+
             let input_content: Vec<Line> = if state.input_buffer.is_empty() {
+                let cursor = if cursor_on { "│" } else { " " };
                 vec![Line::from(vec![
                     Span::styled(
                         format!("  {pfx}  "),
@@ -571,14 +603,17 @@ pub fn draw_frame(
                             .fg(pfx_color)
                             .add_modifier(Modifier::BOLD),
                     ),
+                    Span::styled(cursor.to_string(), Style::default().fg(C_BRAND).add_modifier(Modifier::BOLD)),
                     Span::styled(placeholder, Style::default().fg(C_DIM)),
                 ])]
             } else {
-                state
-                    .input_buffer
-                    .lines()
+                let buf_lines: Vec<&str> = state.input_buffer.lines().collect();
+                let total = buf_lines.len();
+                buf_lines
+                    .into_iter()
                     .enumerate()
                     .map(|(i, line)| {
+                        let is_last = i + 1 == total;
                         let prefix_span = if i == 0 {
                             Span::styled(
                                 format!("  {pfx}  "),
@@ -589,13 +624,24 @@ pub fn draw_frame(
                         } else {
                             Span::raw("       ")
                         };
-                        Line::from(vec![
+                        let mut spans = vec![
                             prefix_span,
-                            Span::styled(
-                                line.to_string(),
-                                Style::default().fg(C_BODY),
-                            ),
-                        ])
+                            Span::styled(line.to_string(), Style::default().fg(C_BODY)),
+                        ];
+                        if is_last {
+                            let cursor = if cursor_on { "│" } else { " " };
+                            spans.push(Span::styled(
+                                cursor.to_string(),
+                                Style::default().fg(C_BRAND).add_modifier(Modifier::BOLD),
+                            ));
+                            if !char_hint.is_empty() {
+                                spans.push(Span::styled(
+                                    char_hint.clone(),
+                                    Style::default().fg(C_DIM),
+                                ));
+                            }
+                        }
+                        Line::from(spans)
                     })
                     .collect()
             };
@@ -787,17 +833,23 @@ fn render_message(
             Span::raw(CONT)
         };
 
-        let mut body_spans: Vec<Span<'static>> = if !is_assistant || trimmed.starts_with("```") {
-            // Fence delimiter or non-assistant: dim raw text
+        let mut body_spans: Vec<Span<'static>> = if trimmed.starts_with("```") {
+            // Fence delimiter: dim text on code background
+            vec![Span::styled(
+                line.to_string(),
+                Style::default().fg(C_DIM).bg(C_CODE_BG),
+            )]
+        } else if !is_assistant {
+            // Non-assistant (user messages etc): plain dim
             vec![Span::styled(
                 line.to_string(),
                 Style::default().fg(C_DIM),
             )]
         } else if in_code_block {
-            // Inside a fenced code block: sky-300 text
+            // Inside a fenced code block: sky-300 on slate-800 background
             vec![Span::styled(
                 line.to_string(),
-                Style::default().fg(C_CODE_FG),
+                Style::default().fg(C_CODE_FG).bg(C_CODE_BG),
             )]
         } else {
             // Normal assistant prose: inline markdown rendering
