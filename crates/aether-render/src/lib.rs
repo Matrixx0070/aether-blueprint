@@ -189,6 +189,8 @@ pub struct UiState {
     pub tool_log: Vec<ToolEntry>,
     pub fleet: Vec<FleetEntry>,
     pub input_buffer: String,
+    /// Byte offset of the insertion cursor within `input_buffer`.
+    pub input_cursor: usize,
     pub status_running: bool,
     pub tokens_in: u64,
     pub tokens_out: u64,
@@ -278,6 +280,7 @@ impl UiState {
             tool_log: Vec::new(),
             fleet: Vec::new(),
             input_buffer: String::new(),
+            input_cursor: 0,
             status_running: false,
             tokens_in: 0,
             tokens_out: 0,
@@ -846,22 +849,59 @@ pub fn draw_frame(
                         } else {
                             vec![Span::styled(line.to_string(), Style::default().fg(C_BODY))]
                         };
-                        let mut spans = vec![prefix_span];
-                        spans.extend(content_spans);
                         if is_last {
-                            let cursor = if cursor_on { "│" } else { " " };
-                            spans.push(Span::styled(
-                                cursor.to_string(),
-                                Style::default().fg(C_BRAND).add_modifier(Modifier::BOLD),
-                            ));
+                            // Compute cursor position within this line's text
+                            let line_start: usize = state.input_buffer
+                                .lines()
+                                .take(i)
+                                .map(|l| l.len() + 1) // +1 for '\n'
+                                .sum();
+                            let cursor_in_line = state.input_cursor
+                                .saturating_sub(line_start)
+                                .min(line.len());
+
+                            let mut spans = vec![prefix_span];
+                            if cursor_in_line >= line.len() {
+                                // Cursor at end — use pre-built slash-colored content_spans
+                                spans.extend(content_spans);
+                                let curs = if cursor_on { "│" } else { " " };
+                                spans.push(Span::styled(
+                                    curs.to_string(),
+                                    Style::default().fg(C_BRAND).add_modifier(Modifier::BOLD),
+                                ));
+                            } else {
+                                // Cursor inside text — block highlight at cursor char
+                                let ch_end = line[cursor_in_line..].chars().next()
+                                    .map(|c| cursor_in_line + c.len_utf8())
+                                    .unwrap_or(line.len());
+                                let before = line[..cursor_in_line].to_string();
+                                let curs_ch = line[cursor_in_line..ch_end].to_string();
+                                let after = line[ch_end..].to_string();
+                                if !before.is_empty() {
+                                    spans.push(Span::styled(before, Style::default().fg(C_BODY)));
+                                }
+                                let curs_style = if cursor_on {
+                                    Style::default().fg(C_HDR_BG).bg(C_BRAND)
+                                } else {
+                                    Style::default().fg(C_BODY)
+                                };
+                                spans.push(Span::styled(curs_ch, curs_style));
+                                if !after.is_empty() {
+                                    spans.push(Span::styled(after, Style::default().fg(C_BODY)));
+                                }
+                            }
                             if !char_hint.is_empty() {
                                 spans.push(Span::styled(
                                     char_hint.clone(),
                                     Style::default().fg(C_DIM),
                                 ));
                             }
+                            Line::from(spans)
+                        } else {
+                            let mut spans = vec![prefix_span];
+                            spans.extend(content_spans);
+                            Line::from(spans)
                         }
-                        Line::from(spans)
                     })
                     .collect()
             };

@@ -4498,7 +4498,8 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
         if event::poll(std::time::Duration::from_millis(80))? {
             match event::read()? {
                 Event::Paste(s) => {
-                    ui.input_buffer.push_str(&s);
+                    ui.input_buffer.insert_str(ui.input_cursor, &s);
+                    ui.input_cursor += s.len();
                 }
                 Event::Key(k) if k.kind == KeyEventKind::Press => match k.code {
                     KeyCode::Esc => break 'outer,
@@ -4510,14 +4511,32 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                             break 'outer;
                         } else {
                             ui.input_buffer.clear();
+                            ui.input_cursor = 0;
                         }
                     }
                     KeyCode::Char('q') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         break 'outer;
                     }
+                    KeyCode::Char('a') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        ui.input_cursor = 0;
+                    }
+                    KeyCode::Char('e') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        ui.input_cursor = ui.input_buffer.len();
+                    }
+                    KeyCode::Char('w') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Delete word backwards from cursor
+                        if ui.input_cursor > 0 {
+                            let before = &ui.input_buffer[..ui.input_cursor];
+                            let trimmed = before.trim_end_matches(' ').len();
+                            let word_start = before[..trimmed].rfind(' ').map(|i| i + 1).unwrap_or(0);
+                            ui.input_buffer.drain(word_start..ui.input_cursor);
+                            ui.input_cursor = word_start;
+                        }
+                    }
                     KeyCode::Char('k') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         // Kill-line: clear the input buffer
                         ui.input_buffer.clear();
+                        ui.input_cursor = 0;
                     }
                     KeyCode::Char('l') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         // Clear visible chat (keeps session context intact)
@@ -4529,9 +4548,11 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     KeyCode::Enter => {
                         if k.modifiers.contains(KeyModifiers::SHIFT) {
-                            ui.input_buffer.push('\n');
+                            ui.input_buffer.insert(ui.input_cursor, '\n');
+                            ui.input_cursor += 1;
                         } else if !ui.input_buffer.trim().is_empty() && !ui.status_running {
                             let msg = std::mem::take(&mut ui.input_buffer);
+                            ui.input_cursor = 0;
                             ui.history_idx = None;
                             // Handle built-in slash commands
                             match msg.trim() {
@@ -4875,6 +4896,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                             };
                             ui.history_idx = Some(new_idx);
                             ui.input_buffer = ui.input_history[new_idx].clone();
+                            ui.input_cursor = ui.input_buffer.len();
                         }
                     }
                     KeyCode::Down => {
@@ -4883,10 +4905,12 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                             Some(i) if i + 1 >= ui.input_history.len() => {
                                 ui.history_idx = None;
                                 ui.input_buffer.clear();
+                                ui.input_cursor = 0;
                             }
                             Some(i) => {
                                 ui.history_idx = Some(i + 1);
                                 ui.input_buffer = ui.input_history[i + 1].clone();
+                                ui.input_cursor = ui.input_buffer.len();
                             }
                         }
                     }
@@ -4908,14 +4932,34 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                 // Cycle through matches on repeated Tab
                                 let next = ui.tab_cycle % matches.len();
                                 ui.input_buffer = matches[next].trim_end().to_string();
+                                ui.input_cursor = ui.input_buffer.len();
                                 ui.tab_cycle += 1;
                             }
                         }
                     }
                     KeyCode::Backspace => {
-                        ui.input_buffer.pop();
-                        ui.history_idx = None; // editing breaks history nav
+                        if ui.input_cursor > 0 {
+                            let before = &ui.input_buffer[..ui.input_cursor];
+                            let ch_len = before.chars().last().map(|c| c.len_utf8()).unwrap_or(0);
+                            ui.input_cursor -= ch_len;
+                            ui.input_buffer.remove(ui.input_cursor);
+                        }
+                        ui.history_idx = None;
                         ui.tab_cycle = 0;
+                    }
+                    KeyCode::Left => {
+                        if ui.input_cursor > 0 {
+                            let ch_len = ui.input_buffer[..ui.input_cursor]
+                                .chars().last().map(|c| c.len_utf8()).unwrap_or(0);
+                            ui.input_cursor -= ch_len;
+                        }
+                    }
+                    KeyCode::Right => {
+                        if ui.input_cursor < ui.input_buffer.len() {
+                            let ch_len = ui.input_buffer[ui.input_cursor..]
+                                .chars().next().map(|c| c.len_utf8()).unwrap_or(0);
+                            ui.input_cursor += ch_len;
+                        }
                     }
                     KeyCode::PageUp => {
                         ui.chat_scroll = ui.chat_scroll.saturating_sub(10);
@@ -4933,7 +4977,8 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         ui.follow_tail = true;
                     }
                     KeyCode::Char(c) => {
-                        ui.input_buffer.push(c);
+                        ui.input_buffer.insert(ui.input_cursor, c);
+                        ui.input_cursor += c.len_utf8();
                         ui.history_idx = None;
                         ui.tab_cycle = 0;
                     }
