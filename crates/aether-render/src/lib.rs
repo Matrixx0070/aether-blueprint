@@ -1272,11 +1272,9 @@ fn render_message(
             // After the toggle above: in_code_block==true = opening fence, false = closing fence.
             let fence_text = if is_assistant {
                 if in_code_block && !code_lang.is_empty() {
-                    // Opening fence with language label: "  ── RUST ─ ─ ─ ─ ─ ─ ─ ─ ─"
-                    format!("  ── {} ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─", code_lang.to_uppercase())
+                    format!("  ─── {} ─────────────────────────", code_lang.to_uppercase())
                 } else {
-                    // Opening fence (no lang) or closing fence: plain ruler
-                    "  ── ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─".to_string()
+                    "  ──────────────────────────────────".to_string()
                 }
             } else {
                 line.to_string()
@@ -1504,6 +1502,28 @@ fn inline_markdown_spans(line: &str, body_color: Color) -> Vec<Span<'static>> {
                         .add_modifier(Modifier::ITALIC),
                 ));
                 i += end + 2;
+                continue;
+            }
+        }
+
+        // URL: https:// or http://
+        if i + 8 < bytes.len()
+            && (line[i..].starts_with("https://") || line[i..].starts_with("http://"))
+        {
+            let rest = &line[i..];
+            let url_end = rest
+                .find(|c: char| c.is_whitespace() || matches!(c, ')' | ',' | '"' | '\'' | '>'))
+                .unwrap_or(rest.len());
+            let url = &rest[..url_end];
+            if url.len() > 8 {
+                flush_buf(&mut buf, &mut out, body_color);
+                out.push(Span::styled(
+                    url.to_string(),
+                    Style::default()
+                        .fg(C_ASST_PFX)
+                        .add_modifier(Modifier::UNDERLINED),
+                ));
+                i += url_end;
                 continue;
             }
         }

@@ -4833,14 +4833,17 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                         "Session stats\n  Messages:   {msg_count} sent\n  Runtime:    {elapsed_str}\n  Speed:      {avg_tps}  response time: {avg_dur}\n  Tokens:     ↑{tok_in} ↓{tok_out}\n  Cost:       {cost_str}\n  Tools:      {}✓ {}✗ ({tools_total} total)",
                                         ui.tools_ok, ui.tools_err
                                     );
-                                    // Per-message cost breakdown (if we have cost snapshots)
+                                    // Per-message cost + duration breakdown
                                     if !ui.msg_cost_snapshots.is_empty() {
-                                        stat.push_str("\n  Per-msg:   ");
+                                        stat.push_str("\n  Per-msg:");
                                         let mut prev = 0.0f64;
                                         for (i, &snap) in ui.msg_cost_snapshots.iter().enumerate() {
                                             let delta = snap - prev;
                                             prev = snap;
-                                            stat.push_str(&format!(" [{i}] ${delta:.4}"));
+                                            let dur_str = ui.response_durations.get(i)
+                                                .map(|&d| format!("  {:.1}s", d))
+                                                .unwrap_or_default();
+                                            stat.push_str(&format!("\n    msg {} — ${:.4}{}", i + 1, delta, dur_str));
                                         }
                                     }
                                     ui.chat_lines.push(ChatLine::SystemNote(stat));
