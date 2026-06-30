@@ -771,6 +771,12 @@ pub enum UiCommand {
     QueryTurnCostStats,
     /// Show estimated context fill percentage vs model window.
     QueryContextFillPct,
+    /// Show the last assistant response text from history.
+    QueryHistoryLastAssistant,
+    /// Show total input and output tokens summed across all turns.
+    QueryTurnTokensTotal,
+    /// Count of User-role items in conversation history.
+    QueryHistoryUserCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

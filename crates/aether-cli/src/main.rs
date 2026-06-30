@@ -6925,6 +6925,48 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryHistoryLastAssistant => {
+                    let last = session.history.iter().rev().find_map(|item| {
+                        if let ConversationItem::Assistant { text: Some(t), .. } = item {
+                            Some(t.as_str())
+                        } else { None }
+                    });
+                    match last {
+                        Some(text) => {
+                            let preview = if text.len() > 800 { &text[..800] } else { text };
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Last assistant response:\n{preview}{}", if text.len() > 800 { "\n[truncated...]" } else { "" }
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote("No assistant responses in history yet.".to_string()));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnTokensTotal => {
+                    if session.turn_cost_log.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No turn token data yet.".to_string()));
+                    } else {
+                        let total_in: u64 = session.turn_cost_log.iter().map(|&(_, i, _, _)| i).sum();
+                        let total_out: u64 = session.turn_cost_log.iter().map(|&(_, _, o, _)| o).sum();
+                        let total = total_in + total_out;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Total tokens ({} turns):\n  Input:  {total_in}\n  Output: {total_out}\n  Total:  {total}",
+                            session.turn_cost_log.len()
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryUserCount => {
+                    let count = session.history.iter().filter(|item| {
+                        matches!(item, ConversationItem::User(_))
+                    }).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "User messages in history: {count} (total history items: {})", session.history.len()
+                    )));
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -31549,6 +31591,30 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /history-last-assistant — show last AI response in history
+                                "/history-last-assistant" => {
+                                    if _ctx.send(UiCommand::QueryHistoryLastAssistant).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tokens-total — total in+out tokens across all turns
+                                "/tokens-total" => {
+                                    if _ctx.send(UiCommand::QueryTurnTokensTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-user-count — count of User items in history
+                                "/history-user-count" => {
+                                    if _ctx.send(UiCommand::QueryHistoryUserCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -32241,6 +32307,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-first-user",
                             "/turn-cost-stats",
                             "/context-fill-pct",
+                            "/history-last-assistant",
+                            "/tokens-total",
+                            "/history-user-count",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
