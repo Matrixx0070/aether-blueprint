@@ -921,6 +921,12 @@ pub enum UiCommand {
     QueryPersistentRemindersList,
     /// List all sticky-context entries.
     QueryStickyContextList,
+    /// Count session notes.
+    QuerySessionNotesCount,
+    /// Show raw token budget (in tokens).
+    QueryTokenBudgetRaw,
+    /// List distinct tool names used in history.
+    QueryHistoryToolNames,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

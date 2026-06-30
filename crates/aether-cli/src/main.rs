@@ -7700,6 +7700,48 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QuerySessionNotesCount => {
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session notes: {} note(s) stored. Use /session-notes-export to view all.",
+                        session.session_notes.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTokenBudgetRaw => {
+                    if session.token_budget == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Token budget: not set (unlimited). Use /token-budget <n> to cap.".to_string()
+                        ));
+                    } else {
+                        let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Token budget: {} tokens cap, ~{} used so far.", session.token_budget, used
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryToolNames => {
+                    let mut names: std::collections::HashSet<String> = std::collections::HashSet::new();
+                    for item in &session.history {
+                        if let aether_core::context::ConversationItem::Assistant { tool_uses, .. } = item {
+                            for tu in tool_uses {
+                                names.insert(tu.name.clone());
+                            }
+                        }
+                    }
+                    if names.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "No tool calls in history yet.".to_string()
+                        ));
+                    } else {
+                        let mut sorted: Vec<String> = names.into_iter().collect();
+                        sorted.sort();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Tools used in history ({} distinct): {}", sorted.len(), sorted.join(", ")
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryAutoTagRulesList => {
                     if session.auto_tag_rules.is_empty() {
                         let _ = etx_for_driver.send(UiEvent::SystemNote(
@@ -33186,6 +33228,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /session-notes-count — count session notes
+                                "/session-notes-count" => {
+                                    if _ctx.send(UiCommand::QuerySessionNotesCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /token-budget-raw — show raw token budget value
+                                "/token-budget-raw" => {
+                                    if _ctx.send(UiCommand::QueryTokenBudgetRaw).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-tool-names — list distinct tool names used in history
+                                "/history-tool-names" => {
+                                    if _ctx.send(UiCommand::QueryHistoryToolNames).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -33953,6 +34013,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/auto-tag-rules-list",
                             "/persistent-reminders-list",
                             "/sticky-context-list",
+                            "/session-notes-count",
+                            "/token-budget-raw",
+                            "/history-tool-names",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
