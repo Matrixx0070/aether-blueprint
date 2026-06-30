@@ -909,6 +909,12 @@ pub enum UiCommand {
     QueryPlanStats,
     /// List models used across all turns.
     QueryTurnModelList,
+    /// List all turn labels.
+    QueryLabelList,
+    /// Show last known output of a named tool.
+    QueryToolOutputShow(String),
+    /// Show session start time and elapsed duration.
+    QueryStartTime,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

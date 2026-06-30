@@ -7700,6 +7700,50 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryLabelList => {
+                    if session.turn_labels.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn labels: none set. Use /label <text> to label the current turn.".to_string()
+                        ));
+                    } else {
+                        let mut lines = vec![format!("Turn labels ({}):", session.turn_labels.len())];
+                        for (idx, lbl) in &session.turn_labels {
+                            lines.push(format!("  turn {idx}: {lbl:?}"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(lines.join("\n")));
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolOutputShow(name) => {
+                    match session.tool_output_history.get(&name) {
+                        Some((prev, curr)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Tool {name:?} output:\n  prev: {prev}\n  curr: {curr}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "No output history for tool {name:?}. Run it first."
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryStartTime => {
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    let elapsed_s = (now_ms.saturating_sub(session.started_at)) / 1000;
+                    let h = elapsed_s / 3600;
+                    let m = (elapsed_s % 3600) / 60;
+                    let s = elapsed_s % 60;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session started at unix ms {}, elapsed {}h {}m {}s.",
+                        session.started_at, h, m, s
+                    )));
+                    continue;
+                }
                 UiCommand::QueryTurnCostTop => {
                     if session.turn_cost_log.is_empty() {
                         let _ = etx_for_driver.send(UiEvent::SystemNote(
@@ -33058,6 +33102,29 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /label-list — list all turn labels
+                                "/label-list" => {
+                                    if _ctx.send(UiCommand::QueryLabelList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tool-output-show <name> — show last known output of a tool
+                                cmd_str if cmd_str.starts_with("/tool-output-show ") => {
+                                    let name = cmd_str.trim_start_matches("/tool-output-show ").trim().to_string();
+                                    if name.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /tool-output-show <tool-name>".to_string()));
+                                    } else if _ctx.send(UiCommand::QueryToolOutputShow(name)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /start-time — show session start time and elapsed duration
+                                "/start-time" => {
+                                    if _ctx.send(UiCommand::QueryStartTime).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -33819,6 +33886,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-cost-top",
                             "/plan-stats",
                             "/turn-model-list",
+                            "/label-list",
+                            "/tool-output-show ",
+                            "/start-time",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
