@@ -5759,6 +5759,35 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::QuerySessionStats => {
+                    use aether_core::compaction::context_window_for_model;
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let wall_secs = now.saturating_sub(session.started_at);
+                    let wall_min = wall_secs / 60;
+                    let wall_sec = wall_secs % 60;
+                    let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
+                    let window = context_window_for_model(&session.config.model);
+                    let pct = if window > 0 { (used as f64 / window as f64 * 100.0) as u64 } else { 0 };
+                    let avg_ms = if session.turn_index > 0 { session.llm_ms_total / session.turn_index as u64 } else { 0 };
+                    let note = format!(
+                        "Session statistics:\n\
+                         Turns: {turns}\n\
+                         Wall time: {wall_min}m {wall_sec}s\n\
+                         Total tokens: {used} ({pct}% of {window})\n\
+                         LLM latency: last={last}ms avg={avg}ms total={total}ms\n\
+                         Cost: ${cost:.4}",
+                        turns = session.turn_index,
+                        last = session.llm_ms_last,
+                        avg = avg_ms,
+                        total = session.llm_ms_total,
+                        cost = estimate_cost_usd(&session.config.model, &session.usage_total),
+                    );
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
             };
             let outs = run_hooks(
                 &hooks.user_prompt_submit,
@@ -22665,6 +22694,14 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /session-stats — turns, tokens, cost, LLM latency, wall time
+                                "/session-stats" => {
+                                    if _ctx.send(UiCommand::QuerySessionStats).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /goal [text] — set or show session goal (survives compaction)
                                 cmd_str if cmd_str.starts_with("/goal ") || cmd_str == "/goal" => {
                                     let arg = cmd_str.trim_start_matches("/goal").trim();
@@ -23082,7 +23119,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/ai-error-types", "/ai-refactor-file", "/ai-refactor-file ",
                             "/ai-critique",
                             "/plan-status", "/stuck", "/reset-errors",
-                            "/goal", "/goal ", "/context-info",
+                            "/goal", "/goal ", "/context-info", "/session-stats",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

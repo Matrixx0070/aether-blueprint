@@ -168,6 +168,8 @@ pub enum UiCommand {
     SetGoal(Option<String>),
     /// Query context window usage; driver replies with UiEvent::SystemNote.
     QueryContextInfo,
+    /// Query session statistics (turns, tokens, cost, wall time, LLM latency).
+    QuerySessionStats,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

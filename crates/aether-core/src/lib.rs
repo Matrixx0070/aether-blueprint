@@ -108,6 +108,17 @@ pub struct Session {
     /// model response's `usage` field. None on responses where the model
     /// didn't return usage.
     pub usage_total: aether_llm::Usage,
+
+    /// Cumulative wall-clock time spent waiting for LLM responses (ms).
+    /// Incremented per turn in `agent_turn_inner`. Does not include
+    /// time spent executing tools or rendering the TUI.
+    pub llm_ms_total: u64,
+
+    /// Wall-clock time of the most recent LLM call (ms).
+    pub llm_ms_last: u64,
+
+    /// Session start timestamp (seconds since UNIX epoch).
+    pub started_at: u64,
 }
 
 impl Session {
@@ -119,6 +130,10 @@ impl Session {
         tools: ToolRegistry,
     ) -> Self {
         let executor = Executor::new(config.permission_mode);
+        let started_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         Self {
             assembler: ContextAssembler::new(KernelRules::default()),
             planner: Planner::new(),
@@ -136,6 +151,9 @@ impl Session {
             pending_reminders: Vec::new(),
             selfcheck_ctx: SelfCheckCtx::default(),
             usage_total: aether_llm::Usage::default(),
+            llm_ms_total: 0,
+            llm_ms_last: 0,
+            started_at,
         }
     }
 
@@ -321,10 +339,14 @@ async fn agent_turn_inner(
     }
 
     // ── tool-sel (LLM call) ──────────────────────────────────────────
+    let llm_start = std::time::Instant::now();
     let resp = match on_delta {
         None => session.llm.complete(req).await?,
         Some(cb) => session.llm.complete_streamed(req, cb).await?,
     };
+    let llm_elapsed_ms = llm_start.elapsed().as_millis() as u64;
+    session.llm_ms_last = llm_elapsed_ms;
+    session.llm_ms_total += llm_elapsed_ms;
     if let Some(u) = &resp.usage {
         session.usage_total.add(u);
     }
