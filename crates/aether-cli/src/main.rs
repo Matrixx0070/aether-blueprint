@@ -18113,6 +18113,63 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /tool-stats — show per-tool call counts and elapsed time for this session
+                                "/tool-stats" | "/tstats" => {
+                                    if ui.tool_log.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "No tool calls recorded yet this session.".to_string()
+                                        ));
+                                    } else {
+                                        // Aggregate by tool name
+                                        use std::collections::HashMap;
+                                        let mut agg: HashMap<String, (usize, u64, usize)> = HashMap::new(); // name → (calls, total_ms, errors)
+                                        for entry in &ui.tool_log {
+                                            let e = agg.entry(entry.name.clone()).or_default();
+                                            e.0 += 1;
+                                            e.1 += entry.elapsed_ms.unwrap_or(0);
+                                            if matches!(entry.status, aether_render::ToolStatus::Err(_)) { e.2 += 1; }
+                                        }
+                                        let mut rows: Vec<(String, usize, u64, usize)> = agg.into_iter()
+                                            .map(|(n, (c, ms, err))| (n, c, ms, err))
+                                            .collect();
+                                        rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                                        let total_calls: usize = rows.iter().map(|r| r.1).sum();
+                                        let total_ms: u64 = rows.iter().map(|r| r.2).sum();
+                                        let mut msg = format!(
+                                            "Tool stats — {} calls, {:.1}s total\n─────────────────────────────\n",
+                                            total_calls, total_ms as f64 / 1000.0
+                                        );
+                                        for (name, calls, ms, errs) in &rows {
+                                            let avg_ms = if *calls > 0 { ms / *calls as u64 } else { 0 };
+                                            let err_tag = if *errs > 0 { format!("  ✗{}", errs) } else { String::new() };
+                                            msg.push_str(&format!(
+                                                "  {:<16} {:>3} calls  avg {:>5}ms  total {:>6}ms{}\n",
+                                                name, calls, avg_ms, ms, err_tag
+                                            ));
+                                        }
+                                        ui.chat_lines.push(ChatLine::SystemNote(msg.trim_end().to_string()));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /model-list — show available Claude models with specs
+                                "/model-list" | "/models" => {
+                                    let current = &ui.model;
+                                    let models = [
+                                        ("claude-opus-4-7",          "opus",   "200k", "Most capable; best for complex multi-step tasks"),
+                                        ("claude-sonnet-4-6",        "sonnet", "200k", "Balanced speed/capability; default for most tasks"),
+                                        ("claude-haiku-4-5-20251001","haiku",  "200k", "Fastest, cheapest; good for quick lookups"),
+                                    ];
+                                    let mut msg = "Available Claude models:\n─────────────────────────────────────────────\n".to_string();
+                                    for (id, alias, ctx, desc) in &models {
+                                        let active = if *id == current.as_str() { " ◀ active" } else { "" };
+                                        msg.push_str(&format!("  {id}\n  alias={alias}  ctx={ctx}  — {desc}{active}\n\n"));
+                                    }
+                                    msg.push_str("Switch with: /config model <id>  or  /config model opus|sonnet|haiku");
+                                    ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
