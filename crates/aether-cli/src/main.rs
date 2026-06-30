@@ -2035,7 +2035,17 @@ async fn run_repl(
                 } else {
                     String::new()
                 };
-                eprintln!("  [tokens in={di} out={do_}{cache_part}{tps_part} cost~${cost:.4}]");
+                // Context window % — di is the input tokens this turn, which
+                // approximates the context sent (history + system prompt + tools).
+                // Claude 4 models all have a 200k token context window.
+                let ctx_window: u32 = 200_000;
+                let ctx_pct = di as f64 / ctx_window as f64 * 100.0;
+                let ctx_part = if ctx_pct >= 1.0 {
+                    format!(" ctx={ctx_pct:.0}%")
+                } else {
+                    String::new()
+                };
+                eprintln!("  [tokens in={di} out={do_}{cache_part}{tps_part} cost~${cost:.4}{ctx_part}]");
             }
         }
         record_turn_delta(&session, &session_id, &pre_usage);
@@ -17696,6 +17706,152 @@ CTF Toolkit — Aether AI-assisted\n\
                                             ));
                                         }
                                     }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /doctor — health-check: API key, memory dir, tools, model
+                                "/doctor" | "/health" => {
+                                    let mut lines: Vec<String> = Vec::new();
+                                    lines.push("Aether health check".to_string());
+                                    lines.push("─".repeat(40));
+
+                                    // 1. API key
+                                    let api_key_ok = std::env::var("ANTHROPIC_API_KEY")
+                                        .map(|k| !k.trim().is_empty())
+                                        .unwrap_or(false);
+                                    lines.push(format!("{} ANTHROPIC_API_KEY  {}",
+                                        if api_key_ok { "✓" } else { "✗" },
+                                        if api_key_ok { "set" } else { "NOT SET — requests will fail" }
+                                    ));
+
+                                    // 2. Memory dir writeable
+                                    let doctor_home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+                                    let mem_dir = std::path::PathBuf::from(&doctor_home).join(".aether/memory");
+                                    let mem_test = std::fs::create_dir_all(&mem_dir)
+                                        .and_then(|_| {
+                                            let probe = mem_dir.join(".probe");
+                                            std::fs::write(&probe, b"ok")?;
+                                            std::fs::remove_file(&probe)
+                                        });
+                                    let mem_ok = mem_test.is_ok();
+                                    lines.push(format!("{} Memory dir  {}  {}",
+                                        if mem_ok { "✓" } else { "✗" },
+                                        mem_dir.display(),
+                                        if mem_ok { "writable" } else { "NOT WRITABLE" }
+                                    ));
+
+                                    // 3. Snippets dir
+                                    let snip_dir = std::path::PathBuf::from(&doctor_home).join(".aether/snippets");
+                                    let snip_ok = snip_dir.exists() || std::fs::create_dir_all(&snip_dir).is_ok();
+                                    lines.push(format!("{} Snippets dir  {}",
+                                        if snip_ok { "✓" } else { "✗" },
+                                        snip_dir.display()
+                                    ));
+
+                                    // 4. Session state
+                                    let turn_count = ui.chat_lines.iter()
+                                        .filter(|cl| matches!(cl, ChatLine::User(_, _)))
+                                        .count();
+                                    let history_count = ui.chat_lines.len();
+                                    lines.push(format!("✓ Exchanges      {}", turn_count));
+                                    lines.push(format!("✓ Chat lines     {}", history_count));
+
+                                    // 5. Model
+                                    lines.push(format!("✓ Model          {}", ui.model));
+
+                                    // 6. Bash availability
+                                    let bash_ok = std::process::Command::new("bash")
+                                        .arg("--version")
+                                        .output()
+                                        .is_ok();
+                                    lines.push(format!("{} bash           {}",
+                                        if bash_ok { "✓" } else { "✗" },
+                                        if bash_ok { "available" } else { "NOT FOUND" }
+                                    ));
+
+                                    // 7. Overall verdict
+                                    lines.push("─".repeat(40));
+                                    let all_ok = api_key_ok && mem_ok && bash_ok;
+                                    lines.push(if all_ok {
+                                        "All systems nominal.".to_string()
+                                    } else {
+                                        "One or more checks failed — fix items marked ✗".to_string()
+                                    });
+
+                                    ui.chat_lines.push(ChatLine::SystemNote(lines.join("\n")));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /fork [name] — snapshot current history to ~/.aether/forks/<name>.json
+                                cmd if cmd == "/fork" || cmd.starts_with("/fork ") => {
+                                    let fork_name_raw = cmd.trim_start_matches("/fork").trim();
+                                    let ts_now = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    let fork_name = if fork_name_raw.is_empty() {
+                                        format!("fork-{ts_now}")
+                                    } else {
+                                        fork_name_raw.chars()
+                                            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+                                            .collect::<String>()
+                                    };
+                                    let fork_home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+                                    let fork_dir = std::path::PathBuf::from(&fork_home).join(".aether/forks");
+                                    let note = match std::fs::create_dir_all(&fork_dir) {
+                                        Err(e) => format!("Fork failed — cannot create dir: {e}"),
+                                        Ok(_) => {
+                                            let fork_path = fork_dir.join(format!("{fork_name}.json"));
+                                            // Build a snapshot: conversation display lines as JSON
+                                            let mut snapshot: Vec<serde_json::Value> = Vec::new();
+                                            for cl in &ui.chat_lines {
+                                                match cl {
+                                                    ChatLine::User(body, t) => {
+                                                        snapshot.push(serde_json::json!({
+                                                            "role": "user",
+                                                            "content": body,
+                                                            "ts": t
+                                                        }));
+                                                    }
+                                                    ChatLine::Assistant(body, dur, _) => {
+                                                        snapshot.push(serde_json::json!({
+                                                            "role": "assistant",
+                                                            "content": body,
+                                                            "dur_secs": dur
+                                                        }));
+                                                    }
+                                                    ChatLine::SystemNote(note) => {
+                                                        snapshot.push(serde_json::json!({
+                                                            "role": "system",
+                                                            "content": note
+                                                        }));
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
+                                            let fork_turns = ui.chat_lines.iter()
+                                                .filter(|cl| matches!(cl, ChatLine::User(_, _)))
+                                                .count();
+                                            let payload = serde_json::json!({
+                                                "fork_name": fork_name,
+                                                "created_at": ts_now,
+                                                "model": ui.model.as_str(),
+                                                "turns": fork_turns,
+                                                "messages": snapshot
+                                            });
+                                            match std::fs::write(&fork_path, serde_json::to_string_pretty(&payload).unwrap_or_default()) {
+                                                Ok(_) => format!(
+                                                    "Fork '{}' saved → {}\n  ({} messages, {} turns)",
+                                                    fork_name,
+                                                    fork_path.display(),
+                                                    snapshot.len(),
+                                                    fork_turns
+                                                ),
+                                                Err(e) => format!("Fork write failed: {e}"),
+                                            }
+                                        }
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(note));
                                     ui.follow_tail = true;
                                     continue;
                                 }
