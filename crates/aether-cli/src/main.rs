@@ -6406,6 +6406,25 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 UiCommand::SetAlias(_, _) | UiCommand::RemoveAlias(_) | UiCommand::QueryAliases => {
                     continue;
                 }
+                UiCommand::SetResponseFormat(fmt_opt) => {
+                    let note = match &fmt_opt {
+                        Some(fmt) => format!(
+                            "Response format: '{fmt}' — will inject format constraint every turn."
+                        ),
+                        None => "Response format: off (no constraint).".to_string(),
+                    };
+                    session.response_format = fmt_opt;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryResponseFormat => {
+                    let note = match &session.response_format {
+                        Some(fmt) => format!("Response format: '{fmt}'  (active, injected every turn)"),
+                        None => "Response format: off. Use /format <json|markdown|plain|custom> to set.".to_string(),
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::SetSessionEnv(key, val) => {
                     // Apply to process env so all child processes (shell tools) inherit it.
                     std::env::set_var(&key, &val);
@@ -25121,6 +25140,32 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /format [json|markdown|plain|custom|off] — set response format
+                                cmd_str if cmd_str == "/format" || cmd_str.starts_with("/format ") => {
+                                    let arg = cmd_str.trim_start_matches("/format").trim();
+                                    let fmt_opt = if arg.is_empty() || arg == "off" {
+                                        None
+                                    } else {
+                                        Some(arg.to_string())
+                                    };
+                                    let show = arg.is_empty();
+                                    if _ctx.send(UiCommand::SetResponseFormat(fmt_opt)).is_err() { break 'outer; }
+                                    if show {
+                                        if _ctx.send(UiCommand::QueryResponseFormat).is_err() { break 'outer; }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /format-show — display current response format
+                                "/format-show" => {
+                                    if _ctx.send(UiCommand::QueryResponseFormat).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /env-set KEY=value — set a session env var
                                 cmd_str if cmd_str.starts_with("/env-set ") => {
                                     let arg = cmd_str.trim_start_matches("/env-set ").trim();
@@ -25828,6 +25873,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/env-set ",
                             "/env-unset ",
                             "/env-show",
+                            "/format", "/format json", "/format markdown", "/format plain", "/format off",
+                            "/format-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

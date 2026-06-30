@@ -269,6 +269,11 @@ pub struct Session {
     /// execution. Allows users to set DATABASE_URL, API keys, etc. without
     /// polluting their shell environment permanently.
     pub session_env: std::collections::HashMap<String, String>,
+
+    /// Preferred response format injected as a system reminder each turn.
+    /// None = no format constraint. Options: "json", "markdown", "plain", or
+    /// a custom string.
+    pub response_format: Option<String>,
 }
 
 impl Session {
@@ -337,6 +342,7 @@ impl Session {
             tool_allow: Vec::new(),
             tool_deny: Vec::new(),
             session_env: std::collections::HashMap::new(),
+            response_format: None,
         }
     }
 
@@ -510,6 +516,21 @@ async fn agent_turn_inner(
             ReminderKind::SystemWarning,
             Source::Kernel,
             format!("[Progress tracker]\n{}", items.join("\n")),
+        ));
+    }
+
+    // Response format constraint: if set, inject a reminder on every turn.
+    if let Some(ref fmt) = session.response_format {
+        let hint = match fmt.as_str() {
+            "json"     => "[Response format] Respond ONLY with valid JSON. No prose, no markdown fences.",
+            "markdown" => "[Response format] Format all responses using Markdown (headings, code blocks, lists).",
+            "plain"    => "[Response format] Respond in plain text only. No markdown, no code fences, no special formatting.",
+            other      => Box::leak(format!("[Response format] {other}").into_boxed_str()),
+        };
+        session.pending_reminders.push(Reminder::new(
+            ReminderKind::SystemWarning,
+            Source::Kernel,
+            hint.to_string(),
         ));
     }
 

@@ -287,6 +287,10 @@ pub enum UiCommand {
     RemovePlaybookEntry(usize),
     /// List all error playbook entries.
     QueryPlaybook,
+    /// Set the preferred response format ("json", "markdown", "plain", or custom).
+    SetResponseFormat(Option<String>),
+    /// Show the current response format constraint.
+    QueryResponseFormat,
     /// Set a session-scoped environment variable (KEY, VALUE).
     SetSessionEnv(String, String),
     /// Remove a session-scoped environment variable by key.
