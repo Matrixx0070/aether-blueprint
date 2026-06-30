@@ -6707,6 +6707,60 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::QueryModeReport => {
+                    let think_str = if session.think_aloud { "ON".to_string() } else { "off".to_string() };
+                    let capture_note = "use /capture-status";
+                    let prefix_str = session.request_prefix.as_deref().map(|s| format!("\"{}\"", s.chars().take(30).collect::<String>())).unwrap_or_else(|| "off".to_string());
+                    let suffix_str = session.request_suffix.as_deref().map(|s| format!("\"{}\"", s.chars().take(30).collect::<String>())).unwrap_or_else(|| "off".to_string());
+                    let auto_commit_str = if session.auto_commit { "ON".to_string() } else { "off".to_string() };
+                    let auto_status_str = if session.auto_status { "ON".to_string() } else { "off".to_string() };
+                    let tool_budget_str = if session.tool_call_budget > 0 { format!("{}", session.tool_call_budget) } else { "off".to_string() };
+                    let pause_str = if session.pause_now { "immediate".to_string() } else if session.pause_after_turns > 0 { format!("after {} turns", session.pause_after_turns) } else { "off".to_string() };
+                    let warn_str = if session.token_budget_warn_pct > 0.0 { format!("{:.0}%", session.token_budget_warn_pct * 100.0) } else { "off".to_string() };
+                    let hard_str = if session.token_budget_hard_pct > 0.0 { format!("{:.0}%", session.token_budget_hard_pct * 100.0) } else { "off".to_string() };
+                    let cost_alert_str = if session.cost_alert_usd > 0.0 { format!("${:.4}", session.cost_alert_usd) } else { "off".to_string() };
+                    let auto_tag_str = if session.auto_tag_rules.is_empty() { "off".to_string() } else { format!("{} rule(s)", session.auto_tag_rules.len()) };
+                    let tags_str = if session.session_tags.is_empty() { "none".to_string() } else { session.session_tags.join(", ") };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Active mode report:\n  Think-aloud:     {think_str}\n  Capture:         {capture_note}\n  Req prefix:      {prefix_str}\n  Req suffix:      {suffix_str}\n  Auto-commit:     {auto_commit_str}\n  Auto-status:     {auto_status_str}\n  Tool budget:     {tool_budget_str}\n  Pause setting:   {pause_str}\n  Token warn:      {warn_str}\n  Token hard-stop: {hard_str}\n  Cost alert:      {cost_alert_str}\n  Auto-tag rules:  {auto_tag_str}\n  Session tags:    {tags_str}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryLastUser => {
+                    use aether_core::context::ConversationItem;
+                    match session.history.iter().rev().find_map(|item| {
+                        if let ConversationItem::User(s) = item { Some(s.as_str()) } else { None }
+                    }) {
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote("No user messages in history.".to_string()));
+                        }
+                        Some(msg) => {
+                            let preview: String = msg.chars().take(400).collect();
+                            let ellipsis = if msg.len() > 400 { "\n…(truncated)" } else { "" };
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Last user message:\n\n{preview}{ellipsis}")));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryModelHistory => {
+                    if session.turn_models.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No turns recorded yet.".to_string()));
+                    } else {
+                        let mut model_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+                        for m in &session.turn_models { *model_counts.entry(m.as_str()).or_insert(0) += 1; }
+                        let mut msg = format!("Model history  ({} turns)\n", session.turn_models.len());
+                        msg.push_str("  Turn  Model\n  ──────────────────────────────\n");
+                        for (i, m) in session.turn_models.iter().enumerate() {
+                            msg.push_str(&format!("  {:>4}  {m}\n", i + 1));
+                        }
+                        msg.push_str("\nSummary:\n");
+                        let mut counts: Vec<(&str, usize)> = model_counts.into_iter().collect();
+                        counts.sort_by(|a, b| b.1.cmp(&a.1));
+                        for (m, c) in counts { msg.push_str(&format!("  {m}: {c} turn(s)\n")); }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
                 UiCommand::QueryContextHealthScore => {
                     use aether_core::compaction::context_window_for_model;
                     let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
@@ -8994,6 +9048,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
             let mut context_60_note_shown: bool = false;
             let hist_before = session.history.len();
             let turn_wall_start = std::time::Instant::now();
+            let turn_model_used = session.next_turn_model.as_deref().unwrap_or(&session.config.model).to_string();
             loop {
                 let etx_inner = etx_for_driver.clone();
                 let mut started = false;
@@ -9342,6 +9397,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
             }
             // Record wall-clock elapsed for this outer turn cycle.
             session.turn_wall_ms.push(turn_wall_start.elapsed().as_millis() as u64);
+            session.turn_models.push(turn_model_used);
             // Capture: write new assistant responses to the capture file.
             if let Some(ref mut cf) = capture_file {
                 use std::io::Write;
@@ -28095,6 +28151,30 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /mode-report — show all active session modes
+                                "/mode-report" => {
+                                    if _ctx.send(UiCommand::QueryModeReport).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /last-user — show the last user message from history
+                                "/last-user" => {
+                                    if _ctx.send(UiCommand::QueryLastUser).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /model-history — show per-turn model usage log
+                                "/model-history" => {
+                                    if _ctx.send(UiCommand::QueryModelHistory).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /context-health-score — 0-100 health score for session
                                 "/context-health-score" => {
                                     if _ctx.send(UiCommand::QueryContextHealthScore).is_err() { break 'outer; }
@@ -28941,6 +29021,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tag-session ",
                             "/tag-session-list",
                             "/tag-session-del ",
+                            "/mode-report",
+                            "/last-user",
+                            "/model-history",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

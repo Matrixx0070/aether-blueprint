@@ -375,6 +375,10 @@ pub struct Session {
 
     /// User-defined labels/tags for this session. Shown in /session-info and /tag-session-list.
     pub session_tags: Vec<String>,
+
+    /// Model name used for each outer turn, in order.
+    /// Recorded by the driver after the inner loop exits.
+    pub turn_models: Vec<String>,
 }
 
 impl Session {
@@ -472,6 +476,7 @@ impl Session {
             cost_alert_usd: 0.0,
             cost_alert_fired: false,
             session_tags: Vec::new(),
+            turn_models: Vec::new(),
         }
     }
 

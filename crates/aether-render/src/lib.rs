@@ -417,6 +417,12 @@ pub enum UiCommand {
     JumpBookmark(usize),
     /// Delete a bookmark by 0-based index.
     DeleteBookmark(usize),
+    /// Display a comprehensive active-modes summary for this session.
+    QueryModeReport,
+    /// Show the last user message from history.
+    QueryLastUser,
+    /// Show the per-turn model history (which model was used for each turn).
+    QueryModelHistory,
     /// Compute and display a 0–100 context health score.
     QueryContextHealthScore,
     /// Dump session.history as JSON to the given file path.
