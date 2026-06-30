@@ -397,6 +397,12 @@ pub enum UiCommand {
     ClearProgressItems,
     /// List current progress items.
     QueryProgressItems,
+    /// Start capturing agent output (user + assistant turns) to a file (path).
+    StartCapture(String),
+    /// Stop the current output capture and close the file.
+    StopCapture,
+    /// Show current capture state: active path and bytes written.
+    QueryCapture,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

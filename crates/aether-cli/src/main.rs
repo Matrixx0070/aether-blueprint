@@ -5536,6 +5536,9 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
         let mut session = session;
         let hooks = hooks;
         let mut pending_task: Option<String> = None;
+        let mut capture_file: Option<std::fs::File> = None;
+        let mut capture_path: Option<String> = None;
+        let mut capture_bytes: u64 = 0;
         loop {
             let cmd = if let Some(task) = pending_task.take() {
                 UiCommand::UserMessage(task)
@@ -6438,6 +6441,56 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                             })
                             .collect();
                         format!("=== Session vars ({}) ===\n{}", lines.len(), lines.join("\n"))
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::StartCapture(path) => {
+                    use std::io::Write;
+                    match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+                        Ok(mut f) => {
+                            let ts = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs();
+                            let header = format!("=== Aether capture started (unix={ts}) ===\n\n");
+                            let _ = f.write_all(header.as_bytes());
+                            capture_bytes = header.len() as u64;
+                            capture_path = Some(path.clone());
+                            capture_file = Some(f);
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                format!("Capture started → {path}  (append mode; use /capture-stop to end)")
+                            ));
+                        }
+                        Err(e) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                format!("Capture: failed to open '{path}': {e}")
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::StopCapture => {
+                    if let Some(p) = capture_path.take() {
+                        let bytes = capture_bytes;
+                        capture_bytes = 0;
+                        drop(capture_file.take());
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            format!("Capture stopped. Wrote {bytes} bytes to {p}")
+                        ));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Capture: not active. Use /capture-start [path] to begin.".to_string()
+                        ));
+                    }
+                    continue;
+                }
+                UiCommand::QueryCapture => {
+                    let note = match &capture_path {
+                        Some(p) => format!(
+                            "Capture: ACTIVE → {p}\n  Bytes written: {capture_bytes}\n  Use /capture-stop to end."
+                        ),
+                        None => "Capture: off. Use /capture-start [path] to begin.".to_string(),
                     };
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
@@ -7566,10 +7619,18 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
             } else {
                 user_msg
             };
+            // Capture: write the user message to the capture file (if active).
+            if let Some(ref mut cf) = capture_file {
+                use std::io::Write;
+                let line = format!("[User]\n{user_msg}\n\n");
+                let _ = cf.write_all(line.as_bytes());
+                capture_bytes += line.len() as u64;
+            }
             let mut next_input: Option<String> = Some(user_msg);
             const AUTO_CONTINUE_LIMIT: usize = 50;
             let mut auto_continue_count: usize = 0;
             let mut context_60_note_shown: bool = false;
+            let hist_before = session.history.len();
             loop {
                 let etx_inner = etx_for_driver.clone();
                 let mut started = false;
@@ -7844,6 +7905,28 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         continue;
                     }
                     TurnOutcome::Exit => break,
+                }
+            }
+            // Capture: write new assistant responses to the capture file.
+            if let Some(ref mut cf) = capture_file {
+                use std::io::Write;
+                use aether_core::context::ConversationItem;
+                let new_items = if hist_before <= session.history.len() {
+                    &session.history[hist_before..]
+                } else {
+                    &session.history[0..0]
+                };
+                let mut buf = String::new();
+                for item in new_items {
+                    if let ConversationItem::Assistant { text: Some(t), .. } = item {
+                        buf.push_str("[Assistant]\n");
+                        buf.push_str(t);
+                        buf.push_str("\n\n");
+                    }
+                }
+                if !buf.is_empty() {
+                    let _ = cf.write_all(buf.as_bytes());
+                    capture_bytes += buf.len() as u64;
                 }
             }
             // Post-turn hook: if configured and tools were used this turn, run the
@@ -25956,6 +26039,36 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /capture-start [path] — begin capturing turns to a file
+                                cmd_str if cmd_str == "/capture-start" || cmd_str.starts_with("/capture-start ") => {
+                                    let arg = cmd_str.trim_start_matches("/capture-start").trim();
+                                    let path = if arg.is_empty() {
+                                        "aether-capture.txt".to_string()
+                                    } else {
+                                        arg.to_string()
+                                    };
+                                    if _ctx.send(UiCommand::StartCapture(path)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /capture-stop — stop capturing and close the file
+                                "/capture-stop" => {
+                                    if _ctx.send(UiCommand::StopCapture).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /capture-status — show whether capture is active and bytes written
+                                "/capture-status" => {
+                                    if _ctx.send(UiCommand::QueryCapture).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -26466,6 +26579,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/var", "/var ",
                             "/vars",
                             "/var-del ",
+                            "/capture-start", "/capture-start ",
+                            "/capture-stop",
+                            "/capture-status",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
