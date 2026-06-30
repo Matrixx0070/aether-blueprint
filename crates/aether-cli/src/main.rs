@@ -6093,6 +6093,43 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::SavePlan(path) => {
+                    let text = session.plan.text.clone();
+                    let note = if text.trim().is_empty() {
+                        "Plan is empty — nothing to save.".to_string()
+                    } else {
+                        match std::fs::write(&path, &text) {
+                            Ok(_) => format!("Plan saved to {path} ({} bytes).", text.len()),
+                            Err(e) => format!("Save failed: {e}"),
+                        }
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::LoadPlan(path) => {
+                    let note = match std::fs::read_to_string(&path) {
+                        Err(e) => format!("Load failed: {e}"),
+                        Ok(text) => {
+                            session.plan.text = text.clone();
+                            session.plan.mark_dirty();
+                            format!("Plan loaded from {path} ({} bytes). Use /plan-status to verify.", text.len())
+                        }
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::ResetStats => {
+                    session.usage_total = aether_llm::Usage::default();
+                    session.llm_ms_total = 0;
+                    session.llm_ms_last = 0;
+                    session.started_at = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(
+                        "Session stats reset (tokens, cost, LLM timing, wall clock).".to_string()));
+                    continue;
+                }
                 UiCommand::QuerySessionStats => {
                     use aether_core::compaction::context_window_for_model;
                     let now = std::time::SystemTime::now()
@@ -18825,10 +18862,65 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /think N or /think Nk — numeric thinking budget
+                                cmd_str if cmd_str.starts_with("/think ") => {
+                                    let arg = cmd_str[7..].trim();
+                                    let budget: Option<u32> = if arg == "off" || arg == "0" {
+                                        None
+                                    } else {
+                                        let n_str = if arg.ends_with('k') || arg.ends_with('K') {
+                                            &arg[..arg.len()-1]
+                                        } else { arg };
+                                        n_str.parse::<u32>().ok().map(|n| {
+                                            if arg.ends_with('k') || arg.ends_with('K') { n * 1000 } else { n }
+                                        })
+                                    };
+                                    match budget {
+                                        None if arg != "off" && arg != "0" => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                "Usage: /think <off|fast|deep|N|Nk>  e.g. /think 8k".into()));
+                                        }
+                                        b => { if _ctx.send(UiCommand::SetThinking(b)).is_err() { break 'outer; } }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/think" => {
                                     ui.chat_lines.push(ChatLine::SystemNote(
-                                        "Usage: /think <off|fast|deep>\n  off  — disable extended thinking\n  fast — 2 000-token budget (quick)\n  deep — 16 000-token budget (thorough, Opus 4+ only)".into()
+                                        "Usage: /think <off|fast|deep|N|Nk>\n  off  — disable extended thinking\n  fast — 2 000-token budget (quick)\n  deep — 16 000-token budget (thorough, Opus 4+ only)\n  N/Nk — custom budget e.g. /think 8000 or /think 8k".into()
                                     ));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /plan-save [path] — export active plan to file
+                                cmd_str if cmd_str.starts_with("/plan-save ") || cmd_str == "/plan-save" => {
+                                    let arg = cmd_str.trim_start_matches("/plan-save").trim();
+                                    let path = if arg.is_empty() {
+                                        format!("aether-plan-{}.txt",
+                                            std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default().as_secs())
+                                    } else { arg.to_string() };
+                                    if _ctx.send(UiCommand::SavePlan(path)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /plan-load [path] — restore plan from file
+                                cmd_str if cmd_str.starts_with("/plan-load ") => {
+                                    let path = cmd_str.trim_start_matches("/plan-load").trim().to_string();
+                                    if _ctx.send(UiCommand::LoadPlan(path)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /stats-reset — reset session stats (tokens, cost, timing)
+                                "/stats-reset" => {
+                                    if _ctx.send(UiCommand::ResetStats).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
                                     ui.follow_tail = true;
                                     continue;
                                 }
@@ -23667,6 +23759,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/remind", "/remind ",
                             "/undo",
                             "/find ",
+                            "/plan-save", "/plan-save ",
+                            "/plan-load ",
+                            "/stats-reset",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

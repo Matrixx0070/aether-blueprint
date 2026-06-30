@@ -202,6 +202,12 @@ pub enum UiCommand {
     UndoLastTurn,
     /// Search conversation history for messages containing the given substring.
     FindInHistory(String),
+    /// Save the current active plan text to a file.
+    SavePlan(String),
+    /// Replace the active plan text with content from a file.
+    LoadPlan(String),
+    /// Reset per-session LLM timing and token counters.
+    ResetStats,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
