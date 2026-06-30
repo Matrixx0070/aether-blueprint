@@ -135,6 +135,10 @@ pub enum UiCommand {
     SetEnvVar(String, String),
     /// Remove an environment variable from the driver's process env.
     UnsetEnvVar(String),
+    /// Force context-history compaction regardless of usage threshold.
+    ForceCompact,
+    /// Inject a message into session history as a User turn (AI sees it as context, no LLM call).
+    InjectContext(String),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

@@ -5576,6 +5576,40 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::ForceCompact => {
+                    match aether_core::compaction::force_compact(&mut session).await {
+                        Ok(true) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                format!("Context compacted — history summarised to {} items.", session.history.len())
+                            ));
+                        }
+                        Ok(false) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Compact skipped: AETHER_NO_COMPACT=1 set, or history too short (< 4 items).".into()
+                            ));
+                        }
+                        Err(e) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                format!("Compact failed: {e}")
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::InjectContext(text) => {
+                    session.history.push(aether_core::context::ConversationItem::User(
+                        format!("[INJECTED CONTEXT]\n{text}")
+                    ));
+                    let preview: String = text.chars().take(60).collect();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(
+                        format!("Context injected ({} chars): {}{}",
+                            text.len(),
+                            preview,
+                            if text.len() > 60 { "…" } else { "" }
+                        )
+                    ));
+                    continue;
+                }
             };
             let outs = run_hooks(
                 &hooks.user_prompt_submit,
@@ -18310,6 +18344,35 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /compact full — force real session-history compaction (bypasses threshold)
+                                "/compact full" => {
+                                    if _ctx.send(UiCommand::ForceCompact).is_err() { break 'outer; }
+                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                        "Requested session-history compaction (force)…".into()
+                                    ));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /inject <text> — inject context into session history (AI sees it, no LLM call)
+                                cmd_str if cmd_str.starts_with("/inject ") => {
+                                    let text = cmd_str[8..].trim().to_string();
+                                    if text.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /inject <text>\n  Injects text into session context — AI sees it as user context on the next turn.".into()
+                                        ));
+                                    } else if _ctx.send(UiCommand::InjectContext(text)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/inject" => {
+                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                        "Usage: /inject <text>\n  Injects text into session context — AI sees it as user context on the next turn.\n  Example: /inject The user's name is Alice and she is a backend engineer.".into()
+                                    ));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -18617,6 +18680,10 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
                             "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/cve ", "/dotenv", "/dotenv ", "/calc ", "/chars", "/chars ", "/ai-arch", "/ai-arch ", "/ai-explain ", "/cheat ", "/color ", "/duck ", "/env-diff ", "/env-vars", "/env-vars ", "/flashcard ", "/format-sql ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/gh-search ", "/http-codes", "/http-codes ", "/impl ", "/json-schema ", "/man-ai ", "/mkscript ", "/open ", "/path", "/ai-bugs ", "/ai-code-review ", "/ai-doc-gen ", "/ai-improve-commit", "/ai-optimize ", "/ai-pr", "/ai-pr ", "/ai-refactor ", "/ai-security ", "/ai-test-gen ", "/ai-translate ", "/bundle-size", "/bundle-size ", "/changelog-ai", "/changelog-ai ", "/codebase-summary", "/git-cherry", "/git-cherry ", "/git-conflicts", "/git-log-file ", "/git-remote", "/git-remote ", "/git-show ", "/net-stat", "/perf-diff ", "/pwd", "/regex-test ", "/run-test ", "/ssh-key", "/ssh-key ", "/tail ", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/semver ", "/session-summary", "/spell ", "/teach ", "/time", "/time ", "/which-all ", "/wiki ", "/workflow", "/workflow ", "/ai-estimate ", "/ai-standup-report", "/ai-standup-report ", "/clipboard", "/clipboard ", "/env-set ", "/git-amend", "/git-amend ", "/ai-changelog-commit", "/ai-changelog-commit ", "/ai-complexity-report", "/ai-complexity-report ", "/ai-rename-symbol ", "/git-undo", "/git-undo ", "/loc", "/loc ", "/ai-explain-diff", "/ai-explain-diff ", "/ai-onboard", "/deps-outdated", "/diff-stat", "/diff-stat ", "/file-watch ", "/ai-migrate ", "/ai-sql-explain ", "/git-bisect-ai", "/git-bisect-ai ", "/http-mock ", "/token-count ", "/ai-data-model ", "/ai-pr-checklist", "/ai-pr-checklist ", "/env-template", "/env-template ", "/git-contributors", "/git-contributors ", "/git-hotspot", "/git-hotspot ", "/ai-code-smell-fix ", "/ai-commit-lint", "/ai-commit-lint ", "/ai-test-fix", "/ai-test-fix ", "/git-tag-diff ", "/process-tree", "/process-tree ", "/ai-api-design ", "/ai-debug-crash", "/ai-debug-crash ", "/ai-incident-report", "/ai-incident-report ", "/cpu-history", "/cpu-history ", "/uptime", "/uptime ", "/git-since ", "/ai-explain-error ", "/ai-naming-convention", "/ai-naming-convention ", "/ai-risk-assessment", "/ai-risk-assessment ", "/git-file-stats ", "/workspace-summary", "/ai-license-audit", "/ai-pentest-hints ", "/ai-secrets-scan", "/ai-secrets-scan ", "/ai-threat-model ", "/cve-check ", "/ai-architecture-decision ", "/ai-glossary ", "/ai-interview-prep ", "/ai-rubber-duck ", "/git-graph", "/git-graph ", "/ai-convert ", "/ai-perf-budget", "/ai-perf-budget ", "/ai-refactor-plan ", "/git-clean-branches", "/git-clean-branches ", "/snippet-save ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
+                            "/tools", "/tools ", "/think", "/think off", "/think fast", "/think deep",
+                            "/setenv ", "/unsetenv ", "/session-info", "/si",
+                            "/compact full", "/inject ", "/model-list", "/models",
+                            "/tool-stats", "/tstats",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

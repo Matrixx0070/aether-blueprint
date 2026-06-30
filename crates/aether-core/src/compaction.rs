@@ -108,10 +108,21 @@ fn summary_prompt(history_text: &str) -> String {
 /// Returns `Ok(true)` if a compaction ran, `Ok(false)` if conditions
 /// weren't met (history too short, kill-switch on, below threshold).
 pub async fn maybe_compact(session: &mut Session) -> Result<bool, AgentError> {
+    compact_inner(session, false).await
+}
+
+/// Force-compact regardless of the usage threshold. Still respects the
+/// kill-switch (`AETHER_NO_COMPACT=1`) and the minimum-history guard.
+/// Useful for the `/compact full` UI command.
+pub async fn force_compact(session: &mut Session) -> Result<bool, AgentError> {
+    compact_inner(session, true).await
+}
+
+async fn compact_inner(session: &mut Session, force: bool) -> Result<bool, AgentError> {
     if std::env::var("AETHER_NO_COMPACT").ok().as_deref() == Some("1") {
         return Ok(false);
     }
-    if !over_threshold(&session.usage_total, &session.config.model, COMPACTION_THRESHOLD_PCT) {
+    if !force && !over_threshold(&session.usage_total, &session.config.model, COMPACTION_THRESHOLD_PCT) {
         return Ok(false);
     }
     // Need at least 4 items to be worth compacting (keep at least 2 in tail).
