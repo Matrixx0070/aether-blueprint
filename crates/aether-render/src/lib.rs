@@ -951,6 +951,12 @@ pub enum UiCommand {
     QueryLlmFallbackTotal,
     /// Show cost cap (hard ceiling) setting.
     QueryCostCapShow,
+    /// Show how many turns tools remain disabled.
+    QueryToolsDisabledTurns,
+    /// Show the system suffix / persona text.
+    QuerySystemSuffixShow,
+    /// Show whether the cost alert has fired.
+    QueryCostAlertFired,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

@@ -7700,6 +7700,56 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryToolsDisabledTurns => {
+                    let n = session.config.tools_disabled_turns;
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Tools: enabled (no turns remaining with tools disabled).".to_string()
+                        ));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Tools disabled for the next {n} turn(s)."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QuerySystemSuffixShow => {
+                    match &session.config.system_suffix {
+                        Some(s) if !s.trim().is_empty() => {
+                            let preview = if s.len() > 200 {
+                                format!("{}… ({} chars total)", &s[..200], s.len())
+                            } else {
+                                s.clone()
+                            };
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "System suffix:\n{preview}"
+                            )));
+                        }
+                        _ => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "System suffix: none set. Use /persona <text> to configure.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryCostAlertFired => {
+                    if session.cost_alert_fired {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Cost alert: FIRED (threshold: ${:.4}). Use /cost-alert off to reset.",
+                            session.cost_alert_usd
+                        )));
+                    } else if session.cost_alert_usd <= 0.0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Cost alert: OFF (not configured). Use /cost-alert <usd> to set.".to_string()
+                        ));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Cost alert: armed at ${:.4} — not yet fired.", session.cost_alert_usd
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryRetryCountShow => {
                     let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
                         "Retry-on-error: {}/{} retries used (threshold: {} errors, max: {} retries).",
@@ -33459,6 +33509,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /tools-disabled-turns — show how many turns tools remain disabled
+                                "/tools-disabled-turns" => {
+                                    if _ctx.send(UiCommand::QueryToolsDisabledTurns).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /system-suffix-show — show system suffix / persona text
+                                "/system-suffix-show" => {
+                                    if _ctx.send(UiCommand::QuerySystemSuffixShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /cost-alert-fired — show whether cost alert has fired
+                                "/cost-alert-fired" => {
+                                    if _ctx.send(UiCommand::QueryCostAlertFired).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -34241,6 +34309,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/retry-count-show",
                             "/llm-fallback-total",
                             "/cost-cap-show",
+                            "/tools-disabled-turns",
+                            "/system-suffix-show",
+                            "/cost-alert-fired",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
