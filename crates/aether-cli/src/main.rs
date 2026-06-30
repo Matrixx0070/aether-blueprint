@@ -6778,6 +6778,93 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryToolOutputSearch(pat) => {
+                    if session.tool_output_history.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No tool output history yet.".to_string()));
+                    } else {
+                        let lower = pat.to_lowercase();
+                        let mut matches: Vec<String> = Vec::new();
+                        for (tool_name, (prev, curr)) in &session.tool_output_history {
+                            for (label, output) in [("prev", prev), ("curr", curr)] {
+                                if output.to_lowercase().contains(&lower) {
+                                    let preview: String = output.chars().take(80).collect::<String>().replace('\n', " ");
+                                    matches.push(format!("  [{} {}]: {preview}", tool_name, label));
+                                }
+                            }
+                        }
+                        if matches.is_empty() {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Pattern '{}' not found in {} tool output(s).", pat, session.tool_output_history.len()
+                            )));
+                        } else {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Tool output search '{}': {} match(es)\n{}", pat, matches.len(), matches.join("\n")
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryReverse(n) => {
+                    if session.history.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("History is empty.".to_string()));
+                    } else {
+                        let take = if n == 0 { session.history.len() } else { n.min(session.history.len()) };
+                        let mut msg = format!("History (newest-first, showing {take}):\n");
+                        for (orig_idx, item) in session.history.iter().enumerate().rev().take(take) {
+                            let (kind, preview) = match item {
+                                ConversationItem::User(t) => ("User", t.chars().take(60).collect::<String>().replace('\n', " ")),
+                                ConversationItem::Assistant { text, tool_uses } => {
+                                    let p: String = text.as_deref().unwrap_or("").chars().take(60).collect::<String>().replace('\n', " ");
+                                    let label = if !tool_uses.is_empty() { "Asst+Tools" } else { "Asst" };
+                                    (label, p)
+                                }
+                                ConversationItem::ToolResults(r) => ("ToolRes", format!("{} result(s)", r.len())),
+                            };
+                            msg.push_str(&format!("  [{orig_idx:>3}] {kind:<10}: {preview}\n"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionBurstDetect(threshold_arg) => {
+                    let mut turn = 0usize;
+                    let mut per_turn: Vec<(usize, usize)> = Vec::new(); // (user_hist_idx, tool_count)
+                    let mut last_user_idx = 0usize;
+                    for (idx, item) in session.history.iter().enumerate() {
+                        match item {
+                            ConversationItem::User(_) => {
+                                turn += 1;
+                                last_user_idx = idx;
+                                per_turn.push((idx, 0));
+                            }
+                            ConversationItem::Assistant { tool_uses, .. } => {
+                                if let Some(last) = per_turn.last_mut() {
+                                    last.1 += tool_uses.len();
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    let threshold = if threshold_arg == 0 {
+                        let avg: f64 = if per_turn.is_empty() { 0.0 } else {
+                            per_turn.iter().map(|&(_, c)| c as f64).sum::<f64>() / per_turn.len() as f64
+                        };
+                        (avg * 1.5).ceil() as usize
+                    } else { threshold_arg };
+                    let bursts: Vec<String> = per_turn.iter().filter(|&&(_, c)| c > threshold)
+                        .map(|&(hist_idx, c)| format!("  [hist:{hist_idx}] {c} tool call(s)"))
+                        .collect();
+                    if bursts.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "No burst turns detected (threshold: >{threshold} calls/turn, {} turns).", per_turn.len()
+                        )));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Burst turns (>{threshold} calls/turn): {} detected\n{}", bursts.len(), bursts.join("\n")
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVar(name) => {
                     match session.session_vars.get(&name) {
                         Some(v) => {
@@ -30038,6 +30125,39 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /tool-output-search <pat> — search tool_output_history
+                                cmd_str if cmd_str.starts_with("/tool-output-search ") => {
+                                    let pat = cmd_str.trim_start_matches("/tool-output-search ").trim().to_string();
+                                    if pat.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /tool-output-search <pattern>".to_string()));
+                                    } else if _ctx.send(UiCommand::QueryToolOutputSearch(pat)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-reverse [n] — show last n history items newest-first
+                                cmd_str if cmd_str == "/history-reverse" || cmd_str.starts_with("/history-reverse ") => {
+                                    let arg = cmd_str.trim_start_matches("/history-reverse").trim();
+                                    let n = arg.parse::<usize>().unwrap_or(10);
+                                    if _ctx.send(UiCommand::QueryHistoryReverse(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-burst-detect [n] — find turns with >n tool calls
+                                cmd_str if cmd_str == "/session-burst-detect" || cmd_str.starts_with("/session-burst-detect ") => {
+                                    let arg = cmd_str.trim_start_matches("/session-burst-detect").trim();
+                                    let n = arg.parse::<usize>().unwrap_or(0);
+                                    if _ctx.send(UiCommand::QuerySessionBurstDetect(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /session-var-show <name> — show value of one session variable
                                 cmd_str if cmd_str.starts_with("/session-var-show ") => {
                                     let name = cmd_str.trim_start_matches("/session-var-show ").trim().to_string();
@@ -30989,6 +31109,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-var-show ",
                             "/history-search-replace-all ",
                             "/model-compare-cost ",
+                            "/tool-output-search ",
+                            "/history-reverse", "/history-reverse ",
+                            "/session-burst-detect", "/session-burst-detect ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

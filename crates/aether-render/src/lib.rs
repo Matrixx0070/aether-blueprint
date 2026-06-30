@@ -691,6 +691,12 @@ pub enum UiCommand {
     HistorySearchReplaceAll(String, String),
     /// Estimate what the session would have cost on a different model.
     QueryModelCompareCost(String),
+    /// Search all tool_output_history entries for a pattern (case-insensitive).
+    QueryToolOutputSearch(String),
+    /// Show history items in reverse order (newest first) as compact previews.
+    QueryHistoryReverse(usize),
+    /// Detect turns with more than N tool calls (burst detection). 0 = auto threshold.
+    QuerySessionBurstDetect(usize),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
