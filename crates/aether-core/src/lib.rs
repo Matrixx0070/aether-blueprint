@@ -300,6 +300,9 @@ async fn agent_turn_inner(
             ContentBlock::Thinking { .. } => {
                 // Already streamed to the user via on_delta; skip from text_parts.
             }
+            ContentBlock::Image { .. } => {
+                // Models never emit images in their assistant responses; drop silently.
+            }
         }
     }
     let raw_assistant_text = if text_parts.is_empty() {

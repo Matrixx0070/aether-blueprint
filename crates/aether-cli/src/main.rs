@@ -18108,32 +18108,53 @@ CTF Toolkit — Aether AI-assisted\n\
                                             cwd_for_at.join(raw_path)
                                         };
                                         if full.is_file() {
-                                            if let Ok(content) = std::fs::read_to_string(&full) {
-                                                let (slice, range_label) = if let Some(range_str) = line_range {
-                                                    let parts: Vec<&str> = range_str.splitn(2, '-').collect();
-                                                    let lo: usize = parts[0].parse::<usize>().unwrap_or(1).saturating_sub(1);
-                                                    let hi: usize = if parts.len() == 2 {
-                                                        parts[1].parse().unwrap_or(usize::MAX)
-                                                    } else {
-                                                        lo + 1
-                                                    };
-                                                    let sliced: Vec<&str> = content.lines()
-                                                        .enumerate()
-                                                        .filter(|(i, _)| *i >= lo && *i < hi)
-                                                        .map(|(_, l)| l)
-                                                        .collect();
-                                                    let label = if parts.len() == 2 {
-                                                        format!("L{}–{}", lo + 1, hi)
-                                                    } else {
-                                                        format!("L{}", lo + 1)
-                                                    };
-                                                    (sliced.join("\n"), format!(":{range_str}"))
-                                                } else {
-                                                    (content.clone(), String::new())
+                                            let token = format!("@{raw_token}");
+                                            if !injections.iter().any(|(t, _, _)| t == &token) {
+                                                // Image files → base64 sentinel for vision API
+                                                let img_media = match std::path::Path::new(raw_path)
+                                                    .extension()
+                                                    .and_then(|e| e.to_str())
+                                                    .unwrap_or("")
+                                                    .to_lowercase()
+                                                    .as_str()
+                                                {
+                                                    "png"        => Some("image/png"),
+                                                    "jpg"|"jpeg" => Some("image/jpeg"),
+                                                    "gif"        => Some("image/gif"),
+                                                    "webp"       => Some("image/webp"),
+                                                    _            => None,
                                                 };
-                                                let token = format!("@{raw_token}");
-                                                let label = format!("{raw_path}{range_label}");
-                                                if !injections.iter().any(|(t, _, _)| t == &token) {
+                                                if let Some(media_type) = img_media {
+                                                    if let Ok(bytes) = std::fs::read(&full) {
+                                                        use base64::Engine as _;
+                                                        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                                                        let sentinel = format!("@@IMAGE:{media_type}:{b64}@@");
+                                                        let size_kb = bytes.len() / 1024;
+                                                        injections.push((token, format!("{raw_path} [{media_type}, {size_kb}KB]"), sentinel));
+                                                    }
+                                                } else if let Ok(content) = std::fs::read_to_string(&full) {
+                                                    // Text file — support line range
+                                                    let (slice, range_label) = if let Some(range_str) = line_range {
+                                                        let parts: Vec<&str> = range_str.splitn(2, '-').collect();
+                                                        let lo: usize = parts[0].parse::<usize>().unwrap_or(1).saturating_sub(1);
+                                                        let hi: usize = if parts.len() == 2 {
+                                                            parts[1].parse().unwrap_or(usize::MAX)
+                                                        } else { lo + 1 };
+                                                        let sliced: Vec<&str> = content.lines()
+                                                            .enumerate()
+                                                            .filter(|(i, _)| *i >= lo && *i < hi)
+                                                            .map(|(_, l)| l)
+                                                            .collect();
+                                                        let label = if parts.len() == 2 {
+                                                            format!("L{}–{}", lo + 1, hi)
+                                                        } else {
+                                                            format!("L{}", lo + 1)
+                                                        };
+                                                        (sliced.join("\n"), format!(":{range_str}"))
+                                                    } else {
+                                                        (content, String::new())
+                                                    };
+                                                    let label = format!("{raw_path}{range_label}");
                                                     injections.push((token, label, slice));
                                                 }
                                             }
@@ -18147,17 +18168,26 @@ CTF Toolkit — Aether AI-assisted\n\
                                     let mut expanded = msg.clone();
                                     let mut appendix = String::new();
                                     for (token, label, content) in &injections {
-                                        let ext = std::path::Path::new(label)
-                                            .extension()
-                                            .and_then(|e| e.to_str())
-                                            .unwrap_or("")
-                                            .to_string();
-                                        appendix.push_str(&format!("\n\n--- {label} ---\n```{ext}\n{content}\n```"));
-                                        expanded = expanded.replace(token.as_str(), &format!("[{label}]"));
+                                        if content.starts_with("@@IMAGE:") {
+                                            // Image sentinel — embed inline so translate_history sees it
+                                            expanded = expanded.replace(token.as_str(), &format!("[image:{label}]{content}"));
+                                        } else {
+                                            let ext = std::path::Path::new(label)
+                                                .extension()
+                                                .and_then(|e| e.to_str())
+                                                .unwrap_or("")
+                                                .to_string();
+                                            appendix.push_str(&format!("\n\n--- {label} ---\n```{ext}\n{content}\n```"));
+                                            expanded = expanded.replace(token.as_str(), &format!("[{label}]"));
+                                        }
                                     }
                                     let files_note = injections.iter().map(|(_, label, content)| {
-                                        let lines = content.lines().count();
-                                        format!("{label} ({lines}L)")
+                                        if content.starts_with("@@IMAGE:") {
+                                            label.clone()
+                                        } else {
+                                            let lines = content.lines().count();
+                                            format!("{label} ({lines}L)")
+                                        }
                                     }).collect::<Vec<_>>().join(", ");
                                     ui.chat_lines.push(ChatLine::SystemNote(
                                         format!("@-file inject: {files_note}")

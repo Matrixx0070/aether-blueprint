@@ -120,6 +120,21 @@ impl Usage {
     }
 }
 
+/// Source descriptor for base64-encoded image content.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageSource {
+    #[serde(rename = "type")]
+    pub source_type: String, // always "base64"
+    pub media_type: String,  // e.g. "image/png"
+    pub data: String,        // base64-encoded bytes
+}
+
+impl ImageSource {
+    pub fn base64(media_type: impl Into<String>, data: impl Into<String>) -> Self {
+        Self { source_type: "base64".into(), media_type: media_type.into(), data: data.into() }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
@@ -140,6 +155,10 @@ pub enum ContentBlock {
     /// Extended-thinking content block (Opus 4+ with thinking enabled).
     Thinking {
         thinking: String,
+    },
+    /// Vision image block. Serialises to Anthropic's base64 source format.
+    Image {
+        source: ImageSource,
     },
 }
 

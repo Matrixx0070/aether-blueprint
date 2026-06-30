@@ -176,11 +176,71 @@ impl ContextAssembler {
     }
 }
 
+/// In-band image sentinel embedded in `ConversationItem::User` text by the CLI.
+/// Format: `@@IMAGE:<media_type>:<base64_data>@@`
+/// The context assembler decodes these into `ContentBlock::Image` blocks.
+const IMAGE_SENTINEL_PREFIX: &str = "@@IMAGE:";
+const IMAGE_SENTINEL_SUFFIX: &str = "@@";
+
+fn decode_user_content(text: &str) -> Vec<ContentBlock> {
+    // Fast-path: no sentinel present
+    if !text.contains(IMAGE_SENTINEL_PREFIX) {
+        return vec![ContentBlock::Text { text: text.to_string() }];
+    }
+    let mut blocks: Vec<ContentBlock> = Vec::new();
+    let mut remaining = text;
+    loop {
+        match remaining.find(IMAGE_SENTINEL_PREFIX) {
+            None => {
+                if !remaining.is_empty() {
+                    blocks.push(ContentBlock::Text { text: remaining.to_string() });
+                }
+                break;
+            }
+            Some(pos) => {
+                // Text before sentinel
+                let before = &remaining[..pos];
+                if !before.is_empty() {
+                    blocks.push(ContentBlock::Text { text: before.to_string() });
+                }
+                let after_prefix = &remaining[pos + IMAGE_SENTINEL_PREFIX.len()..];
+                // Find closing @@
+                match after_prefix.find(IMAGE_SENTINEL_SUFFIX) {
+                    None => {
+                        // Malformed; treat rest as text
+                        blocks.push(ContentBlock::Text { text: remaining[pos..].to_string() });
+                        break;
+                    }
+                    Some(close) => {
+                        let payload = &after_prefix[..close];
+                        // payload = "media_type:base64data"
+                        if let Some(colon) = payload.find(':') {
+                            let media_type = &payload[..colon];
+                            let data = &payload[colon + 1..];
+                            blocks.push(ContentBlock::Image {
+                                source: aether_llm::ImageSource::base64(media_type, data),
+                            });
+                        }
+                        remaining = &after_prefix[close + IMAGE_SENTINEL_SUFFIX.len()..];
+                    }
+                }
+            }
+        }
+    }
+    if blocks.is_empty() {
+        blocks.push(ContentBlock::Text { text: text.to_string() });
+    }
+    blocks
+}
+
 fn translate_history(items: &[ConversationItem]) -> Vec<Message> {
     let mut out = Vec::with_capacity(items.len());
     for item in items {
         match item {
-            ConversationItem::User(text) => out.push(Message::user_text(text)),
+            ConversationItem::User(text) => {
+                let blocks = decode_user_content(text);
+                out.push(Message { role: Role::User, content: blocks });
+            }
             ConversationItem::Assistant { text, tool_uses } => {
                 let mut blocks = Vec::new();
                 if let Some(t) = text {
