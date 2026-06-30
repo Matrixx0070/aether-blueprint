@@ -220,6 +220,10 @@ pub enum UiCommand {
     SetLlmTimeout(u64),
     /// Clear lifetime tool call statistics (tool_call_stats).
     WipeToolStats,
+    /// Enable or disable the D7 self-check verifier (true = enabled).
+    SetVerifyEnabled(bool),
+    /// Append text to the system prompt suffix (does not replace existing suffix).
+    AppendSystemSuffix(String),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

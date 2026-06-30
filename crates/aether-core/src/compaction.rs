@@ -269,6 +269,18 @@ async fn compact_inner(session: &mut Session, force: bool) -> Result<bool, Agent
         session.usage_total.add(u);
     }
 
+    // Re-inject the session goal as a kernel reminder so the model sees it
+    // immediately after the summary on the next turn. The plan refresh will
+    // also emit it as a plan-text line, but the reminder provides a second
+    // injection point that survives even if the plan is empty.
+    if let Some(ref goal_text) = session.plan.goal.clone() {
+        session.pending_reminders.push(aether_hook::Reminder::new(
+            aether_hook::ReminderKind::SystemWarning,
+            aether_hook::Source::Kernel,
+            format!("[Post-compaction goal reminder] {goal_text}"),
+        ));
+    }
+
     // Signal the TUI driver so it can show a compaction notice.
     session.compaction_happened = true;
 

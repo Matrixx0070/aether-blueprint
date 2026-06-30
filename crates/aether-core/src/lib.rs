@@ -162,6 +162,10 @@ pub struct Session {
     /// Set to true when cumulative context usage first exceeds 60%.
     /// The TUI driver reads this flag, emits a SystemNote, and clears it.
     pub context_warned_60pct: bool,
+
+    /// When false, the D7 self-check verifier is skipped entirely, trading
+    /// safety for speed. Default: true. Toggle via `/verify on|off`.
+    pub verify_enabled: bool,
 }
 
 impl Session {
@@ -204,6 +208,7 @@ impl Session {
             token_budget: 0,
             llm_timeout_secs: 0,
             context_warned_60pct: false,
+            verify_enabled: true,
         }
     }
 
@@ -531,17 +536,20 @@ async fn agent_turn_inner(
 
     // ── verify — D7 runs BEFORE we commit anything to history so a
     // rewrite lands in history correctly and a block can choose not to
-    // execute the model's tool_uses. ───────────────────────────────────
+    // execute the model's tool_uses. When verify_enabled is false, skip
+    // entirely (speed mode). ────────────────────────────────────────────
     let mut final_text = raw_assistant_text.clone();
     let mut blocked = false;
-    if let Some(t) = &raw_assistant_text {
-        let v = session.verifier.check_before_emit(t, &session.selfcheck_ctx);
-        if v.is_blocked() {
-            blocked = true;
-        } else {
-            final_text = Some(v.message.clone());
+    if session.verify_enabled {
+        if let Some(t) = &raw_assistant_text {
+            let v = session.verifier.check_before_emit(t, &session.selfcheck_ctx);
+            if v.is_blocked() {
+                blocked = true;
+            } else {
+                final_text = Some(v.message.clone());
+            }
+            session.last_verification = Some(v);
         }
-        session.last_verification = Some(v);
     }
 
     // ── block handler — keep the original blocked text out of history,

@@ -6210,6 +6210,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         format!("Cleared lifetime stats for {n} tool(s).")));
                     continue;
                 }
+                UiCommand::SetVerifyEnabled(enabled) => {
+                    session.verify_enabled = enabled;
+                    let note = if enabled {
+                        "Verifier: ON — D7 self-check gate active (default).".to_string()
+                    } else {
+                        "Verifier: OFF — D7 gate bypassed; responses not checked.".to_string()
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::AppendSystemSuffix(text) => {
+                    let suffix = session.config.system_suffix.get_or_insert_with(String::new);
+                    if !suffix.is_empty() {
+                        suffix.push('\n');
+                    }
+                    suffix.push_str(&text);
+                    let total_len = session.config.system_suffix.as_deref().unwrap_or("").len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(
+                        format!("System suffix appended ({total_len} chars total).")));
+                    continue;
+                }
                 UiCommand::QuerySessionStats => {
                     use aether_core::compaction::context_window_for_model;
                     let now = std::time::SystemTime::now()
@@ -18985,6 +19006,28 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /verify [on|off] — toggle D7 self-check verifier
+                                cmd_str if cmd_str == "/verify" || cmd_str.starts_with("/verify ") => {
+                                    let arg = cmd_str.trim_start_matches("/verify").trim();
+                                    let enabled = match arg {
+                                        "off" | "false" | "0" => false,
+                                        _ => true,
+                                    };
+                                    if _ctx.send(UiCommand::SetVerifyEnabled(enabled)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /system-append [text] — append to system prompt suffix
+                                cmd_str if cmd_str.starts_with("/system-append ") => {
+                                    let text = cmd_str.trim_start_matches("/system-append").trim().to_string();
+                                    if _ctx.send(UiCommand::AppendSystemSuffix(text)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /timeout N — set per-turn LLM timeout in seconds (0=off)
                                 cmd_str if cmd_str.starts_with("/timeout ") || cmd_str == "/timeout" => {
                                     let arg = cmd_str.trim_start_matches("/timeout").trim();
@@ -23921,6 +23964,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/token-budget", "/token-budget ",
                             "/timeout", "/timeout ",
                             "/wipe-tool-stats",
+                            "/verify", "/verify ",
+                            "/system-append ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
