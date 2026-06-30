@@ -6564,6 +6564,62 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::SaveMacro(name, text) => {
+                    let preview: String = text.chars().take(60).collect();
+                    session.prompt_macros.insert(name.clone(), text.clone());
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Macro saved: /{name} = \"{preview}{}\"  ({} total)",
+                        if text.len() > 60 { "…" } else { "" },
+                        session.prompt_macros.len()
+                    )));
+                    continue;
+                }
+                UiCommand::DeleteMacro(name) => {
+                    let had = session.prompt_macros.remove(&name).is_some();
+                    let note = if had {
+                        format!("Macro '{name}' deleted.")
+                    } else {
+                        format!("Macro '{name}' not found. Use /macro-list to see all macros.")
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::RunMacro(name) => {
+                    match session.prompt_macros.get(&name).cloned() {
+                        Some(text) => {
+                            let preview: String = text.chars().take(80).collect();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "[Macro: {name}] Running: \"{preview}{}\"",
+                                if text.len() > 80 { "…" } else { "" }
+                            )));
+                            text
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Macro '{name}' not found. Use /macro-list to see all macros."
+                            )));
+                            continue;
+                        }
+                    }
+                }
+                UiCommand::QueryMacros => {
+                    let note = if session.prompt_macros.is_empty() {
+                        "No macros saved. Use /macro-save <name> <text> to create one.".to_string()
+                    } else {
+                        let mut names: Vec<&String> = session.prompt_macros.keys().collect();
+                        names.sort();
+                        let lines: Vec<String> = names.iter()
+                            .map(|n| {
+                                let t = &session.prompt_macros[*n];
+                                let preview: String = t.chars().take(60).collect();
+                                format!("  /{n} → \"{preview}{}\"", if t.len() > 60 { "…" } else { "" })
+                            })
+                            .collect();
+                        format!("=== Macros ({} saved) ===\n{}", lines.len(), lines.join("\n"))
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::SetTokenBudgetWarn(pct) => {
                     session.token_budget_warn_pct = pct;
                     session.token_budget_warn_fired = false; // reset so it can fire again
@@ -26236,6 +26292,49 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /macro-save <name> <text> — save a named prompt macro
+                                cmd_str if cmd_str.starts_with("/macro-save ") => {
+                                    let arg = cmd_str.trim_start_matches("/macro-save ").trim();
+                                    if let Some(sp) = arg.find(' ') {
+                                        let name = arg[..sp].trim().to_string();
+                                        let text = arg[sp+1..].trim().to_string();
+                                        if _ctx.send(UiCommand::SaveMacro(name, text)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /macro-save <name> <prompt text>".to_string()
+                                        ));
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /macro-run <name> — run a saved macro as a user message
+                                cmd_str if cmd_str.starts_with("/macro-run ") => {
+                                    let name = cmd_str.trim_start_matches("/macro-run ").trim().to_string();
+                                    if _ctx.send(UiCommand::RunMacro(name)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /macro-del <name> — delete a saved macro
+                                cmd_str if cmd_str.starts_with("/macro-del ") => {
+                                    let name = cmd_str.trim_start_matches("/macro-del ").trim().to_string();
+                                    if _ctx.send(UiCommand::DeleteMacro(name)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /macro-list — show all saved macros
+                                "/macro-list" => {
+                                    if _ctx.send(UiCommand::QueryMacros).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /token-budget-warn [pct|off] — warn when context reaches pct% full
                                 cmd_str if cmd_str == "/token-budget-warn" || cmd_str.starts_with("/token-budget-warn ") => {
                                     let arg = cmd_str.trim_start_matches("/token-budget-warn").trim();
@@ -26898,6 +26997,10 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/token-budget-warn", "/token-budget-warn ", "/token-budget-warn off",
                             "/token-budget-hard", "/token-budget-hard ", "/token-budget-hard off",
                             "/token-budget-status",
+                            "/macro-save ",
+                            "/macro-run ",
+                            "/macro-del ",
+                            "/macro-list",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

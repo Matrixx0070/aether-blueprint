@@ -409,6 +409,14 @@ pub enum UiCommand {
     ReplayLast,
     /// List past user messages with their indices.
     QueryReplayList,
+    /// Save a named prompt macro (name, text).
+    SaveMacro(String, String),
+    /// Delete a named prompt macro by name.
+    DeleteMacro(String),
+    /// Run a named prompt macro (sends its text as a user message).
+    RunMacro(String),
+    /// List all saved prompt macros.
+    QueryMacros,
     /// Set context-fill warn threshold (0.0=off, e.g. 0.70 for 70%).
     SetTokenBudgetWarn(f64),
     /// Set context-fill hard-stop threshold (0.0=off).
