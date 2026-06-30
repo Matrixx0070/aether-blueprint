@@ -7657,6 +7657,49 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryRequestPrefixShow => {
+                    match &session.request_prefix {
+                        Some(pfx) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Request prefix: {pfx:?}. Prepended to every user message."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "No request prefix set. Use /request-prefix <text> to configure.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryRequestSuffixShow => {
+                    match &session.request_suffix {
+                        Some(sfx) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Request suffix: {sfx:?}. Appended after every user message."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "No request suffix set. Use /request-suffix <text> to configure.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolDenyShow => {
+                    if session.tool_deny.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Tool deny list: empty. Use /tool-deny <name> to block a tool.".to_string()
+                        ));
+                    } else {
+                        let list = session.tool_deny.join(", ");
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Tool deny list ({} entries): {list}.", session.tool_deny.len()
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -32740,6 +32783,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /request-prefix-show — show current request prefix
+                                "/request-prefix-show" => {
+                                    if _ctx.send(UiCommand::QueryRequestPrefixShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /request-suffix-show — show current request suffix
+                                "/request-suffix-show" => {
+                                    if _ctx.send(UiCommand::QueryRequestSuffixShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tool-deny-show — list all tool deny entries
+                                "/tool-deny-show" => {
+                                    if _ctx.send(UiCommand::QueryToolDenyShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -33483,6 +33544,12 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-reminder-show",
                             "/compaction-threshold-show",
                             "/auto-commit-show",
+                            "/token-budget-warn-show",
+                            "/token-budget-hard-show",
+                            "/post-turn-hook-show",
+                            "/request-prefix-show",
+                            "/request-suffix-show",
+                            "/tool-deny-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

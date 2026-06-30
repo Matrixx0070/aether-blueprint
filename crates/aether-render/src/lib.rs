@@ -879,6 +879,12 @@ pub enum UiCommand {
     QueryTokenBudgetHardShow,
     /// Show the configured post-turn hook command.
     QueryPostTurnHookShow,
+    /// Show the current request prefix injected before every user message.
+    QueryRequestPrefixShow,
+    /// Show the current request suffix appended after every user message.
+    QueryRequestSuffixShow,
+    /// Show all entries in the tool deny list.
+    QueryToolDenyShow,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
