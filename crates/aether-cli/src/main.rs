@@ -6564,6 +6564,61 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::InjectUser(text) => {
+                    use aether_core::context::ConversationItem;
+                    let preview: String = text.chars().take(80).collect();
+                    session.history.push(ConversationItem::User(text.clone()));
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "[Inject user] Added to history ({} items): \"{preview}{}\"",
+                        session.history.len(),
+                        if text.len() > 80 { "…" } else { "" }
+                    )));
+                    continue;
+                }
+                UiCommand::InjectAssistant(text) => {
+                    use aether_core::context::ConversationItem;
+                    let preview: String = text.chars().take(80).collect();
+                    session.history.push(ConversationItem::Assistant {
+                        text: Some(text.clone()),
+                        tool_uses: vec![],
+                    });
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "[Inject assistant] Added to history ({} items): \"{preview}{}\"",
+                        session.history.len(),
+                        if text.len() > 80 { "…" } else { "" }
+                    )));
+                    continue;
+                }
+                UiCommand::PopHistory => {
+                    if let Some(popped) = session.history.pop() {
+                        use aether_core::context::ConversationItem;
+                        let kind = match &popped {
+                            ConversationItem::User(_) => "User",
+                            ConversationItem::Assistant { .. } => "Assistant",
+                            ConversationItem::ToolResults(_) => "ToolResults",
+                        };
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "[Pop history] Removed last item ({kind}). History now has {} items.",
+                            session.history.len()
+                        )));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Pop history: history is empty.".to_string()
+                        ));
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryLen => {
+                    use aether_core::context::ConversationItem;
+                    let user_count = session.history.iter().filter(|i| matches!(i, ConversationItem::User(_))).count();
+                    let asst_count = session.history.iter().filter(|i| matches!(i, ConversationItem::Assistant { .. })).count();
+                    let tool_count = session.history.iter().filter(|i| matches!(i, ConversationItem::ToolResults(_))).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History: {} items total  (User: {user_count}, Assistant: {asst_count}, ToolResults: {tool_count})\n  Use /inject-user, /inject-assistant to add; /pop-history to remove last.",
+                        session.history.len()
+                    )));
+                    continue;
+                }
                 UiCommand::SetScopeGuard(scope_opt) => {
                     let note = match &scope_opt {
                         Some(s) => format!(
@@ -26108,6 +26163,40 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /inject-user <text> — add a User message to history without triggering agent
+                                cmd_str if cmd_str.starts_with("/inject-user ") => {
+                                    let text = cmd_str.trim_start_matches("/inject-user ").trim().to_string();
+                                    if _ctx.send(UiCommand::InjectUser(text)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /inject-assistant <text> — add an Assistant message to history
+                                cmd_str if cmd_str.starts_with("/inject-assistant ") => {
+                                    let text = cmd_str.trim_start_matches("/inject-assistant ").trim().to_string();
+                                    if _ctx.send(UiCommand::InjectAssistant(text)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /pop-history — remove the most recent history item
+                                "/pop-history" => {
+                                    if _ctx.send(UiCommand::PopHistory).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-len — show item counts in conversation history
+                                "/history-len" => {
+                                    if _ctx.send(UiCommand::QueryHistoryLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /replay-turn <n> — re-send the Nth past user message
                                 cmd_str if cmd_str.starts_with("/replay-turn ") => {
                                     let arg = cmd_str.trim_start_matches("/replay-turn ").trim();
@@ -26685,6 +26774,10 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/replay-turn ",
                             "/replay-last",
                             "/replay-list",
+                            "/inject-user ",
+                            "/inject-assistant ",
+                            "/pop-history",
+                            "/history-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

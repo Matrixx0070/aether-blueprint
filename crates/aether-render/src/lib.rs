@@ -409,6 +409,14 @@ pub enum UiCommand {
     ReplayLast,
     /// List past user messages with their indices.
     QueryReplayList,
+    /// Inject a User message into history without triggering an agent turn.
+    InjectUser(String),
+    /// Inject an Assistant message into history (as if the agent said it).
+    InjectAssistant(String),
+    /// Remove the most recent history item (undo last injection or turn).
+    PopHistory,
+    /// Show the number of items in the conversation history.
+    QueryHistoryLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
