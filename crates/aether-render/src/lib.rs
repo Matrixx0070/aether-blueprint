@@ -843,6 +843,12 @@ pub enum UiCommand {
     QueryToolAllowCount,
     /// Show the current preferred response format setting.
     QueryResponseFormatShow,
+    /// Show the active scope guard pattern.
+    QueryScopeGuardShow,
+    /// Show current think-aloud setting and prompt.
+    QueryThinkAloudShow,
+    /// Show the configured LLM fallback model.
+    QueryFallbackModelShow,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

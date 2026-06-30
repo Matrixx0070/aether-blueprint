@@ -7443,6 +7443,50 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryScopeGuardShow => {
+                    match &session.scope_guard {
+                        Some(pattern) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Scope guard active: {pattern:?}. Use /scope-clear to remove."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "No scope guard (all files accessible). Use /scope-set <pattern> to restrict.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryThinkAloudShow => {
+                    let status = if session.think_aloud { "ON" } else { "OFF" };
+                    let prompt_preview = if session.think_aloud_prompt.is_empty() {
+                        "(default)".to_string()
+                    } else {
+                        let p = &session.think_aloud_prompt;
+                        if p.len() > 60 { format!("{}...", &p[..60]) } else { p.clone() }
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Think-aloud: {status}. Prompt: {prompt_preview}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryFallbackModelShow => {
+                    match &session.llm_fallback_model {
+                        Some(model) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "LLM fallback model: {model} (invoked {} time(s) this session). Use /llm-fallback off to clear.",
+                                session.llm_fallback_count
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "No LLM fallback model set. Use /llm-fallback <model> to configure.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -32382,6 +32426,30 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /scope-guard-show — show active scope guard pattern
+                                "/scope-guard-show" => {
+                                    if _ctx.send(UiCommand::QueryScopeGuardShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /think-aloud-show — show think-aloud setting
+                                "/think-aloud-show" => {
+                                    if _ctx.send(UiCommand::QueryThinkAloudShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /fallback-model-show — show LLM fallback model
+                                "/fallback-model-show" => {
+                                    if _ctx.send(UiCommand::QueryFallbackModelShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -33110,6 +33178,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-tags-count",
                             "/tool-allow-count",
                             "/response-format-show",
+                            "/scope-guard-show",
+                            "/think-aloud-show",
+                            "/fallback-model-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
