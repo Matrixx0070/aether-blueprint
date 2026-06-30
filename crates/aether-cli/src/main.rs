@@ -6778,6 +6778,84 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryResponseSearchContext(pat, ctx_n) => {
+                    let lower = pat.to_lowercase();
+                    let mut results: Vec<String> = Vec::new();
+                    for (hist_idx, item) in session.history.iter().enumerate() {
+                        if let ConversationItem::Assistant { text: Some(t), .. } = item {
+                            let lines: Vec<&str> = t.lines().collect();
+                            for (line_idx, line) in lines.iter().enumerate() {
+                                if line.to_lowercase().contains(&lower) {
+                                    let start = line_idx.saturating_sub(ctx_n);
+                                    let end = (line_idx + ctx_n + 1).min(lines.len());
+                                    let snippet: Vec<String> = lines[start..end].iter().enumerate()
+                                        .map(|(i, l)| {
+                                            let abs = start + i;
+                                            if abs == line_idx { format!("  > {l}") } else { format!("    {l}") }
+                                        })
+                                        .collect();
+                                    results.push(format!("[hist:{hist_idx} line:{line_idx}]\n{}", snippet.join("\n")));
+                                    break; // one match per history item
+                                }
+                            }
+                        }
+                    }
+                    if results.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Pattern '{pat}' not found in history.")));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Search context '{}' (+/-{} lines): {} match(es)\n{}", pat, ctx_n, results.len(), results.join("\n---\n")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionTimeline => {
+                    let turns = session.turn_cost_log.len().max(session.turn_wall_ms.len()).max(session.turn_models.len());
+                    if turns == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No turn data yet.".to_string()));
+                    } else {
+                        // Compute tool calls per turn from history
+                        let mut tool_counts: Vec<usize> = Vec::new();
+                        let mut cur = 0usize;
+                        for item in &session.history {
+                            match item {
+                                ConversationItem::User(_) => { tool_counts.push(cur); cur = 0; }
+                                ConversationItem::Assistant { tool_uses, .. } => { cur += tool_uses.len(); }
+                                _ => {}
+                            }
+                        }
+                        let mut msg = format!("Session timeline ({turns} turns):\n");
+                        msg.push_str("  Turn  Model        Cost($)   Wall(ms)  Tools\n");
+                        for i in 0..turns {
+                            let model = session.turn_models.get(i).map(|s| s.as_str()).unwrap_or("?");
+                            let (_, _, _, cost) = session.turn_cost_log.get(i).copied().unwrap_or((0, 0, 0, 0.0));
+                            let wall = session.turn_wall_ms.get(i).copied().unwrap_or(0);
+                            let tools = tool_counts.get(i + 1).copied().unwrap_or(0);
+                            let short_model: String = model.chars().take(12).collect();
+                            msg.push_str(&format!("  {:>4}  {:<12} {:>8.6}  {:>8}  {:>5}\n", i, short_model, cost, wall, tools));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
+                UiCommand::ExportPlan(path) => {
+                    let plan_text = &session.plan.text;
+                    if plan_text.trim().is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No active plan to export.".to_string()));
+                    } else {
+                        match std::fs::write(&path, plan_text) {
+                            Ok(()) => {
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                    "Plan exported to '{}' ({} bytes).", path, plan_text.len()
+                                )));
+                            }
+                            Err(e) => {
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Export failed: {e}")));
+                            }
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryToolOutputSearch(pat) => {
                     if session.tool_output_history.is_empty() {
                         let _ = etx_for_driver.send(UiEvent::SystemNote("No tool output history yet.".to_string()));
@@ -30125,6 +30203,49 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /response-search-context <pat> [n] — search with surrounding context
+                                cmd_str if cmd_str.starts_with("/response-search-context ") => {
+                                    let rest = cmd_str.trim_start_matches("/response-search-context ").trim();
+                                    let mut parts = rest.rsplitn(2, ' ');
+                                    let (pat, ctx_n) = if let Some(last) = parts.next() {
+                                        if let Ok(n) = last.parse::<usize>() {
+                                            let p = parts.next().unwrap_or("").to_string();
+                                            (p, n)
+                                        } else {
+                                            (rest.to_string(), 2)
+                                        }
+                                    } else { (rest.to_string(), 2) };
+                                    if pat.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /response-search-context <pattern> [context_lines]".to_string()));
+                                    } else if _ctx.send(UiCommand::QueryResponseSearchContext(pat, ctx_n)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-timeline — combined per-turn stats table
+                                "/session-timeline" => {
+                                    if _ctx.send(UiCommand::QuerySessionTimeline).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /plan-export <path> — save active plan to file
+                                cmd_str if cmd_str.starts_with("/plan-export ") => {
+                                    let path = cmd_str.trim_start_matches("/plan-export ").trim().to_string();
+                                    if path.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /plan-export <path>".to_string()));
+                                    } else if _ctx.send(UiCommand::ExportPlan(path)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /tool-output-search <pat> — search tool_output_history
                                 cmd_str if cmd_str.starts_with("/tool-output-search ") => {
                                     let pat = cmd_str.trim_start_matches("/tool-output-search ").trim().to_string();
@@ -31112,6 +31233,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-output-search ",
                             "/history-reverse", "/history-reverse ",
                             "/session-burst-detect", "/session-burst-detect ",
+                            "/response-search-context ",
+                            "/session-timeline",
+                            "/plan-export ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

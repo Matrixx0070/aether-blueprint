@@ -697,6 +697,12 @@ pub enum UiCommand {
     QueryHistoryReverse(usize),
     /// Detect turns with more than N tool calls (burst detection). 0 = auto threshold.
     QuerySessionBurstDetect(usize),
+    /// Search history for pattern, return N context lines around each match.
+    QueryResponseSearchContext(String, usize),
+    /// Combined per-turn table: turn#, model, cost, wall_ms, tool count.
+    QuerySessionTimeline,
+    /// Save the active plan text to a file at the given path.
+    ExportPlan(String),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
