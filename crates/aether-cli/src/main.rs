@@ -20375,6 +20375,217 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /compare-files <f1> <f2> — diff two files and ask AI to analyze differences
+                                cmd_str if cmd_str.starts_with("/compare-files ") || cmd_str == "/compare-files" => {
+                                    let args = cmd_str.trim_start_matches("/compare-files").trim();
+                                    let parts: Vec<&str> = args.splitn(2, ' ').collect();
+                                    if parts.len() < 2 || parts[1].trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /compare-files <file1> <file2>  — AI compares two files and explains differences.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let (f1, f2) = (parts[0].trim(), parts[1].trim());
+                                    let diff_out = std::process::Command::new("diff")
+                                        .args(["-u", f1, f2])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    if diff_out.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("/compare-files: {f1} and {f2} are identical.")));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let truncated: String = diff_out.chars().take(8000).collect();
+                                    let prompt = format!(
+                                        "Please compare `{f1}` and `{f2}`. Explain: 1) the key semantic differences, \
+                                         2) which version is better and why, 3) any bugs or regressions introduced, \
+                                         and 4) what to keep from each.\n\n```diff\n{truncated}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-standup — AI drafts a standup update from recent git commits
+                                "/ai-standup" => {
+                                    let log = std::process::Command::new("git")
+                                        .args(["log", "--oneline", "--since=yesterday", "--all"])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    let stat = std::process::Command::new("git")
+                                        .args(["diff", "--stat", "HEAD~3..HEAD"])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    let goal_line = match &ui.session_goal {
+                                        Some(g) => format!("Session goal: {g}\n"),
+                                        None => String::new(),
+                                    };
+                                    let prompt = format!(
+                                        "Please write a concise standup update (Yesterday / Today / Blockers format) \
+                                         based on the following git activity. Keep it under 5 bullet points per section. \
+                                         Be specific about what was done.\n\n\
+                                         {goal_line}\
+                                         ## Recent commits\n```\n{log}\n```\n\
+                                         ## File changes\n```\n{stat}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /lint-ai — run project linter and send warnings to AI for explanation + fixes
+                                "/lint-ai" => {
+                                    let lint_out = if std::path::Path::new("Cargo.toml").exists() {
+                                        std::process::Command::new("cargo")
+                                            .args(["clippy", "--message-format=short", "--", "-W", "clippy::all"])
+                                            .output()
+                                            .ok()
+                                            .map(|o| {
+                                                let s = String::from_utf8_lossy(&o.stderr).to_string();
+                                                let o2 = String::from_utf8_lossy(&o.stdout).to_string();
+                                                format!("{s}{o2}")
+                                            })
+                                    } else if std::path::Path::new("package.json").exists() {
+                                        std::process::Command::new("npx")
+                                            .args(["eslint", ".", "--format=compact"])
+                                            .output()
+                                            .ok()
+                                            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                    } else {
+                                        None
+                                    }.unwrap_or_default();
+                                    if lint_out.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("/lint-ai: no linter output (no Cargo.toml or package.json found, or linter not installed).".into()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let warnings: Vec<&str> = lint_out.lines()
+                                        .filter(|l| l.contains("warning") || l.contains("error"))
+                                        .collect();
+                                    if warnings.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("/lint-ai: linter found no warnings or errors! Codebase is clean.".into()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let truncated: String = warnings.join("\n").chars().take(5000).collect();
+                                    let prompt = format!(
+                                        "Here are linter warnings from this project. For each: \
+                                         1) explain what it means, 2) show the fix, 3) note if it's safe to suppress. \
+                                         Group by severity.\n\n```\n{truncated}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /context-summary — AI summarizes the current context files
+                                "/context-summary" => {
+                                    if ui.context_files.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "/context-summary: no files in context. Use /add <file> to add files first.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let mut file_contents = String::new();
+                                    for path in &ui.context_files {
+                                        if let Ok(src) = std::fs::read_to_string(path) {
+                                            let preview: String = src.chars().take(2000).collect();
+                                            file_contents.push_str(&format!("\n### {path}\n```\n{preview}\n```\n"));
+                                        }
+                                    }
+                                    if file_contents.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("/context-summary: could not read any context files.".into()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Please provide a concise summary of the following context files. \
+                                         For each file: what it does, key exported symbols, and how it relates to the others. \
+                                         End with a one-paragraph holistic overview.\n{file_contents}"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /perf-ai — run cargo bench or hyperfine and explain results
+                                cmd_str if cmd_str == "/perf-ai" || cmd_str.starts_with("/perf-ai ") => {
+                                    let bench_filter = cmd_str.trim_start_matches("/perf-ai").trim();
+                                    let bench_out = if std::path::Path::new("Cargo.toml").exists() {
+                                        let mut args = vec!["bench"];
+                                        if !bench_filter.is_empty() { args.extend(["--bench", bench_filter]); }
+                                        std::process::Command::new("cargo")
+                                            .args(&args)
+                                            .output()
+                                            .ok()
+                                            .map(|o| {
+                                                let s = String::from_utf8_lossy(&o.stderr).to_string();
+                                                let out = String::from_utf8_lossy(&o.stdout).to_string();
+                                                format!("{out}{s}")
+                                            })
+                                    } else {
+                                        std::process::Command::new("hyperfine")
+                                            .args(["--warmup", "3", bench_filter])
+                                            .output()
+                                            .ok()
+                                            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                    }.unwrap_or_default();
+                                    if bench_out.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "/perf-ai: no benchmark output. Run `cargo bench` or install hyperfine.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let truncated: String = bench_out.chars().take(6000).collect();
+                                    let prompt = format!(
+                                        "Here are benchmark results. Please: 1) explain what each benchmark measures, \
+                                         2) identify the slowest operations, 3) suggest concrete optimization strategies \
+                                         with estimated impact, and 4) flag any surprising results.\n\n```\n{truncated}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -20751,6 +20962,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/deps-audit", "/ai-fix-error ", "/complexity-check",
                             "/ai-arch-diagram", "/todos-ai", "/trace-call ",
                             "/time-budget", "/time-budget ", "/env-doctor", "/git-blame-ai ",
+                            "/compare-files ", "/ai-standup", "/lint-ai",
+                            "/context-summary", "/perf-ai", "/perf-ai ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
