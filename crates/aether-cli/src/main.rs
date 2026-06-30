@@ -7404,6 +7404,45 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QuerySessionTagsCount => {
+                    let count = session.session_tags.len();
+                    if count == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No session tags. Use /tag-session <tag>.".to_string()));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session tags ({count}): {}", session.session_tags.join(", ")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolAllowCount => {
+                    let allow_count = session.tool_allow.len();
+                    let deny_count = session.tool_deny.len();
+                    if allow_count == 0 && deny_count == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No tool filters active (all tools available). Use /tool-allow <name> or /tool-deny <name>.".to_string()));
+                    } else {
+                        let mut parts = Vec::new();
+                        if allow_count > 0 { parts.push(format!("allow: {} ({})", allow_count, session.tool_allow.join(", "))); }
+                        if deny_count > 0 { parts.push(format!("deny: {} ({})", deny_count, session.tool_deny.join(", "))); }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Tool filters: {}", parts.join("; "))));
+                    }
+                    continue;
+                }
+                UiCommand::QueryResponseFormatShow => {
+                    match &session.response_format {
+                        Some(fmt) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Response format: {fmt:?}. Use /format off to clear."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Response format: none (free-form). Use /format json|markdown|plain to set.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -32319,6 +32358,30 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /session-tags-count — count session tags
+                                "/session-tags-count" => {
+                                    if _ctx.send(UiCommand::QuerySessionTagsCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tool-allow-count — count tools in allow-list
+                                "/tool-allow-count" => {
+                                    if _ctx.send(UiCommand::QueryToolAllowCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /response-format-show — show current response format
+                                "/response-format-show" => {
+                                    if _ctx.send(UiCommand::QueryResponseFormatShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -33044,6 +33107,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-summary-stats",
                             "/task-count",
                             "/bookmark-count",
+                            "/session-tags-count",
+                            "/tool-allow-count",
+                            "/response-format-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

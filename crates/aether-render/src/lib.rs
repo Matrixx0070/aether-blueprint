@@ -837,6 +837,12 @@ pub enum UiCommand {
     QueryTaskCount,
     /// Count conversation bookmarks.
     QueryBookmarkCount,
+    /// Count session tags.
+    QuerySessionTagsCount,
+    /// Count tools in the allow-list.
+    QueryToolAllowCount,
+    /// Show the current preferred response format setting.
+    QueryResponseFormatShow,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
