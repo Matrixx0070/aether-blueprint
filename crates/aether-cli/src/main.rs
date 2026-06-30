@@ -6564,6 +6564,81 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::AddBookmark(label) => {
+                    let turn = session.turn_index;
+                    let hist = session.history.len();
+                    let lbl = if label.is_empty() {
+                        format!("bookmark-{}", session.bookmarks.len())
+                    } else {
+                        label.clone()
+                    };
+                    session.bookmarks.push((turn, hist, lbl.clone()));
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Bookmark #{} added: \"{lbl}\"  (turn {turn}, {hist} history items)",
+                        session.bookmarks.len() - 1
+                    )));
+                    continue;
+                }
+                UiCommand::QueryBookmarks => {
+                    let note = if session.bookmarks.is_empty() {
+                        "Bookmarks: none. Use /bookmark-add [label] to create one.".to_string()
+                    } else {
+                        let lines: Vec<String> = session.bookmarks.iter().enumerate()
+                            .map(|(i, (turn, hist, label))| {
+                                format!("  #{i}  turn={turn:<4} hist={hist:<4}  \"{label}\"")
+                            })
+                            .collect();
+                        format!("=== Bookmarks ({} total) ===\n{}", lines.len(), lines.join("\n"))
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::JumpBookmark(idx) => {
+                    use aether_core::context::ConversationItem;
+                    if idx >= session.bookmarks.len() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Bookmark #{idx} not found. {} bookmark(s) available. Use /bookmarks to list.",
+                            session.bookmarks.len()
+                        )));
+                        continue;
+                    }
+                    let (turn, hist_len, label) = &session.bookmarks[idx];
+                    // Find the assistant response at or just before hist_len.
+                    let asst_at: Option<String> = session.history[..*hist_len].iter().rev()
+                        .find_map(|item| {
+                            if let ConversationItem::Assistant { text: Some(t), .. } = item {
+                                Some(t.clone())
+                            } else { None }
+                        });
+                    let note = match asst_at {
+                        Some(text) => {
+                            let preview: String = text.chars().take(500).collect();
+                            format!(
+                                "=== Bookmark #{idx}: \"{label}\" (turn {turn}, hist {hist_len}) ===\n{preview}{}",
+                                if text.len() > 500 { "\n… (truncated)" } else { "" }
+                            )
+                        }
+                        None => format!(
+                            "Bookmark #{idx}: \"{label}\" (turn {turn}) — no assistant response at that position."
+                        ),
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::DeleteBookmark(idx) => {
+                    if idx < session.bookmarks.len() {
+                        let (turn, _, label) = session.bookmarks.remove(idx);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Bookmark #{idx} deleted: \"{label}\" (was at turn {turn}). {} remaining.",
+                            session.bookmarks.len()
+                        )));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Bookmark #{idx} not found. {} available.", session.bookmarks.len()
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::TrimLastN(n) => {
                     let before = session.history.len();
                     let remove = n.max(1).min(before);
@@ -26910,6 +26985,53 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /bookmark-add [label] — bookmark the current turn
+                                cmd_str if cmd_str == "/bookmark-add" || cmd_str.starts_with("/bookmark-add ") => {
+                                    let label = cmd_str.trim_start_matches("/bookmark-add").trim().to_string();
+                                    if _ctx.send(UiCommand::AddBookmark(label)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /bookmarks — list all bookmarks
+                                "/bookmarks" => {
+                                    if _ctx.send(UiCommand::QueryBookmarks).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /bookmark-jump <n> — show assistant response at bookmark n
+                                cmd_str if cmd_str.starts_with("/bookmark-jump ") => {
+                                    let arg = cmd_str.trim_start_matches("/bookmark-jump ").trim();
+                                    if let Ok(n) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::JumpBookmark(n)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /bookmark-jump <index>  (use /bookmarks to see indices)".to_string()
+                                        ));
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /bookmark-del <n> — delete a bookmark by index
+                                cmd_str if cmd_str.starts_with("/bookmark-del ") => {
+                                    let arg = cmd_str.trim_start_matches("/bookmark-del ").trim();
+                                    if let Ok(n) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::DeleteBookmark(n)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /bookmark-del <index>".to_string()
+                                        ));
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /trim-last [n] — remove last N history items (default 1)
                                 cmd_str if cmd_str == "/trim-last" || cmd_str.starts_with("/trim-last ") => {
                                     let arg = cmd_str.trim_start_matches("/trim-last").trim();
@@ -27998,6 +28120,10 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/trim-last", "/trim-last ",
                             "/trim-user",
                             "/trim-assistant",
+                            "/bookmark-add", "/bookmark-add ",
+                            "/bookmarks",
+                            "/bookmark-jump ",
+                            "/bookmark-del ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -409,6 +409,14 @@ pub enum UiCommand {
     ReplayLast,
     /// List past user messages with their indices.
     QueryReplayList,
+    /// Add a bookmark at the current turn (optional label).
+    AddBookmark(String),
+    /// List all bookmarks with indices, labels, and turn/history info.
+    QueryBookmarks,
+    /// Show the assistant response at the bookmarked position (0-based index).
+    JumpBookmark(usize),
+    /// Delete a bookmark by 0-based index.
+    DeleteBookmark(usize),
     /// Remove the last N items from conversation history — alias for the existing TrimHistory variant.
     TrimLastN(usize),
     /// Remove all User items from conversation history.

@@ -342,6 +342,10 @@ pub struct Session {
     /// Custom think-aloud preamble. If empty, a default is used.
     pub think_aloud_prompt: String,
 
+    /// Session bookmarks: Vec of (turn_index, history_len, label).
+    /// Captures a snapshot of position in the conversation for navigation.
+    pub bookmarks: Vec<(usize, usize, String)>,
+
     /// Context-fill fraction (0.0–1.0) at which a warning SystemNote fires.
     /// 0.0 = off. Fires once per session (token_budget_warn_fired tracks this).
     pub token_budget_warn_pct: f64,
@@ -437,6 +441,7 @@ impl Session {
             next_turn_model: None,
             think_aloud: false,
             think_aloud_prompt: String::new(),
+            bookmarks: Vec::new(),
             token_budget_warn_pct: 0.0,
             token_budget_hard_pct: 0.0,
             token_budget_warn_fired: false,
