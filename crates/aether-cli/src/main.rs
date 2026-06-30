@@ -17964,6 +17964,155 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /checkpoint [save [name] | list | restore <name>]
+                                // Saves UI chat history to ~/.aether/checkpoints/<name>.json
+                                cmd if cmd == "/checkpoint" || cmd.starts_with("/checkpoint ") => {
+                                    let sub = cmd.trim_start_matches("/checkpoint").trim();
+                                    let ckpt_home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+                                    let ckpt_dir = std::path::PathBuf::from(&ckpt_home).join(".aether/checkpoints");
+                                    let ts_now = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+
+                                    if sub == "list" || sub.is_empty() {
+                                        // List saved checkpoints
+                                        let entries: Vec<String> = std::fs::read_dir(&ckpt_dir)
+                                            .map(|rd| {
+                                                let mut v: Vec<(u64, String)> = rd
+                                                    .flatten()
+                                                    .filter(|e| e.path().extension().map(|x| x == "json").unwrap_or(false))
+                                                    .map(|e| {
+                                                        let mtime = e.metadata().and_then(|m| m.modified())
+                                                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH)
+                                                                .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err)))
+                                                            .map(|d| d.as_secs())
+                                                            .unwrap_or(0);
+                                                        let name = e.path().file_stem()
+                                                            .and_then(|s| s.to_str())
+                                                            .unwrap_or("?").to_string();
+                                                        (mtime, name)
+                                                    })
+                                                    .collect();
+                                                v.sort_by(|a, b| b.0.cmp(&a.0));
+                                                v.into_iter().map(|(ts, name)| {
+                                                    let age = ts_now.saturating_sub(ts);
+                                                    let age_s = if age < 60 { format!("{age}s ago") }
+                                                        else if age < 3600 { format!("{}m ago", age/60) }
+                                                        else if age < 86400 { format!("{}h ago", age/3600) }
+                                                        else { format!("{}d ago", age/86400) };
+                                                    format!("  {name}  ({age_s})")
+                                                }).collect()
+                                            })
+                                            .unwrap_or_default();
+                                        if entries.is_empty() {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                "No checkpoints saved.\n  /checkpoint save [name]  to create one".to_string()
+                                            ));
+                                        } else {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("Saved checkpoints:\n{}\n\n  /checkpoint restore <name>  to load", entries.join("\n"))
+                                            ));
+                                        }
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+
+                                    if sub.starts_with("save") {
+                                        let raw_name = sub.trim_start_matches("save").trim();
+                                        let name = if raw_name.is_empty() {
+                                            format!("ckpt-{ts_now}")
+                                        } else {
+                                            raw_name.chars()
+                                                .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+                                                .collect::<String>()
+                                        };
+                                        let note = match std::fs::create_dir_all(&ckpt_dir) {
+                                            Err(e) => format!("Checkpoint failed: {e}"),
+                                            Ok(_) => {
+                                                let path = ckpt_dir.join(format!("{name}.json"));
+                                                let mut snap: Vec<serde_json::Value> = Vec::new();
+                                                for cl in &ui.chat_lines {
+                                                    match cl {
+                                                        ChatLine::User(b, t) => snap.push(serde_json::json!({"role":"user","content":b,"ts":t})),
+                                                        ChatLine::Assistant(b, d, _) => snap.push(serde_json::json!({"role":"assistant","content":b,"dur":d})),
+                                                        ChatLine::SystemNote(n) => snap.push(serde_json::json!({"role":"system","content":n})),
+                                                        _ => {}
+                                                    }
+                                                }
+                                                let payload = serde_json::json!({
+                                                    "checkpoint": name,
+                                                    "saved_at": ts_now,
+                                                    "messages": snap,
+                                                    "model": ui.model.as_str(),
+                                                });
+                                                match std::fs::write(&path, serde_json::to_string_pretty(&payload).unwrap_or_default()) {
+                                                    Ok(_) => format!("Checkpoint '{}' saved → {}", name, path.display()),
+                                                    Err(e) => format!("Checkpoint write failed: {e}"),
+                                                }
+                                            }
+                                        };
+                                        ui.chat_lines.push(ChatLine::SystemNote(note));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+
+                                    if sub.starts_with("restore") {
+                                        let name = sub.trim_start_matches("restore").trim();
+                                        if name.is_empty() {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                "Usage: /checkpoint restore <name>".to_string()
+                                            ));
+                                        } else {
+                                            let path = ckpt_dir.join(format!("{name}.json"));
+                                            match std::fs::read_to_string(&path) {
+                                                Err(e) => ui.chat_lines.push(ChatLine::SystemNote(
+                                                    format!("Checkpoint '{}' not found: {e}\n  /checkpoint list  to see available", name)
+                                                )),
+                                                Ok(data) => {
+                                                    match serde_json::from_str::<serde_json::Value>(&data) {
+                                                        Err(e) => ui.chat_lines.push(ChatLine::SystemNote(format!("Checkpoint corrupt: {e}"))),
+                                                        Ok(v) => {
+                                                            // Restore display lines from the checkpoint
+                                                            let msgs = v["messages"].as_array().cloned().unwrap_or_default();
+                                                            let saved_at = v["saved_at"].as_u64().unwrap_or(0);
+                                                            ui.chat_lines.clear();
+                                                            for m in &msgs {
+                                                                let role = m["role"].as_str().unwrap_or("");
+                                                                let body = m["content"].as_str().unwrap_or("").to_string();
+                                                                let ts = m["ts"].as_u64().unwrap_or(0);
+                                                                match role {
+                                                                    "user"      => ui.chat_lines.push(ChatLine::User(body, ts)),
+                                                                    "assistant" => {
+                                                                        let dur = m["dur"].as_f64().unwrap_or(0.0);
+                                                                        ui.chat_lines.push(ChatLine::Assistant(body, dur, 0.0));
+                                                                    }
+                                                                    "system"    => ui.chat_lines.push(ChatLine::SystemNote(body)),
+                                                                    _ => {}
+                                                                }
+                                                            }
+                                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                                format!("Restored checkpoint '{}' ({} messages, saved {}s ago)",
+                                                                    name, msgs.len(), ts_now.saturating_sub(saved_at))
+                                                            ));
+                                                            ui.follow_tail = true;
+                                                            ui.chat_scroll = 0;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+
+                                    // Unknown sub-command
+                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                        "Usage:\n  /checkpoint save [name]  — save current chat\n  /checkpoint list         — list saved checkpoints\n  /checkpoint restore <n>  — restore a checkpoint".to_string()
+                                    ));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)

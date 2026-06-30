@@ -1181,21 +1181,79 @@ struct TodoWriteInput {
     todos: Vec<TodoItem>,
 }
 
+/// Shared todo list state between TodoWriteTool and TodoReadTool.
+pub type TodoState = std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>;
+
 pub struct TodoWriteTool {
-    state: std::sync::Mutex<Vec<(String, String)>>,
+    state: TodoState,
 }
 
 impl TodoWriteTool {
     pub fn new() -> Self {
         Self {
-            state: std::sync::Mutex::new(Vec::new()),
+            state: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
+    }
+
+    pub fn with_state(state: TodoState) -> Self {
+        Self { state }
+    }
+
+    pub fn shared_state(&self) -> TodoState {
+        std::sync::Arc::clone(&self.state)
     }
 }
 
 impl Default for TodoWriteTool {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Read-only view of the current todo list. Shares state with `TodoWriteTool`.
+pub struct TodoReadTool {
+    state: TodoState,
+}
+
+impl TodoReadTool {
+    pub fn new(state: TodoState) -> Self {
+        Self { state }
+    }
+}
+
+#[async_trait]
+impl Tool for TodoReadTool {
+    fn name(&self) -> &str { "TodoRead" }
+    fn description(&self) -> &str {
+        "Read the current task list. Returns all todos with their status \
+         (pending / in_progress / completed). Use this to check what tasks \
+         remain before deciding your next step."
+    }
+    fn input_schema(&self) -> Value {
+        json!({ "type": "object", "properties": {} })
+    }
+    async fn run(&self, _input: Value) -> Result<String, ToolError> {
+        let guard = self.state.lock().expect("TodoRead mutex");
+        if guard.is_empty() {
+            return Ok("(no todos in current session)".to_string());
+        }
+        let mut out = String::new();
+        let mut pending = 0usize;
+        let mut in_progress = 0usize;
+        let mut completed = 0usize;
+        for (i, (status, content)) in guard.iter().enumerate() {
+            let mark = match status.as_str() {
+                "completed"   => { completed += 1;   "x" }
+                "in_progress" => { in_progress += 1; "~" }
+                _             => { pending += 1;     " " }
+            };
+            out.push_str(&format!("{:>2}. [{}] {}\n", i + 1, mark, content));
+        }
+        out.push_str(&format!(
+            "\n[totals: {} pending, {} in_progress, {} completed]",
+            pending, in_progress, completed
+        ));
+        Ok(out)
     }
 }
 
@@ -1768,7 +1826,10 @@ pub fn register_builtins(registry: &mut crate::ToolRegistry) {
     registry.register(Box::new(MemoryReadTool));
     registry.register(Box::new(MemoryWriteTool));
     registry.register(Box::new(NotebookEditTool));
-    registry.register(Box::new(TodoWriteTool::new()));
+    let todo_write = TodoWriteTool::new();
+    let todo_state = todo_write.shared_state();
+    registry.register(Box::new(todo_write));
+    registry.register(Box::new(TodoReadTool::new(todo_state)));
     // Security scanners — safe by default (read-only on local filesystem),
     // shell out to external binaries when present. Each tool reports
     // `available: false` when the binary is missing rather than erroring.
@@ -1866,7 +1927,8 @@ mod tests {
         register_builtins(&mut r);
         let names = r.names();
         for expected in ["Bash", "Read", "Write", "Edit", "Grep", "Glob", "LS", "WebFetch",
-                         "WebSearch", "MemoryRead", "MemoryWrite", "NotebookEdit", "TodoWrite"] {
+                         "WebSearch", "MemoryRead", "MemoryWrite", "NotebookEdit", "TodoWrite",
+                         "TodoRead"] {
             assert!(names.contains(&expected.to_string()), "missing: {expected}");
         }
     }
