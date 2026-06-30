@@ -5357,6 +5357,7 @@ Input shortcuts\n\
     ◈ /json /yaml /csv /jq /xml                                 data processing\n\
     ◈ /find-large /find-old /brainstorm /naming /pros-cons       file + creativity\n\
     ◈ /dashboard /secret-gen /cron-explain /k8s                 ops + milestone B100\n\
+    ◈ /ai-improve /ai-simplify /ai-secure /ai-review-diff /ai-perf  AI analysis suite\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -11805,6 +11806,199 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // ── Batch 101: AI code improvement suite ─────────────────────────
+                                cmd if cmd == "/ai-improve" || cmd.starts_with("/ai-improve ") => {
+                                    // /ai-improve [file]  — AI comprehensive improvement suggestions
+                                    let file_arg = cmd.trim_start_matches("/ai-improve").trim();
+                                    let (label, code_content) = if file_arg.is_empty() {
+                                        // use last user message or ask
+                                        let last_user = ui.chat_lines.iter().rev().find_map(|cl| {
+                                            if let ChatLine::User(s, _) = cl { Some(s.clone()) } else { None }
+                                        }).unwrap_or_default();
+                                        if last_user.is_empty() {
+                                            ui.chat_lines.push(ChatLine::SystemNote("Usage: /ai-improve <file>".to_string()));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                        ("(last message)".to_string(), last_user)
+                                    } else {
+                                        match std::fs::read_to_string(file_arg) {
+                                            Ok(s) => (file_arg.to_string(), s),
+                                            Err(e) => {
+                                                ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {file_arg}: {e}")));
+                                                ui.follow_tail = true;
+                                                continue;
+                                            }
+                                        }
+                                    };
+                                    let preview: String = code_content.chars().take(8000).collect();
+                                    let prompt = format!(
+                                        "Perform a comprehensive code improvement review of this file.\n\
+                                        Provide specific, actionable suggestions organized into these sections:\n\
+                                        ## 🔧 Correctness Issues (bugs, edge cases, panics)\n\
+                                        ## ♻️ Code Quality (naming, structure, duplication)\n\
+                                        ## ⚡ Performance (unnecessary allocations, O(n²) loops, I/O)\n\
+                                        ## 🔒 Safety & Security (unchecked inputs, error swallowing)\n\
+                                        ## 📖 Readability (comments, complexity, magic numbers)\n\
+                                        For each issue: show the specific line or pattern, then the improved version.\n\
+                                        Focus on the top 3-5 issues per section.\n\n\
+                                        File: {label}\n```\n{preview}\n```"
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/ai-improve  {label}"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd == "/ai-simplify" || cmd.starts_with("/ai-simplify ") => {
+                                    // /ai-simplify <file>  — AI rewrites to be cleaner and more idiomatic
+                                    let file_arg = cmd.trim_start_matches("/ai-simplify").trim();
+                                    if file_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /ai-simplify <file>".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    match std::fs::read_to_string(file_arg) {
+                                        Ok(source) => {
+                                            let ext = std::path::Path::new(file_arg)
+                                                .extension().and_then(|e| e.to_str()).unwrap_or("code");
+                                            let preview: String = source.chars().take(8000).collect();
+                                            let prompt = format!(
+                                                "Simplify and modernize this {ext} code. Rewrite it to be:\n\
+                                                - Shorter and less verbose without losing clarity\n\
+                                                - More idiomatic for the language/framework\n\
+                                                - Easier for a new developer to read and understand\n\
+                                                - Free of unnecessary complexity, cleverness, or abstraction\n\n\
+                                                Show the complete rewritten version in a code block.\n\
+                                                Then list what you changed and why (bullet points).\n\n\
+                                                File: {file_arg}\n```{ext}\n{preview}\n```"
+                                            );
+                                            let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                            ui.chat_lines.push(ChatLine::User(format!("/ai-simplify  {file_arg}"), ts));
+                                            ui.msg_times_secs.push(ts);
+                                            ui.status_running = true;
+                                            ui.waiting_since = Some(std::time::Instant::now());
+                                            ui.follow_tail = true;
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                        }
+                                        Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {file_arg}: {e}"))); }
+                                    }
+                                    continue;
+                                }
+                                cmd if cmd == "/ai-secure" || cmd.starts_with("/ai-secure ") => {
+                                    // /ai-secure <file>  — AI deep security audit with CWE references
+                                    let file_arg = cmd.trim_start_matches("/ai-secure").trim();
+                                    if file_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /ai-secure <file>".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    match std::fs::read_to_string(file_arg) {
+                                        Ok(source) => {
+                                            let preview: String = source.chars().take(8000).collect();
+                                            let prompt = format!(
+                                                "Perform a thorough security audit of this code. For each vulnerability:\n\
+                                                - Cite the CWE number (e.g., CWE-89 SQL Injection)\n\
+                                                - Show the exact vulnerable line(s)\n\
+                                                - Rate severity: CRITICAL / HIGH / MEDIUM / LOW\n\
+                                                - Provide the secure replacement code\n\
+                                                Check for: injection, auth bypass, insecure crypto, path traversal, \
+                                                SSRF, XXE, deserialization, race conditions, info leakage, hardcoded secrets.\n\
+                                                If no issues found, say so explicitly.\n\n\
+                                                File: {file_arg}\n```\n{preview}\n```"
+                                            );
+                                            let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                            ui.chat_lines.push(ChatLine::User(format!("/ai-secure  {file_arg}"), ts));
+                                            ui.msg_times_secs.push(ts);
+                                            ui.status_running = true;
+                                            ui.waiting_since = Some(std::time::Instant::now());
+                                            ui.follow_tail = true;
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                        }
+                                        Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {file_arg}: {e}"))); }
+                                    }
+                                    continue;
+                                }
+                                cmd if cmd == "/ai-review-diff" || cmd == "/review-diff" => {
+                                    // /ai-review-diff  — AI reviews staged git diff before commit
+                                    let staged = std::process::Command::new("git")
+                                        .args(["diff", "--cached"])
+                                        .output()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                                        .unwrap_or_default();
+                                    let unstaged = std::process::Command::new("git")
+                                        .args(["diff"])
+                                        .output()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                                        .unwrap_or_default();
+                                    let diff = if !staged.is_empty() { staged } else { unstaged };
+                                    if diff.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("No staged or unstaged changes to review.\n  Stage files first: git add <file>".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let preview: String = diff.chars().take(10000).collect();
+                                    let prompt = format!(
+                                        "Review this git diff as a senior engineer doing a code review.\n\
+                                        Provide feedback in these sections:\n\
+                                        ## ✅ What looks good\n\
+                                        ## ⚠️ Concerns (bugs, logic errors, missing error handling)\n\
+                                        ## 🔒 Security issues\n\
+                                        ## 💡 Suggestions (optional improvements, not blockers)\n\
+                                        ## 📝 Commit message suggestion\n\n\
+                                        Be specific: cite file names and line numbers from the diff.\n\n\
+                                        ```diff\n{preview}\n```"
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    let staged_label = if diff.len() > 10000 { " (truncated)" } else { "" };
+                                    ui.chat_lines.push(ChatLine::User(format!("/ai-review-diff{staged_label}"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd == "/ai-perf" || cmd.starts_with("/ai-perf ") => {
+                                    // /ai-perf <file>  — AI deep performance analysis
+                                    let file_arg = cmd.trim_start_matches("/ai-perf").trim();
+                                    if file_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /ai-perf <file>".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    match std::fs::read_to_string(file_arg) {
+                                        Ok(source) => {
+                                            let ext = std::path::Path::new(file_arg)
+                                                .extension().and_then(|e| e.to_str()).unwrap_or("code");
+                                            let preview: String = source.chars().take(8000).collect();
+                                            let prompt = format!(
+                                                "Analyze this {ext} code for performance issues. For each finding:\n\
+                                                - Identify the hot path or bottleneck\n\
+                                                - Estimate the algorithmic complexity (O notation)\n\
+                                                - Explain the performance impact in practical terms\n\
+                                                - Show the optimized version\n\
+                                                Look for: unnecessary clones/copies, O(n²) algorithms, blocking I/O in async, \
+                                                repeated heap allocations, cache misses, string formatting in hot loops, \
+                                                missing indexes in DB queries, N+1 query patterns.\n\
+                                                Prioritize by impact: CRITICAL / HIGH / MEDIUM / LOW.\n\n\
+                                                File: {file_arg}\n```{ext}\n{preview}\n```"
+                                            );
+                                            let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                            ui.chat_lines.push(ChatLine::User(format!("/ai-perf  {file_arg}"), ts));
+                                            ui.msg_times_secs.push(ts);
+                                            ui.status_running = true;
+                                            ui.waiting_since = Some(std::time::Instant::now());
+                                            ui.follow_tail = true;
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                        }
+                                        Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {file_arg}: {e}"))); }
+                                    }
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -12443,7 +12637,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/ai-fix", "/ai-fix ", "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
+                            "/ai-commit", "/ai-commit ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
