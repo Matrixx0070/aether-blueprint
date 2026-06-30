@@ -19671,6 +19671,270 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /refactor-to <style> — ask AI to refactor last code block in given style
+                                cmd_str if cmd_str.starts_with("/refactor-to ") || cmd_str == "/refactor-to" => {
+                                    let style = cmd_str.trim_start_matches("/refactor-to").trim();
+                                    if style.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /refactor-to <style>\n  Styles: functional, idiomatic-rust, async, dry, oop, imperative, simple\n  Refactors the last AI code block to the given style.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let last_ai = ui.chat_lines.iter().rev().find_map(|cl| match cl {
+                                        ChatLine::Assistant(t, _, _) => Some(t.clone()),
+                                        _ => None,
+                                    });
+                                    match last_ai {
+                                        None => {
+                                            ui.chat_lines.push(ChatLine::SystemNote("No AI code to refactor yet.".into()));
+                                        }
+                                        Some(ai_text) => {
+                                            // Extract first fenced code block
+                                            let code = {
+                                                let mut result: Option<String> = None;
+                                                let mut lang = "";
+                                                let mut in_block = false;
+                                                let mut lines_buf: Vec<&str> = Vec::new();
+                                                for line in ai_text.lines() {
+                                                    if !in_block && (line.starts_with("```") || line.starts_with("~~~")) {
+                                                        lang = line.trim_start_matches(|c| c == '`' || c == '~').trim();
+                                                        in_block = true;
+                                                    } else if in_block && (line.starts_with("```") || line.starts_with("~~~")) {
+                                                        result = Some(format!("```{lang}\n{}\n```", lines_buf.join("\n")));
+                                                        break;
+                                                    } else if in_block {
+                                                        lines_buf.push(line);
+                                                    }
+                                                }
+                                                result
+                                            };
+                                            match code {
+                                                None => {
+                                                    ui.chat_lines.push(ChatLine::SystemNote("No fenced code block found in last AI response.".into()));
+                                                }
+                                                Some(block) => {
+                                                    let prompt = format!(
+                                                        "Refactor the following code to use a **{style}** style. \
+                                                         Preserve exact behaviour. Return only the refactored code in a fenced block, \
+                                                         with a one-sentence explanation of the key changes.\n\n{block}"
+                                                    );
+                                                    let ts2 = std::time::SystemTime::now()
+                                                        .duration_since(std::time::UNIX_EPOCH)
+                                                        .unwrap_or_default()
+                                                        .as_secs();
+                                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /inline-explain — add inline comments to every line of last code block
+                                "/inline-explain" => {
+                                    let last_ai = ui.chat_lines.iter().rev().find_map(|cl| match cl {
+                                        ChatLine::Assistant(t, _, _) => Some(t.clone()),
+                                        _ => None,
+                                    });
+                                    match last_ai {
+                                        None => {
+                                            ui.chat_lines.push(ChatLine::SystemNote("No AI code to explain yet.".into()));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                        Some(ai_text) => {
+                                            let code = {
+                                                let mut result: Option<String> = None;
+                                                let mut lang = "";
+                                                let mut in_block = false;
+                                                let mut lines_buf: Vec<&str> = Vec::new();
+                                                for line in ai_text.lines() {
+                                                    if !in_block && (line.starts_with("```") || line.starts_with("~~~")) {
+                                                        lang = line.trim_start_matches(|c| c == '`' || c == '~').trim();
+                                                        in_block = true;
+                                                    } else if in_block && (line.starts_with("```") || line.starts_with("~~~")) {
+                                                        result = Some(format!("```{lang}\n{}\n```", lines_buf.join("\n")));
+                                                        break;
+                                                    } else if in_block {
+                                                        lines_buf.push(line);
+                                                    }
+                                                }
+                                                result
+                                            };
+                                            match code {
+                                                None => {
+                                                    ui.chat_lines.push(ChatLine::SystemNote("No fenced code block found in last AI response.".into()));
+                                                }
+                                                Some(block) => {
+                                                    let prompt = format!(
+                                                        "Add a brief inline comment to every non-trivial line of the following code, \
+                                                         explaining what it does. Return the fully annotated code in a fenced block.\n\n{block}"
+                                                    );
+                                                    let ts2 = std::time::SystemTime::now()
+                                                        .duration_since(std::time::UNIX_EPOCH)
+                                                        .unwrap_or_default()
+                                                        .as_secs();
+                                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /security-scan — grep for common secret/vuln patterns and send to AI
+                                "/security-scan" => {
+                                    let patterns = [
+                                        "password", "passwd", "secret", "api_key", "apikey",
+                                        "private_key", "access_token", "auth_token", "bearer",
+                                        "TODO.*security", "FIXME.*security", "unsafe", "unwrap()",
+                                    ];
+                                    let mut findings: Vec<String> = Vec::new();
+                                    for pat in &patterns {
+                                        if let Ok(out) = std::process::Command::new("grep")
+                                            .args(["-rni", "-m", "5", "--include=*.rs",
+                                                   "--include=*.ts", "--include=*.py",
+                                                   "--include=*.js", "--include=*.toml",
+                                                   "--include=*.yaml", "--include=*.yml",
+                                                   pat, "."])
+                                            .output()
+                                        {
+                                            let text = String::from_utf8_lossy(&out.stdout);
+                                            if !text.trim().is_empty() {
+                                                findings.push(format!("[{pat}]\n{}", text.trim()));
+                                            }
+                                        }
+                                    }
+                                    if findings.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("/security-scan: no common security patterns found. Codebase looks clean.".into()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let report = findings.join("\n\n");
+                                    let truncated: String = report.chars().take(6000).collect();
+                                    let prompt = format!(
+                                        "I ran a security pattern scan on this codebase and found the following matches. \
+                                         Please review them and flag any genuine security issues, false positives, and recommended fixes.\n\n```\n{truncated}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /changelog-entry — AI drafts CHANGELOG.md entry from recent commits
+                                "/changelog-entry" => {
+                                    let log = std::process::Command::new("git")
+                                        .args(["log", "--oneline", "-20"])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    if log.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("/changelog-entry: no git commits found.".into()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Write a CHANGELOG.md entry (Keep a Changelog format) for the following recent git commits. \
+                                         Group into Added / Changed / Fixed / Removed sections as appropriate. \
+                                         Use today's date as the release date.\n\n```\n{log}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /test-gen <file> — AI generates tests for a source file
+                                cmd_str if cmd_str.starts_with("/test-gen ") || cmd_str == "/test-gen" => {
+                                    let file_path_arg = cmd_str.trim_start_matches("/test-gen").trim();
+                                    if file_path_arg.is_empty() {
+                                        let hint = ui.context_files.first().cloned().unwrap_or_else(|| "(no file in context)".into());
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("Usage: /test-gen <file>  — generates tests for the given source file.\n  Current context: {hint}")
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    match std::fs::read_to_string(file_path_arg) {
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("/test-gen: cannot read {file_path_arg}: {e}")));
+                                        }
+                                        Ok(src) => {
+                                            let truncated: String = src.chars().take(8000).collect();
+                                            let lang_hint = if file_path_arg.ends_with(".rs") { "Rust" }
+                                                else if file_path_arg.ends_with(".ts") || file_path_arg.ends_with(".js") { "TypeScript/JS" }
+                                                else if file_path_arg.ends_with(".py") { "Python" }
+                                                else if file_path_arg.ends_with(".go") { "Go" }
+                                                else { "the same language" };
+                                            let prompt = format!(
+                                                "Generate comprehensive unit tests for the following {lang_hint} source file `{file_path_arg}`. \
+                                                 Cover happy paths, edge cases, and error conditions. \
+                                                 Use the idiomatic test framework for this language.\n\n```\n{truncated}\n```"
+                                            );
+                                            let ts2 = std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs();
+                                            ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                        }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /hotkey-ref — print keyboard shortcut reference card
+                                "/hotkey-ref" => {
+                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                        "─── Aether Keyboard Reference ───\n\
+                                         Navigation\n\
+                                           PgUp / PgDn         scroll chat pane\n\
+                                           Home / End          scroll to top / bottom\n\
+                                           Ctrl+G              jump to bottom (tail)\n\
+                                         Input editing\n\
+                                           Left / Right        move cursor\n\
+                                           Ctrl+A / Ctrl+E     beginning / end of line\n\
+                                           Ctrl+W              delete word left\n\
+                                           Ctrl+U              clear input\n\
+                                           Ctrl+Z              undo last edit\n\
+                                         History & Search\n\
+                                           Up / Down           cycle input history\n\
+                                           Ctrl+R              reverse-i-search history\n\
+                                           Tab                 cycle slash-command / @file completions\n\
+                                         Session control\n\
+                                           F2                  toggle side panel\n\
+                                           Ctrl+F              toggle focus mode (hide hints)\n\
+                                           Ctrl+L              clear screen / redraw\n\
+                                           Ctrl+C              interrupt current AI turn\n\
+                                           Ctrl+D              quit Aether\n\
+                                         Chord (Ctrl+X prefix)\n\
+                                           Ctrl+X, Ctrl+E      open $EDITOR for long input\n\
+                                           Ctrl+X, Ctrl+S      save session to ~/.aether/sessions/\n\
+                                         ─── /help for slash commands ───".into()
+                                    ));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -20040,6 +20304,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/diff-ai", "/smart-commit", "/smart-commit ",
                             "/pr-draft", "/explain-last", "/tokens-left",
                             "/grep-ai ", "/loop-fix", "/loop-fix ",
+                            "/refactor-to ", "/inline-explain",
+                            "/security-scan", "/changelog-entry",
+                            "/test-gen ", "/hotkey-ref",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
