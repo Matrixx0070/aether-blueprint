@@ -6406,6 +6406,28 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 UiCommand::SetAlias(_, _) | UiCommand::RemoveAlias(_) | UiCommand::QueryAliases => {
                     continue;
                 }
+                UiCommand::SetLlmFallback(model_opt) => {
+                    let note = match &model_opt {
+                        Some(m) => format!(
+                            "LLM fallback: '{m}' — will retry with this model on primary failure."
+                        ),
+                        None => "LLM fallback: off.".to_string(),
+                    };
+                    session.llm_fallback_model = model_opt;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryLlmFallback => {
+                    let note = match &session.llm_fallback_model {
+                        Some(m) => format!(
+                            "LLM fallback: '{m}'  |  Invoked {} time(s) this session.",
+                            session.llm_fallback_count
+                        ),
+                        None => "LLM fallback: off. Use /llm-fallback <model> to configure.".to_string(),
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::SetCostCap(cap) => {
                     session.cost_cap_usd = cap;
                     let note = if cap == 0.0 {
@@ -7034,10 +7056,43 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     let _ = etx_inner.send(UiEvent::AssistantDelta(delta.to_string()));
                 });
-                let outcome = match agent_turn_streamed(&mut session, next_input.take(), sink)
-                    .await
-                {
+                let first_result = agent_turn_streamed(&mut session, next_input.take(), sink).await;
+                let outcome = match first_result {
                     Ok(o) => o,
+                    Err(ref e) if session.llm_fallback_model.is_some() => {
+                        // Primary model failed — retry once with the fallback model.
+                        let fallback = session.llm_fallback_model.clone().unwrap();
+                        let orig_model = session.config.model.clone();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "[LLM fallback] Primary model error: {}. Retrying with '{fallback}'…",
+                            e
+                        )));
+                        session.config.model = fallback.clone();
+                        let etx_inner2 = etx_for_driver.clone();
+                        let mut started2 = false;
+                        let sink2: aether_llm::TextDeltaSink = Box::new(move |delta: &str| {
+                            if !started2 { started2 = true; }
+                            let _ = etx_inner2.send(UiEvent::AssistantDelta(delta.to_string()));
+                        });
+                        match agent_turn_streamed(&mut session, None, sink2).await {
+                            Ok(o2) => {
+                                session.llm_fallback_count += 1;
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                    "[LLM fallback] Succeeded with '{fallback}' (used {} time(s) this session). Restoring primary model '{orig_model}'.",
+                                    session.llm_fallback_count
+                                )));
+                                session.config.model = orig_model;
+                                o2
+                            }
+                            Err(e2) => {
+                                session.config.model = orig_model;
+                                let _ = etx_for_driver.send(UiEvent::Error(format!(
+                                    "Both primary and fallback failed. Fallback error: {e2}"
+                                )));
+                                break;
+                            }
+                        }
+                    }
                     Err(e) => {
                         let _ = etx_for_driver.send(UiEvent::Error(e.to_string()));
                         break;
@@ -24865,6 +24920,32 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /llm-fallback [model|off] — set or clear a fallback model
+                                cmd_str if cmd_str == "/llm-fallback" || cmd_str.starts_with("/llm-fallback ") => {
+                                    let arg = cmd_str.trim_start_matches("/llm-fallback").trim();
+                                    let model_opt = if arg.is_empty() || arg == "off" {
+                                        None
+                                    } else {
+                                        Some(arg.to_string())
+                                    };
+                                    let show = arg.is_empty();
+                                    if _ctx.send(UiCommand::SetLlmFallback(model_opt)).is_err() { break 'outer; }
+                                    if show {
+                                        if _ctx.send(UiCommand::QueryLlmFallback).is_err() { break 'outer; }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /llm-fallback-show — display current fallback config
+                                "/llm-fallback-show" => {
+                                    if _ctx.send(UiCommand::QueryLlmFallback).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /cost-cap [usd|off] — set or clear a hard cost limit
                                 cmd_str if cmd_str == "/cost-cap" || cmd_str.starts_with("/cost-cap ") => {
                                     let arg = cmd_str.trim_start_matches("/cost-cap").trim();
@@ -25424,6 +25505,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/on-finish-show",
                             "/cost-cap ", "/cost-cap off",
                             "/token-rate",
+                            "/llm-fallback ", "/llm-fallback off",
+                            "/llm-fallback-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

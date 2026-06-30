@@ -287,6 +287,10 @@ pub enum UiCommand {
     RemovePlaybookEntry(usize),
     /// List all error playbook entries.
     QueryPlaybook,
+    /// Set a fallback LLM model to retry with on primary model failure (None = off).
+    SetLlmFallback(Option<String>),
+    /// Show the current fallback model and invocation count.
+    QueryLlmFallback,
     /// Set a hard cost cap in USD (0.0 = off). Agent stops when exceeded.
     SetCostCap(f64),
     /// Show current cost cap and cumulative cost.

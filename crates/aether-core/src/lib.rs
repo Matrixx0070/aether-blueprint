@@ -240,6 +240,12 @@ pub struct Session {
     /// exceeds this value the driver stops the agent and emits a warning.
     /// 0.0 means no cap.
     pub cost_cap_usd: f64,
+
+    /// If set, the driver retries a failed LLM call once with this model name
+    /// before surfacing the error to the user. Useful for rate-limit resilience.
+    pub llm_fallback_model: Option<String>,
+    /// Number of times the fallback model has been invoked this session.
+    pub llm_fallback_count: u64,
 }
 
 impl Session {
@@ -300,6 +306,8 @@ impl Session {
             post_turn_hook: None,
             aliases: std::collections::HashMap::new(),
             cost_cap_usd: 0.0,
+            llm_fallback_model: None,
+            llm_fallback_count: 0,
         }
     }
 
