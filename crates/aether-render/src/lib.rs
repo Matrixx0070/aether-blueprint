@@ -777,6 +777,12 @@ pub enum UiCommand {
     QueryTurnTokensTotal,
     /// Count of User-role items in conversation history.
     QueryHistoryUserCount,
+    /// Show line count of the active plan.
+    QueryPlanLines,
+    /// Export session notes to a file path.
+    ExportSessionNotes(String),
+    /// Show total tool calls used vs budget this session.
+    QueryToolBudgetRemaining,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

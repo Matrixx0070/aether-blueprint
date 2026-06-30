@@ -6967,6 +6967,56 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryPlanLines => {
+                    let text = &session.plan.text;
+                    if text.trim().is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No active plan. Use /plan-save to create one.".to_string()));
+                    } else {
+                        let lines = text.lines().count();
+                        let words = text.split_whitespace().count();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Active plan: {lines} lines, {words} words, {} chars.", text.len()
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::ExportSessionNotes(path) => {
+                    if session.session_notes.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No session notes to export.".to_string()));
+                    } else {
+                        let mut out = String::new();
+                        for (i, (text, ts)) in session.session_notes.iter().enumerate() {
+                            out.push_str(&format!("# Note {}\n[ts:{}]\n{}\n\n", i + 1, ts, text));
+                        }
+                        match std::fs::write(&path, &out) {
+                            Ok(_) => {
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                    "Exported {} session notes to {}.", session.session_notes.len(), path
+                                )));
+                            }
+                            Err(e) => {
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                    "Export failed: {}", e
+                                )));
+                            }
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolBudgetRemaining => {
+                    let used: usize = session.plan.tool_call_stats.values().map(|(ok, err)| ok + err).sum();
+                    if session.tool_call_budget == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Tool budget: unlimited (used {used} this session). Set a cap with /tool-budget <n>."
+                        )));
+                    } else {
+                        let remaining = session.tool_call_budget.saturating_sub(used);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Tool budget: {used}/{} used, {} remaining.", session.tool_call_budget, remaining
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -31615,6 +31665,35 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /plan-lines — line count of the active plan
+                                "/plan-lines" => {
+                                    if _ctx.send(UiCommand::QueryPlanLines).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-notes-export <path> — export session notes to file
+                                cmd_str if cmd_str.starts_with("/session-notes-export ") => {
+                                    let path = cmd_str.trim_start_matches("/session-notes-export ").trim().to_string();
+                                    if path.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /session-notes-export <path>".to_string()));
+                                    } else if _ctx.send(UiCommand::ExportSessionNotes(path)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tool-budget-remaining — show tool call usage vs budget
+                                "/tool-budget-remaining" => {
+                                    if _ctx.send(UiCommand::QueryToolBudgetRemaining).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -32310,6 +32389,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-last-assistant",
                             "/tokens-total",
                             "/history-user-count",
+                            "/plan-lines",
+                            "/session-notes-export ",
+                            "/tool-budget-remaining",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
