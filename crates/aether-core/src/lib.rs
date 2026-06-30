@@ -211,6 +211,11 @@ pub struct Session {
     /// When > 0, the agent pauses after this many total tool errors accumulate
     /// across the session. Prevents wasting tokens/money on a broken run. 0 = off.
     pub fail_fast_errors: usize,
+
+    /// User-defined error playbook: (substring_pattern, hint_text) pairs.
+    /// When a tool error contains a pattern, the corresponding hint is injected
+    /// as a reminder so the agent gets targeted guidance, not just a generic error.
+    pub error_playbook: Vec<(String, String)>,
 }
 
 impl Session {
@@ -265,6 +270,7 @@ impl Session {
             saved_snapshots: std::collections::HashMap::new(),
             auto_compact_on_stuck: false,
             fail_fast_errors: 0,
+            error_playbook: Vec::new(),
         }
     }
 
@@ -767,6 +773,24 @@ async fn agent_turn_inner(
     // Drain any reminders the PreToolUse / PostToolUse hooks emitted
     // during execute() and queue them for the NEXT turn so the model
     // sees the hook commentary on its next call.
+    // Playbook: scan tool errors for known patterns and inject targeted hints.
+    if !session.error_playbook.is_empty() {
+        for r in &tool_results {
+            if r.is_error {
+                let content_lc = r.content.to_ascii_lowercase();
+                for (pattern, hint) in &session.error_playbook {
+                    if content_lc.contains(&pattern.to_ascii_lowercase()) {
+                        session.pending_reminders.push(Reminder::new(
+                            ReminderKind::SystemWarning,
+                            Source::Kernel,
+                            format!("[Playbook hint for \"{pattern}\"]: {hint}"),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
     let hook_reminders = session.executor.drain_pending_reminders();
     for body in hook_reminders {
         session.pending_reminders.push(Reminder::new(

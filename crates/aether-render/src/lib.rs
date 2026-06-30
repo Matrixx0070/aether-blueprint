@@ -277,6 +277,12 @@ pub enum UiCommand {
     SetFailFast(usize),
     /// Query session elapsed wall time.
     QueryElapsed,
+    /// Add a (pattern, hint) entry to the error playbook.
+    AddPlaybookEntry(String, String),
+    /// Remove a playbook entry by 0-based index.
+    RemovePlaybookEntry(usize),
+    /// List all error playbook entries.
+    QueryPlaybook,
     /// Save current history+plan under a named in-memory snapshot.
     SaveSnapshot(String),
     /// Restore history+plan from a named in-memory snapshot.

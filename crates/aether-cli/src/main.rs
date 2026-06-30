@@ -6320,6 +6320,37 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::AddPlaybookEntry(pattern, hint) => {
+                    session.error_playbook.push((pattern.clone(), hint.clone()));
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Playbook [{idx}]: pattern=\"{pattern}\" → hint=\"{hint}\"",
+                        idx = session.error_playbook.len() - 1
+                    )));
+                    continue;
+                }
+                UiCommand::RemovePlaybookEntry(idx) => {
+                    let note = if idx < session.error_playbook.len() {
+                        let (p, _) = session.error_playbook.remove(idx);
+                        format!("Playbook [{idx}] removed: \"{p}\".")
+                    } else {
+                        format!("No playbook entry at index {idx}.")
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryPlaybook => {
+                    let note = if session.error_playbook.is_empty() {
+                        "Error playbook is empty.\n  Usage: /playbook-add <pattern>|<hint>\n  e.g. /playbook-add permission denied|Try using sudo or fix file permissions.".to_string()
+                    } else {
+                        let lines: Vec<String> = session.error_playbook.iter()
+                            .enumerate()
+                            .map(|(i, (p, h))| format!("  [{i}] \"{p}\" → {h}"))
+                            .collect();
+                        format!("=== Error playbook ({} entries) ===\n{}", lines.len(), lines.join("\n"))
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::SetFailFast(n) => {
                     session.fail_fast_errors = n;
                     let note = if n == 0 {
@@ -24180,6 +24211,42 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /playbook-add <pattern>|<hint> — add error pattern → hint
+                                cmd_str if cmd_str.starts_with("/playbook-add ") => {
+                                    let arg = cmd_str.trim_start_matches("/playbook-add ").trim();
+                                    if let Some(pos) = arg.find('|') {
+                                        let pattern = arg[..pos].trim().to_string();
+                                        let hint = arg[pos+1..].trim().to_string();
+                                        if _ctx.send(UiCommand::AddPlaybookEntry(pattern, hint)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /playbook-add <pattern>|<hint>  (pipe separates pattern from hint)".to_string()
+                                        ));
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /playbook-rm <n> — remove playbook entry by index
+                                cmd_str if cmd_str.starts_with("/playbook-rm ") => {
+                                    let arg = cmd_str.trim_start_matches("/playbook-rm ").trim();
+                                    if let Ok(n) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::RemovePlaybookEntry(n)).is_err() { break 'outer; }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /playbook-list — show all error playbook entries
+                                "/playbook-list" => {
+                                    if _ctx.send(UiCommand::QueryPlaybook).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /mode <quick|balanced|deep> — model+thinking preset
                                 cmd_str if cmd_str == "/mode" || cmd_str.starts_with("/mode ") => {
                                     let preset = cmd_str.trim_start_matches("/mode").trim();
@@ -24994,6 +25061,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/mode quick", "/mode balanced", "/mode deep",
                             "/fail-fast ", "/fail-fast off",
                             "/elapsed",
+                            "/playbook-add ",
+                            "/playbook-rm ",
+                            "/playbook-list",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
