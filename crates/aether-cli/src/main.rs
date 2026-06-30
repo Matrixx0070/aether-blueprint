@@ -6707,6 +6707,70 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::QueryToolSuccessRate => {
+                    let stats = &session.plan.tool_call_stats;
+                    if stats.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "No tool calls recorded this session.".to_string()
+                        ));
+                    } else {
+                        let mut msg = format!("Tool success rates  ({} tool(s))\n", stats.len());
+                        msg.push_str("  Tool name               ok   err   rate\n");
+                        msg.push_str("  ─────────────────────────────────────\n");
+                        let mut entries: Vec<(&String, &(usize, usize))> = stats.iter().collect();
+                        entries.sort_by(|a, b| b.1.0.cmp(&a.1.0));
+                        for (name, &(ok, err)) in &entries {
+                            let total = ok + err;
+                            let rate = if total > 0 { ok as f64 / total as f64 * 100.0 } else { 0.0 };
+                            let bar = if rate >= 90.0 { "●" } else if rate >= 70.0 { "◑" } else { "○" };
+                            msg.push_str(&format!("  {name:<22} {ok:>4} {err:>5}  {rate:>5.1}% {bar}\n"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
+                UiCommand::SetCostAlert(threshold) => {
+                    session.cost_alert_usd = threshold;
+                    session.cost_alert_fired = false;
+                    let current_usd = if session.usage_total.input_tokens > 0 || session.usage_total.output_tokens > 0 {
+                        session.turn_cost_log.iter().map(|&(_, _, _, c)| c).sum::<f64>()
+                    } else { 0.0 };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Cost alert set: ${threshold:.4}. Current cost: ${current_usd:.4}. A SystemNote will fire once when threshold is crossed."
+                    )));
+                    continue;
+                }
+                UiCommand::ClearCostAlert => {
+                    session.cost_alert_usd = 0.0;
+                    session.cost_alert_fired = false;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote("Cost alert cleared.".to_string()));
+                    continue;
+                }
+                UiCommand::QueryCostAlert => {
+                    let note = if session.cost_alert_usd <= 0.0 {
+                        "Cost alert: off. Use /cost-alert <usd> to set.".to_string()
+                    } else {
+                        let status = if session.cost_alert_fired { "fired" } else { "pending" };
+                        let current: f64 = session.turn_cost_log.iter().map(|&(_, _, _, c)| c).sum();
+                        format!("Cost alert: ${:.4}  (status: {status})  current cost: ${current:.4}", session.cost_alert_usd)
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QuerySessionDuration => {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let elapsed = now.saturating_sub(session.started_at);
+                    let (h, m, s) = (elapsed / 3600, (elapsed % 3600) / 60, elapsed % 60);
+                    let turns = session.turn_index;
+                    let total_cost: f64 = session.turn_cost_log.iter().map(|&(_, _, _, c)| c).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session duration: {h:02}:{m:02}:{s:02}  ({elapsed}s)\n  Turns completed: {turns}\n  Total cost:      ${total_cost:.6}"
+                    )));
+                    continue;
+                }
                 UiCommand::QueryResponseGrep(pattern) => {
                     use aether_core::context::ConversationItem;
                     let pat_lower = pattern.to_lowercase();
@@ -9331,6 +9395,17 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         "Token budget warning: context is {:.1}%+ full ({used}/{window} tokens). \
                          Threshold: {:.0}%. Consider /compact or shortening history.",
                         fill * 100.0, session.token_budget_warn_pct * 100.0
+                    )));
+                }
+            }
+            // Cost alert: fire a soft warning when cumulative cost crosses the threshold.
+            if session.cost_alert_usd > 0.0 && !session.cost_alert_fired {
+                let current_cost: f64 = session.turn_cost_log.iter().map(|&(_, _, _, c)| c).sum();
+                if current_cost >= session.cost_alert_usd {
+                    session.cost_alert_fired = true;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Cost alert: ${current_cost:.4} has reached threshold ${:.4}. Agent continues — use /cost-cap to stop on limit.",
+                        session.cost_alert_usd
                     )));
                 }
             }
@@ -27939,6 +28014,49 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /tool-success-rate — show per-tool ok/err/rate table
+                                "/tool-success-rate" => {
+                                    if _ctx.send(UiCommand::QueryToolSuccessRate).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /cost-alert <usd> | off — set or clear soft cost alert
+                                cmd_str if cmd_str == "/cost-alert off" || cmd_str.starts_with("/cost-alert ") => {
+                                    if cmd_str == "/cost-alert off" {
+                                        if _ctx.send(UiCommand::ClearCostAlert).is_err() { break 'outer; }
+                                    } else {
+                                        let arg = cmd_str.trim_start_matches("/cost-alert ").trim();
+                                        if let Ok(usd) = arg.parse::<f64>() {
+                                            if _ctx.send(UiCommand::SetCostAlert(usd)).is_err() { break 'outer; }
+                                        } else {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                "Usage: /cost-alert <usd>  or  /cost-alert off".to_string()
+                                            ));
+                                        }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /cost-alert-show — show current cost alert setting
+                                "/cost-alert-show" => {
+                                    if _ctx.send(UiCommand::QueryCostAlert).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-duration — show wall-clock time since session started
+                                "/session-duration" => {
+                                    if _ctx.send(UiCommand::QuerySessionDuration).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /response-grep <pattern> — grep all assistant responses for pattern
                                 cmd_str if cmd_str.starts_with("/response-grep ") => {
                                     let pattern = cmd_str.trim_start_matches("/response-grep ").trim().to_string();
@@ -28678,6 +28796,10 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/auto-tag-list",
                             "/auto-tag-del ",
                             "/repeat-last",
+                            "/tool-success-rate",
+                            "/cost-alert ", "/cost-alert off",
+                            "/cost-alert-show",
+                            "/session-duration",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -366,6 +366,12 @@ pub struct Session {
     /// After each turn, if the assistant response contains the pattern, a bookmark
     /// is automatically added at that turn with the given label.
     pub auto_tag_rules: Vec<(String, String)>,
+
+    /// When > 0.0, fire a SystemNote warning once when cumulative cost exceeds this.
+    /// Unlike cost_cap_usd which stops the agent, this is a soft notification only.
+    pub cost_alert_usd: f64,
+    /// True once the cost_alert_usd threshold has fired, so it only shows once.
+    pub cost_alert_fired: bool,
 }
 
 impl Session {
@@ -460,6 +466,8 @@ impl Session {
             request_prefix: None,
             request_suffix: None,
             auto_tag_rules: Vec::new(),
+            cost_alert_usd: 0.0,
+            cost_alert_fired: false,
         }
     }
 

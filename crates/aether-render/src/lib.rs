@@ -417,6 +417,16 @@ pub enum UiCommand {
     JumpBookmark(usize),
     /// Delete a bookmark by 0-based index.
     DeleteBookmark(usize),
+    /// Show per-tool success rate (ok / total) from session tool call stats.
+    QueryToolSuccessRate,
+    /// Set a soft cost alert threshold in USD (fires a note once, does not stop agent).
+    SetCostAlert(f64),
+    /// Clear the cost alert threshold.
+    ClearCostAlert,
+    /// Show the current cost alert threshold and whether it has fired.
+    QueryCostAlert,
+    /// Show how long the current session has been running (wall clock).
+    QuerySessionDuration,
     /// Search all assistant responses for a substring pattern (case-insensitive).
     QueryResponseGrep(String),
     /// Add an auto-tag rule: (pattern, label) — bookmark added when response matches.
