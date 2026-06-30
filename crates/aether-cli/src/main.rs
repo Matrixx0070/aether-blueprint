@@ -6406,6 +6406,55 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 UiCommand::SetAlias(_, _) | UiCommand::RemoveAlias(_) | UiCommand::QueryAliases => {
                     continue;
                 }
+                UiCommand::AllowTool(name) => {
+                    if !session.tool_allow.contains(&name) {
+                        session.tool_allow.push(name.clone());
+                    }
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Tool allow-list: added '{name}'. Only listed tools will be visible to agent: [{}]",
+                        session.tool_allow.join(", ")
+                    )));
+                    continue;
+                }
+                UiCommand::DenyTool(name) => {
+                    if !session.tool_deny.contains(&name) {
+                        session.tool_deny.push(name.clone());
+                    }
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Tool deny-list: added '{name}'. Blocked tools: [{}]",
+                        session.tool_deny.join(", ")
+                    )));
+                    continue;
+                }
+                UiCommand::ClearToolFilter => {
+                    let na = session.tool_allow.len();
+                    let nd = session.tool_deny.len();
+                    session.tool_allow.clear();
+                    session.tool_deny.clear();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Tool filters cleared (removed {na} allow, {nd} deny entries). All tools visible again."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryToolFilter => {
+                    let note = if session.tool_allow.is_empty() && session.tool_deny.is_empty() {
+                        "Tool filter: off (all tools visible). Use /tool-allow or /tool-deny to restrict.".to_string()
+                    } else {
+                        let allow_str = if session.tool_allow.is_empty() {
+                            "  Allow-list: (empty — allows all)".to_string()
+                        } else {
+                            format!("  Allow-list: [{}]", session.tool_allow.join(", "))
+                        };
+                        let deny_str = if session.tool_deny.is_empty() {
+                            "  Deny-list:  (empty — blocks none)".to_string()
+                        } else {
+                            format!("  Deny-list:  [{}]", session.tool_deny.join(", "))
+                        };
+                        format!("Tool filter active:\n{allow_str}\n{deny_str}")
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::SetAutoCommit(enabled) => {
                     session.auto_commit = enabled;
                     let note = if enabled {
@@ -25033,6 +25082,40 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /tool-allow <name> — add to tool allow-list
+                                cmd_str if cmd_str.starts_with("/tool-allow ") => {
+                                    let name = cmd_str.trim_start_matches("/tool-allow ").trim().to_string();
+                                    if _ctx.send(UiCommand::AllowTool(name)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tool-deny <name> — add to tool deny-list
+                                cmd_str if cmd_str.starts_with("/tool-deny ") => {
+                                    let name = cmd_str.trim_start_matches("/tool-deny ").trim().to_string();
+                                    if _ctx.send(UiCommand::DenyTool(name)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tool-filter-clear — remove all allow/deny filters
+                                "/tool-filter-clear" => {
+                                    if _ctx.send(UiCommand::ClearToolFilter).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tool-filter-show — display current filter config
+                                "/tool-filter-show" => {
+                                    if _ctx.send(UiCommand::QueryToolFilter).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /auto-commit on|off — auto git commit after each tool-using turn
                                 cmd_str if cmd_str == "/auto-commit" || cmd_str.starts_with("/auto-commit ") => {
                                     let arg = cmd_str.trim_start_matches("/auto-commit").trim();
@@ -25665,6 +25748,10 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/cost-report",
                             "/auto-commit", "/auto-commit on", "/auto-commit off",
                             "/auto-commit-msg ",
+                            "/tool-allow ",
+                            "/tool-deny ",
+                            "/tool-filter-clear",
+                            "/tool-filter-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

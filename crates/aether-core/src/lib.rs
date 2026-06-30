@@ -257,6 +257,13 @@ pub struct Session {
     /// Commit message template for auto-commit. Supports {turn} placeholder.
     /// Default: "aether: auto-commit turn {turn}".
     pub auto_commit_template: String,
+
+    /// Explicit tool allow-list. When non-empty, only listed tools are
+    /// passed to the LLM; all others are hidden for this session.
+    pub tool_allow: Vec<String>,
+    /// Tool deny-list. Listed tools are stripped from the tool definitions
+    /// sent to the LLM (agent cannot use them).
+    pub tool_deny: Vec<String>,
 }
 
 impl Session {
@@ -322,6 +329,8 @@ impl Session {
             turn_cost_log: Vec::new(),
             auto_commit: false,
             auto_commit_template: "aether: auto-commit turn {turn}".to_string(),
+            tool_allow: Vec::new(),
+            tool_deny: Vec::new(),
         }
     }
 
@@ -536,6 +545,19 @@ async fn agent_turn_inner(
                 description: t.description().to_string(),
                 input_schema: t.input_schema(),
             })
+        })
+        .filter(|td| {
+            // Allow-list: if non-empty, only listed tools pass.
+            if !session.tool_allow.is_empty() {
+                if !session.tool_allow.contains(&td.name) {
+                    return false;
+                }
+            }
+            // Deny-list: listed tools are blocked.
+            if session.tool_deny.contains(&td.name) {
+                return false;
+            }
+            true
         })
         .collect();
     let plan_text = if session.plan.is_active() {

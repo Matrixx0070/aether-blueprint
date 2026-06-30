@@ -287,6 +287,14 @@ pub enum UiCommand {
     RemovePlaybookEntry(usize),
     /// List all error playbook entries.
     QueryPlaybook,
+    /// Add a tool name to the allow-list (empty = allow all).
+    AllowTool(String),
+    /// Add a tool name to the deny-list.
+    DenyTool(String),
+    /// Clear both allow and deny tool filter lists.
+    ClearToolFilter,
+    /// Show current tool allow/deny filter configuration.
+    QueryToolFilter,
     /// Enable or disable auto git-commit after each tool-using turn.
     SetAutoCommit(bool),
     /// Set the commit message template (supports {turn} placeholder).
