@@ -417,6 +417,16 @@ pub enum UiCommand {
     JumpBookmark(usize),
     /// Delete a bookmark by 0-based index.
     DeleteBookmark(usize),
+    /// Compute and display a 0–100 context health score.
+    QueryContextHealthScore,
+    /// Dump session.history as JSON to the given file path.
+    DumpHistory(String),
+    /// Add a user-defined tag/label to the current session.
+    AddSessionTag(String),
+    /// Remove a session tag by 0-based index.
+    DelSessionTag(usize),
+    /// List all session tags.
+    QuerySessionTags,
     /// Show per-tool success rate (ok / total) from session tool call stats.
     QueryToolSuccessRate,
     /// Set a soft cost alert threshold in USD (fires a note once, does not stop agent).

@@ -372,6 +372,9 @@ pub struct Session {
     pub cost_alert_usd: f64,
     /// True once the cost_alert_usd threshold has fired, so it only shows once.
     pub cost_alert_fired: bool,
+
+    /// User-defined labels/tags for this session. Shown in /session-info and /tag-session-list.
+    pub session_tags: Vec<String>,
 }
 
 impl Session {
@@ -468,6 +471,7 @@ impl Session {
             auto_tag_rules: Vec::new(),
             cost_alert_usd: 0.0,
             cost_alert_fired: false,
+            session_tags: Vec::new(),
         }
     }
 

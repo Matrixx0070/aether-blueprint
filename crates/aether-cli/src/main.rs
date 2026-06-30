@@ -6707,6 +6707,87 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::QueryContextHealthScore => {
+                    use aether_core::compaction::context_window_for_model;
+                    let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
+                    let window = context_window_for_model(&session.config.model);
+                    let fill = if window > 0 { used as f64 / window as f64 } else { 0.0 };
+                    let total_calls: usize = session.plan.tool_call_stats.values().map(|(ok, err)| ok + err).sum();
+                    let total_err: usize = session.plan.tool_call_stats.values().map(|(_, err)| *err).sum();
+                    let error_rate = if total_calls > 0 { total_err as f64 / total_calls as f64 } else { 0.0 };
+                    let total_cost: f64 = session.turn_cost_log.iter().map(|&(_, _, _, c)| c).sum();
+                    let turns = session.turn_index.max(1);
+                    let cost_per_turn = total_cost / turns as f64;
+                    // Scoring: fill 0→30 pts (30 pts at 0% fill, 0 pts at 100%), error_rate 0→40 pts, cost_per_turn 0→30 pts
+                    let fill_score = ((1.0 - fill) * 30.0).max(0.0).min(30.0);
+                    let err_score = ((1.0 - error_rate) * 40.0).max(0.0).min(40.0);
+                    let cost_score = if cost_per_turn < 0.001 { 30.0 } else if cost_per_turn < 0.01 { 25.0 } else if cost_per_turn < 0.05 { 15.0 } else { 5.0 };
+                    let total_score = (fill_score + err_score + cost_score).round() as u32;
+                    let grade = if total_score >= 85 { "A" } else if total_score >= 70 { "B" } else if total_score >= 55 { "C" } else if total_score >= 40 { "D" } else { "F" };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Context health score: {total_score}/100  (grade: {grade})\n  Context fill:    {:.1}%  → {fill_score:.0}/30 pts\n  Tool error rate: {:.1}%  → {err_score:.0}/40 pts\n  Avg cost/turn:   ${cost_per_turn:.5}  → {cost_score:.0}/30 pts",
+                        fill * 100.0, error_rate * 100.0
+                    )));
+                    continue;
+                }
+                UiCommand::DumpHistory(path) => {
+                    let json = match serde_json::to_string_pretty(&session.history) {
+                        Ok(j) => j,
+                        Err(e) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Failed to serialize history: {e}")));
+                            continue;
+                        }
+                    };
+                    match std::fs::write(&path, &json) {
+                        Ok(()) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "History dumped to {path}  ({} items, {} bytes)", session.history.len(), json.len()
+                            )));
+                        }
+                        Err(e) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Error writing {path}: {e}")));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::AddSessionTag(tag) => {
+                    if !session.session_tags.contains(&tag) {
+                        session.session_tags.push(tag.clone());
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session tag added: \"{tag}\". {} tag(s) total.", session.session_tags.len()
+                        )));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Tag \"{tag}\" already set.")));
+                    }
+                    continue;
+                }
+                UiCommand::DelSessionTag(idx) => {
+                    if idx < session.session_tags.len() {
+                        let removed = session.session_tags.remove(idx);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session tag #{idx} removed: \"{removed}\". {} remaining.", session.session_tags.len()
+                        )));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "No session tag #{idx}. {} tag(s) active.", session.session_tags.len()
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionTags => {
+                    if session.session_tags.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "No session tags. Use /tag-session <tag> to add one.".to_string()
+                        ));
+                    } else {
+                        let mut msg = format!("Session tags  ({}):\n", session.session_tags.len());
+                        for (i, tag) in session.session_tags.iter().enumerate() {
+                            msg.push_str(&format!("  [{i}] {tag}\n"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
                 UiCommand::QueryToolSuccessRate => {
                     let stats = &session.plan.tool_call_stats;
                     if stats.is_empty() {
@@ -28014,6 +28095,61 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /context-health-score — 0-100 health score for session
+                                "/context-health-score" => {
+                                    if _ctx.send(UiCommand::QueryContextHealthScore).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /dump-history <path> — write conversation history as JSON
+                                cmd_str if cmd_str.starts_with("/dump-history ") => {
+                                    let path = cmd_str.trim_start_matches("/dump-history ").trim().to_string();
+                                    if path.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /dump-history <path>".to_string()
+                                        ));
+                                    } else if _ctx.send(UiCommand::DumpHistory(path)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tag-session <tag> — add a tag to the session
+                                cmd_str if cmd_str.starts_with("/tag-session ") && !cmd_str.starts_with("/tag-session-") => {
+                                    let tag = cmd_str.trim_start_matches("/tag-session ").trim().to_string();
+                                    if _ctx.send(UiCommand::AddSessionTag(tag)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tag-session-list — list all session tags
+                                "/tag-session-list" => {
+                                    if _ctx.send(UiCommand::QuerySessionTags).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tag-session-del <n> — remove session tag by index
+                                cmd_str if cmd_str.starts_with("/tag-session-del ") => {
+                                    let arg = cmd_str.trim_start_matches("/tag-session-del ").trim();
+                                    if let Ok(n) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::DelSessionTag(n)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /tag-session-del <index>".to_string()
+                                        ));
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /tool-success-rate — show per-tool ok/err/rate table
                                 "/tool-success-rate" => {
                                     if _ctx.send(UiCommand::QueryToolSuccessRate).is_err() { break 'outer; }
@@ -28800,6 +28936,11 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/cost-alert ", "/cost-alert off",
                             "/cost-alert-show",
                             "/session-duration",
+                            "/context-health-score",
+                            "/dump-history ",
+                            "/tag-session ",
+                            "/tag-session-list",
+                            "/tag-session-del ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
