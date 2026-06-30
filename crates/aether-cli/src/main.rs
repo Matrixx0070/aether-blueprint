@@ -5260,7 +5260,13 @@ Dev tools\n\
   /color <hex|r,g,b>      inspect color: hex/RGB/HSL conversion + ANSI preview\n\
   /json-schema <json>     infer JSON Schema draft-07 from a sample JSON value\n\
   /http-codes [filter]    HTTP status code reference; filter by code or keyword\n\
-  /mkscript <name> [lang] scaffold a new bash/python/node/ruby script with boilerplate"),
+  /mkscript <name> [lang] scaffold a new bash/python/node/ruby script with boilerplate\n\
+Dev productivity\n\
+  /regex-test <pat> <txt> test regex; shows all matches + capture groups\n\
+  /format-sql <sql>       keyword-based SQL formatter with indented clauses\n\
+  /env-diff <f1> <f2>     diff two .env files: added/removed/changed keys\n\
+  /ssh-key [path]         inspect SSH public key: type, comment, fingerprint\n\
+  /ai-arch [focus]        AI architectural overview of the current project"),
                                         ("keys", &["keys", "keyboard", "shortcuts", "bindings"], "\
 Input shortcuts\n\
   ↑ ↓  / Ctrl+R           history recall / reverse-i-search\n\
@@ -5377,6 +5383,7 @@ Input shortcuts\n\
     ◈ /duck /wiki /cve /gh-search                                web search + research\n\
     ◈ /semver /calc /chars /open /spell                          utilities B107\n\
     ◈ /time /color /json-schema /http-codes /mkscript            dev tools B108\n\
+    ◈ /regex-test /format-sql /env-diff /ssh-key /ai-arch        B109 tools\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -13417,6 +13424,230 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /regex-test <pattern> <text> — test regex, show all matches
+                                cmd if cmd.starts_with("/regex-test ") || cmd == "/regex-test" => {
+                                    let arg = cmd.trim_start_matches("/regex-test").trim();
+                                    if arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /regex-test <pattern> <text>\n  Example: /regex-test '\\d+' 'foo 42 bar 99'\n  Flags prefix: /regex-test '(?i)hello' 'Hello World'".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    // Split pattern (first token) from text (rest)
+                                    let (pat_raw, text) = if arg.starts_with('\'') {
+                                        let end = arg[1..].find('\'').map(|i| i + 1).unwrap_or(arg.len());
+                                        (&arg[1..end], arg[end + 1..].trim())
+                                    } else if arg.starts_with('"') {
+                                        let end = arg[1..].find('"').map(|i| i + 1).unwrap_or(arg.len());
+                                        (&arg[1..end], arg[end + 1..].trim())
+                                    } else {
+                                        // First whitespace-separated token is the pattern
+                                        let sp = arg.find(' ').unwrap_or(arg.len());
+                                        (&arg[..sp], arg[sp..].trim())
+                                    };
+                                    let body = match regex::Regex::new(pat_raw) {
+                                        Err(e) => format!("regex-test: invalid pattern '{}': {}", pat_raw, e),
+                                        Ok(re) => {
+                                            let matches: Vec<&str> = re.find_iter(text).map(|m| m.as_str()).collect();
+                                            let captures: Vec<Vec<Option<&str>>> = re.captures_iter(text)
+                                                .map(|c| (0..c.len()).map(|i| c.get(i).map(|m| m.as_str())).collect())
+                                                .collect();
+                                            if matches.is_empty() {
+                                                format!("regex-test: /{}/\n  text:    {}\n  result:  NO MATCHES", pat_raw, text)
+                                            } else {
+                                                let mut out = format!("regex-test: /{}/\n  text:    {}\n  matches: {} found\n", pat_raw, text, matches.len());
+                                                for (i, (m, caps)) in matches.iter().zip(captures.iter()).enumerate() {
+                                                    out.push_str(&format!("  [{i}] '{m}'"));
+                                                    if caps.len() > 1 {
+                                                        let groups: Vec<String> = caps[1..].iter()
+                                                            .enumerate()
+                                                            .map(|(gi, g)| format!("  group {}: '{}'", gi + 1, g.unwrap_or("<no match>")))
+                                                            .collect();
+                                                        out.push_str(&format!("\n{}", groups.join("\n")));
+                                                    }
+                                                    out.push('\n');
+                                                }
+                                                out
+                                            }
+                                        }
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /format-sql <sql> — format SQL with indentation
+                                cmd if cmd.starts_with("/format-sql ") || cmd == "/format-sql" => {
+                                    let sql = cmd.trim_start_matches("/format-sql").trim();
+                                    if sql.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /format-sql <sql>\n  Example: /format-sql 'select id,name from users where active=1 order by name'".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    // Keyword-based SQL formatter (no external crate needed)
+                                    let keywords = ["SELECT", "FROM", "WHERE", "AND", "OR", "JOIN",
+                                        "LEFT JOIN", "RIGHT JOIN", "INNER JOIN", "OUTER JOIN", "ON",
+                                        "GROUP BY", "ORDER BY", "HAVING", "LIMIT", "OFFSET",
+                                        "INSERT INTO", "VALUES", "UPDATE", "SET", "DELETE FROM",
+                                        "CREATE TABLE", "ALTER TABLE", "DROP TABLE", "WITH", "UNION",
+                                        "UNION ALL", "EXCEPT", "INTERSECT", "RETURNING", "DISTINCT"];
+                                    let mut result = sql.to_string();
+                                    for kw in &keywords {
+                                        let pat = regex::Regex::new(&format!(r"(?i)\b{}\b", regex::escape(kw))).unwrap_or_else(|_| regex::Regex::new(kw).unwrap());
+                                        result = pat.replace_all(&result, format!("\n{}", kw)).to_string();
+                                    }
+                                    // Indent continuation lines
+                                    let formatted: String = result.lines().enumerate().map(|(i, line)| {
+                                        let trimmed = line.trim();
+                                        if i == 0 || trimmed.is_empty() { trimmed.to_string() } else { format!("  {}", trimmed) }
+                                    }).collect::<Vec<_>>().join("\n");
+                                    ui.chat_lines.push(ChatLine::SystemNote(format!("format-sql:\n{}", formatted.trim())));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /env-diff <file1> <file2> — diff two .env files
+                                cmd if cmd.starts_with("/env-diff ") || cmd == "/env-diff" => {
+                                    let arg = cmd.trim_start_matches("/env-diff").trim();
+                                    if arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /env-diff <file1> <file2>\n  Example: /env-diff .env .env.production".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let parts: Vec<&str> = arg.splitn(2, ' ').collect();
+                                    if parts.len() < 2 {
+                                        ui.chat_lines.push(ChatLine::SystemNote("env-diff: need two file paths".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    fn parse_env_file(path: &str) -> std::collections::HashMap<String, String> {
+                                        let mut map = std::collections::HashMap::new();
+                                        if let Ok(content) = std::fs::read_to_string(path) {
+                                            for line in content.lines() {
+                                                let line = line.trim();
+                                                if line.is_empty() || line.starts_with('#') { continue; }
+                                                if let Some(eq) = line.find('=') {
+                                                    let key = line[..eq].trim().to_string();
+                                                    let val = line[eq + 1..].trim().trim_matches('"').trim_matches('\'').to_string();
+                                                    map.insert(key, val);
+                                                }
+                                            }
+                                        }
+                                        map
+                                    }
+                                    let (f1, f2) = (parts[0], parts[1]);
+                                    let m1 = parse_env_file(f1);
+                                    let m2 = parse_env_file(f2);
+                                    let mut all_keys: Vec<&str> = m1.keys().chain(m2.keys()).map(|k| k.as_str()).collect();
+                                    all_keys.sort();
+                                    all_keys.dedup();
+                                    let mut body = format!("env-diff: {} vs {}\n", f1, f2);
+                                    let mut diffs = 0;
+                                    for key in &all_keys {
+                                        match (m1.get(*key), m2.get(*key)) {
+                                            (Some(v1), Some(v2)) if v1 == v2 => {}
+                                            (Some(v1), Some(v2)) => {
+                                                body.push_str(&format!("  ~ {}={} → ={}\n", key, v1, v2));
+                                                diffs += 1;
+                                            }
+                                            (Some(v1), None) => {
+                                                body.push_str(&format!("  - {}={} (only in {})\n", key, v1, f1));
+                                                diffs += 1;
+                                            }
+                                            (None, Some(v2)) => {
+                                                body.push_str(&format!("  + {}={} (only in {})\n", key, v2, f2));
+                                                diffs += 1;
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    if diffs == 0 { body.push_str("  (files are identical)"); }
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ssh-key [path] — inspect SSH key metadata
+                                cmd if cmd.starts_with("/ssh-key ") || cmd == "/ssh-key" => {
+                                    let key_path = cmd.trim_start_matches("/ssh-key").trim();
+                                    // Enumerate candidate key paths
+                                    let candidates: Vec<String> = if key_path.is_empty() {
+                                        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+                                        vec![
+                                            format!("{}/.ssh/id_ed25519.pub", home),
+                                            format!("{}/.ssh/id_rsa.pub", home),
+                                            format!("{}/.ssh/id_ecdsa.pub", home),
+                                            format!("{}/.ssh/id_ed448.pub", home),
+                                        ]
+                                    } else {
+                                        vec![key_path.to_string()]
+                                    };
+                                    let mut body = "SSH key info\n".to_string();
+                                    let mut found = false;
+                                    for path in &candidates {
+                                        if let Ok(content) = std::fs::read_to_string(path) {
+                                            found = true;
+                                            let content = content.trim();
+                                            let parts: Vec<&str> = content.splitn(3, ' ').collect();
+                                            let key_type = parts.get(0).copied().unwrap_or("?");
+                                            let comment = parts.get(2).copied().unwrap_or("");
+                                            // Fingerprint via ssh-keygen -lf
+                                            let fp = std::process::Command::new("ssh-keygen")
+                                                .args(["-l", "-f", path])
+                                                .output()
+                                                .ok()
+                                                .filter(|o| o.status.success())
+                                                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                                                .unwrap_or_else(|| "(ssh-keygen unavailable)".to_string());
+                                            body.push_str(&format!("  file:        {}\n  type:        {}\n  comment:     {}\n  fingerprint: {}\n\n", path, key_type, comment, fp));
+                                        }
+                                    }
+                                    if !found {
+                                        body.push_str("  (no public key files found — specify path: /ssh-key ~/.ssh/id_ed25519.pub)");
+                                    }
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-arch — AI architectural overview of the current project
+                                cmd if cmd == "/ai-arch" || cmd.starts_with("/ai-arch ") => {
+                                    let focus = cmd.trim_start_matches("/ai-arch").trim();
+                                    // Gather project context: tree, Cargo.toml / package.json / etc
+                                    let mut ctx = String::new();
+                                    // Directory tree (2 levels, exclude common noise)
+                                    if let Ok(o) = std::process::Command::new("find")
+                                        .args([".", "-maxdepth", "2", "-not", "-path", "*/.*", "-not", "-path", "*/target/*", "-not", "-path", "*/node_modules/*"])
+                                        .output()
+                                    {
+                                        let tree = String::from_utf8_lossy(&o.stdout);
+                                        let lines: Vec<&str> = tree.lines().take(60).collect();
+                                        ctx.push_str("Project layout (depth 2):\n");
+                                        ctx.push_str(&lines.join("\n"));
+                                        ctx.push('\n');
+                                    }
+                                    // Top-level manifest files
+                                    for manifest in &["Cargo.toml", "package.json", "pyproject.toml", "go.mod", "pom.xml", "build.gradle"] {
+                                        if let Ok(content) = std::fs::read_to_string(manifest) {
+                                            let snippet: String = content.lines().take(40).collect::<Vec<_>>().join("\n");
+                                            ctx.push_str(&format!("\n{}:\n{}\n", manifest, snippet));
+                                        }
+                                    }
+                                    let focus_note = if focus.is_empty() { String::new() } else { format!(" Focus on: {focus}") };
+                                    let prompt = format!(
+                                        "You are an expert software architect.{focus_note}\n\nAnalyze the following project and provide:\n1. Architecture overview (2-3 sentences)\n2. Key components and their responsibilities\n3. Data flow / request path\n4. Strengths observed\n5. Potential concerns or improvements\n\n{ctx}"
+                                    );
+                                    // Push as user message to trigger AI
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts));
+                                    ui.follow_tail = true;
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.msg_times_secs.push(ts);
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -14055,7 +14286,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/cve ", "/dotenv", "/dotenv ", "/calc ", "/chars", "/chars ", "/color ", "/duck ", "/env-vars", "/env-vars ", "/flashcard ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/gh-search ", "/http-codes", "/http-codes ", "/impl ", "/json-schema ", "/man-ai ", "/mkscript ", "/open ", "/path", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/semver ", "/session-summary", "/spell ", "/teach ", "/time", "/time ", "/which-all ", "/wiki ", "/workflow", "/workflow ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
+                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/cve ", "/dotenv", "/dotenv ", "/calc ", "/chars", "/chars ", "/ai-arch", "/ai-arch ", "/color ", "/duck ", "/env-diff ", "/env-vars", "/env-vars ", "/flashcard ", "/format-sql ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/gh-search ", "/http-codes", "/http-codes ", "/impl ", "/json-schema ", "/man-ai ", "/mkscript ", "/open ", "/path", "/regex-test ", "/ssh-key", "/ssh-key ", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/semver ", "/session-summary", "/spell ", "/teach ", "/time", "/time ", "/which-all ", "/wiki ", "/workflow", "/workflow ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
