@@ -6406,6 +6406,45 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 UiCommand::SetAlias(_, _) | UiCommand::RemoveAlias(_) | UiCommand::QueryAliases => {
                     continue;
                 }
+                UiCommand::SetSessionEnv(key, val) => {
+                    // Apply to process env so all child processes (shell tools) inherit it.
+                    std::env::set_var(&key, &val);
+                    session.session_env.insert(key.clone(), val.clone());
+                    let preview: String = val.chars().take(40).collect();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session env: {key}={preview}{}  (process env set; inherited by shell tools)",
+                        if val.len() > 40 { "…" } else { "" }
+                    )));
+                    continue;
+                }
+                UiCommand::UnsetSessionEnv(key) => {
+                    let had = session.session_env.remove(&key).is_some();
+                    std::env::remove_var(&key);
+                    let note = if had {
+                        format!("Session env: unset {key}.")
+                    } else {
+                        format!("Session env: {key} was not set.")
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QuerySessionEnv => {
+                    let note = if session.session_env.is_empty() {
+                        "Session env: empty. Use /env-set KEY=value to set variables.".to_string()
+                    } else {
+                        let mut lines = format!("=== Session env ({} var(s)) ===\n", session.session_env.len());
+                        let mut pairs: Vec<(&String, &String)> = session.session_env.iter().collect();
+                        pairs.sort_by_key(|(k, _)| k.as_str());
+                        for (k, v) in pairs {
+                            let preview: String = v.chars().take(50).collect();
+                            lines.push_str(&format!("  {k}={preview}{}\n",
+                                if v.len() > 50 { "…" } else { "" }));
+                        }
+                        lines
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::AllowTool(name) => {
                     if !session.tool_allow.contains(&name) {
                         session.tool_allow.push(name.clone());
@@ -25082,6 +25121,40 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /env-set KEY=value — set a session env var
+                                cmd_str if cmd_str.starts_with("/env-set ") => {
+                                    let arg = cmd_str.trim_start_matches("/env-set ").trim();
+                                    if let Some(eq) = arg.find('=') {
+                                        let key = arg[..eq].trim().to_string();
+                                        let val = arg[eq+1..].to_string();
+                                        if _ctx.send(UiCommand::SetSessionEnv(key, val)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /env-set KEY=value  (must include '=')".to_string()
+                                        ));
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /env-unset KEY — remove a session env var
+                                cmd_str if cmd_str.starts_with("/env-unset ") => {
+                                    let key = cmd_str.trim_start_matches("/env-unset ").trim().to_string();
+                                    if _ctx.send(UiCommand::UnsetSessionEnv(key)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /env-show — list all session env vars
+                                "/env-show" => {
+                                    if _ctx.send(UiCommand::QuerySessionEnv).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /tool-allow <name> — add to tool allow-list
                                 cmd_str if cmd_str.starts_with("/tool-allow ") => {
                                     let name = cmd_str.trim_start_matches("/tool-allow ").trim().to_string();
@@ -25752,6 +25825,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-deny ",
                             "/tool-filter-clear",
                             "/tool-filter-show",
+                            "/env-set ",
+                            "/env-unset ",
+                            "/env-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

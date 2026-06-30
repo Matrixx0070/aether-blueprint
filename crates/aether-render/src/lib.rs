@@ -287,6 +287,12 @@ pub enum UiCommand {
     RemovePlaybookEntry(usize),
     /// List all error playbook entries.
     QueryPlaybook,
+    /// Set a session-scoped environment variable (KEY, VALUE).
+    SetSessionEnv(String, String),
+    /// Remove a session-scoped environment variable by key.
+    UnsetSessionEnv(String),
+    /// Show all session-scoped environment variables.
+    QuerySessionEnv,
     /// Add a tool name to the allow-list (empty = allow all).
     AllowTool(String),
     /// Add a tool name to the deny-list.

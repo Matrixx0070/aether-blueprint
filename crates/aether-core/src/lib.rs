@@ -264,6 +264,11 @@ pub struct Session {
     /// Tool deny-list. Listed tools are stripped from the tool definitions
     /// sent to the LLM (agent cannot use them).
     pub tool_deny: Vec<String>,
+
+    /// Session-scoped environment variables injected into every shell tool
+    /// execution. Allows users to set DATABASE_URL, API keys, etc. without
+    /// polluting their shell environment permanently.
+    pub session_env: std::collections::HashMap<String, String>,
 }
 
 impl Session {
@@ -331,6 +336,7 @@ impl Session {
             auto_commit_template: "aether: auto-commit turn {turn}".to_string(),
             tool_allow: Vec::new(),
             tool_deny: Vec::new(),
+            session_env: std::collections::HashMap::new(),
         }
     }
 
