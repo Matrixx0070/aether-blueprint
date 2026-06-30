@@ -885,6 +885,12 @@ pub enum UiCommand {
     QueryRequestSuffixShow,
     /// Show all entries in the tool deny list.
     QueryToolDenyShow,
+    /// Show all entries in the tool allow list.
+    QueryToolAllowShow,
+    /// Show all current session variables (key=value pairs).
+    QuerySessionVarsShow,
+    /// Show the pause-after-turns setting.
+    QueryPauseAfterShow,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

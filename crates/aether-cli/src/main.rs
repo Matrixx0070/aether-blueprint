@@ -7700,6 +7700,49 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryToolAllowShow => {
+                    if session.tool_allow.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Tool allow list: empty (all tools allowed). Use /tool-allow <name> to restrict.".to_string()
+                        ));
+                    } else {
+                        let list = session.tool_allow.join(", ");
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Tool allow list ({} entries): {list}.", session.tool_allow.len()
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionVarsShow => {
+                    if session.session_vars.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Session vars: none set. Use /set-var <key> <value> to define one.".to_string()
+                        ));
+                    } else {
+                        let mut pairs: Vec<String> = session.session_vars
+                            .iter()
+                            .map(|(k, v)| format!("  {k}={v:?}"))
+                            .collect();
+                        pairs.sort();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session vars ({} set):\n{}", session.session_vars.len(), pairs.join("\n")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryPauseAfterShow => {
+                    if session.pause_after_turns == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Pause-after-turns: OFF. Use /pause-after <N> to pause every N turns.".to_string()
+                        ));
+                    } else {
+                        let now = if session.pause_now { " (paused now)" } else { "" };
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Pause-after-turns: every {} turns{now}.", session.pause_after_turns
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -32801,6 +32844,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /tool-allow-show — list all tool allow entries
+                                "/tool-allow-show" => {
+                                    if _ctx.send(UiCommand::QueryToolAllowShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-vars-show — show all session variables
+                                "/session-vars-show" => {
+                                    if _ctx.send(UiCommand::QuerySessionVarsShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /pause-after-show — show pause-after-turns config
+                                "/pause-after-show" => {
+                                    if _ctx.send(UiCommand::QueryPauseAfterShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -33550,6 +33611,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/request-prefix-show",
                             "/request-suffix-show",
                             "/tool-deny-show",
+                            "/tool-allow-show",
+                            "/session-vars-show",
+                            "/pause-after-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
