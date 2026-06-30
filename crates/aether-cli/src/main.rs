@@ -6400,6 +6400,67 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                // Alias commands are handled entirely in the TUI layer (ui.aliases).
+                // The driver receives these only as a side-effect of the match being
+                // exhaustive; nothing to do here.
+                UiCommand::SetAlias(_, _) | UiCommand::RemoveAlias(_) | UiCommand::QueryAliases => {
+                    continue;
+                }
+                UiCommand::SetCostCap(cap) => {
+                    session.cost_cap_usd = cap;
+                    let note = if cap == 0.0 {
+                        "Cost cap: off.".to_string()
+                    } else {
+                        let current = estimate_cost_usd(&session.config.model, &session.usage_total);
+                        format!("Cost cap: ${cap:.4}  (current spend: ${current:.4})")
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryCostCap => {
+                    let current = estimate_cost_usd(&session.config.model, &session.usage_total);
+                    let note = if session.cost_cap_usd == 0.0 {
+                        format!("Cost cap: off  |  Current spend: ${current:.4}")
+                    } else {
+                        let remaining = (session.cost_cap_usd - current).max(0.0);
+                        format!(
+                            "Cost cap: ${:.4}  |  Spent: ${current:.4}  |  Remaining: ${remaining:.4}",
+                            session.cost_cap_usd
+                        )
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryTokenRate => {
+                    use aether_core::compaction::context_window_for_model;
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let elapsed = now.saturating_sub(session.started_at).max(1);
+                    let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
+                    let rate = used as f64 / elapsed as f64;
+                    let window = context_window_for_model(&session.config.model);
+                    let remaining_tokens = if window > 0 && used < window as u64 {
+                        window as u64 - used
+                    } else {
+                        0
+                    };
+                    let secs_to_fill = if rate > 0.0 { (remaining_tokens as f64 / rate) as u64 } else { 0 };
+                    let note = if secs_to_fill > 0 {
+                        let h = secs_to_fill / 3600;
+                        let m = (secs_to_fill % 3600) / 60;
+                        let s = secs_to_fill % 60;
+                        let eta = if h > 0 { format!("{h}h {m}m") } else if m > 0 { format!("{m}m {s}s") } else { format!("{s}s") };
+                        format!(
+                            "Token rate: {rate:.1} tok/s  |  Used: {used}/{window}  |  Est. full in: {eta}",
+                        )
+                    } else {
+                        format!("Token rate: {rate:.1} tok/s  |  Used: {used}/{window}")
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::SetPostTurnHook(cmd_opt) => {
                     let note = match &cmd_opt {
                         Some(cmd) => format!(
@@ -7082,6 +7143,19 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 match outcome {
                     TurnOutcome::AwaitUser => { auto_continue_count = 0; break; }
                     TurnOutcome::ContinueImmediately => {
+                        // Cost cap: stop the agent if cumulative spend exceeds the limit.
+                        if session.cost_cap_usd > 0.0 {
+                            let cost = estimate_cost_usd(&session.config.model, &session.usage_total);
+                            if cost >= session.cost_cap_usd {
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                    "Cost cap reached: ${cost:.4} ≥ limit ${:.4}. \
+                                     Stopping agent. Use /cost-cap off to remove the cap.",
+                                    session.cost_cap_usd
+                                )));
+                                auto_continue_count = 0;
+                                break;
+                            }
+                        }
                         // Auto-compact when stuck: fire compaction if any tool has hit the
                         // consecutive-error threshold, clearing context to break the loop.
                         if session.auto_compact_on_stuck {
@@ -24791,6 +24865,31 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /cost-cap [usd|off] — set or clear a hard cost limit
+                                cmd_str if cmd_str == "/cost-cap" || cmd_str.starts_with("/cost-cap ") => {
+                                    let arg = cmd_str.trim_start_matches("/cost-cap").trim();
+                                    let cap = if arg.is_empty() || arg == "off" {
+                                        0.0f64
+                                    } else {
+                                        arg.trim_start_matches('$').parse::<f64>().unwrap_or(0.0)
+                                    };
+                                    if _ctx.send(UiCommand::SetCostCap(cap)).is_err() { break 'outer; }
+                                    if arg.is_empty() {
+                                        if _ctx.send(UiCommand::QueryCostCap).is_err() { break 'outer; }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /token-rate — show token consumption rate and ETA to fill context
+                                "/token-rate" => {
+                                    if _ctx.send(UiCommand::QueryTokenRate).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /on-finish-run <cmd> — auto-run shell cmd after each tool-using turn
                                 cmd_str if cmd_str.starts_with("/on-finish-run ") => {
                                     let cmd = cmd_str.trim_start_matches("/on-finish-run ").trim().to_string();
@@ -25323,6 +25422,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/on-finish-run ",
                             "/on-finish-clear",
                             "/on-finish-show",
+                            "/cost-cap ", "/cost-cap off",
+                            "/token-rate",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

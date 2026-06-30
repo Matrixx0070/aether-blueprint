@@ -230,6 +230,16 @@ pub struct Session {
     /// one tool. The stdout+stderr output is emitted as a SystemNote and
     /// re-injected as a user context message so the agent sees the result.
     pub post_turn_hook: Option<String>,
+
+    /// User-defined command aliases: short name → expansion string.
+    /// When the user types `/<name>`, it is replaced by the expansion before
+    /// the slash-command dispatch loop processes it.
+    pub aliases: std::collections::HashMap<String, String>,
+
+    /// Maximum session cost in USD. When the estimated cumulative cost
+    /// exceeds this value the driver stops the agent and emits a warning.
+    /// 0.0 means no cap.
+    pub cost_cap_usd: f64,
 }
 
 impl Session {
@@ -288,6 +298,8 @@ impl Session {
             auto_status: false,
             task_queue: std::collections::VecDeque::new(),
             post_turn_hook: None,
+            aliases: std::collections::HashMap::new(),
+            cost_cap_usd: 0.0,
         }
     }
 

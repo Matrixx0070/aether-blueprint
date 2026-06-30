@@ -287,6 +287,18 @@ pub enum UiCommand {
     RemovePlaybookEntry(usize),
     /// List all error playbook entries.
     QueryPlaybook,
+    /// Set a hard cost cap in USD (0.0 = off). Agent stops when exceeded.
+    SetCostCap(f64),
+    /// Show current cost cap and cumulative cost.
+    QueryCostCap,
+    /// Show token consumption rate (tokens/sec) and estimated time to fill.
+    QueryTokenRate,
+    /// Define a slash-command alias: (name, expansion).
+    SetAlias(String, String),
+    /// Remove a slash-command alias by name.
+    RemoveAlias(String),
+    /// List all defined aliases.
+    QueryAliases,
     /// Set a shell command to auto-run after each tool-using agent turn.
     SetPostTurnHook(Option<String>),
     /// Show the current post-turn hook command.
