@@ -6564,6 +6564,59 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::QueryTurnDiff(idx_a, idx_b) => {
+                    use aether_core::context::ConversationItem;
+                    let asst_turns: Vec<&str> = session.history.iter()
+                        .filter_map(|item| {
+                            if let ConversationItem::Assistant { text: Some(t), .. } = item {
+                                Some(t.as_str())
+                            } else { None }
+                        })
+                        .collect();
+                    if asst_turns.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn diff: no assistant turns in history yet.".to_string()
+                        ));
+                        continue;
+                    }
+                    let max = asst_turns.len().saturating_sub(1);
+                    if idx_a > max || idx_b > max {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn diff: index out of range (0..{max}). {} assistant turns available.",
+                            asst_turns.len()
+                        )));
+                        continue;
+                    }
+                    let a = asst_turns[idx_a];
+                    let b = asst_turns[idx_b];
+                    if a == b {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn diff [{idx_a} vs {idx_b}]: identical."
+                        )));
+                        continue;
+                    }
+                    let a_lines: std::collections::HashSet<&str> = a.lines().collect();
+                    let b_lines: std::collections::HashSet<&str> = b.lines().collect();
+                    let mut diff = format!("=== Turn diff: [{idx_a}] → [{idx_b}] ===\n");
+                    let mut changes = 0usize;
+                    for line in a.lines() {
+                        if !b_lines.contains(line) {
+                            let preview: String = line.chars().take(100).collect();
+                            diff.push_str(&format!("  - {preview}\n"));
+                            changes += 1;
+                        }
+                    }
+                    for line in b.lines() {
+                        if !a_lines.contains(line) {
+                            let preview: String = line.chars().take(100).collect();
+                            diff.push_str(&format!("  + {preview}\n"));
+                            changes += 1;
+                        }
+                    }
+                    diff.push_str(&format!("  ── {changes} line(s) differ"));
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(diff));
+                    continue;
+                }
                 UiCommand::QueryWordCount => {
                     use aether_core::context::ConversationItem;
                     let mut user_words = 0usize;
@@ -26723,6 +26776,28 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /turn-diff <n> <m> — line-diff between two assistant turns
+                                cmd_str if cmd_str.starts_with("/turn-diff ") => {
+                                    let arg = cmd_str.trim_start_matches("/turn-diff ").trim();
+                                    let parts: Vec<&str> = arg.split_whitespace().collect();
+                                    if parts.len() >= 2 {
+                                        if let (Ok(a), Ok(b)) = (parts[0].parse::<usize>(), parts[1].parse::<usize>()) {
+                                            if _ctx.send(UiCommand::QueryTurnDiff(a, b)).is_err() { break 'outer; }
+                                        } else {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                "Usage: /turn-diff <n> <m>  (0-based assistant turn indices)".to_string()
+                                            ));
+                                        }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /turn-diff <n> <m>  (0-based assistant turn indices)".to_string()
+                                        ));
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /word-count — total words in conversation by role
                                 "/word-count" => {
                                     if _ctx.send(UiCommand::QueryWordCount).is_err() { break 'outer; }
@@ -27706,6 +27781,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/word-count",
                             "/char-count",
                             "/session-volume",
+                            "/turn-diff ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

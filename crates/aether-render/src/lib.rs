@@ -409,6 +409,8 @@ pub enum UiCommand {
     ReplayLast,
     /// List past user messages with their indices.
     QueryReplayList,
+    /// Show a line-diff between two assistant turns by 0-based index.
+    QueryTurnDiff(usize, usize),
     /// Show total word count in conversation history by role.
     QueryWordCount,
     /// Show total character count in conversation history by role.
