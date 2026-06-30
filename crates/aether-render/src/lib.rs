@@ -269,6 +269,14 @@ pub enum UiCommand {
     SetDedupToolCalls(bool),
     /// Enable or disable auto-thinking when the agent is stuck.
     SetAutoThinkOnStuck(bool),
+    /// Save current history+plan under a named in-memory snapshot.
+    SaveSnapshot(String),
+    /// Restore history+plan from a named in-memory snapshot.
+    LoadSnapshot(String),
+    /// List all saved in-memory snapshots.
+    ListSnapshots,
+    /// Delete all in-memory snapshots.
+    ClearSnapshots,
     /// Add an item to the in-session progress tracker.
     AddProgressItem(String),
     /// Mark a progress item (by 0-based index) as done.

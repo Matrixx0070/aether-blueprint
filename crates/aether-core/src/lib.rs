@@ -199,6 +199,10 @@ pub struct Session {
     /// When true, automatically raise thinking budget to 8 192 tokens when
     /// the agent is detected as stuck (consecutive tool errors ≥ threshold).
     pub auto_think_on_stuck: bool,
+
+    /// In-memory named snapshots of (history, plan). Allows branching and
+    /// backtracking without writing files or touching git.
+    pub saved_snapshots: std::collections::HashMap<String, (Vec<context::ConversationItem>, planner::Plan)>,
 }
 
 impl Session {
@@ -250,6 +254,7 @@ impl Session {
             dedup_tool_calls: false,
             last_tool_signatures: Vec::new(),
             auto_think_on_stuck: false,
+            saved_snapshots: std::collections::HashMap::new(),
         }
     }
 

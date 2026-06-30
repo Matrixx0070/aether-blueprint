@@ -6320,6 +6320,55 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::SaveSnapshot(name) => {
+                    let snap_name = if name.is_empty() {
+                        format!("snap-{}", session.saved_snapshots.len() + 1)
+                    } else {
+                        name.clone()
+                    };
+                    let hist = session.history.clone();
+                    let plan = session.plan.clone();
+                    let hist_len = hist.len();
+                    session.saved_snapshots.insert(snap_name.clone(), (hist, plan));
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Snapshot '{snap_name}' saved ({hist_len} history items). \
+                         Use /snap-load {snap_name} to restore."
+                    )));
+                    continue;
+                }
+                UiCommand::LoadSnapshot(name) => {
+                    let note = match session.saved_snapshots.get(&name) {
+                        None => format!("No snapshot named '{name}'. Use /snap-list to see all."),
+                        Some((hist, plan)) => {
+                            let hist_len = hist.len();
+                            session.history = hist.clone();
+                            session.plan = plan.clone();
+                            format!("Restored snapshot '{name}' ({hist_len} history items). \
+                                     Session state rolled back.")
+                        }
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::ListSnapshots => {
+                    let note = if session.saved_snapshots.is_empty() {
+                        "No snapshots. Use /snap-save [name] to create one.".to_string()
+                    } else {
+                        let mut lines: Vec<String> = session.saved_snapshots.iter()
+                            .map(|(name, (hist, _))| format!("  {name}: {} history items", hist.len()))
+                            .collect();
+                        lines.sort();
+                        format!("=== {} snapshot(s) ===\n{}", lines.len(), lines.join("\n"))
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::ClearSnapshots => {
+                    let n = session.saved_snapshots.len();
+                    session.saved_snapshots.clear();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Cleared {n} snapshot(s).")));
+                    continue;
+                }
                 UiCommand::SetDedupToolCalls(enabled) => {
                     session.dedup_tool_calls = enabled;
                     let note = if enabled {
@@ -24038,6 +24087,40 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /snap-save [name] — save in-memory session snapshot
+                                cmd_str if cmd_str == "/snap-save" || cmd_str.starts_with("/snap-save ") => {
+                                    let name = cmd_str.trim_start_matches("/snap-save").trim().to_string();
+                                    if _ctx.send(UiCommand::SaveSnapshot(name)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /snap-load <name> — restore session from named snapshot
+                                cmd_str if cmd_str.starts_with("/snap-load ") => {
+                                    let name = cmd_str.trim_start_matches("/snap-load ").trim().to_string();
+                                    if _ctx.send(UiCommand::LoadSnapshot(name)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /snap-list — list all in-memory snapshots
+                                "/snap-list" => {
+                                    if _ctx.send(UiCommand::ListSnapshots).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /snap-clear — delete all in-memory snapshots
+                                "/snap-clear" => {
+                                    if _ctx.send(UiCommand::ClearSnapshots).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /dedup-tools on|off — warn on consecutive duplicate tool calls
                                 cmd_str if cmd_str == "/dedup-tools" || cmd_str.starts_with("/dedup-tools ") => {
                                     let arg = cmd_str.trim_start_matches("/dedup-tools").trim();
@@ -24746,6 +24829,10 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-output-limits",
                             "/dedup-tools", "/dedup-tools on", "/dedup-tools off",
                             "/auto-think-stuck", "/auto-think-stuck on", "/auto-think-stuck off",
+                            "/snap-save", "/snap-save ",
+                            "/snap-load ",
+                            "/snap-list",
+                            "/snap-clear",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
