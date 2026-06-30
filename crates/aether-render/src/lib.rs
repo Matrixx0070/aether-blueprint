@@ -659,6 +659,12 @@ pub enum UiCommand {
     QueryCostPerTool,
     /// List all User turns in history with their index and a text preview.
     QueryUserTurnList,
+    /// Extract all JSON code blocks from assistant responses in history.
+    QueryExtractJson,
+    /// Detailed efficiency report: tokens/dollar, cost/hr, turns/hr, avg tools/turn.
+    QueryEfficiencyReport,
+    /// Show tool-calls-per-turn as a mini histogram.
+    QueryToolCallDensity,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

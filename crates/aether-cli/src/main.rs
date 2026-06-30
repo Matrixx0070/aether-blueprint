@@ -6778,6 +6778,82 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryExtractJson => {
+                    let mut found: Vec<(usize, String)> = Vec::new();
+                    for (idx, item) in session.history.iter().enumerate() {
+                        if let ConversationItem::Assistant { text: Some(t), .. } = item {
+                            let mut rest = t.as_str();
+                            while let Some(start) = rest.find("```json") {
+                                let after = &rest[start + 7..];
+                                if let Some(end) = after.find("```") {
+                                    let block = after[..end].trim().to_string();
+                                    found.push((idx, block));
+                                    rest = &after[end + 3..];
+                                } else { break; }
+                            }
+                        }
+                    }
+                    if found.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No JSON code blocks found in history.".to_string()));
+                    } else {
+                        let mut msg = format!("JSON blocks extracted ({} found):\n", found.len());
+                        for (idx, block) in &found {
+                            let preview: String = block.chars().take(120).collect();
+                            msg.push_str(&format!("--- [hist:{idx}] ---\n{preview}\n"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
+                UiCommand::QueryEfficiencyReport => {
+                    let turns = session.turn_cost_log.len();
+                    let total_cost: f64 = session.turn_cost_log.iter().map(|&(_, _, _, c)| c).sum();
+                    let total_in: u64 = session.turn_cost_log.iter().map(|&(_, tin, _, _)| tin as u64).sum();
+                    let total_out: u64 = session.turn_cost_log.iter().map(|&(_, _, tout, _)| tout as u64).sum();
+                    let total_wall_ms: u64 = session.turn_wall_ms.iter().sum();
+                    let elapsed_hrs = total_wall_ms as f64 / 3_600_000.0;
+                    let total_calls: usize = session.plan.tool_call_stats.values().map(|(ok, err)| ok + err).sum();
+                    let avg_tools_per_turn = if turns > 0 { total_calls as f64 / turns as f64 } else { 0.0 };
+                    let tokens_per_dollar = if total_cost > 0.0 { (total_in + total_out) as f64 / total_cost } else { 0.0 };
+                    let cost_per_hr = if elapsed_hrs > 0.0 { total_cost / elapsed_hrs } else { 0.0 };
+                    let turns_per_hr = if elapsed_hrs > 0.0 { turns as f64 / elapsed_hrs } else { 0.0 };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session efficiency report:\n  Turns:            {turns}\n  Total cost:       ${total_cost:.6}\n  Tokens in:        {total_in}\n  Tokens out:       {total_out}\n  Wall time:        {total_wall_ms}ms\n  Tokens/$:         {tokens_per_dollar:.0}\n  Cost/hr:          ${cost_per_hr:.4}\n  Turns/hr:         {turns_per_hr:.1}\n  Avg tools/turn:   {avg_tools_per_turn:.2}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryToolCallDensity => {
+                    if session.history.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No history yet.".to_string()));
+                    } else {
+                        let mut turn = 0usize;
+                        let mut per_turn: Vec<usize> = Vec::new();
+                        for item in &session.history {
+                            match item {
+                                ConversationItem::User(_) => {
+                                    turn += 1;
+                                    per_turn.push(0);
+                                }
+                                ConversationItem::Assistant { tool_uses, .. } => {
+                                    if let Some(last) = per_turn.last_mut() {
+                                        *last += tool_uses.len();
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        let max_calls = per_turn.iter().copied().max().unwrap_or(1).max(1);
+                        let bar_w = 20usize;
+                        let mut msg = format!("Tool call density ({} turns):\n", per_turn.len());
+                        for (i, &calls) in per_turn.iter().enumerate() {
+                            let bar_len = calls * bar_w / max_calls;
+                            let bar: String = "#".repeat(bar_len);
+                            msg.push_str(&format!("  Turn {:>3}: {:>2} {}\n", i + 1, calls, bar));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
                 UiCommand::QueryFindErrors => {
                     let mut errors: Vec<String> = Vec::new();
                     let mut hist_idx = 0usize;
@@ -29683,6 +29759,30 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /history-extract-json — pull JSON code blocks from responses
+                                "/history-extract-json" => {
+                                    if _ctx.send(UiCommand::QueryExtractJson).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-efficiency-report — detailed efficiency metrics
+                                "/session-efficiency-report" => {
+                                    if _ctx.send(UiCommand::QueryEfficiencyReport).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tool-call-density — tool calls per turn histogram
+                                "/tool-call-density" => {
+                                    if _ctx.send(UiCommand::QueryToolCallDensity).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /find-errors — scan ToolResults for is_error=true entries
                                 "/find-errors" => {
                                     if _ctx.send(UiCommand::QueryFindErrors).is_err() { break 'outer; }
@@ -30442,6 +30542,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/find-errors",
                             "/cost-per-tool",
                             "/user-turns",
+                            "/history-extract-json",
+                            "/session-efficiency-report",
+                            "/tool-call-density",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
