@@ -2065,6 +2065,9 @@ fn handle_slash(
             eprintln!("\nslash commands:");
             eprintln!("  /help               show this help");
             eprintln!("  /add <file>         inject a file's contents into context");
+            eprintln!("  /grep <pat> [path]  grep source files from the REPL");
+            eprintln!("  /diff [file]        show git diff HEAD in colored output");
+            eprintln!("  /git <cmd>          run read-only git commands (status/log/…)");
             eprintln!("  /clear              wipe in-memory conversation");
             eprintln!("  /compact            manually compact the context window now");
             eprintln!("  /model [NAME]       show or change the active model");
@@ -2232,6 +2235,111 @@ fn handle_slash(
             }
             eprintln!("  total:      {total}");
             eprintln!("  est cost:   ${cost:.4}");
+            SlashAction::Continue
+        }
+        // /grep <pattern> [path] — quick project search from the REPL.
+        "grep" => {
+            if args.is_empty() {
+                eprintln!("[usage] /grep <pattern> [path]");
+                return SlashAction::Continue;
+            }
+            let mut parts = args.splitn(2, char::is_whitespace);
+            let pattern = parts.next().unwrap_or("");
+            let search_path = parts.next().unwrap_or(".").trim();
+            let out = std::process::Command::new("grep")
+                .args(["-r", "-n", "--include=*.rs", "--include=*.ts",
+                       "--include=*.py", "--include=*.js", "--include=*.go",
+                       "-m", "40", pattern, search_path])
+                .output();
+            match out {
+                Err(e) => eprintln!("[grep] error: {e}"),
+                Ok(o) => {
+                    let stdout = std::str::from_utf8(&o.stdout).unwrap_or("").trim();
+                    let stderr = std::str::from_utf8(&o.stderr).unwrap_or("").trim();
+                    if stdout.is_empty() {
+                        eprintln!("[grep] no matches for '{pattern}' in {search_path}");
+                    } else {
+                        for line in stdout.lines().take(40) {
+                            eprintln!("{line}");
+                        }
+                        let count = stdout.lines().count();
+                        if count == 40 {
+                            eprintln!("[grep] (showing first 40 matches — use agent for full results)");
+                        }
+                    }
+                    if !stderr.is_empty() {
+                        eprintln!("[grep stderr] {stderr}");
+                    }
+                }
+            }
+            SlashAction::Continue
+        }
+        // /diff [file] — show git diff (staged + unstaged) in the REPL.
+        "diff" => {
+            let git_args: Vec<&str> = if args.is_empty() {
+                vec!["diff", "HEAD"]
+            } else {
+                vec!["diff", "HEAD", "--", args]
+            };
+            let out = std::process::Command::new("git").args(&git_args).output();
+            match out {
+                Err(e) => eprintln!("[diff] git not found: {e}"),
+                Ok(o) => {
+                    let text = std::str::from_utf8(&o.stdout).unwrap_or("").trim();
+                    if text.is_empty() {
+                        eprintln!("[diff] no changes since HEAD");
+                    } else {
+                        let color = use_color();
+                        for line in text.lines().take(200) {
+                            if color {
+                                if line.starts_with('+') && !line.starts_with("+++") {
+                                    eprintln!("\x1b[32m{line}\x1b[0m");
+                                } else if line.starts_with('-') && !line.starts_with("---") {
+                                    eprintln!("\x1b[31m{line}\x1b[0m");
+                                } else if line.starts_with("@@") {
+                                    eprintln!("\x1b[36m{line}\x1b[0m");
+                                } else {
+                                    eprintln!("{line}");
+                                }
+                            } else {
+                                eprintln!("{line}");
+                            }
+                        }
+                        if text.lines().count() > 200 {
+                            eprintln!("[diff] (truncated at 200 lines)");
+                        }
+                    }
+                }
+            }
+            SlashAction::Continue
+        }
+        // /git <args> — run a git command and show output.
+        "git" => {
+            if args.is_empty() {
+                eprintln!("[usage] /git <subcommand> [args...]");
+                return SlashAction::Continue;
+            }
+            let git_parts: Vec<&str> = args.split_whitespace().collect();
+            let safe_subcmds = ["status", "log", "branch", "stash", "show",
+                                 "diff", "ls-files", "remote", "tag", "shortlog"];
+            let sub = git_parts.first().copied().unwrap_or("");
+            if !safe_subcmds.contains(&sub) {
+                eprintln!("[git] /git only allows read-only subcommands: {}", safe_subcmds.join(", "));
+                return SlashAction::Continue;
+            }
+            let out = std::process::Command::new("git").args(&git_parts).output();
+            match out {
+                Err(e) => eprintln!("[git] error: {e}"),
+                Ok(o) => {
+                    let text = std::str::from_utf8(&o.stdout).unwrap_or("").trim();
+                    let err = std::str::from_utf8(&o.stderr).unwrap_or("").trim();
+                    if !text.is_empty() {
+                        for line in text.lines().take(80) { eprintln!("{line}"); }
+                        if text.lines().count() > 80 { eprintln!("[git] (truncated at 80 lines)"); }
+                    }
+                    if !err.is_empty() { eprintln!("{err}"); }
+                }
+            }
             SlashAction::Continue
         }
         "compact" => SlashAction::Compact,
