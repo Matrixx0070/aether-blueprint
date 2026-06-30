@@ -641,6 +641,12 @@ pub enum UiCommand {
     QueryMultiSearch(String),
     /// Show a chronological log of all tool calls grouped by turn index.
     QueryToolTimeline,
+    /// Find-and-replace text in the last User history item (old, new).
+    HistoryGrepReplace(String, String),
+    /// Show what a named alias expands to, or note if it doesn't exist.
+    QueryAliasExpand(String),
+    /// Analyse gaps between turns: show per-turn wall-time deltas and flag long pauses.
+    QueryTurnGapAnalysis,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

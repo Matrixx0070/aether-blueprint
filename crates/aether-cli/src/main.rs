@@ -6778,6 +6778,50 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::HistoryGrepReplace(old, new) => {
+                    let mut replaced = false;
+                    for item in session.history.iter_mut().rev() {
+                        if let ConversationItem::User(ref mut t) = item {
+                            if t.contains(&old) {
+                                *t = t.replace(&old, &new);
+                                replaced = true;
+                            }
+                            break;
+                        }
+                    }
+                    let note = if replaced {
+                        format!("Last user message: replaced {:?} with {:?}.", old, new)
+                    } else {
+                        format!("Pattern {:?} not found in last user message.", old)
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryAliasExpand(_) => {
+                    // Aliases live in the TUI layer — handled by TUI arm; driver is a no-op.
+                    continue;
+                }
+                UiCommand::QueryTurnGapAnalysis => {
+                    if session.turn_wall_ms.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No turn timing data yet.".to_string()));
+                    } else {
+                        let mut msg = format!("Turn gap analysis  ({} turns)\n", session.turn_wall_ms.len());
+                        msg.push_str("  Turn  Wall(ms)  Gap(ms)  Flag\n");
+                        let mut prev_end: u64 = 0;
+                        for (i, &w) in session.turn_wall_ms.iter().enumerate() {
+                            let gap = if i == 0 { 0u64 } else { prev_end };
+                            let flag = if w > 10_000 { " ← slow" } else { "" };
+                            msg.push_str(&format!("  {:>4}  {:>8}  {:>7}{}\n", i, w, gap, flag));
+                            prev_end = w;
+                        }
+                        let total: u64 = session.turn_wall_ms.iter().sum();
+                        let max = session.turn_wall_ms.iter().copied().max().unwrap_or(0);
+                        msg.push_str(&format!("  Total: {}ms  Max: {}ms  Avg: {}ms",
+                            total, max, total / session.turn_wall_ms.len().max(1) as u64));
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
                 UiCommand::ResetSessionMetrics => {
                     let n = session.turn_cost_log.len();
                     session.turn_cost_log.clear();
@@ -29515,6 +29559,46 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /history-grep-replace <old>|<new> — replace text in last user message
+                                cmd_str if cmd_str.starts_with("/history-grep-replace ") => {
+                                    let rest = cmd_str.trim_start_matches("/history-grep-replace ").trim();
+                                    if let Some(pipe) = rest.find('|') {
+                                        let old = rest[..pipe].to_string();
+                                        let new = rest[pipe + 1..].to_string();
+                                        if _ctx.send(UiCommand::HistoryGrepReplace(old, new)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /history-grep-replace <old>|<new>".to_string()));
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /alias-expand <name> — show what an alias expands to (TUI-layer only)
+                                cmd_str if cmd_str.starts_with("/alias-expand ") => {
+                                    let name = cmd_str.trim_start_matches("/alias-expand ").trim().to_string();
+                                    if name.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /alias-expand <alias-name>".to_string()));
+                                    } else {
+                                        let note = match ui.aliases.iter().find(|(k, _)| k == &name) {
+                                            Some((_, v)) => format!("Alias '{}' → {}", name, v),
+                                            None => format!("No alias named '{}'. Use /alias to list all defined aliases.", name),
+                                        };
+                                        ui.chat_lines.push(ChatLine::SystemNote(note));
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /turn-gap-analysis — show wall-time gaps between turns
+                                "/turn-gap-analysis" => {
+                                    if _ctx.send(UiCommand::QueryTurnGapAnalysis).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /session-reset-metrics — clear cost/timing/model metrics without clearing history
                                 "/session-reset-metrics" => {
                                     if _ctx.send(UiCommand::ResetSessionMetrics).is_err() { break 'outer; }
@@ -30170,6 +30254,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-reset-metrics",
                             "/multi-search ",
                             "/tool-timeline",
+                            "/history-grep-replace ",
+                            "/alias-expand ",
+                            "/turn-gap-analysis",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
