@@ -5284,7 +5284,13 @@ Performance & ops\n\
   /net-stat               network interfaces + listening sockets (ss/netstat/ip)\n\
   /ai-optimize <file>     AI spots algorithmic/memory/I/O/concurrency hotspots\n\
   /perf-diff <c1> | <c2>  benchmark two shell commands, show ms + ratio winner\n\
-  /bundle-size [dir]      du -sh on node_modules/target/.venv/build/dist/etc"),
+  /bundle-size [dir]      du -sh on node_modules/target/.venv/build/dist/etc\n\
+AI review suite\n\
+  /ai-security <file>     OWASP/CWE audit: injection, auth, crypto, data exposure\n\
+  /git-log-file <path>    commit history for a specific file (git log --follow)\n\
+  /ai-pr [base]           AI writes PR description from diff vs base (default main)\n\
+  /changelog-ai [range]   AI groups commits into Features/Fixes/Security changelog\n\
+  /ai-code-review <file>  senior-level code review: critical/style/tests/positives"),
                                         ("keys", &["keys", "keyboard", "shortcuts", "bindings"], "\
 Input shortcuts\n\
   ↑ ↓  / Ctrl+R           history recall / reverse-i-search\n\
@@ -5405,6 +5411,7 @@ Input shortcuts\n\
     ◈ /git-cherry /git-remote /tail /cheat /ai-explain           B110 tools\n\
     ◈ /pwd /git-show /ai-bugs /codebase-summary /run-test        B111 tools\n\
     ◈ /git-conflicts /net-stat /ai-optimize /perf-diff /bundle-size  B112\n\
+    ◈ /ai-security /git-log-file /ai-pr /changelog-ai /ai-code-review  B113\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -14119,6 +14126,154 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /ai-security <file> — AI security audit for OWASP + CWE issues
+                                cmd if cmd.starts_with("/ai-security ") || cmd == "/ai-security" => {
+                                    let file_arg = cmd.trim_start_matches("/ai-security").trim();
+                                    if file_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /ai-security <file>\n  AI audits code for security vulnerabilities (OWASP, CWE).".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    match std::fs::read_to_string(file_arg) {
+                                        Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("ai-security: cannot read '{}': {}", file_arg, e))); ui.follow_tail = true; continue; }
+                                        Ok(content) => {
+                                            let snippet: String = content.lines().take(300).collect::<Vec<_>>().join("\n");
+                                            let ext = std::path::Path::new(file_arg).extension().and_then(|e| e.to_str()).unwrap_or("");
+                                            let prompt = format!(
+                                                "You are a security expert. Audit this {} file for security vulnerabilities. For each finding report:\n- CWE ID and OWASP category\n- Line numbers affected\n- Severity: CRITICAL/HIGH/MEDIUM/LOW\n- Attack vector description\n- Remediation with specific code fix\n\nFocus on: injection, authentication, authorization, cryptography, data exposure, XXE, broken access control, security misconfig, insecure deserialization.\n\nFile: {}\n```{}\n{}\n```",
+                                                ext, file_arg, ext, snippet
+                                            );
+                                            let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                            ui.chat_lines.push(ChatLine::User(prompt.clone(), ts));
+                                            ui.follow_tail = true;
+                                            ui.status_running = true;
+                                            ui.waiting_since = Some(std::time::Instant::now());
+                                            ui.msg_times_secs.push(ts);
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                        }
+                                    }
+                                    continue;
+                                }
+                                // /git-log-file <file> — commit history for a specific file
+                                cmd if cmd.starts_with("/git-log-file ") || cmd == "/git-log-file" => {
+                                    let file_arg = cmd.trim_start_matches("/git-log-file").trim();
+                                    if file_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /git-log-file <path>\n  Shows commit history for a specific file.".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let out = std::process::Command::new("git")
+                                        .args(["log", "--follow", "--oneline", "--stat", "-20", "--", file_arg])
+                                        .output();
+                                    let body = match out {
+                                        Ok(o) if o.status.success() => {
+                                            let raw = String::from_utf8_lossy(&o.stdout).to_string();
+                                            if raw.trim().is_empty() {
+                                                format!("git-log-file: no commits found for '{}'", file_arg)
+                                            } else {
+                                                format!("git-log-file: {}\n{}", file_arg, raw.trim())
+                                            }
+                                        }
+                                        Ok(o) => format!("git-log-file: {}", String::from_utf8_lossy(&o.stderr).trim()),
+                                        Err(_) => "git not found".to_string(),
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-pr — AI pull request description from current diff
+                                cmd if cmd == "/ai-pr" || cmd.starts_with("/ai-pr ") => {
+                                    let base = cmd.trim_start_matches("/ai-pr").trim();
+                                    let base_branch = if base.is_empty() { "main" } else { base };
+                                    // Get the diff
+                                    let diff_out = std::process::Command::new("git")
+                                        .args(["diff", base_branch, "HEAD", "--stat"])
+                                        .output();
+                                    let log_range = format!("{}..HEAD", base_branch);
+                                    let log_out = std::process::Command::new("git")
+                                        .args(["log", &log_range, "--oneline"])
+                                        .output();
+                                    let diff_stat = diff_out.ok().filter(|o| o.status.success())
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                                        .unwrap_or_else(|| "(diff unavailable)".to_string());
+                                    let commits = log_out.ok().filter(|o| o.status.success())
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                                        .unwrap_or_else(|| "(log unavailable)".to_string());
+                                    let prompt = format!(
+                                        "Write a professional pull request description for these changes from {} to HEAD.\n\nCommits:\n{}\n\nDiff stats:\n{}\n\nFormat:\n## Summary\n- bullet points of what changed\n\n## Why\n- motivation\n\n## Test Plan\n- how to test\n\n## Breaking Changes\n- any breaking changes or 'none'",
+                                        base_branch, commits, diff_stat
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts));
+                                    ui.follow_tail = true;
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.msg_times_secs.push(ts);
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                // /changelog-ai [range] — AI-generated changelog from git log
+                                cmd if cmd == "/changelog-ai" || cmd.starts_with("/changelog-ai ") => {
+                                    let range = cmd.trim_start_matches("/changelog-ai").trim();
+                                    let git_range = if range.is_empty() { "HEAD~20..HEAD".to_string() } else { range.to_string() };
+                                    let out = std::process::Command::new("git")
+                                        .args(["log", &git_range, "--oneline", "--no-merges"])
+                                        .output();
+                                    let body = match out {
+                                        Ok(o) if o.status.success() => {
+                                            let commits = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                                            if commits.is_empty() {
+                                                format!("changelog-ai: no commits in range '{}'", git_range)
+                                            } else {
+                                                let prompt = format!(
+                                                    "Generate a user-facing changelog from these git commits. Group into sections: Features, Bug Fixes, Performance, Security, Breaking Changes, Other. Use present tense. Skip trivial changes.\n\nCommits:\n{}\n\nFormat each entry as:\n- Brief user-facing description (module/area if relevant)\n\nOutput only the changelog, no preamble.",
+                                                    commits
+                                                );
+                                                let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                                ui.chat_lines.push(ChatLine::User(prompt.clone(), ts));
+                                                ui.follow_tail = true;
+                                                ui.status_running = true;
+                                                ui.waiting_since = Some(std::time::Instant::now());
+                                                ui.msg_times_secs.push(ts);
+                                                if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                                continue;
+                                            }
+                                        }
+                                        Ok(o) => format!("changelog-ai: {}", String::from_utf8_lossy(&o.stderr).trim()),
+                                        Err(_) => "git not found".to_string(),
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-code-review <file> — deep AI code review with actionable suggestions
+                                cmd if cmd.starts_with("/ai-code-review ") || cmd == "/ai-code-review" => {
+                                    let file_arg = cmd.trim_start_matches("/ai-code-review").trim();
+                                    if file_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /ai-code-review <file>\n  AI performs comprehensive code review.".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    match std::fs::read_to_string(file_arg) {
+                                        Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("ai-code-review: cannot read '{}': {}", file_arg, e))); ui.follow_tail = true; continue; }
+                                        Ok(content) => {
+                                            let snippet: String = content.lines().take(300).collect::<Vec<_>>().join("\n");
+                                            let ext = std::path::Path::new(file_arg).extension().and_then(|e| e.to_str()).unwrap_or("");
+                                            let prompt = format!(
+                                                "Perform a senior-level code review of this {} file. Structure your review:\n\n## Critical Issues (must fix before merge)\n## Important Improvements (should fix)\n## Style & Readability\n## Test Coverage Gaps\n## Positive Observations\n\nFor each issue: line number, problem, specific fix with code example. Be direct and actionable.\n\nFile: {}\n```{}\n{}\n```",
+                                                ext, file_arg, ext, snippet
+                                            );
+                                            let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                            ui.chat_lines.push(ChatLine::User(prompt.clone(), ts));
+                                            ui.follow_tail = true;
+                                            ui.status_running = true;
+                                            ui.waiting_since = Some(std::time::Instant::now());
+                                            ui.msg_times_secs.push(ts);
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                        }
+                                    }
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -14757,7 +14912,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/cve ", "/dotenv", "/dotenv ", "/calc ", "/chars", "/chars ", "/ai-arch", "/ai-arch ", "/ai-explain ", "/cheat ", "/color ", "/duck ", "/env-diff ", "/env-vars", "/env-vars ", "/flashcard ", "/format-sql ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/gh-search ", "/http-codes", "/http-codes ", "/impl ", "/json-schema ", "/man-ai ", "/mkscript ", "/open ", "/path", "/ai-bugs ", "/ai-optimize ", "/bundle-size", "/bundle-size ", "/codebase-summary", "/git-cherry", "/git-cherry ", "/git-conflicts", "/git-remote", "/git-remote ", "/git-show ", "/net-stat", "/perf-diff ", "/pwd", "/regex-test ", "/run-test ", "/ssh-key", "/ssh-key ", "/tail ", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/semver ", "/session-summary", "/spell ", "/teach ", "/time", "/time ", "/which-all ", "/wiki ", "/workflow", "/workflow ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
+                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/cve ", "/dotenv", "/dotenv ", "/calc ", "/chars", "/chars ", "/ai-arch", "/ai-arch ", "/ai-explain ", "/cheat ", "/color ", "/duck ", "/env-diff ", "/env-vars", "/env-vars ", "/flashcard ", "/format-sql ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/gh-search ", "/http-codes", "/http-codes ", "/impl ", "/json-schema ", "/man-ai ", "/mkscript ", "/open ", "/path", "/ai-bugs ", "/ai-code-review ", "/ai-optimize ", "/ai-pr", "/ai-pr ", "/ai-security ", "/bundle-size", "/bundle-size ", "/changelog-ai", "/changelog-ai ", "/codebase-summary", "/git-cherry", "/git-cherry ", "/git-conflicts", "/git-log-file ", "/git-remote", "/git-remote ", "/git-show ", "/net-stat", "/perf-diff ", "/pwd", "/regex-test ", "/run-test ", "/ssh-key", "/ssh-key ", "/tail ", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/semver ", "/session-summary", "/spell ", "/teach ", "/time", "/time ", "/which-all ", "/wiki ", "/workflow", "/workflow ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
