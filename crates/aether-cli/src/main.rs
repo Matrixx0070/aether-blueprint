@@ -5248,7 +5248,13 @@ Data processing\n\
   /yaml <file>            pretty-print + validate YAML (serde_yaml)\n\
   /jq <expr> [file]       run jq expression on JSON; graceful no-jq error\n\
   /csv <file> [rows]      display CSV as aligned table (up to 200 rows)\n\
-  /xml <file>             pretty-print XML via xmllint or raw fallback"),
+  /xml <file>             pretty-print XML via xmllint or raw fallback\n\
+Utilities\n\
+  /semver <v1> [v2]       parse or compare semantic versions (major/minor/patch)\n\
+  /calc <expr>            math via bc: sqrt(), e^x, ^, /, arbitrary precision\n\
+  /chars [file]           char/word/line/byte count; no arg = last AI response\n\
+  /open <path|url>        open in system default app (xdg-open / open / start)\n\
+  /spell [text]           spell-check via aspell/hunspell; no arg = last message"),
                                         ("keys", &["keys", "keyboard", "shortcuts", "bindings"], "\
 Input shortcuts\n\
   ↑ ↓  / Ctrl+R           history recall / reverse-i-search\n\
@@ -5363,6 +5369,7 @@ Input shortcuts\n\
     ◈ /session-summary /ai-plan /workflow /prompt-engineer /ai-debug  AI session tools\n\
     ◈ /env-vars /dotenv /config-lint /path /which-all             env + config mgmt\n\
     ◈ /duck /wiki /cve /gh-search                                web search + research\n\
+    ◈ /semver /calc /chars /open /spell                          utilities B107\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -12989,6 +12996,183 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /semver — parse and compare semantic versions
+                                cmd if cmd.starts_with("/semver ") || cmd == "/semver" => {
+                                    let args_raw = cmd.trim_start_matches("/semver").trim();
+                                    fn parse_semver_triple(s: &str) -> Option<(u64, u64, u64)> {
+                                        let s = s.trim().trim_start_matches('v');
+                                        let core = if let Some(p) = s.find(['-', '+']) { &s[..p] } else { s };
+                                        let mut p = core.splitn(3, '.');
+                                        let maj: u64 = p.next()?.parse().ok()?;
+                                        let min: u64 = p.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+                                        let pat: u64 = p.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+                                        Some((maj, min, pat))
+                                    }
+                                    let tokens: Vec<&str> = args_raw.split_whitespace().collect();
+                                    let body = if tokens.len() >= 2 {
+                                        let a = tokens[0]; let b = tokens[tokens.len() - 1];
+                                        match (parse_semver_triple(a), parse_semver_triple(b)) {
+                                            (Some(va), Some(vb)) => {
+                                                let sym = match va.cmp(&vb) {
+                                                    std::cmp::Ordering::Less    => "<  (older)",
+                                                    std::cmp::Ordering::Equal   => "=  (same)",
+                                                    std::cmp::Ordering::Greater => ">  (newer)",
+                                                };
+                                                format!("semver compare\n  {a}  {sym}  {b}\n  {a} = {}.{}.{}\n  {b} = {}.{}.{}", va.0, va.1, va.2, vb.0, vb.1, vb.2)
+                                            }
+                                            _ => format!("semver: could not parse '{}' or '{}'", a, b),
+                                        }
+                                    } else if tokens.len() == 1 && !tokens[0].is_empty() {
+                                        match parse_semver_triple(tokens[0]) {
+                                            Some((maj, min, pat)) => format!("semver: {} → major={} minor={} patch={}", tokens[0], maj, min, pat),
+                                            None => format!("semver: could not parse '{}'", tokens[0]),
+                                        }
+                                    } else {
+                                        "Usage:\n  /semver <version>          parse a version\n  /semver <v1> <v2>          compare two versions".to_string()
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /calc — evaluate a math expression via bc
+                                cmd if cmd.starts_with("/calc ") || cmd == "/calc" => {
+                                    let expr = cmd.trim_start_matches("/calc").trim();
+                                    if expr.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /calc <expression>\n  Examples: /calc 2^32   /calc sqrt(2)   /calc 1024*1024*1024/1000000".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let bc_input = format!("scale=10; {}\n", expr);
+                                    let out = std::process::Command::new("bc")
+                                        .arg("-l")
+                                        .stdin(std::process::Stdio::piped())
+                                        .stdout(std::process::Stdio::piped())
+                                        .stderr(std::process::Stdio::piped())
+                                        .spawn();
+                                    let body = match out {
+                                        Ok(mut child) => {
+                                            use std::io::Write as _;
+                                            if let Some(si) = child.stdin.as_mut() { let _ = si.write_all(bc_input.as_bytes()); }
+                                            match child.wait_with_output() {
+                                                Ok(o) if o.status.success() => {
+                                                    let raw = String::from_utf8_lossy(&o.stdout);
+                                                    let result = raw.trim().trim_end_matches('0').trim_end_matches('.');
+                                                    format!("calc: {} = {}", expr, result)
+                                                }
+                                                Ok(o) => format!("calc error: {}", String::from_utf8_lossy(&o.stderr).trim()),
+                                                Err(e) => format!("calc error: {}", e),
+                                            }
+                                        }
+                                        Err(_) => "bc not found — install: sudo apt install bc".to_string(),
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /open — open path/URL in system default application
+                                cmd if cmd.starts_with("/open ") || cmd == "/open" => {
+                                    let target = cmd.trim_start_matches("/open").trim();
+                                    if target.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /open <path|url|.>\n  Opens in system default app (xdg-open / open).".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let openers = ["xdg-open", "open", "start"];
+                                    let mut launched = false;
+                                    for opener in &openers {
+                                        match std::process::Command::new(opener).arg(target).spawn() {
+                                            Ok(_) => {
+                                                ui.chat_lines.push(ChatLine::SystemNote(format!("open: '{}' launched via {}", target, opener)));
+                                                launched = true;
+                                                break;
+                                            }
+                                            Err(_) => {}
+                                        }
+                                    }
+                                    if !launched {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("open: no opener found for '{}' (tried xdg-open, open, start)", target)));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /chars [file] — count characters, words, and lines
+                                cmd if cmd.starts_with("/chars ") || cmd == "/chars" => {
+                                    let target = cmd.trim_start_matches("/chars").trim();
+                                    let (label, text) = if target.is_empty() {
+                                        let last = ui.chat_lines.iter().rev().find_map(|cl| match cl {
+                                            ChatLine::Assistant(t, _, _) => Some(t.clone()),
+                                            _ => None,
+                                        }).unwrap_or_default();
+                                        ("last response".to_string(), last)
+                                    } else {
+                                        match std::fs::read_to_string(target) {
+                                            Ok(t) => (target.to_string(), t),
+                                            Err(e) => {
+                                                ui.chat_lines.push(ChatLine::SystemNote(format!("chars: cannot read '{}': {}", target, e)));
+                                                ui.follow_tail = true;
+                                                continue;
+                                            }
+                                        }
+                                    };
+                                    let lines  = text.lines().count();
+                                    let words  = text.split_whitespace().count();
+                                    let chars  = text.chars().count();
+                                    let bytes  = text.len();
+                                    let non_ascii = text.chars().filter(|c| !c.is_ascii()).count();
+                                    let body = format!(
+                                        "chars: {}\n  lines      {}\n  words      {}\n  chars      {}\n  bytes      {}\n  non-ASCII  {}",
+                                        label, lines, words, chars, bytes, non_ascii
+                                    );
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /spell [text] — spell-check via aspell (fallback: hunspell)
+                                cmd if cmd.starts_with("/spell ") || cmd == "/spell" => {
+                                    use std::io::Write as _;
+                                    let text_arg = cmd.trim_start_matches("/spell").trim();
+                                    let text = if text_arg.is_empty() {
+                                        ui.chat_lines.iter().rev().find_map(|cl| match cl {
+                                            ChatLine::User(t, _) => Some(t.clone()),
+                                            _ => None,
+                                        }).unwrap_or_default()
+                                    } else {
+                                        text_arg.to_string()
+                                    };
+                                    if text.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /spell <text>  — or run after sending a message to check it".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    fn run_spell_checker(prog: &str, args: &[&str], input: &str) -> Result<String, ()> {
+                                        let mut child = std::process::Command::new(prog)
+                                            .args(args)
+                                            .stdin(std::process::Stdio::piped())
+                                            .stdout(std::process::Stdio::piped())
+                                            .stderr(std::process::Stdio::null())
+                                            .spawn().map_err(|_| ())?;
+                                        use std::io::Write as _;
+                                        if let Some(si) = child.stdin.as_mut() { let _ = si.write_all(input.as_bytes()); }
+                                        let o = child.wait_with_output().map_err(|_| ())?;
+                                        Ok(String::from_utf8_lossy(&o.stdout).to_string())
+                                    }
+                                    let result = run_spell_checker("aspell", &["--lang=en_US", "--encoding=utf-8", "list"], &text)
+                                        .or_else(|_| run_spell_checker("hunspell", &["-l"], &text));
+                                    let body = match result {
+                                        Ok(raw) => {
+                                            let words: Vec<&str> = raw.lines().filter(|l| !l.trim().is_empty()).collect();
+                                            if words.is_empty() {
+                                                "spell: no misspellings found ✓".to_string()
+                                            } else {
+                                                format!("spell: {} misspelled word(s):\n  {}", words.len(), words.join(", "))
+                                            }
+                                        }
+                                        Err(_) => "spell: aspell/hunspell not found — install: sudo apt install aspell".to_string(),
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -13627,7 +13811,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/cve ", "/dotenv", "/dotenv ", "/duck ", "/env-vars", "/env-vars ", "/flashcard ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/gh-search ", "/impl ", "/man-ai ", "/path", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/session-summary", "/teach ", "/which-all ", "/wiki ", "/workflow", "/workflow ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
+                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/cve ", "/dotenv", "/dotenv ", "/calc ", "/chars", "/chars ", "/duck ", "/env-vars", "/env-vars ", "/flashcard ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/gh-search ", "/impl ", "/man-ai ", "/open ", "/path", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/semver ", "/session-summary", "/spell ", "/teach ", "/which-all ", "/wiki ", "/workflow", "/workflow ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.

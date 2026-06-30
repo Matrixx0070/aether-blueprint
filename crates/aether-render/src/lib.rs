@@ -1953,12 +1953,42 @@ fn render_message(
                     "─────────────────────────────────────────────".to_string(),
                     Style::default().fg(C_DIM),
                 )]
-            // Blockquote: > text
-            } else if trimmed.starts_with("> ") || trimmed == ">" {
+            // Blockquote: > text  — also handles GitHub/Obsidian callout >[!TYPE]
+            } else if trimmed.starts_with("> ") || trimmed == ">" || trimmed.starts_with(">[!") {
                 let content = trimmed.trim_start_matches('>').trim_start();
-                let mut bq = vec![Span::styled("│ ".to_string(), Style::default().fg(C_ASST_PFX))];
-                bq.extend(inline_markdown_spans(content, Color::Rgb(148, 163, 184))); // slate-400
-                bq
+                if let Some(rest) = content.strip_prefix("[!") {
+                    // Callout header: >[!NOTE], >[!WARNING], >[!TIP], >[!DANGER], >[!IMPORTANT]
+                    let close = rest.find(']').unwrap_or(rest.len());
+                    let kind = &rest[..close];
+                    let title_after = rest.get(close + 1..).unwrap_or("").trim();
+                    let kind_upper = kind.to_uppercase();
+                    let (icon, color, label): (&str, Color, &str) = match kind_upper.as_str() {
+                        "NOTE" | "INFO"               => ("ℹ  ", C_ASST_PFX,                       "NOTE"),
+                        "WARNING" | "WARN"            => ("⚠  ", C_WARN,                           "WARNING"),
+                        "TIP"                         => ("◈  ", C_OK,                             "TIP"),
+                        "DANGER" | "ERROR"            => ("✕  ", C_ERR,                            "DANGER"),
+                        "IMPORTANT"                   => ("★  ", Color::Rgb(167, 139, 250),         "IMPORTANT"),
+                        "SUCCESS" | "CHECK"           => ("✓  ", C_OK,                             "SUCCESS"),
+                        "QUESTION" | "HELP" | "FAQ"   => ("?  ", C_WARN,                           "QUESTION"),
+                        "BUG"                         => ("⊗  ", C_ERR,                            "BUG"),
+                        "EXAMPLE"                     => ("◉  ", Color::Rgb(139, 92, 246),          "EXAMPLE"),
+                        "QUOTE" | "CITE"              => ("❝  ", Color::Rgb(148, 163, 184),         "QUOTE"),
+                        _                             => ("│  ", C_ASST_PFX,                       kind),
+                    };
+                    let display = if title_after.is_empty() {
+                        label.to_string()
+                    } else {
+                        format!("{label} — {title_after}")
+                    };
+                    vec![
+                        Span::styled(icon.to_string(), Style::default().fg(color)),
+                        Span::styled(display, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                    ]
+                } else {
+                    let mut bq = vec![Span::styled("│ ".to_string(), Style::default().fg(C_ASST_PFX))];
+                    bq.extend(inline_markdown_spans(content, Color::Rgb(148, 163, 184))); // slate-400
+                    bq
+                }
             // Task list item: - [ ] unchecked  /  - [x] or - [X] checked
             } else if trimmed.starts_with("- [ ] ") || trimmed.starts_with("- [x] ") || trimmed.starts_with("- [X] ") {
                 let is_done = !trimmed.starts_with("- [ ]");
