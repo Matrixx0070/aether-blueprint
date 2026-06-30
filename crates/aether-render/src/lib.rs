@@ -891,6 +891,12 @@ pub enum UiCommand {
     QuerySessionVarsShow,
     /// Show the pause-after-turns setting.
     QueryPauseAfterShow,
+    /// List all session tags.
+    QuerySessionTagsList,
+    /// List all error-playbook entries.
+    QueryErrorPlaybookList,
+    /// List all queued tasks.
+    QueryTaskList,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

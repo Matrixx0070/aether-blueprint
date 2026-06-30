@@ -7700,6 +7700,47 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QuerySessionTagsList => {
+                    if session.session_tags.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Session tags: none. Use /tag-session <tag> to add one.".to_string()
+                        ));
+                    } else {
+                        let list = session.session_tags.join(", ");
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session tags ({} total): {list}.", session.session_tags.len()
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryErrorPlaybookList => {
+                    if session.error_playbook.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Error playbook: empty. Use /on-error <pattern> <cmd> to add entries.".to_string()
+                        ));
+                    } else {
+                        let mut lines = vec![format!("Error playbook ({} entries):", session.error_playbook.len())];
+                        for (i, (pat, cmd)) in session.error_playbook.iter().enumerate() {
+                            lines.push(format!("  [{i}] {pat:?} → {cmd:?}"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(lines.join("\n")));
+                    }
+                    continue;
+                }
+                UiCommand::QueryTaskList => {
+                    if session.task_queue.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Task queue: empty. Use /task-add <description> to enqueue a task.".to_string()
+                        ));
+                    } else {
+                        let mut lines = vec![format!("Task queue ({} items):", session.task_queue.len())];
+                        for (i, t) in session.task_queue.iter().enumerate() {
+                            lines.push(format!("  [{i}] {t}"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(lines.join("\n")));
+                    }
+                    continue;
+                }
                 UiCommand::QueryToolAllowShow => {
                     if session.tool_allow.is_empty() {
                         let _ = etx_for_driver.send(UiEvent::SystemNote(
@@ -32862,6 +32903,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /session-tags-list — list all session tags
+                                "/session-tags-list" => {
+                                    if _ctx.send(UiCommand::QuerySessionTagsList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /error-playbook-list — list all error-playbook entries
+                                "/error-playbook-list" => {
+                                    if _ctx.send(UiCommand::QueryErrorPlaybookList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /task-list — list all queued tasks
+                                "/task-list" => {
+                                    if _ctx.send(UiCommand::QueryTaskList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -33614,6 +33673,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-allow-show",
                             "/session-vars-show",
                             "/pause-after-show",
+                            "/session-tags-list",
+                            "/error-playbook-list",
+                            "/task-list",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
