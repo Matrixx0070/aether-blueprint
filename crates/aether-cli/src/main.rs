@@ -5825,6 +5825,17 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                 };
 
+                // Notify the user when automatic compaction fired this turn.
+                if session.compaction_happened {
+                    session.compaction_happened = false;
+                    let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Context compacted at turn {} — history summarised to free context budget. \
+                         Current usage: {} tokens. Use /context-info to see details.",
+                        session.turn_index, used
+                    )));
+                }
+
                 // Drain just-appended history items into UI events.
                 if let Some(last_two) = session
                     .history
@@ -22718,6 +22729,38 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /auto-fix — AI diagnoses the last tool error and proposes a concrete fix
+                                "/auto-fix" => {
+                                    let last_error_info = ui.chat_lines.iter().rev().find_map(|cl| {
+                                        if let ChatLine::SystemNote(s) = cl {
+                                            if s.starts_with("Last tool error") { Some(s.clone()) }
+                                            else { None }
+                                        } else { None }
+                                    });
+                                    // Build a prompt using the last visible error in chat or ask AI about stuck state
+                                    let prompt = format!(
+                                        "I need your help diagnosing a tool error. Please:\n\
+                                         1. Read the FULL error output carefully\n\
+                                         2. Identify the ROOT CAUSE (not just the symptom)\n\
+                                         3. Provide a CONCRETE FIX with exact commands or code changes\n\
+                                         4. Explain why the fix addresses the root cause\n\n\
+                                         Context: A tool has failed repeatedly. {}",
+                                        match last_error_info {
+                                            Some(e) => format!("Here is the last error:\n{e}"),
+                                            None => "Please check your tool call history for the most recent error.".to_string(),
+                                        }
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /goal [text] — set or show session goal (survives compaction)
                                 cmd_str if cmd_str.starts_with("/goal ") || cmd_str == "/goal" => {
                                     let arg = cmd_str.trim_start_matches("/goal").trim();
@@ -23136,7 +23179,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/ai-critique",
                             "/plan-status", "/stuck", "/reset-errors",
                             "/goal", "/goal ", "/context-info", "/session-stats",
-                            "/last-error",
+                            "/last-error", "/auto-fix",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

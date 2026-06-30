@@ -119,6 +119,11 @@ pub struct Session {
 
     /// Session start timestamp (seconds since UNIX epoch).
     pub started_at: u64,
+
+    /// Set to true by `compact_inner` when compaction fires this turn.
+    /// The TUI driver reads this after each agent turn and resets it to false,
+    /// then shows a SystemNote so the user knows compaction happened.
+    pub compaction_happened: bool,
 }
 
 impl Session {
@@ -154,6 +159,7 @@ impl Session {
             llm_ms_total: 0,
             llm_ms_last: 0,
             started_at,
+            compaction_happened: false,
         }
     }
 

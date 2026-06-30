@@ -264,6 +264,9 @@ async fn compact_inner(session: &mut Session, force: bool) -> Result<bool, Agent
         session.usage_total.add(u);
     }
 
+    // Signal the TUI driver so it can show a compaction notice.
+    session.compaction_happened = true;
+
     Ok(true)
 }
 
