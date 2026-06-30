@@ -6564,6 +6564,76 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::QueryToolStatsDetail => {
+                    let stats = &session.plan.tool_call_stats;
+                    if stats.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Tool stats: no tools called yet this session.".to_string()
+                        ));
+                    } else {
+                        let mut entries: Vec<(&String, &(usize, usize))> = stats.iter().collect();
+                        entries.sort_by(|a, b| {
+                            let ta = a.1.0 + a.1.1;
+                            let tb = b.1.0 + b.1.1;
+                            tb.cmp(&ta).then(a.0.cmp(b.0))
+                        });
+                        let total_calls: usize = entries.iter().map(|(_, (ok, err))| ok + err).sum();
+                        let total_errs: usize = entries.iter().map(|(_, (_, err))| err).sum();
+                        let lines: Vec<String> = entries.iter()
+                            .map(|(name, (ok, err))| {
+                                let total = ok + err;
+                                let err_pct = if total > 0 { *err * 100 / total } else { 0 };
+                                format!("  {name:<30} ok={ok:>4}  err={err:>4} ({err_pct}%)")
+                            })
+                            .collect();
+                        let note = format!(
+                            "=== Tool stats ({} tools, {total_calls} calls, {total_errs} errors) ===\n{}",
+                            entries.len(), lines.join("\n")
+                        );
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolTop(n) => {
+                    let stats = &session.plan.tool_call_stats;
+                    if stats.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Tool top: no tools called yet.".to_string()
+                        ));
+                    } else {
+                        let mut entries: Vec<(&String, usize)> = stats.iter()
+                            .map(|(name, (ok, err))| (name, ok + err))
+                            .collect();
+                        entries.sort_by(|a, b| b.1.cmp(&a.1));
+                        let top: Vec<String> = entries.iter().take(n)
+                            .enumerate()
+                            .map(|(i, (name, calls))| format!("  #{:>2} {name}: {calls} call(s)", i + 1))
+                            .collect();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "=== Top {} tool(s) by call count ===\n{}", n, top.join("\n")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolErrors => {
+                    let stats = &session.plan.tool_call_stats;
+                    let errored: Vec<(&String, usize, usize)> = stats.iter()
+                        .filter(|(_, (_, err))| *err > 0)
+                        .map(|(name, (ok, err))| (name, *ok, *err))
+                        .collect();
+                    let note = if errored.is_empty() {
+                        "Tool errors: none this session.".to_string()
+                    } else {
+                        let mut sorted = errored;
+                        sorted.sort_by(|a, b| b.2.cmp(&a.2));
+                        let lines: Vec<String> = sorted.iter()
+                            .map(|(name, ok, err)| format!("  {name}: {err} error(s) / {} total calls", ok + err))
+                            .collect();
+                        format!("=== Tools with errors ({} tool(s)) ===\n{}", lines.len(), lines.join("\n"))
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::SearchHistory(query) => {
                     use aether_core::context::ConversationItem;
                     let q = query.to_ascii_lowercase();
@@ -26480,6 +26550,32 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /tool-stats-detail — per-tool ok/err breakdown sorted by call count
+                                "/tool-stats-detail" => {
+                                    if _ctx.send(UiCommand::QueryToolStatsDetail).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tool-top [N] — show top N tools by call count (default 5)
+                                cmd_str if cmd_str == "/tool-top" || cmd_str.starts_with("/tool-top ") => {
+                                    let arg = cmd_str.trim_start_matches("/tool-top").trim();
+                                    let n = arg.parse::<usize>().unwrap_or(5);
+                                    if _ctx.send(UiCommand::QueryToolTop(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tool-errors — list tools with at least one error this session
+                                "/tool-errors" => {
+                                    if _ctx.send(UiCommand::QueryToolErrors).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /search-history <query> — full-text search conversation history
                                 cmd_str if cmd_str.starts_with("/search-history ") => {
                                     let query = cmd_str.trim_start_matches("/search-history ").trim().to_string();
@@ -27274,6 +27370,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/pause-status",
                             "/search-history ",
                             "/search-tools ",
+                            "/tool-stats-detail",
+                            "/tool-top", "/tool-top ",
+                            "/tool-errors",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

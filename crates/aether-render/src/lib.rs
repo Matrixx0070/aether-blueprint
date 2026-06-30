@@ -409,6 +409,12 @@ pub enum UiCommand {
     ReplayLast,
     /// List past user messages with their indices.
     QueryReplayList,
+    /// Show detailed per-tool breakdown: ok/err counts and call order.
+    QueryToolStatsDetail,
+    /// Show the top N tools by total call count.
+    QueryToolTop(usize),
+    /// List only tools that had at least one error this session.
+    QueryToolErrors,
     /// Full-text search across conversation history items (returns matches).
     SearchHistory(String),
     /// Full-text search across tool output history (tool_output_history values).
