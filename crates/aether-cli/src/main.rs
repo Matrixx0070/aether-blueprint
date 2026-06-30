@@ -9140,6 +9140,178 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // ── BATCH 87: PRECISION DEVELOPER TOOLS ──────────────────────────
+                                cmd if cmd.starts_with("/explain-error ") || cmd == "/explain-error" => {
+                                    // Deep AI explanation of a compiler/runtime error message
+                                    let err_msg = cmd.trim_start_matches("/explain-error").trim();
+                                    let error_text = if err_msg.is_empty() {
+                                        // Pull last system note that looks like an error
+                                        ui.chat_lines.iter().rev().find_map(|cl| {
+                                            if let ChatLine::SystemNote(s) = cl {
+                                                if s.contains("error") || s.contains("Error") || s.contains("failed") { Some(s.clone()) }
+                                                else { None }
+                                            } else { None }
+                                        }).unwrap_or_else(|| {
+                                            "No error message found. Paste the error after the command:\n  /explain-error <paste error here>".to_string()
+                                        })
+                                    } else { err_msg.to_string() };
+                                    if error_text.starts_with("No error") {
+                                        ui.chat_lines.push(ChatLine::SystemNote(error_text));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Explain this error in plain terms and provide a fix:\n\n```\n{}\n```\n\n\
+                                         Structure your response as:\n\
+                                         ## What Went Wrong\n(plain English, no jargon — why did this happen?)\n\
+                                         ## Root Cause\n(the underlying reason, with line-level analysis if available)\n\
+                                         ## Fix\n(concrete code change — show before → after)\n\
+                                         ## Why This Fix Works\n(1-2 sentences connecting the fix to the root cause)\n\
+                                         ## Prevention\n(how to avoid this class of error in future code)",
+                                        &error_text[..error_text.len().min(2000)]
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    let preview: String = error_text.lines().next().unwrap_or("error").chars().take(50).collect();
+                                    ui.chat_lines.push(ChatLine::User(format!("/explain-error  {preview}"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/format-code ") || cmd == "/format-code" => {
+                                    let file_arg = cmd.trim_start_matches("/format-code").trim();
+                                    let cwd = std::env::current_dir().unwrap_or_default();
+                                    if file_arg.is_empty() {
+                                        // Format entire project
+                                        let fmt_cmd = if cwd.join("Cargo.toml").exists() {
+                                            Some(("cargo fmt", vec!["fmt"]))
+                                        } else if cwd.join("package.json").exists() {
+                                            Some(("npx prettier", vec!["prettier", "--write", "."]))
+                                        } else if cwd.join("go.mod").exists() {
+                                            Some(("gofmt", vec!["gofmt", "-w", "."]))
+                                        } else if cwd.join("pyproject.toml").exists() {
+                                            Some(("black", vec!["black", "."]))
+                                        } else { None };
+                                        if let Some((label, args)) = fmt_cmd {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("Running {label}…")));
+                                            let out = std::process::Command::new(args[0]).args(&args[1..]).current_dir(&cwd).output();
+                                            match out {
+                                                Ok(o) => {
+                                                    let badge = if o.status.success() { "✓" } else { "✗" };
+                                                    let stderr = String::from_utf8_lossy(&o.stderr);
+                                                    let msg = format!("{badge} {label}\n{}", stderr.trim());
+                                                    ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                                }
+                                                Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("{label} not found: {e}"))); }
+                                            }
+                                        } else {
+                                            ui.chat_lines.push(ChatLine::SystemNote("No formatter detected.\n  Supported: cargo fmt (Rust), prettier (JS/TS), gofmt (Go), black (Python)\n  Or: /format-code <file>".to_string()));
+                                        }
+                                    } else {
+                                        let fpath = if file_arg.starts_with('/') { std::path::PathBuf::from(file_arg) }
+                                                   else { cwd.join(file_arg) };
+                                        let ext = fpath.extension().and_then(|e| e.to_str()).unwrap_or("");
+                                        let (formatter, fmt_args): (&str, Vec<String>) = match ext {
+                                            "rs"  => ("rustfmt", vec![fpath.to_string_lossy().to_string()]),
+                                            "py"  => ("black",   vec![fpath.to_string_lossy().to_string()]),
+                                            "go"  => ("gofmt",   vec!["-w".to_string(), fpath.to_string_lossy().to_string()]),
+                                            "js"|"ts"|"tsx"|"jsx"|"json"|"md" => ("npx", vec!["prettier".to_string(), "--write".to_string(), fpath.to_string_lossy().to_string()]),
+                                            "sh"|"bash" => ("shfmt", vec!["-w".to_string(), fpath.to_string_lossy().to_string()]),
+                                            _ => {
+                                                ui.chat_lines.push(ChatLine::SystemNote(format!("No formatter for .{ext}")));
+                                                ui.follow_tail = true;
+                                                continue;
+                                            }
+                                        };
+                                        let out = std::process::Command::new(formatter).args(&fmt_args).output();
+                                        match out {
+                                            Ok(o) => {
+                                                let badge = if o.status.success() { "✓" } else { "✗" };
+                                                let stderr = String::from_utf8_lossy(&o.stderr);
+                                                let note = if o.status.success() { format!("{badge} {formatter} {file_arg}  formatted") } else { format!("{badge} {formatter} failed\n{}", stderr.trim()) };
+                                                ui.chat_lines.push(ChatLine::SystemNote(note));
+                                            }
+                                            Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("{formatter} not found: {e}"))); }
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/perf-hint" || cmd.starts_with("/perf-hint ") => {
+                                    // AI performance analysis using profile + recent code context
+                                    let file_arg = cmd.trim_start_matches("/perf-hint").trim();
+                                    let content = if file_arg.is_empty() {
+                                        ui.chat_lines.iter().rev().find_map(|cl| {
+                                            if let ChatLine::Assistant(m, _, _) = cl { Some(m.clone()) } else { None }
+                                        }).unwrap_or_default()
+                                    } else {
+                                        let fpath = if file_arg.starts_with('/') { std::path::PathBuf::from(file_arg) }
+                                                   else { std::env::current_dir().unwrap_or_default().join(file_arg) };
+                                        match std::fs::read_to_string(&fpath) {
+                                            Ok(c) => c,
+                                            Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {file_arg}: {e}"))); ui.follow_tail = true; continue; }
+                                        }
+                                    };
+                                    if content.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("No content to analyze. Send code first or specify a file: /perf-hint <file>".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let source_label = if file_arg.is_empty() { "last AI response" } else { file_arg };
+                                    let prompt = format!(
+                                        "Analyze this code for performance issues:\n\n{source_label}\n```\n{}\n```\n\n\
+                                         Provide a PERFORMANCE AUDIT:\n\
+                                         ## Hotspots\n(functions/loops most likely to be slow — O(n²), repeated work, etc.)\n\
+                                         ## Memory Pressure\n(unnecessary allocations, clones, large buffers)\n\
+                                         ## I/O Patterns\n(blocking calls, missing batching, N+1 queries)\n\
+                                         ## Quick Wins\n(changes < 5 lines that could give 10–50% improvement)\n\
+                                         ## Profiling Commands\n(exact commands to confirm with real data)",
+                                        &content[..content.len().min(3000)]
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/perf-hint {source_label}"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/deps-graph ") || cmd == "/deps-graph" => {
+                                    let cwd = std::env::current_dir().unwrap_or_default();
+                                    // Cargo dependency tree, npm ls, or go mod graph
+                                    let (dep_cmd, dep_label) = if cwd.join("Cargo.toml").exists() {
+                                        let depth = cmd.trim_start_matches("/deps-graph").trim().parse::<usize>().unwrap_or(2);
+                                        (format!("cargo tree --depth {} 2>&1", depth), "cargo tree")
+                                    } else if cwd.join("package.json").exists() {
+                                        ("npm ls --depth=2 2>&1".to_string(), "npm ls")
+                                    } else if cwd.join("go.mod").exists() {
+                                        ("go mod graph 2>&1 | head -50".to_string(), "go mod graph")
+                                    } else if cwd.join("requirements.txt").exists() {
+                                        ("pip show -f . 2>&1 || pip list 2>&1".to_string(), "pip list")
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("No dependency manifest found.\n  Supported: Cargo.toml, package.json, go.mod, requirements.txt".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    };
+                                    match std::process::Command::new("sh").args(["-c", &dep_cmd]).current_dir(&cwd).output() {
+                                        Ok(out) => {
+                                            let stdout = String::from_utf8_lossy(&out.stdout);
+                                            let lines: Vec<&str> = stdout.trim_end().lines().collect();
+                                            let shown = lines.len().min(100);
+                                            let mut msg = format!("{dep_label}  ({} deps shown)\n```\n", lines.len());
+                                            msg.push_str(&lines[..shown].join("\n"));
+                                            if lines.len() > shown { msg.push_str(&format!("\n… ({} more)", lines.len() - shown)); }
+                                            msg.push_str("\n```\n  /deps to run vulnerability audit");
+                                            ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                        }
+                                        Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("{dep_label} failed: {e}"))); }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -9778,7 +9950,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/bench", "/bench ", "/blame ", "/changelog", "/changelog ", "/code-review ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/debug-ai ", "/doc-gen ", "/flow ", "/gen-tests ", "/grep-code ", "/heatmap", "/heatmap ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/metrics", "/metrics ", "/mock ", "/optimize ", "/patch", "/patch ", "/pr-review", "/pr-review ", "/profile ", "/recent", "/recent ", "/refactor ", "/rename ", "/setup-env", "/status", "/test", "/test ", "/todo-ai ", "/translate-code ", "/vulnscan", "/vulnscan ", "/watch ",
+                            "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/bench", "/bench ", "/blame ", "/changelog", "/changelog ", "/code-review ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/debug-ai ", "/deps-graph", "/deps-graph ", "/doc-gen ", "/explain-error", "/explain-error ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/grep-code ", "/heatmap", "/heatmap ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/metrics", "/metrics ", "/mock ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/pr-review", "/pr-review ", "/profile ", "/recent", "/recent ", "/refactor ", "/rename ", "/setup-env", "/status", "/test", "/test ", "/todo-ai ", "/translate-code ", "/vulnscan", "/vulnscan ", "/watch ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
