@@ -5266,7 +5266,13 @@ Dev productivity\n\
   /format-sql <sql>       keyword-based SQL formatter with indented clauses\n\
   /env-diff <f1> <f2>     diff two .env files: added/removed/changed keys\n\
   /ssh-key [path]         inspect SSH public key: type, comment, fingerprint\n\
-  /ai-arch [focus]        AI architectural overview of the current project"),
+  /ai-arch [focus]        AI architectural overview of the current project\n\
+Git + navigation\n\
+  /git-cherry [upstream]  commits in HEAD not in upstream (default: main)\n\
+  /git-remote             remote URLs + branch ahead/behind tracking info\n\
+  /tail <file> [n]        last N lines of file (default 20)\n\
+  /cheat <cmd>            quick reference: git/docker/vim/curl/tmux/jq/grep/ssh/awk\n\
+  /ai-explain <file>      AI explains what a source file does (≤200 lines read)"),
                                         ("keys", &["keys", "keyboard", "shortcuts", "bindings"], "\
 Input shortcuts\n\
   ↑ ↓  / Ctrl+R           history recall / reverse-i-search\n\
@@ -5384,6 +5390,7 @@ Input shortcuts\n\
     ◈ /semver /calc /chars /open /spell                          utilities B107\n\
     ◈ /time /color /json-schema /http-codes /mkscript            dev tools B108\n\
     ◈ /regex-test /format-sql /env-diff /ssh-key /ai-arch        B109 tools\n\
+    ◈ /git-cherry /git-remote /tail /cheat /ai-explain           B110 tools\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -13648,6 +13655,147 @@ CTF Toolkit — Aether AI-assisted\n\
                                     if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
                                     continue;
                                 }
+                                // /git-cherry [upstream] — commits in current branch not in upstream
+                                cmd if cmd == "/git-cherry" || cmd.starts_with("/git-cherry ") => {
+                                    let upstream = cmd.trim_start_matches("/git-cherry").trim();
+                                    let up = if upstream.is_empty() { "main" } else { upstream };
+                                    let out = std::process::Command::new("git")
+                                        .args(["cherry", "-v", up])
+                                        .output();
+                                    let body = match out {
+                                        Ok(o) if o.status.success() => {
+                                            let raw = String::from_utf8_lossy(&o.stdout).to_string();
+                                            if raw.trim().is_empty() {
+                                                format!("git-cherry: no commits ahead of '{}'", up)
+                                            } else {
+                                                let lines: Vec<&str> = raw.lines().take(30).collect();
+                                                let count = raw.lines().count();
+                                                let mut result = format!("git-cherry vs '{}' ({} commits):\n", up, count);
+                                                for line in &lines {
+                                                    let sym = if line.starts_with('+') { "◈" } else { "✕" };
+                                                    result.push_str(&format!("  {} {}\n", sym, &line[2..]));
+                                                }
+                                                if count > 30 { result.push_str(&format!("  … and {} more\n", count - 30)); }
+                                                result
+                                            }
+                                        }
+                                        Ok(o) => format!("git-cherry: {}", String::from_utf8_lossy(&o.stderr).trim()),
+                                        Err(_) => "git not found".to_string(),
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /git-remote — show remote URLs and ahead/behind counts
+                                cmd if cmd == "/git-remote" || cmd.starts_with("/git-remote ") => {
+                                    let mut body = "git remotes\n".to_string();
+                                    // List remotes
+                                    if let Ok(o) = std::process::Command::new("git").args(["remote", "-v"]).output() {
+                                        let raw = String::from_utf8_lossy(&o.stdout).to_string();
+                                        let seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+                                        for line in raw.lines() {
+                                            if line.ends_with("(fetch)") { body.push_str(&format!("  {}\n", line.trim_end_matches(" (fetch)"))); }
+                                        }
+                                        drop(seen);
+                                    }
+                                    // Show ahead/behind for each tracking branch
+                                    if let Ok(o) = std::process::Command::new("git")
+                                        .args(["branch", "-vv", "--format=%(refname:short) %(upstream:track) %(upstream:short)"])
+                                        .output()
+                                    {
+                                        let raw = String::from_utf8_lossy(&o.stdout).to_string();
+                                        if !raw.trim().is_empty() {
+                                            body.push_str("\nbranch tracking:\n");
+                                            for line in raw.lines().take(10) {
+                                                if !line.trim().is_empty() { body.push_str(&format!("  {}\n", line.trim())); }
+                                            }
+                                        }
+                                    }
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tail <file> [n] — show last N lines of a file (default 20)
+                                cmd if cmd.starts_with("/tail ") || cmd == "/tail" => {
+                                    let arg = cmd.trim_start_matches("/tail").trim();
+                                    if arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /tail <file> [lines]\n  Example: /tail /var/log/syslog 50".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let parts: Vec<&str> = arg.rsplitn(2, ' ').collect();
+                                    let (file, n) = if parts.len() == 2 {
+                                        if let Ok(num) = parts[0].parse::<u32>() {
+                                            (parts[1], num)
+                                        } else { (arg, 20u32) }
+                                    } else { (arg, 20u32) };
+                                    let n_str = n.to_string();
+                                    let out = std::process::Command::new("tail").args(["-n", &n_str, file]).output();
+                                    let body = match out {
+                                        Ok(o) if o.status.success() => {
+                                            let text = String::from_utf8_lossy(&o.stdout).to_string();
+                                            let lines = text.lines().count();
+                                            format!("tail: {} (last {} lines)\n{}", file, lines, text.trim_end())
+                                        }
+                                        Ok(o) => format!("tail: {}", String::from_utf8_lossy(&o.stderr).trim()),
+                                        Err(_) => "tail not found".to_string(),
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /cheat <cmd> — quick reference cheatsheet for common tools
+                                cmd if cmd.starts_with("/cheat ") || cmd == "/cheat" => {
+                                    let tool = cmd.trim_start_matches("/cheat").trim().to_lowercase();
+                                    let body = match tool.as_str() {
+                                        "git" => "git cheatsheet\n  git status / git diff / git diff --staged\n  git add -p           interactive hunk staging\n  git commit -m '...'  commit\n  git log --oneline -20\n  git stash / git stash pop\n  git cherry-pick <sha>\n  git rebase -i HEAD~n interactive rebase\n  git bisect start/good/bad binary search\n  git reflog           recover lost commits\n  git worktree add     parallel checkout".to_string(),
+                                        "docker" => "docker cheatsheet\n  docker ps / ps -a     running/all containers\n  docker images         local images\n  docker run -it <img>  interactive container\n  docker exec -it <c> bash  shell into container\n  docker logs -f <c>   follow container logs\n  docker build -t x .  build image\n  docker system prune   clean up disk space\n  docker inspect <c>   full metadata\n  docker stats          live resource usage\n  docker compose up -d  start compose stack".to_string(),
+                                        "vim" | "vi" => "vim cheatsheet\n  i / I / a / A / o / O  insert modes\n  Esc                    normal mode\n  :w / :q / :wq / :q!    save/quit\n  dd / yy / p            delete/yank/paste line\n  /pattern / n / N       search\n  :%s/old/new/g          replace all\n  Ctrl+f/b               page down/up\n  gg / G                 top / bottom\n  :set number            line numbers\n  :sp / :vsp             split windows\n  :%!python3 -m json.tool  format JSON".to_string(),
+                                        "curl" => "curl cheatsheet\n  curl <url>                    GET\n  curl -X POST -d 'data' <url>  POST body\n  curl -H 'Auth: Bearer tok'    header\n  curl -o file.txt <url>        save to file\n  curl -L <url>                 follow redirects\n  curl -I <url>                 headers only\n  curl -u user:pass <url>       basic auth\n  curl -k <url>                 skip TLS verify\n  curl --compressed <url>       gzip\n  curl -s <url> | jq            JSON output".to_string(),
+                                        "tmux" => "tmux cheatsheet\n  tmux new -s name        new session\n  tmux ls                 list sessions\n  tmux attach -t name     attach\n  Ctrl+b c               new window\n  Ctrl+b n / p           next/prev window\n  Ctrl+b \"               split horizontal\n  Ctrl+b %               split vertical\n  Ctrl+b arrows          navigate panes\n  Ctrl+b d               detach session\n  Ctrl+b [               scroll mode (q to exit)\n  Ctrl+b z               zoom pane".to_string(),
+                                        "jq" => "jq cheatsheet\n  jq '.'                  pretty-print\n  jq '.key'               extract key\n  jq '.arr[]'             iterate array\n  jq '.arr[0]'            first element\n  jq 'keys'               object keys\n  jq 'length'             array length\n  jq 'select(.x > 1)'     filter\n  jq 'map(.id)'           transform array\n  jq '{a,b}'              pick fields\n  jq -r '.name'           raw string output\n  jq --arg x 'v' '.[$x]' variable".to_string(),
+                                        "grep" => "grep cheatsheet\n  grep 'pattern' file      basic search\n  grep -r 'pat' dir/       recursive\n  grep -i                  case-insensitive\n  grep -n                  show line numbers\n  grep -v                  invert (exclude)\n  grep -l                  show only filenames\n  grep -c                  count matches\n  grep -A2 / -B2 / -C2     context lines\n  grep -E 'a|b'            extended regex\n  grep -P '\\d+'            Perl regex\n  grep -o                  print only match".to_string(),
+                                        "ssh" => "ssh cheatsheet\n  ssh user@host           connect\n  ssh -i key.pem u@h      with key\n  ssh -p 2222 u@h         custom port\n  ssh -L 8080:host:80 u@h local tunnel\n  ssh -R 80:localhost:80  remote tunnel\n  ssh -N -f u@h           background tunnel\n  ssh-copy-id u@h         copy pub key\n  ssh-keygen -t ed25519   generate key\n  scp file u@h:~/         copy file\n  rsync -avz src/ u@h:d/ sync dir".to_string(),
+                                        "awk" => "awk cheatsheet\n  awk '{print $1}' f       first column\n  awk -F: '{print $1}' /etc/passwd  custom delimiter\n  awk 'NR==2'              second line\n  awk 'NR>=2 && NR<=5'     line range\n  awk '{sum+=$1} END{print sum}'  sum column\n  awk '/pattern/'          filter lines\n  awk '{print NR, $0}'     prefix line numbers\n  awk 'NF>0'               skip blank lines\n  awk '{gsub(/a/,\"b\"); print}'  replace".to_string(),
+                                        "" => "cheat: available topics:\n  git  docker  vim  curl  tmux  jq  grep  ssh  awk\n  Usage: /cheat <topic>".to_string(),
+                                        _ => format!("cheat: no cheatsheet for '{}'\n  Available: git, docker, vim, curl, tmux, jq, grep, ssh, awk", tool),
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-explain <file> — AI explains what a file does
+                                cmd if cmd.starts_with("/ai-explain ") || cmd == "/ai-explain" => {
+                                    let file_arg = cmd.trim_start_matches("/ai-explain").trim();
+                                    if file_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /ai-explain <file>\n  AI reads the file and explains what it does.".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    match std::fs::read_to_string(file_arg) {
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("ai-explain: cannot read '{}': {}", file_arg, e)));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                        Ok(content) => {
+                                            let snippet: String = content.lines().take(200).collect::<Vec<_>>().join("\n");
+                                            let ext = std::path::Path::new(file_arg).extension().and_then(|e| e.to_str()).unwrap_or("");
+                                            let prompt = format!(
+                                                "Explain the following {} file in plain English. Describe: purpose, main logic, inputs/outputs, anything non-obvious. Be concise (under 300 words).\n\nFile: {}\n```{}\n{}\n```",
+                                                ext, file_arg, ext, snippet
+                                            );
+                                            let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                            ui.chat_lines.push(ChatLine::User(prompt.clone(), ts));
+                                            ui.follow_tail = true;
+                                            ui.status_running = true;
+                                            ui.waiting_since = Some(std::time::Instant::now());
+                                            ui.msg_times_secs.push(ts);
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                        }
+                                    }
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -14286,7 +14434,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/cve ", "/dotenv", "/dotenv ", "/calc ", "/chars", "/chars ", "/ai-arch", "/ai-arch ", "/color ", "/duck ", "/env-diff ", "/env-vars", "/env-vars ", "/flashcard ", "/format-sql ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/gh-search ", "/http-codes", "/http-codes ", "/impl ", "/json-schema ", "/man-ai ", "/mkscript ", "/open ", "/path", "/regex-test ", "/ssh-key", "/ssh-key ", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/semver ", "/session-summary", "/spell ", "/teach ", "/time", "/time ", "/which-all ", "/wiki ", "/workflow", "/workflow ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
+                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/cve ", "/dotenv", "/dotenv ", "/calc ", "/chars", "/chars ", "/ai-arch", "/ai-arch ", "/ai-explain ", "/cheat ", "/color ", "/duck ", "/env-diff ", "/env-vars", "/env-vars ", "/flashcard ", "/format-sql ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/gh-search ", "/http-codes", "/http-codes ", "/impl ", "/json-schema ", "/man-ai ", "/mkscript ", "/open ", "/path", "/git-cherry", "/git-cherry ", "/git-remote", "/git-remote ", "/regex-test ", "/ssh-key", "/ssh-key ", "/tail ", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/semver ", "/session-summary", "/spell ", "/teach ", "/time", "/time ", "/which-all ", "/wiki ", "/workflow", "/workflow ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
