@@ -299,6 +299,11 @@ pub struct Session {
     /// Active agent persona injected as a high-priority sticky instruction.
     /// Examples: "senior Rust engineer", "security auditor", "skeptical reviewer".
     pub agent_persona: Option<String>,
+
+    /// File scope guard: when set, the agent is instructed (via sticky reminder)
+    /// to only read/write files matching this pattern. Not enforced at the tool
+    /// level — relies on the LLM respecting the instruction.
+    pub scope_guard: Option<String>,
 }
 
 impl Session {
@@ -375,6 +380,7 @@ impl Session {
             retry_on_error_count: 0,
             tool_output_history: std::collections::HashMap::new(),
             agent_persona: None,
+            scope_guard: None,
         }
     }
 
@@ -531,6 +537,18 @@ async fn agent_turn_inner(
             ReminderKind::SystemWarning,
             Source::Kernel,
             format!("[Agent persona] You are acting as: {persona}. Respond with the expertise, tone, and priorities that role entails."),
+        ));
+    }
+
+    // Scope guard: restrict agent to files matching the glob pattern.
+    if let Some(ref scope) = session.scope_guard {
+        session.pending_reminders.push(Reminder::new(
+            ReminderKind::SystemWarning,
+            Source::Kernel,
+            format!(
+                "[Scope guard] ONLY read, write, or edit files matching the pattern: {scope}\n\
+                 Do NOT touch files outside this scope. If you need to look elsewhere, ask the user first."
+            ),
         ));
     }
 

@@ -287,6 +287,10 @@ pub enum UiCommand {
     RemovePlaybookEntry(usize),
     /// List all error playbook entries.
     QueryPlaybook,
+    /// Set a file scope guard pattern (None = off).
+    SetScopeGuard(Option<String>),
+    /// Show the current scope guard.
+    QueryScopeGuard,
     /// Set the agent persona (None = off).
     SetAgentPersona(Option<String>),
     /// Show the current agent persona.

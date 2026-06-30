@@ -6406,6 +6406,25 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 UiCommand::SetAlias(_, _) | UiCommand::RemoveAlias(_) | UiCommand::QueryAliases => {
                     continue;
                 }
+                UiCommand::SetScopeGuard(scope_opt) => {
+                    let note = match &scope_opt {
+                        Some(s) => format!(
+                            "Scope guard: '{s}' — agent instructed to only touch matching files."
+                        ),
+                        None => "Scope guard: cleared (no file restriction).".to_string(),
+                    };
+                    session.scope_guard = scope_opt;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryScopeGuard => {
+                    let note = match &session.scope_guard {
+                        Some(s) => format!("Scope guard: '{s}'  (active — injected every turn)"),
+                        None => "Scope guard: off. Use /scope-set <glob> to restrict file access.".to_string(),
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::SetAgentPersona(persona_opt) => {
                     let note = match &persona_opt {
                         Some(p) => format!(
@@ -25437,6 +25456,31 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /scope-set <glob> — restrict agent to files matching pattern
+                                cmd_str if cmd_str.starts_with("/scope-set ") => {
+                                    let scope = cmd_str.trim_start_matches("/scope-set ").trim().to_string();
+                                    if _ctx.send(UiCommand::SetScopeGuard(Some(scope))).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /scope-clear — remove scope restriction
+                                "/scope-clear" => {
+                                    if _ctx.send(UiCommand::SetScopeGuard(None)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /scope-show — display current scope guard
+                                "/scope-show" => {
+                                    if _ctx.send(UiCommand::QueryScopeGuard).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /persona [description|off] — set agent persona
                                 cmd_str if cmd_str == "/persona" || cmd_str.starts_with("/persona ") => {
                                     let arg = cmd_str.trim_start_matches("/persona").trim();
@@ -26328,6 +26372,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-diff ",
                             "/persona", "/persona ", "/persona off",
                             "/persona-show",
+                            "/scope-set ",
+                            "/scope-clear",
+                            "/scope-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
