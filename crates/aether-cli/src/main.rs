@@ -5360,6 +5360,7 @@ Input shortcuts\n\
     ◈ /ai-improve /ai-simplify /ai-secure /ai-review-diff /ai-perf  AI analysis suite\n\
     ◈ /flashcard /quiz /teach /man-ai /compare                  learning + productivity\n\
     ◈ /scaffold /impl /gen-readme /gen-api-docs /pseudocode     code generation\n\
+    ◈ /session-summary /ai-plan /workflow /prompt-engineer /ai-debug  AI session tools\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -12345,6 +12346,213 @@ CTF Toolkit — Aether AI-assisted\n\
                                     if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
                                     continue;
                                 }
+                                // ── Batch 104: AI session + workflow tools ────────────────────────
+                                cmd if cmd == "/session-summary" => {
+                                    // /session-summary  — AI summarizes the current conversation
+                                    let msgs: Vec<String> = ui.chat_lines.iter().filter_map(|cl| match cl {
+                                        ChatLine::User(s, _) => Some(format!("User: {s}")),
+                                        ChatLine::Assistant(s, _, _) => {
+                                            let excerpt: String = s.chars().take(400).collect();
+                                            Some(format!("AI: {excerpt}{}", if s.len() > 400 { "…" } else { "" }))
+                                        }
+                                        _ => None,
+                                    }).collect();
+                                    if msgs.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("No conversation to summarize yet.".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let transcript: String = msgs.iter().take(30).cloned().collect::<Vec<_>>().join("\n\n");
+                                    let prompt = format!(
+                                        "Summarize this conversation session concisely.\n\
+                                        Include:\n\
+                                        ## What we worked on\n\
+                                        ## Key decisions made\n\
+                                        ## Code/files modified (if any)\n\
+                                        ## Open questions / next steps\n\n\
+                                        Keep it under 250 words. Be specific, not generic.\n\n\
+                                        Transcript:\n{transcript}"
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User("/session-summary".to_string(), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/ai-plan ") || cmd == "/ai-plan" => {
+                                    // /ai-plan <goal>  — AI creates step-by-step implementation plan
+                                    let goal = cmd.trim_start_matches("/ai-plan").trim();
+                                    if goal.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /ai-plan <goal>\n  Example: /ai-plan add rate limiting to our REST API".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    // include project context
+                                    let project_files: String = std::process::Command::new("find")
+                                        .args([".", "-type", "f", "-not", "-path", "*/target/*",
+                                               "-not", "-path", "*/.git/*", "-not", "-path", "*/node_modules/*"])
+                                        .output()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).lines().take(30).collect::<Vec<_>>().join(", "))
+                                        .unwrap_or_default();
+                                    let context = if project_files.is_empty() { String::new() } else {
+                                        format!("\n\nProject files (for context): {project_files}")
+                                    };
+                                    let prompt = format!(
+                                        "Create a detailed implementation plan for: {goal}\n\n\
+                                        Format:\n\
+                                        ## Overview\n\
+                                        [1 paragraph describing the approach]\n\n\
+                                        ## Implementation Steps\n\
+                                        1. **Step name** — what to do, why, estimated time\n\
+                                        (5-8 steps, ordered by dependency)\n\n\
+                                        ## Files to Create/Modify\n\
+                                        - `path/to/file` — what changes\n\n\
+                                        ## Risks & Mitigations\n\
+                                        ## Testing Strategy\n\n\
+                                        Be specific and actionable.{context}"
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/ai-plan  {goal}"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/workflow ") || cmd == "/workflow" => {
+                                    // /workflow <name>  — run a predefined AI workflow
+                                    let name = cmd.trim_start_matches("/workflow").trim();
+                                    let workflow_prompts: &[(&str, &[&str], &str)] = &[
+                                        ("security-audit", &["security", "sec", "audit"], "\
+                                            Perform a comprehensive security audit of this project.\n\
+                                            Check: OWASP Top 10, secrets in code, dependency vulnerabilities,\n\
+                                            auth/authz issues, crypto weakness, input validation, error leakage.\n\
+                                            Output: CRITICAL / HIGH / MEDIUM / LOW findings with file:line.\n\
+                                            Context: run /scan and /secrets first for machine-readable results."),
+                                        ("code-quality", &["quality", "review"], "\
+                                            Evaluate the overall code quality of this project.\n\
+                                            Assess: test coverage, error handling, code duplication, naming,\n\
+                                            documentation, modularity, complexity, dependency hygiene.\n\
+                                            Score each dimension 1-10 with specific evidence.\n\
+                                            Top 5 improvements with effort vs. impact estimates."),
+                                        ("ship-check", &["ship", "release", "deploy"], "\
+                                            Perform a pre-ship checklist review.\n\
+                                            Check: tests passing, no TODOs/FIXMEs, error handling, logging,\n\
+                                            config externalised, secrets not hardcoded, docs updated,\n\
+                                            CHANGELOG updated, version bumped.\n\
+                                            Output a PASS/FAIL/WARN checklist table."),
+                                        ("onboard", &["onboard", "new-dev"], "\
+                                            Generate an onboarding guide for a new developer.\n\
+                                            Include: project purpose, architecture overview, how to run locally,\n\
+                                            key files to read first, coding conventions, how to contribute,\n\
+                                            glossary of domain terms.\n\
+                                            Keep it practical and under 500 words."),
+                                    ];
+                                    if name.is_empty() {
+                                        let wf_list = workflow_prompts.iter()
+                                            .map(|(n, aliases, _)| format!("  {n}  (aliases: {})", aliases.join(", ")))
+                                            .collect::<Vec<_>>().join("\n");
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("Available workflows:\n{wf_list}")));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let matched = workflow_prompts.iter().find(|(n, aliases, _)| {
+                                        *n == name || aliases.contains(&name)
+                                    });
+                                    match matched {
+                                        Some((wf_name, _, prompt_text)) => {
+                                            let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                            ui.chat_lines.push(ChatLine::User(format!("/workflow  {wf_name}"), ts));
+                                            ui.msg_times_secs.push(ts);
+                                            ui.status_running = true;
+                                            ui.waiting_since = Some(std::time::Instant::now());
+                                            ui.follow_tail = true;
+                                            if _ctx.send(UiCommand::UserMessage(prompt_text.to_string())).is_err() { break 'outer; }
+                                        }
+                                        None => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("Unknown workflow: {name}\n  Use /workflow to list available workflows.")));
+                                        }
+                                    }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/prompt-engineer ") || cmd == "/prompt-engineer" => {
+                                    // /prompt-engineer <prompt>  — AI helps improve a prompt
+                                    let orig_prompt = cmd.trim_start_matches("/prompt-engineer").trim();
+                                    if orig_prompt.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /prompt-engineer <your prompt>\n  AI rewrites it to be clearer, more specific, and more effective.".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Improve this AI prompt to get better results:\n\n\
+                                        Original: \"{orig_prompt}\"\n\n\
+                                        Provide:\n\
+                                        1. **Analysis** — what's weak about the current prompt (2-3 points)\n\
+                                        2. **Improved version** — rewritten prompt in a code block\n\
+                                        3. **What changed** — bullet points explaining each improvement\n\
+                                        4. **Variation** — an alternative approach with different framing\n\n\
+                                        Focus on: specificity, context, output format, examples, constraints."
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    let short: String = orig_prompt.chars().take(50).collect();
+                                    ui.chat_lines.push(ChatLine::User(format!("/prompt-engineer  {short}{}",
+                                        if orig_prompt.len() > 50 { "…" } else { "" }), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/ai-debug ") || cmd == "/ai-debug" => {
+                                    // /ai-debug <error or description>  — structured AI debugging session
+                                    let problem = cmd.trim_start_matches("/ai-debug").trim();
+                                    if problem.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /ai-debug <error message or problem description>".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    // include recent session context
+                                    let recent_errors: Vec<String> = ui.chat_lines.iter().rev().take(10).filter_map(|cl| {
+                                        if let ChatLine::SystemNote(s) = cl {
+                                            if s.to_lowercase().contains("error") || s.to_lowercase().contains("failed") {
+                                                Some(s.chars().take(300).collect())
+                                            } else { None }
+                                        } else { None }
+                                    }).collect();
+                                    let error_context = if recent_errors.is_empty() { String::new() } else {
+                                        format!("\n\nRecent errors from session:\n{}", recent_errors.join("\n"))
+                                    };
+                                    let prompt = format!(
+                                        "Debug this problem using the scientific method:\n\n\
+                                        Problem: {problem}\n\n\
+                                        Structure your response:\n\
+                                        ## Root Cause Hypothesis\n\
+                                        [Most likely cause based on the error pattern]\n\n\
+                                        ## Why This Happens\n\
+                                        [Explain the mechanism behind the error]\n\n\
+                                        ## Diagnostic Steps\n\
+                                        [3-5 specific commands/checks to confirm the hypothesis]\n\n\
+                                        ## Fix\n\
+                                        [Exact code or commands to resolve it]\n\n\
+                                        ## Prevention\n\
+                                        [How to avoid this class of bug in the future]{error_context}"
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    let short: String = problem.chars().take(60).collect();
+                                    ui.chat_lines.push(ChatLine::User(format!("/ai-debug  {short}{}",
+                                        if problem.len() > 60 { "…" } else { "" }), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -12983,7 +13191,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/flashcard ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/impl ", "/man-ai ", "/pseudocode ", "/quiz ", "/scaffold ", "/teach ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
+                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/flashcard ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/impl ", "/man-ai ", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/session-summary", "/teach ", "/workflow", "/workflow ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
