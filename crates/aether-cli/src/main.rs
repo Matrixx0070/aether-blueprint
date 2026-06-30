@@ -5297,7 +5297,17 @@ Input shortcuts\n\
     ◈ cosign keyless provenance on every release\n\
     ◈ SIEM forwarding  ·  tenant quota  ·  OTel tracing\n\
 \n\
-  /help for key bindings  ·  /model to switch AI  ·  /cost for usage",
+  Power Tools (100+ commands — /help power for full list)\n\
+    ◈ /scan /secrets /owasp /deps /sbom /vulnscan /ctf-tools  security research\n\
+    ◈ /gen-tests /mock /code-review /pr-review /refactor      AI code workflows\n\
+    ◈ /blame /grep-code /flow /heatmap /metrics /deps-graph    code intelligence\n\
+    ◈ /optimize /perf-hint /translate-code /arch-review        performance + arch\n\
+    ◈ /bench /test /coverage /lint /format-code /run           project runners\n\
+    ◈ /ask-code /explain-error /debug-ai /doc-gen /todo-ai     AI-powered dev\n\
+    ◈ /status /log-parse /api-test /changelog /recent          ops + project mgmt\n\
+    ◈ /watch /profile /patch /rename /count-tokens             precision tools\n\
+\n\
+  /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
                                         model = ui.model,
                                         session = ui.session_id,

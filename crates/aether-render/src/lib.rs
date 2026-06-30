@@ -328,7 +328,8 @@ impl UiState {
             ChatLine::SplashRow { logo: "       ◆◆◆◆◆◆◆◆◆◆       ".to_string(), info: String::new(),                  style: SplashStyle::Title },
             ChatLine::SplashRow { logo: "         ◆◆◆◆◆◆         ".to_string(), info: String::new(),                  style: SplashStyle::Title },
             ChatLine::SplashRow { logo: "           ◆◆           ".to_string(), info: String::new(),                  style: SplashStyle::Title },
-            ChatLine::SplashRow { logo: String::new(), info: "/help  ·  F7 theme  ·  Ctrl+G find  ·  /model switch  ·  /cost usage  ·  /version features".to_string(), style: SplashStyle::Dim },
+            ChatLine::SplashRow { logo: String::new(), info: "/help  ·  /help power  ·  F7 theme  ·  Ctrl+G find  ·  /model switch  ·  /cost  ·  /version".to_string(), style: SplashStyle::Dim },
+            ChatLine::SplashRow { logo: String::new(), info: "Power: /scan  /secrets  /deps  /sbom  /owasp  /vulnscan  /ctf-tools  /owasp  /gen-tests  /arch-review".to_string(), style: SplashStyle::Ok },
             {
                 let tips: &[&str] = &[
                     "Tip: /copy all — copies the full conversation to clipboard",
@@ -337,7 +338,7 @@ impl UiState {
                     "Tip: F6 — focus mode hides the hints bar for more chat space",
                     "Tip: /extract — writes all code blocks to /tmp files by language",
                     "Tip: /speed — sparkline of token throughput across responses",
-                    "Tip: /todo add <task> — built-in todo tracker with progress bar",
+                    "Tip: /todo + <task> — built-in todo tracker with progress bar",
                     "Tip: Ctrl+G — find text using your current input buffer as pattern",
                     "Tip: /bm — bookmark the current position; /bookmarks to list",
                     "Tip: Alt+. — insert the last word from the AI response into input",
@@ -346,6 +347,21 @@ impl UiState {
                     "Tip: /pin <note> — pin a sticky note visible in the tools panel",
                     "Tip: /goto N — jump to the Nth user/AI exchange",
                     "Tip: Ctrl+B — wrap the word at cursor in **bold** markdown",
+                    "Tip: /ask-code <file> [q] — inject a file and ask AI about it",
+                    "Tip: /grep-code <pattern> — regex search across all source files",
+                    "Tip: /secrets [dir] — scan for hardcoded credentials (14 patterns)",
+                    "Tip: /pr-review staged — AI reviews your staged git changes",
+                    "Tip: /gen-tests <file> — AI generates full test suite for a file",
+                    "Tip: /heatmap — visual git change-frequency map of your files",
+                    "Tip: /explain-error — AI explains the last error + how to fix it",
+                    "Tip: /translate-code <file> <lang> — port code to another language",
+                    "Tip: /arch-review — full architecture audit: risks + roadmap + grade",
+                    "Tip: /flow <file> — static call-flow outline for any source file",
+                    "Tip: /metrics — LoC breakdown by language with percentage bar chart",
+                    "Tip: /changelog — AI generates CHANGELOG from your recent commits",
+                    "Tip: /status — project dashboard: git + tests + env + session cost",
+                    "Tip: /bench — smart benchmark runner (cargo/jest/go/pytest)",
+                    "Tip: /format-code — auto-format with the right tool for any language",
                 ];
                 let tip_idx = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
