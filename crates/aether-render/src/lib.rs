@@ -287,6 +287,10 @@ pub enum UiCommand {
     RemovePlaybookEntry(usize),
     /// List all error playbook entries.
     QueryPlaybook,
+    /// Configure auto-retry: (error_threshold, max_retries). 0,0 = off.
+    SetRetryOnError(usize, usize),
+    /// Show current auto-retry configuration.
+    QueryRetryOnError,
     /// Annotate the current turn with a label (turn_index, label).
     LabelTurn(usize, String),
     /// List all labeled turns.

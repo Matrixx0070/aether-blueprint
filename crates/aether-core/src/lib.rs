@@ -283,6 +283,14 @@ pub struct Session {
     /// User annotations on turns: Vec of (turn_index, label_text).
     /// Set by the user mid-session to mark important moments for navigation.
     pub turn_labels: Vec<(usize, String)>,
+
+    /// When >0, automatically re-run a failed turn (one with ≥this many tool
+    /// errors) up to `retry_on_error_max` additional times before pausing.
+    pub retry_on_error_threshold: usize,
+    /// Maximum number of automatic retries per user message. 0=off.
+    pub retry_on_error_max: usize,
+    /// Current retry count for the active user message turn.
+    pub retry_on_error_count: usize,
 }
 
 impl Session {
@@ -354,6 +362,9 @@ impl Session {
             response_format: None,
             sticky_context: Vec::new(),
             turn_labels: Vec::new(),
+            retry_on_error_threshold: 0,
+            retry_on_error_max: 0,
+            retry_on_error_count: 0,
         }
     }
 

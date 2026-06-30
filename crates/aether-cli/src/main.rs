@@ -6406,6 +6406,34 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 UiCommand::SetAlias(_, _) | UiCommand::RemoveAlias(_) | UiCommand::QueryAliases => {
                     continue;
                 }
+                UiCommand::SetRetryOnError(threshold, max_retries) => {
+                    session.retry_on_error_threshold = threshold;
+                    session.retry_on_error_max = max_retries;
+                    session.retry_on_error_count = 0;
+                    let note = if threshold == 0 || max_retries == 0 {
+                        "Auto-retry-on-error: off.".to_string()
+                    } else {
+                        format!(
+                            "Auto-retry-on-error: ON — retry up to {max_retries}x when turn has ≥{threshold} tool error(s)."
+                        )
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryRetryOnError => {
+                    let note = if session.retry_on_error_threshold == 0 || session.retry_on_error_max == 0 {
+                        "Auto-retry-on-error: off. Use /retry-on-error <N> <max> to enable.".to_string()
+                    } else {
+                        format!(
+                            "Auto-retry-on-error: ON  |  Threshold: ≥{} errors  |  Max retries: {}  |  Current count: {}",
+                            session.retry_on_error_threshold,
+                            session.retry_on_error_max,
+                            session.retry_on_error_count
+                        )
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::LabelTurn(turn, label) => {
                     // When turn==0 (sentinel from TUI), use the current session turn_index.
                     let effective_turn = if turn == 0 { session.turn_index } else { turn };
@@ -7534,7 +7562,31 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 });
 
                 match outcome {
-                    TurnOutcome::AwaitUser => { auto_continue_count = 0; break; }
+                    TurnOutcome::AwaitUser => {
+                        // Auto-retry-on-error: if configured and this turn had enough errors,
+                        // automatically re-run without waiting for user input.
+                        if session.retry_on_error_threshold > 0 && session.retry_on_error_max > 0 {
+                            let turn_errs: usize = session.plan.tool_call_stats.values()
+                                .map(|(_, err)| err)
+                                .sum();
+                            if turn_errs >= session.retry_on_error_threshold
+                                && session.retry_on_error_count < session.retry_on_error_max
+                            {
+                                session.retry_on_error_count += 1;
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                    "[Auto-retry] Turn had {turn_errs} tool error(s) ≥ threshold {}. \
+                                     Auto-retry {}/{} …",
+                                    session.retry_on_error_threshold,
+                                    session.retry_on_error_count,
+                                    session.retry_on_error_max
+                                )));
+                                continue;
+                            }
+                        }
+                        session.retry_on_error_count = 0;
+                        auto_continue_count = 0;
+                        break;
+                    }
                     TurnOutcome::ContinueImmediately => {
                         // Cost cap: stop the agent if cumulative spend exceeds the limit.
                         if session.cost_cap_usd > 0.0 {
@@ -25283,6 +25335,27 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /retry-on-error [N max|off] — auto-retry when turn has ≥N errors
+                                cmd_str if cmd_str == "/retry-on-error" || cmd_str.starts_with("/retry-on-error ") => {
+                                    let arg = cmd_str.trim_start_matches("/retry-on-error").trim();
+                                    let (threshold, max_retries) = if arg.is_empty() || arg == "off" {
+                                        (0usize, 0usize)
+                                    } else {
+                                        let parts: Vec<&str> = arg.split_whitespace().collect();
+                                        let t = parts.first().and_then(|s| s.parse().ok()).unwrap_or(1);
+                                        let m = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(3);
+                                        (t, m)
+                                    };
+                                    let show = arg.is_empty();
+                                    if _ctx.send(UiCommand::SetRetryOnError(threshold, max_retries)).is_err() { break 'outer; }
+                                    if show {
+                                        if _ctx.send(UiCommand::QueryRetryOnError).is_err() { break 'outer; }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /label <text> — annotate the current turn with a label
                                 cmd_str if cmd_str.starts_with("/label ") => {
                                     let label = cmd_str.trim_start_matches("/label ").trim().to_string();
@@ -26109,6 +26182,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/label ",
                             "/labels",
                             "/label-rm ",
+                            "/retry-on-error", "/retry-on-error ", "/retry-on-error off",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
