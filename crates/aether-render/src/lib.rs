@@ -409,6 +409,12 @@ pub enum UiCommand {
     ReplayLast,
     /// List past user messages with their indices.
     QueryReplayList,
+    /// Remove the last N items from conversation history — alias for the existing TrimHistory variant.
+    TrimLastN(usize),
+    /// Remove all User items from conversation history.
+    TrimUserHistory,
+    /// Remove all Assistant items from conversation history.
+    TrimAssistantHistory,
     /// Enable or disable think-aloud mode (bool). When enabling with a custom preamble, see SetThinkAloudPrompt.
     SetThinkAloud(bool),
     /// Set a custom think-aloud preamble (empty = use default).

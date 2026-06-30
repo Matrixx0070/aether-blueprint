@@ -6564,6 +6564,36 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::TrimLastN(n) => {
+                    let before = session.history.len();
+                    let remove = n.max(1).min(before);
+                    let new_len = before - remove;
+                    session.history.truncate(new_len);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History trimmed: removed last {remove} item(s). {new_len} items remain (was {before})."
+                    )));
+                    continue;
+                }
+                UiCommand::TrimUserHistory => {
+                    use aether_core::context::ConversationItem;
+                    let before = session.history.len();
+                    session.history.retain(|item| !matches!(item, ConversationItem::User(_)));
+                    let removed = before - session.history.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Trim user history: removed {removed} User item(s). {} remain.", session.history.len()
+                    )));
+                    continue;
+                }
+                UiCommand::TrimAssistantHistory => {
+                    use aether_core::context::ConversationItem;
+                    let before = session.history.len();
+                    session.history.retain(|item| !matches!(item, ConversationItem::Assistant { .. }));
+                    let removed = before - session.history.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Trim assistant history: removed {removed} Assistant item(s). {} remain.", session.history.len()
+                    )));
+                    continue;
+                }
                 UiCommand::SetThinkAloud(enabled) => {
                     session.think_aloud = enabled;
                     let note = if enabled {
@@ -26880,6 +26910,32 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /trim-last [n] — remove last N history items (default 1)
+                                cmd_str if cmd_str == "/trim-last" || cmd_str.starts_with("/trim-last ") => {
+                                    let arg = cmd_str.trim_start_matches("/trim-last").trim();
+                                    let n = arg.parse::<usize>().unwrap_or(1).max(1);
+                                    if _ctx.send(UiCommand::TrimLastN(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /trim-user — remove all User items from history
+                                "/trim-user" => {
+                                    if _ctx.send(UiCommand::TrimUserHistory).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /trim-assistant — remove all Assistant items from history
+                                "/trim-assistant" => {
+                                    if _ctx.send(UiCommand::TrimAssistantHistory).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /think-aloud [on|off] — toggle reasoning-first mode
                                 cmd_str if cmd_str == "/think-aloud" || cmd_str.starts_with("/think-aloud ") => {
                                     let arg = cmd_str.trim_start_matches("/think-aloud").trim();
@@ -27939,6 +27995,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/model-for-next-show",
                             "/think-aloud", "/think-aloud on", "/think-aloud off",
                             "/think-aloud-prompt ",
+                            "/trim-last", "/trim-last ",
+                            "/trim-user",
+                            "/trim-assistant",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
