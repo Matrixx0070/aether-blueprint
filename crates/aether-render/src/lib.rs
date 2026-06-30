@@ -287,6 +287,12 @@ pub enum UiCommand {
     RemovePlaybookEntry(usize),
     /// List all error playbook entries.
     QueryPlaybook,
+    /// Enable or disable auto git-commit after each tool-using turn.
+    SetAutoCommit(bool),
+    /// Set the commit message template (supports {turn} placeholder).
+    SetAutoCommitTemplate(String),
+    /// Show current auto-commit config.
+    QueryAutoCommit,
     /// Show the most recent N per-turn cost entries (default 10).
     QueryCostPerTurn(usize),
     /// Show a full per-turn cost report for the session.

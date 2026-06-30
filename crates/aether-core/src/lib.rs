@@ -250,6 +250,13 @@ pub struct Session {
     /// Per-turn cost log: Vec of (turn_index, tokens_in, tokens_out, cost_usd).
     /// Appended after each agent turn for per-turn cost reporting.
     pub turn_cost_log: Vec<(usize, u64, u64, f64)>,
+
+    /// When true, run `git add -A && git commit -m <auto_commit_template>` after
+    /// each tool-using agent turn. Changes are committed automatically.
+    pub auto_commit: bool,
+    /// Commit message template for auto-commit. Supports {turn} placeholder.
+    /// Default: "aether: auto-commit turn {turn}".
+    pub auto_commit_template: String,
 }
 
 impl Session {
@@ -313,6 +320,8 @@ impl Session {
             llm_fallback_model: None,
             llm_fallback_count: 0,
             turn_cost_log: Vec::new(),
+            auto_commit: false,
+            auto_commit_template: "aether: auto-commit turn {turn}".to_string(),
         }
     }
 

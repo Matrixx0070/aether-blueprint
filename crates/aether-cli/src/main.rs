@@ -6406,6 +6406,37 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 UiCommand::SetAlias(_, _) | UiCommand::RemoveAlias(_) | UiCommand::QueryAliases => {
                     continue;
                 }
+                UiCommand::SetAutoCommit(enabled) => {
+                    session.auto_commit = enabled;
+                    let note = if enabled {
+                        format!(
+                            "Auto-commit: ON — will run `git add -A && git commit` after each tool-using turn.\n\
+                             Message template: '{}'\n\
+                             Use /auto-commit-msg <template> to change. Use {{turn}} as placeholder.",
+                            session.auto_commit_template
+                        )
+                    } else {
+                        "Auto-commit: off.".to_string()
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::SetAutoCommitTemplate(tmpl) => {
+                    session.auto_commit_template = tmpl.clone();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Auto-commit template set: '{tmpl}'"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryAutoCommit => {
+                    let note = if session.auto_commit {
+                        format!("Auto-commit: ON  |  Template: '{}'", session.auto_commit_template)
+                    } else {
+                        format!("Auto-commit: off  |  Template: '{}'\n  Use /auto-commit on to enable.", session.auto_commit_template)
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::QueryCostPerTurn(n) => {
                     let n = if n == 0 { 10 } else { n };
                     let log = &session.turn_cost_log;
@@ -7378,6 +7409,31 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     session.history.push(aether_core::context::ConversationItem::User(
                         hook_note
                     ));
+                }
+            }
+            // Auto-commit: after each tool-using turn, git add -A && git commit.
+            if session.auto_commit {
+                let used_tools = session.plan.tool_call_stats.values().any(|(ok, err)| ok + err > 0);
+                if used_tools {
+                    let msg = session.auto_commit_template
+                        .replace("{turn}", &session.turn_index.to_string());
+                    let commit_out = std::process::Command::new("sh")
+                        .arg("-c")
+                        .arg(format!("git add -A && git commit -m '{}' 2>&1 || true", msg.replace('\'', "\\'")))
+                        .output();
+                    let note = match commit_out {
+                        Ok(o) => {
+                            let out = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                            if out.is_empty() || out.contains("nothing to commit") {
+                                format!("[Auto-commit] Turn {} — nothing to commit.", session.turn_index)
+                            } else {
+                                format!("[Auto-commit] Turn {} — committed: {}", session.turn_index,
+                                    out.lines().next().unwrap_or("ok"))
+                            }
+                        }
+                        Err(e) => format!("[Auto-commit] Failed: {e}"),
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                 }
             }
             // Auto-status: emit a compact turn summary before awaiting user input.
@@ -24977,6 +25033,29 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /auto-commit on|off — auto git commit after each tool-using turn
+                                cmd_str if cmd_str == "/auto-commit" || cmd_str.starts_with("/auto-commit ") => {
+                                    let arg = cmd_str.trim_start_matches("/auto-commit").trim();
+                                    if arg.is_empty() {
+                                        if _ctx.send(UiCommand::QueryAutoCommit).is_err() { break 'outer; }
+                                    } else {
+                                        let enabled = arg != "off";
+                                        if _ctx.send(UiCommand::SetAutoCommit(enabled)).is_err() { break 'outer; }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /auto-commit-msg <template> — set commit message template
+                                cmd_str if cmd_str.starts_with("/auto-commit-msg ") => {
+                                    let tmpl = cmd_str.trim_start_matches("/auto-commit-msg ").trim().to_string();
+                                    if _ctx.send(UiCommand::SetAutoCommitTemplate(tmpl)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /cost-per-turn [N] — show last N per-turn costs (default 10)
                                 cmd_str if cmd_str == "/cost-per-turn" || cmd_str.starts_with("/cost-per-turn ") => {
                                     let arg = cmd_str.trim_start_matches("/cost-per-turn").trim();
@@ -25584,6 +25663,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/llm-fallback-show",
                             "/cost-per-turn", "/cost-per-turn ",
                             "/cost-report",
+                            "/auto-commit", "/auto-commit on", "/auto-commit off",
+                            "/auto-commit-msg ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
