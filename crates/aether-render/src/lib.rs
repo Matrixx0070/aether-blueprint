@@ -963,6 +963,12 @@ pub enum UiCommand {
     QueryPromptMacrosList,
     /// Show current turn index.
     QueryTurnIndexShow,
+    /// List all history annotations.
+    QueryHistoryAnnotationList,
+    /// Show auto-continue cooldown configuration.
+    QueryAutoContinueCooldown,
+    /// Show last tool call signatures (dedup detection).
+    QueryLastToolSigs,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

@@ -7700,6 +7700,48 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryHistoryAnnotationList => {
+                    if session.history_annotations.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "History annotations: none. Use /annotate <idx> <text> to add one.".to_string()
+                        ));
+                    } else {
+                        let mut lines = vec![format!("History annotations ({}):", session.history_annotations.len())];
+                        for (idx, ann) in &session.history_annotations {
+                            lines.push(format!("  item {idx}: {ann}"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(lines.join("\n")));
+                    }
+                    continue;
+                }
+                UiCommand::QueryAutoContinueCooldown => {
+                    let ms = session.auto_continue_cooldown_ms;
+                    if ms == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Auto-continue cooldown: OFF (no delay between auto-continue turns).".to_string()
+                        ));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Auto-continue cooldown: {}ms delay between auto-continue turns.", ms
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryLastToolSigs => {
+                    if session.last_tool_signatures.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Last tool signatures: none (no tool calls this turn yet).".to_string()
+                        ));
+                    } else {
+                        let mut lines = vec![format!("Last tool signatures ({} tracked):", session.last_tool_signatures.len())];
+                        for (name, sig) in &session.last_tool_signatures {
+                            let preview = if sig.len() > 60 { format!("{}…", &sig[..60]) } else { sig.clone() };
+                            lines.push(format!("  {name}: {preview}"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(lines.join("\n")));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionEnvList => {
                     if session.session_env.is_empty() {
                         let _ = etx_for_driver.send(UiEvent::SystemNote(
@@ -33589,6 +33631,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /history-annotation-list — list all history annotations
+                                "/history-annotation-list" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAnnotationList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /auto-continue-cooldown-show — show auto-continue cooldown ms
+                                "/auto-continue-cooldown-show" => {
+                                    if _ctx.send(UiCommand::QueryAutoContinueCooldown).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /last-tool-sigs — show last tool call signatures for dedup
+                                "/last-tool-sigs" => {
+                                    if _ctx.send(UiCommand::QueryLastToolSigs).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -34377,6 +34437,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-env-list",
                             "/prompt-macros-list",
                             "/turn-index-show",
+                            "/history-annotation-list",
+                            "/auto-continue-cooldown-show",
+                            "/last-tool-sigs",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
