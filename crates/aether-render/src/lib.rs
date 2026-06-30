@@ -813,6 +813,12 @@ pub enum UiCommand {
     QueryHistoryGrepCount(String),
     /// Count files in the warmup-files list.
     QueryWarmupCount,
+    /// Count progress items (total, done, pending).
+    QueryProgressCount,
+    /// Remove the last item from conversation history.
+    HistoryDropLast,
+    /// Show cumulative cost and total tokens together.
+    QueryCostTotalTokens,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

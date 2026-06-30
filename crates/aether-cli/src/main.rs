@@ -7236,6 +7236,40 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryProgressCount => {
+                    let total = session.progress_items.len();
+                    if total == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No progress items. Use /progress-add <description>.".to_string()));
+                    } else {
+                        let done = session.progress_items.iter().filter(|(_, d)| *d).count();
+                        let pending = total - done;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Progress: {done}/{total} done, {pending} pending."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::HistoryDropLast => {
+                    if session.history.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("History is already empty.".to_string()));
+                    } else {
+                        session.history.pop();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Dropped last history item. History now has {} items.", session.history.len()
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryCostTotalTokens => {
+                    let total_cost: f64 = session.turn_cost_log.iter().map(|&(_, _, _, c)| c).sum();
+                    let total_in: u64 = session.turn_cost_log.iter().map(|&(_, i, _, _)| i).sum();
+                    let total_out: u64 = session.turn_cost_log.iter().map(|&(_, _, o, _)| o).sum();
+                    let turns = session.turn_cost_log.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Cost & tokens ({turns} turns):\n  Cost:         ${total_cost:.6}\n  Input tokens:  {total_in}\n  Output tokens: {total_out}\n  Total tokens:  {}", total_in + total_out
+                    )));
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -32048,6 +32082,30 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /progress-count — count progress items
+                                "/progress-count" => {
+                                    if _ctx.send(UiCommand::QueryProgressCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-drop-last — remove last item from history
+                                "/history-drop-last" => {
+                                    if _ctx.send(UiCommand::HistoryDropLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /cost-total-tokens — show cost + total tokens summary
+                                "/cost-total-tokens" => {
+                                    if _ctx.send(UiCommand::QueryCostTotalTokens).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -32761,6 +32819,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/macro-count",
                             "/history-grep-count ",
                             "/warmup-count",
+                            "/progress-count",
+                            "/history-drop-last",
+                            "/cost-total-tokens",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
