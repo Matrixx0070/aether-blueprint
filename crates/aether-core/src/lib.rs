@@ -246,6 +246,10 @@ pub struct Session {
     pub llm_fallback_model: Option<String>,
     /// Number of times the fallback model has been invoked this session.
     pub llm_fallback_count: u64,
+
+    /// Per-turn cost log: Vec of (turn_index, tokens_in, tokens_out, cost_usd).
+    /// Appended after each agent turn for per-turn cost reporting.
+    pub turn_cost_log: Vec<(usize, u64, u64, f64)>,
 }
 
 impl Session {
@@ -308,6 +312,7 @@ impl Session {
             cost_cap_usd: 0.0,
             llm_fallback_model: None,
             llm_fallback_count: 0,
+            turn_cost_log: Vec::new(),
         }
     }
 

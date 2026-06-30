@@ -287,6 +287,10 @@ pub enum UiCommand {
     RemovePlaybookEntry(usize),
     /// List all error playbook entries.
     QueryPlaybook,
+    /// Show the most recent N per-turn cost entries (default 10).
+    QueryCostPerTurn(usize),
+    /// Show a full per-turn cost report for the session.
+    QueryCostReport,
     /// Set a fallback LLM model to retry with on primary model failure (None = off).
     SetLlmFallback(Option<String>),
     /// Show the current fallback model and invocation count.

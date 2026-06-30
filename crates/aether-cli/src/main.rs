@@ -6406,6 +6406,50 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 UiCommand::SetAlias(_, _) | UiCommand::RemoveAlias(_) | UiCommand::QueryAliases => {
                     continue;
                 }
+                UiCommand::QueryCostPerTurn(n) => {
+                    let n = if n == 0 { 10 } else { n };
+                    let log = &session.turn_cost_log;
+                    let note = if log.is_empty() {
+                        "No per-turn cost data yet (agent hasn't run any turns).".to_string()
+                    } else {
+                        let shown = log.iter().rev().take(n).collect::<Vec<_>>();
+                        let mut lines = format!("=== Last {} turn(s) cost ===\n", shown.len());
+                        for (turn, d_in, d_out, cost) in shown.iter().rev() {
+                            lines.push_str(&format!(
+                                "  Turn {turn:3}: ${cost:.5}  in={d_in} out={d_out}\n"
+                            ));
+                        }
+                        let total: f64 = log.iter().map(|(_, _, _, c)| c).sum();
+                        lines.push_str(&format!("  ─── Session total: ${total:.4}"));
+                        lines
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryCostReport => {
+                    let log = &session.turn_cost_log;
+                    let note = if log.is_empty() {
+                        "No cost data recorded yet.".to_string()
+                    } else {
+                        let total: f64 = log.iter().map(|(_, _, _, c)| c).sum();
+                        let max_entry = log.iter().max_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal));
+                        let avg = total / log.len() as f64;
+                        let mut lines = format!(
+                            "=== Session cost report ({} turns) ===\n  Total: ${total:.4}  |  Avg/turn: ${avg:.5}\n",
+                            log.len()
+                        );
+                        if let Some((mt, _, _, mc)) = max_entry {
+                            lines.push_str(&format!("  Most expensive: turn {mt} (${mc:.5})\n"));
+                        }
+                        lines.push_str("  Turn  | Cost        | In tok | Out tok\n");
+                        for (turn, d_in, d_out, cost) in log.iter() {
+                            lines.push_str(&format!("  {turn:5} | ${cost:.5} | {d_in:6} | {d_out:7}\n"));
+                        }
+                        lines
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::SetLlmFallback(model_opt) => {
                     let note = match &model_opt {
                         Some(m) => format!(
@@ -7056,6 +7100,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     let _ = etx_inner.send(UiEvent::AssistantDelta(delta.to_string()));
                 });
+                let pre_turn_usage = session.usage_total.clone();
                 let first_result = agent_turn_streamed(&mut session, next_input.take(), sink).await;
                 let outcome = match first_result {
                     Ok(o) => o,
@@ -7099,6 +7144,18 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                 };
 
+                // Record per-turn cost entry for /cost-per-turn / /cost-report.
+                {
+                    let d_in  = session.usage_total.input_tokens.saturating_sub(pre_turn_usage.input_tokens);
+                    let d_out = session.usage_total.output_tokens.saturating_sub(pre_turn_usage.output_tokens);
+                    if d_in + d_out > 0 {
+                        let mut delta_usage = aether_llm::Usage::default();
+                        delta_usage.input_tokens = d_in;
+                        delta_usage.output_tokens = d_out;
+                        let turn_cost = estimate_cost_usd(&session.config.model, &delta_usage);
+                        session.turn_cost_log.push((session.turn_index, d_in, d_out, turn_cost));
+                    }
+                }
                 // Notify the user when automatic compaction fired this turn.
                 if session.compaction_happened {
                     session.compaction_happened = false;
@@ -24920,6 +24977,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /cost-per-turn [N] — show last N per-turn costs (default 10)
+                                cmd_str if cmd_str == "/cost-per-turn" || cmd_str.starts_with("/cost-per-turn ") => {
+                                    let arg = cmd_str.trim_start_matches("/cost-per-turn").trim();
+                                    let n = arg.parse::<usize>().unwrap_or(10);
+                                    if _ctx.send(UiCommand::QueryCostPerTurn(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /cost-report — full per-turn cost breakdown for the session
+                                "/cost-report" => {
+                                    if _ctx.send(UiCommand::QueryCostReport).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /llm-fallback [model|off] — set or clear a fallback model
                                 cmd_str if cmd_str == "/llm-fallback" || cmd_str.starts_with("/llm-fallback ") => {
                                     let arg = cmd_str.trim_start_matches("/llm-fallback").trim();
@@ -25507,6 +25582,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/token-rate",
                             "/llm-fallback ", "/llm-fallback off",
                             "/llm-fallback-show",
+                            "/cost-per-turn", "/cost-per-turn ",
+                            "/cost-report",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
