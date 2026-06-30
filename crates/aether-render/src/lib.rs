@@ -915,6 +915,12 @@ pub enum UiCommand {
     QueryToolOutputShow(String),
     /// Show session start time and elapsed duration.
     QueryStartTime,
+    /// List all auto-tag rules (pattern → tag).
+    QueryAutoTagRulesList,
+    /// List all persistent reminders.
+    QueryPersistentRemindersList,
+    /// List all sticky-context entries.
+    QueryStickyContextList,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

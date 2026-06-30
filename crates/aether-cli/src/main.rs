@@ -7700,6 +7700,49 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryAutoTagRulesList => {
+                    if session.auto_tag_rules.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Auto-tag rules: none. Use /auto-tag <pattern> <tag> to add one.".to_string()
+                        ));
+                    } else {
+                        let mut lines = vec![format!("Auto-tag rules ({}):", session.auto_tag_rules.len())];
+                        for (pat, tag) in &session.auto_tag_rules {
+                            lines.push(format!("  {pat:?} → {tag:?}"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(lines.join("\n")));
+                    }
+                    continue;
+                }
+                UiCommand::QueryPersistentRemindersList => {
+                    if session.persistent_reminders.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Persistent reminders: none. Use /remind <text> to add one.".to_string()
+                        ));
+                    } else {
+                        let mut lines = vec![format!("Persistent reminders ({}):", session.persistent_reminders.len())];
+                        for (i, r) in session.persistent_reminders.iter().enumerate() {
+                            lines.push(format!("  [{i}] {r}"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(lines.join("\n")));
+                    }
+                    continue;
+                }
+                UiCommand::QueryStickyContextList => {
+                    if session.sticky_context.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Sticky context: empty. Use /sticky <text> to add persistent context.".to_string()
+                        ));
+                    } else {
+                        let mut lines = vec![format!("Sticky context ({} entries):", session.sticky_context.len())];
+                        for (i, s) in session.sticky_context.iter().enumerate() {
+                            let preview = if s.len() > 80 { format!("{}…", &s[..80]) } else { s.clone() };
+                            lines.push(format!("  [{i}] {preview}"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(lines.join("\n")));
+                    }
+                    continue;
+                }
                 UiCommand::QueryLabelList => {
                     if session.turn_labels.is_empty() {
                         let _ = etx_for_driver.send(UiEvent::SystemNote(
@@ -33125,6 +33168,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /auto-tag-rules-list — list all auto-tag rules
+                                "/auto-tag-rules-list" => {
+                                    if _ctx.send(UiCommand::QueryAutoTagRulesList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /persistent-reminders-list — list all persistent reminders
+                                "/persistent-reminders-list" => {
+                                    if _ctx.send(UiCommand::QueryPersistentRemindersList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /sticky-context-list — list all sticky-context entries
+                                "/sticky-context-list" => {
+                                    if _ctx.send(UiCommand::QueryStickyContextList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -33889,6 +33950,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/label-list",
                             "/tool-output-show ",
                             "/start-time",
+                            "/auto-tag-rules-list",
+                            "/persistent-reminders-list",
+                            "/sticky-context-list",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
