@@ -6778,6 +6778,92 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QuerySnapshotList => {
+                    if session.saved_snapshots.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No snapshots saved. Use /snapshot-save <name>.".to_string()));
+                    } else {
+                        let mut lines: Vec<String> = session.saved_snapshots.iter().map(|(name, (hist, plan))| {
+                            let hist_bytes: usize = hist.iter().map(|item| match item {
+                                ConversationItem::User(t) => t.len(),
+                                ConversationItem::Assistant { text, .. } => text.as_deref().map(|t| t.len()).unwrap_or(0),
+                                ConversationItem::ToolResults(r) => r.iter().map(|rr| rr.content.len()).sum(),
+                            }).sum();
+                            format!("  '{}': {} items, ~{}B history, {}B plan", name, hist.len(), hist_bytes, plan.text.len())
+                        }).collect();
+                        lines.sort();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Saved snapshots ({}):\n{}", lines.len(), lines.join("\n")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryResponseGrade(n) => {
+                    let asst_items: Vec<(usize, &str)> = session.history.iter().enumerate()
+                        .filter_map(|(i, item)| {
+                            if let ConversationItem::Assistant { text: Some(t), .. } = item { Some((i, t.as_str())) } else { None }
+                        })
+                        .collect();
+                    if n >= asst_items.len() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Response #{n} not found. Total assistant responses: {}.", asst_items.len()
+                        )));
+                    } else {
+                        let (hist_idx, text) = asst_items[n];
+                        let length = text.len();
+                        let words = text.split_whitespace().count();
+                        let sentences = text.split(['.', '!', '?']).filter(|s| !s.trim().is_empty()).count();
+                        let has_code = text.contains("```");
+                        let has_list = text.contains('\n') && (text.contains("- ") || text.contains("* ") || text.contains("1."));
+                        let avg_sentence_len = if sentences > 0 { words / sentences } else { 0 };
+                        let length_grade = match length {
+                            0..=100 => "too short",
+                            101..=500 => "concise",
+                            501..=2000 => "balanced",
+                            2001..=5000 => "detailed",
+                            _ => "very long",
+                        };
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Response #{n} grade [hist:{hist_idx}]:\n  Length:   {} chars ({}) | {} words | {} sentences\n  Avg sentence: {} words\n  Code blocks: {}  |  Lists: {}",
+                            length, length_grade, words, sentences, avg_sentence_len,
+                            if has_code { "yes" } else { "no" },
+                            if has_list { "yes" } else { "no" }
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::SetHistorySizeWarn(bytes) => {
+                    session.history_size_warn_bytes = bytes;
+                    if bytes == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("History size warning cleared.".to_string()));
+                    } else {
+                        let current: usize = session.history.iter().map(|item| match item {
+                            ConversationItem::User(t) => t.len(),
+                            ConversationItem::Assistant { text, .. } => text.as_deref().map(|t| t.len()).unwrap_or(0),
+                            ConversationItem::ToolResults(r) => r.iter().map(|rr| rr.content.len()).sum::<usize>(),
+                        }).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "History size warning set at {}B. Current history: {}B.", bytes, current
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistorySizeWarn => {
+                    let current: usize = session.history.iter().map(|item| match item {
+                        ConversationItem::User(t) => t.len(),
+                        ConversationItem::Assistant { text, .. } => text.as_deref().map(|t| t.len()).unwrap_or(0),
+                        ConversationItem::ToolResults(r) => r.iter().map(|rr| rr.content.len()).sum::<usize>(),
+                    }).sum();
+                    if session.history_size_warn_bytes == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!("History size warning: OFF. Current: {}B.", current)));
+                    } else {
+                        let pct = (current as f64 / session.history_size_warn_bytes as f64 * 100.0).min(100.0);
+                        let flag = if current >= session.history_size_warn_bytes { " ← EXCEEDED" } else { "" };
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "History size warning: {}B. Current: {}B ({:.1}%){flag}.", session.history_size_warn_bytes, current, pct
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionScore => {
                     let turns = session.turn_cost_log.len();
                     // Score components (0-100 each), weighted average
@@ -11287,6 +11373,19 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
                         "Cost alert: ${current_cost:.4} has reached threshold ${:.4}. Agent continues — use /cost-cap to stop on limit.",
                         session.cost_alert_usd
+                    )));
+                }
+            }
+            // History size warning — soft warn when estimated history size exceeds threshold.
+            if session.history_size_warn_bytes > 0 {
+                let current_bytes: usize = session.history.iter().map(|item| match item {
+                    ConversationItem::User(t) => t.len(),
+                    ConversationItem::Assistant { text, .. } => text.as_deref().map(|t| t.len()).unwrap_or(0),
+                    ConversationItem::ToolResults(r) => r.iter().map(|rr| rr.content.len()).sum::<usize>(),
+                }).sum();
+                if current_bytes >= session.history_size_warn_bytes {
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History size warning: {current_bytes}B >= {}B threshold. Consider /compact or /smart-trim.", session.history_size_warn_bytes
                     )));
                 }
             }
@@ -30509,6 +30608,49 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /session-checkpoint-list — list saved snapshots with size
+                                "/session-checkpoint-list" => {
+                                    if _ctx.send(UiCommand::QuerySnapshotList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /response-grade <n> — grade Nth assistant response
+                                cmd_str if cmd_str.starts_with("/response-grade ") => {
+                                    let arg = cmd_str.trim_start_matches("/response-grade ").trim();
+                                    let n = arg.parse::<usize>().unwrap_or(0);
+                                    if _ctx.send(UiCommand::QueryResponseGrade(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-size-warn <bytes> | off — set size warning threshold
+                                cmd_str if cmd_str == "/history-size-warn off" || cmd_str.starts_with("/history-size-warn ") => {
+                                    if cmd_str == "/history-size-warn off" {
+                                        if _ctx.send(UiCommand::SetHistorySizeWarn(0)).is_err() { break 'outer; }
+                                    } else {
+                                        let arg = cmd_str.trim_start_matches("/history-size-warn ").trim();
+                                        if let Ok(n) = arg.parse::<usize>() {
+                                            if _ctx.send(UiCommand::SetHistorySizeWarn(n)).is_err() { break 'outer; }
+                                        } else {
+                                            ui.chat_lines.push(ChatLine::SystemNote("Usage: /history-size-warn <bytes>  or  /history-size-warn off".to_string()));
+                                        }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-size-warn-show — show current threshold
+                                "/history-size-warn-show" => {
+                                    if _ctx.send(UiCommand::QueryHistorySizeWarn).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /session-score — composite quality score 0-100
                                 "/session-score" => {
                                     if _ctx.send(UiCommand::QuerySessionScore).is_err() { break 'outer; }
@@ -31724,6 +31866,10 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-score",
                             "/history-context-window-estimate",
                             "/tool-call-trace ",
+                            "/session-checkpoint-list",
+                            "/response-grade ",
+                            "/history-size-warn ", "/history-size-warn off",
+                            "/history-size-warn-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

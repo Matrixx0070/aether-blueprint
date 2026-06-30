@@ -398,6 +398,9 @@ pub struct Session {
     /// Focus mode topic — appended as a sticky reminder to every turn's system prompt.
     /// None = off.
     pub focus_mode: Option<String>,
+
+    /// Soft warning threshold for history size in bytes (0 = off).
+    pub history_size_warn_bytes: usize,
 }
 
 impl Session {
@@ -501,6 +504,7 @@ impl Session {
             auto_bookmark_every: 0,
             cost_ceiling_usd: 0.0,
             focus_mode: None,
+            history_size_warn_bytes: 0,
         }
     }
 

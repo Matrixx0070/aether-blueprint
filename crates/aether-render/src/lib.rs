@@ -735,6 +735,14 @@ pub enum UiCommand {
     QueryHistoryContextWindowEstimate,
     /// Show full input + output of the Nth tool call in the last assistant turn.
     QueryToolCallTrace(usize),
+    /// List all saved snapshots with their history size.
+    QuerySnapshotList,
+    /// Grade the Nth assistant response on length, tool use, and clarity.
+    QueryResponseGrade(usize),
+    /// Set a soft warning when estimated history size exceeds N bytes (0 = off).
+    SetHistorySizeWarn(usize),
+    /// Show the current history size warning threshold.
+    QueryHistorySizeWarn,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
