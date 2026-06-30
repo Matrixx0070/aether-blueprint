@@ -8747,6 +8747,206 @@ CTF Toolkit — Aether AI-assisted\n\
                                     continue;
                                 }
                                 // ─────────────────────────────────────────────────────────────────
+                                // ── BATCH 85: TEST GENERATION + SMART CONTEXT ────────────────────
+                                cmd if cmd.starts_with("/gen-tests ") || cmd == "/gen-tests" => {
+                                    let rest = cmd.trim_start_matches("/gen-tests").trim();
+                                    if rest.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /gen-tests <file> [style: unit|integration|property|e2e]\n  AI generates comprehensive tests for the file\n  e.g. /gen-tests src/parser.rs unit\n       /gen-tests app.py integration".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let mut parts = rest.splitn(2, char::is_whitespace);
+                                    let file_part = parts.next().unwrap_or("");
+                                    let style = parts.next().unwrap_or("").trim();
+                                    let fpath = if file_part.starts_with('/') { std::path::PathBuf::from(file_part) }
+                                               else { std::env::current_dir().unwrap_or_default().join(file_part) };
+                                    let content = match std::fs::read_to_string(&fpath) {
+                                        Ok(c) => c,
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {file_part}: {e}")));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                    };
+                                    let lines = content.lines().count();
+                                    let ext = fpath.extension().and_then(|e| e.to_str()).unwrap_or("");
+                                    let lang = match ext { "rs" => "rust", "py" => "python", "js"|"mjs" => "javascript", "ts"|"tsx" => "typescript", "go" => "go", "java" => "java", "rb" => "ruby", other => other };
+                                    let test_style = match style {
+                                        "integration" => "integration tests that test components together via real interfaces (no mocks)",
+                                        "property"|"prop"|"fuzz" => "property-based tests that use generative input (QuickCheck/Hypothesis/fast-check style) to find edge cases",
+                                        "e2e" => "end-to-end tests that test the full user-facing behavior",
+                                        _ => "unit tests with complete coverage: happy path, edge cases, error conditions, boundary values",
+                                    };
+                                    let (test_framework, test_file_hint) = match ext {
+                                        "rs"  => ("Rust's built-in #[test] with #[cfg(test)] module", "tests/"),
+                                        "py"  => ("pytest with fixtures", "test_"),
+                                        "go"  => ("Go testing package (*testing.T)", "_test.go"),
+                                        "js"  => ("Jest", "*.test.js"),
+                                        "ts"|"tsx" => ("Vitest or Jest", "*.test.ts"),
+                                        "java" => ("JUnit 5", "Test.java"),
+                                        "rb"  => ("RSpec", "spec/"),
+                                        _     => ("appropriate test framework", "tests/"),
+                                    };
+                                    let prompt = format!(
+                                        "Generate {test_style} for {file_part}  ({lines} lines)\n\nSource:\n```{lang}\n{}\n```\n\n\
+                                         Requirements:\n\
+                                         - Use {test_framework}\n\
+                                         - Test file convention: {test_file_hint}\n\
+                                         - Cover every public function and method\n\
+                                         - Include: happy path, null/empty inputs, out-of-range values, concurrent access (if applicable)\n\
+                                         - Use descriptive test names that document the expected behavior\n\
+                                         - Add a ## Test Coverage Summary table at the end (function → test cases)",
+                                        content.lines().take(350).collect::<Vec<_>>().join("\n")
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/gen-tests {file_part}{}", if style.is_empty() { String::new() } else { format!(" [{style}]") }), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/mock ") || cmd == "/mock" => {
+                                    // Generate mock/stub for an interface or struct
+                                    let rest = cmd.trim_start_matches("/mock").trim();
+                                    if rest.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /mock <file> [interface/trait name]\n  Generate mock implementations for testing\n  e.g. /mock src/db.rs Database\n       /mock api/client.py APIClient".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let mut parts = rest.splitn(2, char::is_whitespace);
+                                    let file_part = parts.next().unwrap_or("");
+                                    let target_name = parts.next().unwrap_or("").trim();
+                                    let fpath = if file_part.starts_with('/') { std::path::PathBuf::from(file_part) }
+                                               else { std::env::current_dir().unwrap_or_default().join(file_part) };
+                                    let content = match std::fs::read_to_string(&fpath) {
+                                        Ok(c) => c,
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {file_part}: {e}")));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                    };
+                                    let ext = fpath.extension().and_then(|e| e.to_str()).unwrap_or("");
+                                    let lang = match ext { "rs" => "rust", "py" => "python", "js"|"mjs" => "javascript", "ts"|"tsx" => "typescript", "go" => "go", other => other };
+                                    let target_hint = if target_name.is_empty() {
+                                        "all traits/interfaces/abstract classes in the file".to_string()
+                                    } else {
+                                        format!("the '{target_name}' trait/interface/class")
+                                    };
+                                    let mock_pattern = match ext {
+                                        "rs" => "mockall::mock! macro or manual MockX struct implementing the trait",
+                                        "py" => "unittest.mock.MagicMock or pytest-mock fixtures with spec=",
+                                        "go" => "testify/mock or gomock generated mock struct",
+                                        "ts"|"tsx"|"js" => "jest.fn() / sinon.stub() or manual mock class implementing the interface",
+                                        "java" => "Mockito @Mock annotations",
+                                        _ => "manual stub struct/class implementing the interface",
+                                    };
+                                    let prompt = format!(
+                                        "Generate mocks for {target_hint} in {file_part}:\n\n```{lang}\n{}\n```\n\n\
+                                         Use {mock_pattern}.\n\
+                                         For each mock:\n\
+                                         1. Configurable return values per method\n\
+                                         2. Call count and argument recording\n\
+                                         3. Example usage showing how to set up the mock in a test\n\
+                                         4. Clear comments explaining what each mock control does",
+                                        content.lines().take(300).collect::<Vec<_>>().join("\n")
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/mock {file_part}{}", if target_name.is_empty() { String::new() } else { format!(" [{target_name}]") }), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/rename ") || cmd == "/rename" => {
+                                    // AI-assisted rename: find all usages and generate a sed-ready rename script
+                                    let rest = cmd.trim_start_matches("/rename").trim();
+                                    if rest.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /rename <old-name> <new-name>\n  Show all occurrences + generate rename script\n  e.g. /rename parse_user parseUser\n       /rename OldClass NewClass".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let tokens: Vec<&str> = rest.split_whitespace().collect();
+                                    let (old_name, new_name) = if tokens.len() >= 2 {
+                                        (tokens[0], tokens[1])
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /rename <old-name> <new-name>".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    };
+                                    // Use grep-code-style search for all occurrences
+                                    use walkdir::WalkDir;
+                                    use regex::Regex;
+                                    let rx = match Regex::new(&format!(r"\b{}\b", regex::escape(old_name))) {
+                                        Ok(r) => r,
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("Bad pattern: {e}")));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                    };
+                                    let cwd = std::env::current_dir().unwrap_or_default();
+                                    let skip_dirs = ["target", "node_modules", ".git", "dist", "__pycache__"];
+                                    let code_exts = ["rs","py","js","ts","tsx","go","java","c","cpp","rb","sh","toml","md"];
+                                    let mut hits: Vec<(String, usize, String)> = Vec::new();
+                                    let mut file_count = 0usize;
+                                    for entry in WalkDir::new(&cwd).into_iter()
+                                        .filter_entry(|e| { let n = e.file_name().to_string_lossy(); !n.starts_with('.') && !skip_dirs.contains(&n.as_ref()) })
+                                        .filter_map(|e| e.ok())
+                                        .filter(|e| e.file_type().is_file())
+                                    {
+                                        let ext = entry.path().extension().and_then(|x| x.to_str()).unwrap_or("");
+                                        if !code_exts.contains(&ext) { continue; }
+                                        let Ok(content) = std::fs::read_to_string(entry.path()) else { continue };
+                                        if !content.contains(old_name) { continue; }
+                                        file_count += 1;
+                                        let rel = entry.path().strip_prefix(&cwd).unwrap_or(entry.path());
+                                        for (lnum, line) in content.lines().enumerate() {
+                                            if rx.is_match(line) {
+                                                hits.push((rel.to_string_lossy().to_string(), lnum + 1, line.trim().to_string()));
+                                            }
+                                        }
+                                    }
+                                    if hits.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("No occurrences of '{old_name}' found.")));
+                                    } else {
+                                        let total = hits.len();
+                                        let mut msg = format!("rename '{old_name}' → '{new_name}'  ({total} occurrence{} in {file_count} file{})\n\n",
+                                            if total == 1 { "" } else { "s" }, if file_count == 1 { "" } else { "s" });
+                                        // Show occurrences
+                                        let show = total.min(30);
+                                        let mut cur_file = String::new();
+                                        for (file, line, content) in &hits[..show] {
+                                            if file != &cur_file { msg.push_str(&format!("  {file}\n")); cur_file = file.clone(); }
+                                            msg.push_str(&format!("    L{line}: {}\n", &content[..content.len().min(70)]));
+                                        }
+                                        if total > show { msg.push_str(&format!("  … ({} more)\n", total - show)); }
+                                        // Generate rename script
+                                        let unique_files: Vec<String> = {
+                                            let mut seen = std::collections::HashSet::new();
+                                            hits.iter().filter_map(|(f, _, _)| if seen.insert(f.clone()) { Some(f.clone()) } else { None }).collect()
+                                        };
+                                        msg.push_str(&format!("\nRename script (run in {}/):\n```bash\n", cwd.display()));
+                                        for file in &unique_files {
+                                            msg.push_str(&format!("sed -i 's/\\b{}\\b/{}/g' {}\n", old_name, new_name, file));
+                                        }
+                                        msg.push_str("```\n  Review changes with: /git diff");
+                                        ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
                                     let replacement_raw = cmd.trim_start_matches("/retry").trim();
@@ -9384,7 +9584,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/arch-review", "/arch-review ", "/ask-code ", "/bench", "/bench ", "/blame ", "/changelog", "/changelog ", "/code-review ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/debug-ai ", "/doc-gen ", "/flow ", "/grep-code ", "/heatmap", "/heatmap ", "/lint", "/lint ", "/metrics", "/metrics ", "/optimize ", "/patch", "/patch ", "/pr-review", "/pr-review ", "/profile ", "/recent", "/recent ", "/refactor ", "/setup-env", "/test", "/test ", "/todo-ai ", "/translate-code ", "/watch ",
+                            "/arch-review", "/arch-review ", "/ask-code ", "/bench", "/bench ", "/blame ", "/changelog", "/changelog ", "/code-review ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/debug-ai ", "/doc-gen ", "/flow ", "/gen-tests ", "/grep-code ", "/heatmap", "/heatmap ", "/lint", "/lint ", "/metrics", "/metrics ", "/mock ", "/optimize ", "/patch", "/patch ", "/pr-review", "/pr-review ", "/profile ", "/recent", "/recent ", "/refactor ", "/rename ", "/setup-env", "/test", "/test ", "/todo-ai ", "/translate-code ", "/watch ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
