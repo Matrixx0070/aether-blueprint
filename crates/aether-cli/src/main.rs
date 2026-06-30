@@ -5296,7 +5296,7 @@ AI workflow\n\
   /ai-refactor <f> [inst] AI refactors code preserving behavior (default: clean up)\n\
   /ai-doc-gen <file>      AI adds docstrings/comments in language-appropriate style\n\
   /ai-improve-commit      AI rewrites last/staged commit message to best practices\n\
-  /ai-translate <f> <lng> AI translates source file to another programming language\nSession & environment\n  /env-set <KEY>=<val>    set (or unset) env var in this aether process session\n  /git-amend [msg]        show last commit info; with msg: amend commit message\n  /ai-estimate <task>     AI estimates complexity + time for a described task\n  /clipboard [get|clear]  paste clipboard into chat, or clear it (xclip/xsel/pbpaste)\n  /ai-standup-report [h]  AI writes standup from last N hours of git + TODOs\nCode intelligence\n  /loc [dir]              lines-of-code breakdown by language (sorted by size)\n  /git-undo [n]           soft-reset last N commits — changes stay staged\n  /ai-rename-symbol <f> <sym>  AI suggests 3 rename options + all call sites\n  /ai-complexity-report [f]    cyclomatic/cognitive complexity audit + refactor tips\n  /ai-changelog-commit [n]     AI writes CHANGELOG.md entry from last N commits\nDiff & project tools\n  /diff-stat [base]       rich git diff with file-type add/del breakdown\n  /ai-explain-diff [base] AI explains what the current diff actually changes\n  /file-watch <path>      show last 20 lines of a file (re-run to refresh)\n  /ai-onboard            AI writes onboarding guide from tree + README + manifest\n  /deps-outdated         list outdated deps (cargo-outdated / npm outdated / pip)\nQuery & HTTP tools\n  /token-count <file>    estimate token count + context % for 4K/32K/200K windows\n  /http-mock [method] <url>  HTTP request preview (curl wrapper with response summary)\n  /ai-sql-explain <sql>  AI explains + optimizes a SQL query with index suggestions\n  /ai-migrate <from> [to]  AI writes step-by-step migration guide between tech stacks\n  /git-bisect-ai <good> [bad]  AI guides binary search to find a regression commit\nTeam & audit tools\n  /git-contributors [n]   ranked contributor table with commit count + % share\n  /git-hotspot [n]       top N most-changed files (high churn = bug risk)\n  /env-template [dir]   scan codebase for env var references → emit .env.example\n  /ai-pr-checklist [base]  AI generates PR review checklist from current diff\n  /ai-data-model <file>  AI extracts entities/relationships + ASCII ER diagram\nProcess & commit quality\n  /process-tree [filter]  rich ps+pstree view sorted by CPU (optional name filter)\n  /git-tag-diff <t1> <t2>  commit log + file diff summary between two tags\n  /ai-commit-lint [n]  AI validates last N commits vs Conventional Commits spec\n  /ai-test-fix [out]   AI diagnoses failing test output + provides code fix\n  /ai-code-smell-fix <f>  AI detects code smells + severity + concrete fixed snippets\nOps & observability\n  /cpu-history [n]       ASCII sparkline of CPU% over N×100ms samples\n  /git-since <date>      all commits since a date (standup-friendly, e.g. yesterday)\n  /ai-incident-report [f]  AI writes SRE post-mortem from error log\n  /ai-api-design <file>  AI critiques REST API + rewrites endpoint surface\n  /ai-debug-crash [f]    AI diagnoses crash dump / stack trace → root cause + fix\nWorkspace & flow\n  /workspace-summary     recent files, git status, TODO files in CWD\n  /git-file-stats <path> commit count, authors, first/last date, churn for a file\n  /ai-explain-error <msg>  AI explains error in plain English + common fixes\n  /ai-risk-assessment [base]  blast radius + risk score before merging\n  /ai-naming-convention [dir]  naming consistency audit + rename suggestions"),
+  /ai-translate <f> <lng> AI translates source file to another programming language\nSession & environment\n  /env-set <KEY>=<val>    set (or unset) env var in this aether process session\n  /git-amend [msg]        show last commit info; with msg: amend commit message\n  /ai-estimate <task>     AI estimates complexity + time for a described task\n  /clipboard [get|clear]  paste clipboard into chat, or clear it (xclip/xsel/pbpaste)\n  /ai-standup-report [h]  AI writes standup from last N hours of git + TODOs\nCode intelligence\n  /loc [dir]              lines-of-code breakdown by language (sorted by size)\n  /git-undo [n]           soft-reset last N commits — changes stay staged\n  /ai-rename-symbol <f> <sym>  AI suggests 3 rename options + all call sites\n  /ai-complexity-report [f]    cyclomatic/cognitive complexity audit + refactor tips\n  /ai-changelog-commit [n]     AI writes CHANGELOG.md entry from last N commits\nDiff & project tools\n  /diff-stat [base]       rich git diff with file-type add/del breakdown\n  /ai-explain-diff [base] AI explains what the current diff actually changes\n  /file-watch <path>      show last 20 lines of a file (re-run to refresh)\n  /ai-onboard            AI writes onboarding guide from tree + README + manifest\n  /deps-outdated         list outdated deps (cargo-outdated / npm outdated / pip)\nQuery & HTTP tools\n  /token-count <file>    estimate token count + context % for 4K/32K/200K windows\n  /http-mock [method] <url>  HTTP request preview (curl wrapper with response summary)\n  /ai-sql-explain <sql>  AI explains + optimizes a SQL query with index suggestions\n  /ai-migrate <from> [to]  AI writes step-by-step migration guide between tech stacks\n  /git-bisect-ai <good> [bad]  AI guides binary search to find a regression commit\nTeam & audit tools\n  /git-contributors [n]   ranked contributor table with commit count + % share\n  /git-hotspot [n]       top N most-changed files (high churn = bug risk)\n  /env-template [dir]   scan codebase for env var references → emit .env.example\n  /ai-pr-checklist [base]  AI generates PR review checklist from current diff\n  /ai-data-model <file>  AI extracts entities/relationships + ASCII ER diagram\nProcess & commit quality\n  /process-tree [filter]  rich ps+pstree view sorted by CPU (optional name filter)\n  /git-tag-diff <t1> <t2>  commit log + file diff summary between two tags\n  /ai-commit-lint [n]  AI validates last N commits vs Conventional Commits spec\n  /ai-test-fix [out]   AI diagnoses failing test output + provides code fix\n  /ai-code-smell-fix <f>  AI detects code smells + severity + concrete fixed snippets\nOps & observability\n  /cpu-history [n]       ASCII sparkline of CPU% over N×100ms samples\n  /git-since <date>      all commits since a date (standup-friendly, e.g. yesterday)\n  /ai-incident-report [f]  AI writes SRE post-mortem from error log\n  /ai-api-design <file>  AI critiques REST API + rewrites endpoint surface\n  /ai-debug-crash [f]    AI diagnoses crash dump / stack trace → root cause + fix\nWorkspace & flow\n  /workspace-summary     recent files, git status, TODO files in CWD\n  /git-file-stats <path> commit count, authors, first/last date, churn for a file\n  /ai-explain-error <msg>  AI explains error in plain English + common fixes\n  /ai-risk-assessment [base]  blast radius + risk score before merging\n  /ai-naming-convention [dir]  naming consistency audit + rename suggestions\nSecurity suite\n  /ai-threat-model <file>  STRIDE threat model: Spoofing/Tampering/Repudiation/etc.\n  /ai-pentest-hints <file>  attack surface map: entry points, sinks, auth vectors + CWEs\n  /ai-license-audit       GPL/proprietary conflict audit across all package managers\n  /ai-secrets-scan [dir]  regex grep + AI triage for hardcoded secrets\n  /cve-check <pkg>@<ver>  OSV.dev CVE lookup for any package/version"),
                                         ("keys", &["keys", "keyboard", "shortcuts", "bindings"], "\
 Input shortcuts\n\
   ↑ ↓  / Ctrl+R           history recall / reverse-i-search\n\
@@ -5427,6 +5427,7 @@ Input shortcuts\n\
     ◈ /process-tree /git-tag-diff /ai-commit-lint /ai-test-fix /ai-code-smell-fix  B120\n\
     ◈ /cpu-history /git-since /ai-incident-report /ai-api-design /ai-debug-crash  B121\n\
     ◈ /workspace-summary /git-file-stats /ai-explain-error /ai-risk-assessment /ai-naming-convention  B122\n\
+    ◈ /ai-threat-model /ai-pentest-hints /ai-license-audit /ai-secrets-scan /cve-check  B123\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -15703,6 +15704,152 @@ CTF Toolkit — Aether AI-assisted\n\
                                     continue;
                                 }
                                 // ─────────────────────────────────────────────────────────────────
+                                // /ai-threat-model <file> — AI generates STRIDE threat model from code
+                                cmd if cmd.starts_with("/ai-threat-model ") || cmd == "/ai-threat-model" => {
+                                    let path = cmd.trim_start_matches("/ai-threat-model").trim();
+                                    if path.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /ai-threat-model <file>\n  Example: /ai-threat-model src/auth.rs\n  AI generates a STRIDE threat model: Spoofing/Tampering/Repudiation/Info Disclosure/DoS/Elevation.".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let content = std::fs::read_to_string(path).unwrap_or_else(|e| format!("[could not read {}: {}]", path, e));
+                                    let prompt = format!(
+                                        "You are a security architect. Generate a STRIDE threat model for this code.\n\nFile: {path}\n```\n{}\n```\n\nFor each STRIDE category:\n- **S**poofing — how could an attacker impersonate?\n- **T**ampering — what data could be modified?\n- **R**epudiation — what actions could be denied?\n- **I**nformation Disclosure — what secrets could leak?\n- **D**enial of Service — what could be exhausted or crashed?\n- **E**levation of Privilege — how could access be gained beyond intended?\n\nFor each threat found: Severity (CRITICAL/HIGH/MED/LOW), attack vector, current mitigations, recommended fix.",
+                                        content.chars().take(5000).collect::<String>(), path=path
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts));
+                                    ui.follow_tail = true;
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.msg_times_secs.push(ts);
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                // /ai-pentest-hints <file> — AI identifies attack surface and entry points
+                                cmd if cmd.starts_with("/ai-pentest-hints ") || cmd == "/ai-pentest-hints" => {
+                                    let path = cmd.trim_start_matches("/ai-pentest-hints").trim();
+                                    if path.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /ai-pentest-hints <file>\n  AI identifies attack surface: entry points, injection sinks, auth bypass vectors.".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let content = std::fs::read_to_string(path).unwrap_or_else(|e| format!("[could not read {}: {}]", path, e));
+                                    let prompt = format!(
+                                        "You are a penetration tester reviewing this code for vulnerabilities.\n\nFile: {path}\n```\n{}\n```\n\nIdentify:\n1. **Entry points** — where does untrusted input enter?\n2. **Injection sinks** — SQL, command, LDAP, XPath injection candidates\n3. **Auth weaknesses** — missing auth checks, token validation gaps\n4. **Business logic flaws** — race conditions, IDOR, state machine bypass\n5. **Crypto issues** — weak algorithms, improper IV, key exposure\n6. **Quick wins** — top 3 things to test first in a pentest\n\nFor each finding: CWE ID, exploitability (Easy/Medium/Hard), one-line PoC idea.",
+                                        content.chars().take(5000).collect::<String>(), path=path
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts));
+                                    ui.follow_tail = true;
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.msg_times_secs.push(ts);
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                // /ai-license-audit — AI audits dependency licenses for conflicts
+                                cmd if cmd == "/ai-license-audit" || cmd.starts_with("/ai-license-audit ") => {
+                                    // Collect licenses from Cargo.toml, package.json, requirements.txt
+                                    let cargo = std::fs::read_to_string("Cargo.toml").unwrap_or_default();
+                                    let pkg = std::fs::read_to_string("package.json").unwrap_or_default();
+                                    let lock_out = std::process::Command::new("sh").arg("-c")
+                                        .arg("grep -E 'name = |version = |license = ' Cargo.lock 2>/dev/null | head -100")
+                                        .output().ok();
+                                    let lock_raw = lock_out.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+                                    let npm_out = std::process::Command::new("sh").arg("-c")
+                                        .arg("cat node_modules/*/package.json 2>/dev/null | grep -E '\"license\"' | sort -u | head -30")
+                                        .output().ok();
+                                    let npm_licenses = npm_out.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+                                    if cargo.is_empty() && pkg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("ai-license-audit: no Cargo.toml or package.json found.".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "You are a software licensing expert. Audit these project dependencies for license issues.\n\nCargo.toml:\n```toml\n{}\n```\n\nCargo.lock license entries:\n```\n{}\n```\n\npackage.json:\n```json\n{}\n```\n\nnpm license entries:\n```\n{}\n```\n\nAnalyze:\n1. **License inventory** — list all unique licenses found\n2. **Risk assessment** — flag GPL/AGPL/LGPL that may require source disclosure\n3. **Proprietary conflicts** — licenses incompatible with commercial use\n4. **Missing licenses** — packages with no license declaration\n5. **Recommendations** — what to do for each risky license",
+                                        cargo.chars().take(2000).collect::<String>(),
+                                        lock_raw.chars().take(2000).collect::<String>(),
+                                        pkg.chars().take(2000).collect::<String>(),
+                                        npm_licenses.chars().take(1000).collect::<String>()
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts));
+                                    ui.follow_tail = true;
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.msg_times_secs.push(ts);
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                // /ai-secrets-scan [dir] — AI scans code for hardcoded secrets
+                                cmd if cmd == "/ai-secrets-scan" || cmd.starts_with("/ai-secrets-scan ") => {
+                                    let dir = cmd.trim_start_matches("/ai-secrets-scan").trim();
+                                    let target = if dir.is_empty() { "." } else { dir };
+                                    // Use grep to collect suspicious lines first, then AI analyzes
+                                    let out = std::process::Command::new("sh").arg("-c")
+                                        .arg(format!("grep -rniE '(password|secret|token|api_key|apikey|private_key|auth|bearer|credential|passwd|pwd)\\s*[=:]\\s*[\"\\x27]?[A-Za-z0-9+/={{}}]{{8,}}' {} --include='*.rs' --include='*.py' --include='*.js' --include='*.ts' --include='*.env' --include='*.yaml' --include='*.yml' --include='*.json' --include='*.toml' 2>/dev/null | grep -v '.example\\|.sample\\|test\\|mock\\|fake\\|placeholder' | head -30", target))
+                                        .output().ok();
+                                    let raw = out.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+                                    if raw.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("ai-secrets-scan: no suspicious lines found in '{}'", target)));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "You are a security engineer reviewing code for hardcoded secrets. Analyze these suspicious lines.\n\nSuspicious lines found:\n```\n{}\n```\n\nFor each line:\n1. Is this a REAL SECRET or a false positive? (Real/FP/Uncertain)\n2. What type of secret is it? (API key, password, token, etc.)\n3. Severity if real (CRITICAL/HIGH/MED)\n4. How to remediate (env var, secrets manager, vault)\n\nEnd with: total REAL secrets found, and the single highest-priority fix.",
+                                        raw.chars().take(4000).collect::<String>()
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts));
+                                    ui.follow_tail = true;
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.msg_times_secs.push(ts);
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                // /cve-check <pkg>@<ver> — query OSV.dev for known CVEs
+                                cmd if cmd.starts_with("/cve-check ") || cmd == "/cve-check" => {
+                                    let arg = cmd.trim_start_matches("/cve-check").trim();
+                                    if arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /cve-check <package>@<version>\n  Examples:\n    /cve-check openssl@1.1.1\n    /cve-check lodash@4.17.20\n  Queries OSV.dev API for known vulnerabilities.".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let (pkg, ver) = if let Some(at) = arg.rfind('@') {
+                                        (&arg[..at], &arg[at + 1..])
+                                    } else {
+                                        (arg, "")
+                                    };
+                                    let payload = if ver.is_empty() {
+                                        format!(r#"{{"package":{{"name":"{}","ecosystem":""}}}}"#, pkg)
+                                    } else {
+                                        format!(r#"{{"version":"{}","package":{{"name":"{}","ecosystem":""}}}}"#, ver, pkg)
+                                    };
+                                    let out = std::process::Command::new("curl")
+                                        .args(["-s", "-X", "POST", "https://api.osv.dev/v1/query",
+                                               "-H", "Content-Type: application/json",
+                                               "-d", &payload, "--max-time", "10"])
+                                        .output().ok();
+                                    let body = match out {
+                                        Some(o) if o.status.success() => {
+                                            let raw = String::from_utf8_lossy(&o.stdout).to_string();
+                                            if raw.contains("\"vulns\"") && !raw.contains("\"vulns\":[]") {
+                                                format!("cve-check: {}@{} — VULNERABILITIES FOUND\n\n{}", pkg, ver, raw.chars().take(2000).collect::<String>())
+                                            } else if raw.contains("\"vulns\":[]") || raw.contains("{}") {
+                                                format!("cve-check: {}@{} — no known vulnerabilities in OSV.dev", pkg, ver)
+                                            } else {
+                                                format!("cve-check: {}@{}\n{}", pkg, ver, raw.chars().take(1000).collect::<String>())
+                                            }
+                                        }
+                                        _ => format!("cve-check: could not query OSV.dev (network unavailable or curl error)\nManual: https://osv.dev/list?q={}", pkg),
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
                                     let replacement_raw = cmd.trim_start_matches("/retry").trim();
@@ -16340,7 +16487,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/cve ", "/dotenv", "/dotenv ", "/calc ", "/chars", "/chars ", "/ai-arch", "/ai-arch ", "/ai-explain ", "/cheat ", "/color ", "/duck ", "/env-diff ", "/env-vars", "/env-vars ", "/flashcard ", "/format-sql ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/gh-search ", "/http-codes", "/http-codes ", "/impl ", "/json-schema ", "/man-ai ", "/mkscript ", "/open ", "/path", "/ai-bugs ", "/ai-code-review ", "/ai-doc-gen ", "/ai-improve-commit", "/ai-optimize ", "/ai-pr", "/ai-pr ", "/ai-refactor ", "/ai-security ", "/ai-test-gen ", "/ai-translate ", "/bundle-size", "/bundle-size ", "/changelog-ai", "/changelog-ai ", "/codebase-summary", "/git-cherry", "/git-cherry ", "/git-conflicts", "/git-log-file ", "/git-remote", "/git-remote ", "/git-show ", "/net-stat", "/perf-diff ", "/pwd", "/regex-test ", "/run-test ", "/ssh-key", "/ssh-key ", "/tail ", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/semver ", "/session-summary", "/spell ", "/teach ", "/time", "/time ", "/which-all ", "/wiki ", "/workflow", "/workflow ", "/ai-estimate ", "/ai-standup-report", "/ai-standup-report ", "/clipboard", "/clipboard ", "/env-set ", "/git-amend", "/git-amend ", "/ai-changelog-commit", "/ai-changelog-commit ", "/ai-complexity-report", "/ai-complexity-report ", "/ai-rename-symbol ", "/git-undo", "/git-undo ", "/loc", "/loc ", "/ai-explain-diff", "/ai-explain-diff ", "/ai-onboard", "/deps-outdated", "/diff-stat", "/diff-stat ", "/file-watch ", "/ai-migrate ", "/ai-sql-explain ", "/git-bisect-ai", "/git-bisect-ai ", "/http-mock ", "/token-count ", "/ai-data-model ", "/ai-pr-checklist", "/ai-pr-checklist ", "/env-template", "/env-template ", "/git-contributors", "/git-contributors ", "/git-hotspot", "/git-hotspot ", "/ai-code-smell-fix ", "/ai-commit-lint", "/ai-commit-lint ", "/ai-test-fix", "/ai-test-fix ", "/git-tag-diff ", "/process-tree", "/process-tree ", "/ai-api-design ", "/ai-debug-crash", "/ai-debug-crash ", "/ai-incident-report", "/ai-incident-report ", "/cpu-history", "/cpu-history ", "/git-since ", "/ai-explain-error ", "/ai-naming-convention", "/ai-naming-convention ", "/ai-risk-assessment", "/ai-risk-assessment ", "/git-file-stats ", "/workspace-summary", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
+                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/cve ", "/dotenv", "/dotenv ", "/calc ", "/chars", "/chars ", "/ai-arch", "/ai-arch ", "/ai-explain ", "/cheat ", "/color ", "/duck ", "/env-diff ", "/env-vars", "/env-vars ", "/flashcard ", "/format-sql ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/gh-search ", "/http-codes", "/http-codes ", "/impl ", "/json-schema ", "/man-ai ", "/mkscript ", "/open ", "/path", "/ai-bugs ", "/ai-code-review ", "/ai-doc-gen ", "/ai-improve-commit", "/ai-optimize ", "/ai-pr", "/ai-pr ", "/ai-refactor ", "/ai-security ", "/ai-test-gen ", "/ai-translate ", "/bundle-size", "/bundle-size ", "/changelog-ai", "/changelog-ai ", "/codebase-summary", "/git-cherry", "/git-cherry ", "/git-conflicts", "/git-log-file ", "/git-remote", "/git-remote ", "/git-show ", "/net-stat", "/perf-diff ", "/pwd", "/regex-test ", "/run-test ", "/ssh-key", "/ssh-key ", "/tail ", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/semver ", "/session-summary", "/spell ", "/teach ", "/time", "/time ", "/which-all ", "/wiki ", "/workflow", "/workflow ", "/ai-estimate ", "/ai-standup-report", "/ai-standup-report ", "/clipboard", "/clipboard ", "/env-set ", "/git-amend", "/git-amend ", "/ai-changelog-commit", "/ai-changelog-commit ", "/ai-complexity-report", "/ai-complexity-report ", "/ai-rename-symbol ", "/git-undo", "/git-undo ", "/loc", "/loc ", "/ai-explain-diff", "/ai-explain-diff ", "/ai-onboard", "/deps-outdated", "/diff-stat", "/diff-stat ", "/file-watch ", "/ai-migrate ", "/ai-sql-explain ", "/git-bisect-ai", "/git-bisect-ai ", "/http-mock ", "/token-count ", "/ai-data-model ", "/ai-pr-checklist", "/ai-pr-checklist ", "/env-template", "/env-template ", "/git-contributors", "/git-contributors ", "/git-hotspot", "/git-hotspot ", "/ai-code-smell-fix ", "/ai-commit-lint", "/ai-commit-lint ", "/ai-test-fix", "/ai-test-fix ", "/git-tag-diff ", "/process-tree", "/process-tree ", "/ai-api-design ", "/ai-debug-crash", "/ai-debug-crash ", "/ai-incident-report", "/ai-incident-report ", "/cpu-history", "/cpu-history ", "/git-since ", "/ai-explain-error ", "/ai-naming-convention", "/ai-naming-convention ", "/ai-risk-assessment", "/ai-risk-assessment ", "/git-file-stats ", "/workspace-summary", "/ai-license-audit", "/ai-pentest-hints ", "/ai-secrets-scan", "/ai-secrets-scan ", "/ai-threat-model ", "/cve-check ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
