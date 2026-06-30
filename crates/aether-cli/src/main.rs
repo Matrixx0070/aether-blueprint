@@ -5567,6 +5567,22 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::ToolList(list));
                     continue;
                 }
+                UiCommand::QueryToolSchema(name) => {
+                    if let Some(tool) = session.tools.get(&name) {
+                        let schema = serde_json::to_string_pretty(&tool.input_schema())
+                            .unwrap_or_else(|_| "{}".to_string());
+                        let _ = etx_for_driver.send(UiEvent::ToolSchemaResult {
+                            name: tool.name().to_string(),
+                            description: tool.description().to_string(),
+                            schema,
+                        });
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            format!("Unknown tool: {name}\n  Use /tools to list registered tools.")
+                        ));
+                    }
+                    continue;
+                }
                 UiCommand::SetThinking(budget) => {
                     session.config.thinking_budget = budget;
                     let note = match budget {
@@ -18720,6 +18736,19 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /tool-schema <name> — show full JSON input schema for a tool
+                                cmd_str if cmd_str.starts_with("/tool-schema ") || cmd_str == "/tool-schema" => {
+                                    let name = cmd_str.trim_start_matches("/tool-schema").trim().to_string();
+                                    if name.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /tool-schema <name>  e.g. /tool-schema Bash\n  Use /tools to list available tool names.".into()
+                                        ));
+                                    } else if _ctx.send(UiCommand::QueryToolSchema(name)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /run-last [args] — execute last AI code block in a temp file
                                 cmd_str if cmd_str == "/run-last" || cmd_str.starts_with("/run-last ") => {
                                     let args_str = cmd_str.trim_start_matches("/run-last").trim();
@@ -19523,6 +19552,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/write-last", "/write-last ", "/debug-context", "/ctx-debug", "/env-list", "/env-vars-session",
                             "/persona ", "/persona off", "/persona show",
                             "/run-last", "/run-last ", "/prompt-history", "/prompt-history ",
+                            "/tool-schema ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
@@ -19577,7 +19607,44 @@ CTF Toolkit — Aether AI-assisted\n\
                             } else { false }
                         } else { false };
 
-                        if !subcomp_handled && buf.starts_with('/') && !buf.contains(' ') {
+                        // @file tab completion: expand @<partial-path> to matching files/dirs
+                        let at_file_handled = if !subcomp_handled && buf.contains('@') {
+                            if let Some(at_pos) = buf.rfind('@') {
+                                let partial = &buf[at_pos + 1..];
+                                let (dir_str, file_prefix) = if let Some(slash) = partial.rfind('/') {
+                                    (&partial[..slash + 1], &partial[slash + 1..])
+                                } else {
+                                    ("./", partial)
+                                };
+                                let base = if dir_str.starts_with('/') {
+                                    std::path::PathBuf::from(dir_str)
+                                } else {
+                                    std::env::current_dir().unwrap_or_default().join(dir_str)
+                                };
+                                if let Ok(entries) = std::fs::read_dir(&base) {
+                                    let mut file_matches: Vec<String> = entries
+                                        .filter_map(|e| e.ok())
+                                        .filter_map(|e| {
+                                            let name = e.file_name().into_string().ok()?;
+                                            if name.starts_with(file_prefix) {
+                                                let trail = if e.path().is_dir() { "/" } else { "" };
+                                                Some(format!("{dir_str}{name}{trail}"))
+                                            } else { None }
+                                        })
+                                        .collect();
+                                    file_matches.sort();
+                                    if !file_matches.is_empty() {
+                                        let next = ui.tab_cycle % file_matches.len();
+                                        ui.input_buffer = format!("{}@{}", &buf[..at_pos], file_matches[next]);
+                                        ui.input_cursor = ui.input_buffer.len();
+                                        ui.tab_cycle += 1;
+                                        true
+                                    } else { false }
+                                } else { false }
+                            } else { false }
+                        } else { false };
+
+                        if !subcomp_handled && !at_file_handled && buf.starts_with('/') && !buf.contains(' ') {
                             // Find all commands matching the current prefix
                             let matches: Vec<&&str> = SLASH_CMDS
                                 .iter()

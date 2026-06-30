@@ -115,6 +115,8 @@ pub enum UiEvent {
     SystemNote(String),
     /// Response to QueryTools: list of (name, description) pairs.
     ToolList(Vec<(String, String)>),
+    /// Response to QueryToolSchema: full JSON schema for one tool.
+    ToolSchemaResult { name: String, description: String, schema: String },
     /// A single line of streaming output from a running Bash tool call.
     /// `id` is the tool_use_id; `line` is the text (may start with "[err] ").
     ToolOutputLine { id: String, line: String },
@@ -132,6 +134,8 @@ pub enum UiCommand {
     ClearPlan,
     /// Request the driver to respond with the registered tool list (filtered by substring).
     QueryTools(String),
+    /// Return the full input_schema JSON for a specific tool by name.
+    QueryToolSchema(String),
     /// Set session thinking budget. None = off, Some(n) = n tokens.
     SetThinking(Option<u32>),
     /// Inject an environment variable into the driver's process env (inherited by Bash tool).
@@ -637,6 +641,13 @@ impl UiState {
                     }
                     self.chat_lines.push(ChatLine::SystemNote(msg));
                 }
+            }
+            UiEvent::ToolSchemaResult { name, description, schema } => {
+                let msg = format!(
+                    "Tool: {name}\n  {description}\n\n  Input schema:\n  {schema}",
+                    schema = schema.replace('\n', "\n  ")
+                );
+                self.chat_lines.push(ChatLine::SystemNote(msg));
             }
         }
     }
