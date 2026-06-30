@@ -22164,6 +22164,218 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /ai-learn <concept> — interactive learning mode: AI teaches a concept
+                                cmd_str if cmd_str.starts_with("/ai-learn ") || cmd_str == "/ai-learn" => {
+                                    let concept = cmd_str.trim_start_matches("/ai-learn").trim();
+                                    if concept.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /ai-learn <concept>  e.g. /ai-learn Rust lifetimes\n  AI teaches the concept progressively with examples.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let lang_ctx = if ui.context_files.iter().any(|f| f.ends_with(".rs")) { "in a Rust context" }
+                                        else if ui.context_files.iter().any(|f| f.ends_with(".ts")) { "in a TypeScript context" }
+                                        else { "" };
+                                    let prompt = format!(
+                                        "Teach me **{concept}** {lang_ctx}. Structure:\n\
+                                         1. **One-sentence definition** (no jargon)\n\
+                                         2. **The problem it solves** (motivating example)\n\
+                                         3. **Minimal working example** (code + comments)\n\
+                                         4. **Common pitfalls** (what trips people up)\n\
+                                         5. **When NOT to use it** (anti-patterns)\n\
+                                         6. **3 practice exercises** (easy → medium → hard)\n\n\
+                                         Be progressive — assume I'm learning from scratch but am a developer."
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /codebase-stats — rich statistics dashboard (no AI)
+                                "/codebase-stats" => {
+                                    let file_count = std::process::Command::new("sh")
+                                        .arg("-c")
+                                        .arg(r#"git ls-files 2>/dev/null | wc -l || find . -not -path "./.git/*" -type f | wc -l"#)
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                                        .unwrap_or_else(|| "?".to_string());
+                                    let by_ext = std::process::Command::new("sh")
+                                        .arg("-c")
+                                        .arg(r#"git ls-files 2>/dev/null | sed 's/.*\.//' | sort | uniq -c | sort -rn | head -10"#)
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    let total_lines = std::process::Command::new("sh")
+                                        .arg("-c")
+                                        .arg(r#"git ls-files 2>/dev/null | xargs wc -l 2>/dev/null | tail -1"#)
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                                        .unwrap_or_default();
+                                    let authors = std::process::Command::new("git")
+                                        .args(["shortlog", "-sn", "--no-merges"])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    let commit_count = std::process::Command::new("git")
+                                        .args(["rev-list", "--count", "HEAD"])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                                        .unwrap_or_else(|| "?".to_string());
+                                    let report = format!(
+                                        "─── Codebase Statistics ───\n\
+                                           Total files:  {file_count}\n\
+                                           Total lines:  {total_lines}\n\
+                                           Total commits: {commit_count}\n\
+                                         By file type:\n{by_ext}\
+                                         By author (commits):\n{}",
+                                        authors.lines().take(5).collect::<Vec<_>>().join("\n")
+                                    );
+                                    ui.chat_lines.push(ChatLine::SystemNote(report));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-pair — AI acts as a pair programmer for the current task
+                                "/ai-pair" => {
+                                    let goal_info = match &ui.session_goal {
+                                        Some(g) => format!("Task: {g}"),
+                                        None => "No session task set (use /goal to set one).".to_string(),
+                                    };
+                                    let ctx_info = if !ui.context_files.is_empty() {
+                                        format!("Working files: {}", ui.context_files.join(", "))
+                                    } else { String::new() };
+                                    let prompt = format!(
+                                        "Act as my pair programmer for this session. Your role:\n\
+                                         1. Ask one clarifying question about the current task\n\
+                                         2. Suggest the first concrete implementation step\n\
+                                         3. Flag any architectural concerns upfront\n\
+                                         4. Propose a test-first approach\n\n\
+                                         {goal_info}\n{ctx_info}\n\n\
+                                         Start by acknowledging the task and asking your clarifying question."
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /rubber-duck — AI uses rubber duck debugging technique
+                                "/rubber-duck" => {
+                                    let last_user = ui.chat_lines.iter().rev().find_map(|cl| match cl {
+                                        ChatLine::User(t, _) if !t.starts_with('[') => Some(t.chars().take(500).collect::<String>()),
+                                        _ => None,
+                                    });
+                                    let problem = last_user.unwrap_or_else(|| "the current problem in this session".to_string());
+                                    let prompt = format!(
+                                        "Use the rubber duck debugging technique to help me work through this problem. \
+                                         Ask me a series of probing questions to help ME find the answer myself. \
+                                         Do NOT give me the solution directly — guide me through the thinking.\n\
+                                         Start with: 'Let me be your rubber duck. Can you explain what the code is supposed to do?'\n\n\
+                                         Problem context: {problem}"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /git-log-since <date|days> — show commits since a date or N days ago
+                                cmd_str if cmd_str.starts_with("/git-log-since ") || cmd_str == "/git-log-since" => {
+                                    let since_arg = cmd_str.trim_start_matches("/git-log-since").trim();
+                                    if since_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /git-log-since <date|Nd>  e.g. /git-log-since 2026-01-01 or /git-log-since 7d".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let since_str = if since_arg.ends_with('d') {
+                                        let days = since_arg.trim_end_matches('d');
+                                        format!("{} days ago", days)
+                                    } else {
+                                        since_arg.to_string()
+                                    };
+                                    let log = std::process::Command::new("git")
+                                        .args(["log", "--oneline", "--no-merges", &format!("--since={since_str}")])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    if log.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("/git-log-since: no commits since '{since_str}'.")));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let count = log.lines().count();
+                                    let prompt = format!(
+                                        "Here are the {count} commit(s) since {since_str}. \
+                                         Summarize what was worked on, group by theme, \
+                                         and note any particularly significant changes.\n\n```\n{log}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /design-pattern <pattern> — AI explains a design pattern with code
+                                cmd_str if cmd_str.starts_with("/design-pattern ") || cmd_str == "/design-pattern" => {
+                                    let pattern = cmd_str.trim_start_matches("/design-pattern").trim();
+                                    if pattern.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /design-pattern <name>  e.g. /design-pattern observer\n  Common: singleton, factory, observer, strategy, builder, adapter, decorator, command".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let lang = if ui.context_files.iter().any(|f| f.ends_with(".rs")) { "Rust" }
+                                        else if ui.context_files.iter().any(|f| f.ends_with(".ts")) { "TypeScript" }
+                                        else { "Rust" };
+                                    let prompt = format!(
+                                        "Explain the **{pattern}** design pattern in {lang}:\n\
+                                         1. Intent (one sentence)\n\
+                                         2. Problem it solves\n\
+                                         3. Full {lang} implementation\n\
+                                         4. Real-world use case from the standard library or popular crates\n\
+                                         5. When NOT to use it"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -22559,6 +22771,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/translate-code ", "/staged-diff-ai",
                             "/code-snippet ", "/count-lines", "/count-lines ",
                             "/function-list", "/function-list ", "/ai-dep ",
+                            "/ai-learn ", "/codebase-stats", "/ai-pair", "/rubber-duck",
+                            "/git-log-since ", "/design-pattern ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
