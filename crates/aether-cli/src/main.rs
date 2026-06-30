@@ -21943,6 +21943,227 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /translate-code <lang> — AI translates last code block to another language
+                                cmd_str if cmd_str.starts_with("/translate-code ") || cmd_str == "/translate-code" => {
+                                    let target_lang = cmd_str.trim_start_matches("/translate-code").trim();
+                                    if target_lang.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /translate-code <language>  e.g. /translate-code Python\n  Translates the last AI code block to the target language.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let last_ai = ui.chat_lines.iter().rev().find_map(|cl| match cl {
+                                        ChatLine::Assistant(t, _, _) => Some(t.clone()),
+                                        _ => None,
+                                    });
+                                    match last_ai {
+                                        None => {
+                                            ui.chat_lines.push(ChatLine::SystemNote("No AI code to translate.".into()));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                        Some(ai_text) => {
+                                            let code = {
+                                                let mut result: Option<String> = None;
+                                                let mut lang = "";
+                                                let mut in_block = false;
+                                                let mut lines_buf: Vec<&str> = Vec::new();
+                                                for line in ai_text.lines() {
+                                                    if !in_block && (line.starts_with("```") || line.starts_with("~~~")) {
+                                                        lang = line.trim_start_matches(|c| c == '`' || c == '~').trim();
+                                                        in_block = true;
+                                                    } else if in_block && (line.starts_with("```") || line.starts_with("~~~")) {
+                                                        result = Some(format!("```{lang}\n{}\n```", lines_buf.join("\n")));
+                                                        break;
+                                                    } else if in_block {
+                                                        lines_buf.push(line);
+                                                    }
+                                                }
+                                                result
+                                            };
+                                            match code {
+                                                None => { ui.chat_lines.push(ChatLine::SystemNote("No fenced code block found.".into())); }
+                                                Some(block) => {
+                                                    let prompt = format!(
+                                                        "Translate the following code to **{target_lang}**, preserving exact behaviour and algorithm. \
+                                                         Use idiomatic {target_lang} patterns. Add a brief note on any semantic differences.\n\n{block}"
+                                                    );
+                                                    let ts2 = std::time::SystemTime::now()
+                                                        .duration_since(std::time::UNIX_EPOCH)
+                                                        .unwrap_or_default()
+                                                        .as_secs();
+                                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /staged-diff-ai — explain the currently staged changes
+                                "/staged-diff-ai" => {
+                                    let diff = std::process::Command::new("git")
+                                        .args(["diff", "--staged"])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    if diff.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("/staged-diff-ai: nothing staged (git diff --staged is empty). Use git add first.".into()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let truncated: String = diff.chars().take(8000).collect();
+                                    let prompt = format!(
+                                        "Explain the following staged git changes in plain language. \
+                                         What do they accomplish, are there any concerns, and do they look ready to commit?\n\n```diff\n{truncated}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /code-snippet <topic> — AI generates a best-practice code snippet
+                                cmd_str if cmd_str.starts_with("/code-snippet ") || cmd_str == "/code-snippet" => {
+                                    let topic = cmd_str.trim_start_matches("/code-snippet").trim();
+                                    if topic.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /code-snippet <topic>  e.g. /code-snippet HTTP client with retry".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let lang = if ui.context_files.iter().any(|f| f.ends_with(".rs")) { "Rust" }
+                                        else if ui.context_files.iter().any(|f| f.ends_with(".ts")) { "TypeScript" }
+                                        else if ui.context_files.iter().any(|f| f.ends_with(".py")) { "Python" }
+                                        else if ui.context_files.iter().any(|f| f.ends_with(".go")) { "Go" }
+                                        else { "Rust" };
+                                    let prompt = format!(
+                                        "Show a best-practice {lang} code snippet for: **{topic}**\n\
+                                         Include: 1) minimal but complete working example, \
+                                         2) inline comments on non-obvious parts, \
+                                         3) one common pitfall to avoid, \
+                                         4) the crate/package needed (if any)"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /count-lines [ext] — count lines by extension or total
+                                cmd_str if cmd_str == "/count-lines" || cmd_str.starts_with("/count-lines ") => {
+                                    let ext_arg = cmd_str.trim_start_matches("/count-lines").trim();
+                                    let out = if ext_arg.is_empty() {
+                                        std::process::Command::new("sh")
+                                            .arg("-c")
+                                            .arg(r#"find . -not -path "./.git/*" -type f | sed 's/.*\.//' | sort | uniq -c | sort -rn | head -20"#)
+                                            .output()
+                                            .ok()
+                                            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                            .unwrap_or_default()
+                                    } else {
+                                        std::process::Command::new("sh")
+                                            .arg("-c")
+                                            .arg(&format!(r#"find . -not -path "./.git/*" -name "*.{ext_arg}" -exec wc -l {{}} \; 2>/dev/null | awk '{{sum+=$1}} END {{print sum " total lines in *.{ext_arg}"}}'  "#))
+                                            .output()
+                                            .ok()
+                                            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                            .unwrap_or_default()
+                                    };
+                                    if out.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("/count-lines: no files found.".into()));
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("Line count by extension:\n{out}")));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /function-list [file] — list all functions/methods in a file
+                                cmd_str if cmd_str.starts_with("/function-list ") || cmd_str == "/function-list" => {
+                                    let file_arg = cmd_str.trim_start_matches("/function-list").trim();
+                                    let file_path_arg = if file_arg.is_empty() {
+                                        ui.context_files.first().cloned().unwrap_or_default()
+                                    } else {
+                                        file_arg.to_string()
+                                    };
+                                    if file_path_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /function-list [file]  — lists all functions/methods in a file (no AI).".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    match std::fs::read_to_string(&file_path_arg) {
+                                        Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("/function-list: {e}"))); }
+                                        Ok(src) => {
+                                            let fns: Vec<(usize, &str)> = src.lines().enumerate()
+                                                .filter(|(_, l)| {
+                                                    let t = l.trim();
+                                                    t.starts_with("fn ") || t.starts_with("pub fn") || t.starts_with("pub async fn")
+                                                    || t.starts_with("async fn") || t.starts_with("def ") || t.starts_with("async def ")
+                                                    || t.starts_with("function ") || t.starts_with("export function")
+                                                    || t.starts_with("export async function") || t.starts_with("func ")
+                                                    || t.starts_with("method ") || t.contains("=> {")
+                                                })
+                                                .collect();
+                                            if fns.is_empty() {
+                                                ui.chat_lines.push(ChatLine::SystemNote(format!("/function-list: no functions found in {file_path_arg}.")));
+                                            } else {
+                                                let list = fns.iter().map(|(ln, l)| format!("  {:>5}: {}", ln+1, l.trim())).collect::<Vec<_>>().join("\n");
+                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                    format!("`{file_path_arg}` — {} function(s):\n{list}", fns.len())
+                                                ));
+                                            }
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-dep <name> — AI explains what a dependency does and alternatives
+                                cmd_str if cmd_str.starts_with("/ai-dep ") || cmd_str == "/ai-dep" => {
+                                    let dep = cmd_str.trim_start_matches("/ai-dep").trim();
+                                    if dep.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /ai-dep <package>  e.g. /ai-dep tokio\n  AI explains what the dependency does and suggests alternatives.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Explain the `{dep}` package/crate:\n\
+                                         1. What it does (one paragraph)\n\
+                                         2. Key APIs and typical usage pattern (code example)\n\
+                                         3. Why you'd choose it over alternatives\n\
+                                         4. Main alternatives and when to use them instead\n\
+                                         5. Any known gotchas, security considerations, or deprecation status"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -22335,6 +22556,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/ai-ask-file ", "/ai-paraphrase",
                             "/find-callers ", "/find-usages ", "/show-config",
                             "/ai-sql ", "/ai-shell ",
+                            "/translate-code ", "/staged-diff-ai",
+                            "/code-snippet ", "/count-lines", "/count-lines ",
+                            "/function-list", "/function-list ", "/ai-dep ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
