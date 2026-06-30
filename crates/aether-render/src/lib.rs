@@ -329,6 +329,9 @@ pub struct UiState {
     /// When true, `git diff --stat HEAD` is injected as a SystemNote after
     /// every AI turn that invoked at least one tool. Toggled by /auto-diff.
     pub auto_diff_enabled: bool,
+    /// Env vars set in this session via /setenv (key, value pairs).
+    /// Mirrored here for display by /env-list; authoritative copy is process env.
+    pub session_env_vars: Vec<(String, String)>,
 }
 
 impl UiState {
@@ -472,6 +475,7 @@ impl UiState {
             tool_stream_lines: Vec::new(),
             cost_limit_usd: None,
             auto_diff_enabled: false,
+            session_env_vars: Vec::new(),
         }
     }
 

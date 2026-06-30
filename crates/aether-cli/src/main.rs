@@ -18327,8 +18327,16 @@ CTF Toolkit — Aether AI-assisted\n\
                                         let v = kv[eq + 1..].to_string();
                                         if k.is_empty() {
                                             ui.chat_lines.push(ChatLine::SystemNote("Usage: /setenv VAR=value".into()));
-                                        } else if _ctx.send(UiCommand::SetEnvVar(k, v)).is_err() {
-                                            break 'outer;
+                                        } else {
+                                            // Mirror to UiState for /env-list display
+                                            if let Some(existing) = ui.session_env_vars.iter_mut().find(|(ek, _)| ek == &k) {
+                                                existing.1 = v.clone();
+                                            } else {
+                                                ui.session_env_vars.push((k.clone(), v.clone()));
+                                            }
+                                            if _ctx.send(UiCommand::SetEnvVar(k, v)).is_err() {
+                                                break 'outer;
+                                            }
                                         }
                                     } else {
                                         ui.chat_lines.push(ChatLine::SystemNote("Usage: /setenv VAR=value  (value can be empty: /setenv FOO=)".into()));
@@ -18341,8 +18349,11 @@ CTF Toolkit — Aether AI-assisted\n\
                                     let k = cmd_str[10..].trim().to_string();
                                     if k.is_empty() {
                                         ui.chat_lines.push(ChatLine::SystemNote("Usage: /unsetenv VAR".into()));
-                                    } else if _ctx.send(UiCommand::UnsetEnvVar(k)).is_err() {
-                                        break 'outer;
+                                    } else {
+                                        ui.session_env_vars.retain(|(ek, _)| ek != &k);
+                                        if _ctx.send(UiCommand::UnsetEnvVar(k)).is_err() {
+                                            break 'outer;
+                                        }
                                     }
                                     ui.follow_tail = true;
                                     continue;
@@ -18682,6 +18693,136 @@ CTF Toolkit — Aether AI-assisted\n\
                                             "Auto-diff disabled."
                                         })
                                     ));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /write-last [file] — extract last AI code block and write to file
+                                cmd_str if cmd_str == "/write-last" || cmd_str.starts_with("/write-last ") => {
+                                    let file_arg = cmd_str.trim_start_matches("/write-last").trim();
+                                    // Find last Assistant message
+                                    let last_ai = ui.chat_lines.iter().rev().find_map(|cl| match cl {
+                                        ChatLine::Assistant(text, _, _) => Some(text.as_str()),
+                                        _ => None,
+                                    });
+                                    match last_ai {
+                                        None => {
+                                            ui.chat_lines.push(ChatLine::SystemNote("No AI response yet.".into()));
+                                        }
+                                        Some(ai_text) => {
+                                            // Extract first fenced code block (``` or ~~~)
+                                            let code = {
+                                                let mut result: Option<String> = None;
+                                                let mut in_block = false;
+                                                let mut block_lines: Vec<&str> = Vec::new();
+                                                for line in ai_text.lines() {
+                                                    if !in_block && (line.starts_with("```") || line.starts_with("~~~")) {
+                                                        in_block = true;
+                                                    } else if in_block && (line.starts_with("```") || line.starts_with("~~~")) {
+                                                        result = Some(block_lines.join("\n"));
+                                                        break;
+                                                    } else if in_block {
+                                                        block_lines.push(line);
+                                                    }
+                                                }
+                                                result
+                                            };
+                                            match code {
+                                                None => {
+                                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                                        "No fenced code block found in last AI response.".into()
+                                                    ));
+                                                }
+                                                Some(code_text) => {
+                                                    if file_arg.is_empty() {
+                                                        // Print to chat
+                                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                                            format!("Last code block ({} lines):\n```\n{}\n```", code_text.lines().count(), code_text)
+                                                        ));
+                                                    } else {
+                                                        match std::fs::write(file_arg, &code_text) {
+                                                            Ok(_) => {
+                                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                                    format!("Wrote {} bytes ({} lines) → {file_arg}", code_text.len(), code_text.lines().count())
+                                                                ));
+                                                            }
+                                                            Err(e) => {
+                                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                                    format!("Write failed: {e}")
+                                                                ));
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /debug-context — show what will be sent to the API on the next turn
+                                "/debug-context" | "/ctx-debug" => {
+                                    let model = &ui.model;
+                                    let ctx_files_n = ui.context_files.len();
+                                    let ctx_files_total_chars: usize = ui.context_files.iter()
+                                        .filter_map(|p| std::fs::read_to_string(p).ok())
+                                        .map(|c| c.len())
+                                        .sum();
+                                    let prefix_len = ui.prompt_prefix.as_ref().map(|p| p.len()).unwrap_or(0);
+                                    let exchanges = ui.msg_times_secs.len();
+                                    let approx_tokens_in = ui.tokens_in;
+                                    let cost_limit_info = match ui.cost_limit_usd {
+                                        Some(l) => format!("${l:.4} (used: ${:.4})", ui.cost_usd),
+                                        None => "none".to_string(),
+                                    };
+                                    let auto_diff_str = if ui.auto_diff_enabled { "on" } else { "off" };
+                                    let mut note = format!(
+                                        "Context debug\n\
+                                         ─────────────────────────────────────\n\
+                                         Model:          {model}\n\
+                                         Exchanges:      {exchanges}\n\
+                                         Tokens in:      ~{approx_tokens_in}\n\
+                                         Context files:  {ctx_files_n} (~{} chars)\n\
+                                         Prompt prefix:  {} chars\n\
+                                         Auto-diff:      {auto_diff_str}\n\
+                                         Cost limit:     {cost_limit_info}\n\
+                                         ─────────────────────────────────────",
+                                        ctx_files_total_chars,
+                                        prefix_len,
+                                    );
+                                    if !ui.context_files.is_empty() {
+                                        note.push_str("\nContext files:");
+                                        for (i, f) in ui.context_files.iter().enumerate() {
+                                            let sz = std::fs::metadata(f).map(|m| m.len()).unwrap_or(0);
+                                            note.push_str(&format!("\n  [{i}] {f}  ({sz} bytes)"));
+                                        }
+                                    }
+                                    if let Some(ref pfx) = ui.prompt_prefix {
+                                        note.push_str(&format!("\nPrompt prefix: {:?}", &pfx[..pfx.len().min(80)]));
+                                    }
+                                    ui.chat_lines.push(ChatLine::SystemNote(note));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /env-list — list env vars set in this session via /setenv
+                                "/env-list" | "/env-vars-session" => {
+                                    if ui.session_env_vars.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "No env vars set this session. Use /setenv VAR=value to set one.".into()
+                                        ));
+                                    } else {
+                                        let mut note = format!("Session env vars ({} set via /setenv):", ui.session_env_vars.len());
+                                        for (k, v) in &ui.session_env_vars {
+                                            // Mask values that look like secrets
+                                            let display_v = if k.to_lowercase().contains("key") || k.to_lowercase().contains("secret") || k.to_lowercase().contains("token") || k.to_lowercase().contains("pass") {
+                                                format!("{}…{}", &v[..v.len().min(4)], if v.len() > 4 { "[masked]" } else { "" })
+                                            } else {
+                                                v.clone()
+                                            };
+                                            note.push_str(&format!("\n  {k}={display_v}"));
+                                        }
+                                        note.push_str("\n\n  /unsetenv <VAR> to remove  ·  /setenv VAR=val to add/update");
+                                        ui.chat_lines.push(ChatLine::SystemNote(note));
+                                    }
                                     ui.follow_tail = true;
                                     continue;
                                 }
@@ -19206,6 +19347,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/snapshot", "/snapshot ", "/snapshot-list", "/snapshot-pop",
                             "/set-cost-limit ", "/set-cost-limit off", "/model-context", "/ctx-bar",
                             "/retry-last", "/retry-last ", "/cost-history", "/cost-breakdown", "/auto-diff",
+                            "/write-last", "/write-last ", "/debug-context", "/ctx-debug", "/env-list", "/env-vars-session",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
