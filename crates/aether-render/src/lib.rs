@@ -715,6 +715,14 @@ pub enum UiCommand {
     SetResponseLengthHint(String),
     /// Show a delta summary of context stats vs what they were N turns ago.
     QueryContextStatsDiff(usize),
+    /// Set a focus topic appended to every system prompt as a sticky reminder (None = clear).
+    SetFocusMode(Option<String>),
+    /// Show the current focus mode topic if set.
+    QueryFocusMode,
+    /// Show per-tool error breakdown combining error_counts and tool_call_stats.
+    QueryToolErrorSummary,
+    /// Hard-truncate history to keep only the last N items (drop from head).
+    HistoryTruncateTo(usize),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

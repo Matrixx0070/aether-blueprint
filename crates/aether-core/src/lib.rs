@@ -394,6 +394,10 @@ pub struct Session {
     /// Hard cost ceiling in USD (0.0 = off). When cumulative cost exceeds this,
     /// the agent stops with a note rather than continuing.
     pub cost_ceiling_usd: f64,
+
+    /// Focus mode topic — appended as a sticky reminder to every turn's system prompt.
+    /// None = off.
+    pub focus_mode: Option<String>,
 }
 
 impl Session {
@@ -496,6 +500,7 @@ impl Session {
             auto_continue_cooldown_ms: 0,
             auto_bookmark_every: 0,
             cost_ceiling_usd: 0.0,
+            focus_mode: None,
         }
     }
 
@@ -674,6 +679,15 @@ async fn agent_turn_inner(
             ReminderKind::SystemWarning,
             Source::Kernel,
             format!("[Sticky context {i}] {snippet}"),
+        ));
+    }
+
+    // Focus mode — when set, remind the agent every turn of the active focus topic.
+    if let Some(ref topic) = session.focus_mode {
+        session.pending_reminders.push(Reminder::new(
+            ReminderKind::SystemWarning,
+            Source::Kernel,
+            format!("[Focus mode] Keep responses focused on: {topic}"),
         ));
     }
 

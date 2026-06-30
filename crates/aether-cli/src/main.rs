@@ -6778,6 +6778,62 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::SetFocusMode(topic) => {
+                    session.focus_mode = topic.clone();
+                    let note = match topic {
+                        None => "Focus mode cleared.".to_string(),
+                        Some(t) => format!("Focus mode set: \"{t}\" — will be reminded every turn."),
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryFocusMode => {
+                    let note = match &session.focus_mode {
+                        None => "Focus mode: OFF.".to_string(),
+                        Some(t) => format!("Focus mode: \"{t}\""),
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryToolErrorSummary => {
+                    let stats = &session.plan.tool_call_stats;
+                    let error_counts = &session.plan.tool_error_counts;
+                    if stats.is_empty() && error_counts.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No tool call data yet.".to_string()));
+                    } else {
+                        let mut all_tools: std::collections::HashSet<&String> = std::collections::HashSet::new();
+                        all_tools.extend(stats.keys());
+                        all_tools.extend(error_counts.keys());
+                        let mut rows: Vec<String> = all_tools.iter().map(|tool| {
+                            let (ok, err) = stats.get(*tool).copied().unwrap_or((0, 0));
+                            let consecutive = error_counts.get(*tool).copied().unwrap_or(0);
+                            let total = ok + err;
+                            let rate = if total > 0 { err as f64 / total as f64 * 100.0 } else { 0.0 };
+                            format!("  {:<30}  ok:{:>4}  err:{:>4}  consec:{:>3}  rate:{:.1}%", tool, ok, err, consecutive, rate)
+                        }).collect();
+                        rows.sort();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Tool error summary:\n  {:<30}  {:>7}  {:>8}  {:>10}  rate\n{}",
+                            "Tool", "ok", "err", "consec", rows.join("\n")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::HistoryTruncateTo(n) => {
+                    let before = session.history.len();
+                    if n >= before {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "History has {before} items — nothing to truncate (n={n})."
+                        )));
+                    } else {
+                        let drop_count = before - n;
+                        session.history.drain(0..drop_count);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Truncated {drop_count} item(s) from history head. Now: {} items.", session.history.len()
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryUserContext(n) => {
                     let user_turns: Vec<(usize, &str)> = session.history.iter().enumerate()
                         .filter_map(|(i, item)| {
@@ -30320,6 +30376,48 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /session-focus <topic> | off — set focus mode reminder
+                                cmd_str if cmd_str == "/session-focus off" || cmd_str.starts_with("/session-focus ") => {
+                                    if cmd_str == "/session-focus off" {
+                                        if _ctx.send(UiCommand::SetFocusMode(None)).is_err() { break 'outer; }
+                                    } else {
+                                        let topic = cmd_str.trim_start_matches("/session-focus ").trim().to_string();
+                                        if _ctx.send(UiCommand::SetFocusMode(Some(topic))).is_err() { break 'outer; }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-focus-show — show current focus mode
+                                "/session-focus-show" => {
+                                    if _ctx.send(UiCommand::QueryFocusMode).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tool-error-summary — per-tool error count breakdown
+                                "/tool-error-summary" => {
+                                    if _ctx.send(UiCommand::QueryToolErrorSummary).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-truncate-to <n> — keep only last n history items
+                                cmd_str if cmd_str.starts_with("/history-truncate-to ") => {
+                                    let arg = cmd_str.trim_start_matches("/history-truncate-to ").trim();
+                                    if let Ok(n) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::HistoryTruncateTo(n)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /history-truncate-to <n>".to_string()));
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /history-user-context <n> — show nth user turn + response
                                 cmd_str if cmd_str.starts_with("/history-user-context ") => {
                                     let arg = cmd_str.trim_start_matches("/history-user-context ").trim();
@@ -31422,6 +31520,10 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-user-context ",
                             "/set-response-length-hint ",
                             "/context-stats-diff ",
+                            "/session-focus ", "/session-focus off",
+                            "/session-focus-show",
+                            "/tool-error-summary",
+                            "/history-truncate-to ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
