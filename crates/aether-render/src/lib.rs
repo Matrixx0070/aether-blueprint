@@ -2246,6 +2246,38 @@ fn inline_markdown_spans(line: &str, body_color: Color) -> Vec<Span<'static>> {
             }
         }
 
+        // Highlight ==text== → amber background (Obsidian/GitHub style)
+        if i + 1 < bytes.len() && &bytes[i..i + 2] == b"==" {
+            flush_buf(&mut buf, &mut out, body_color);
+            if let Some(end) = line[i + 2..].find("==") {
+                out.push(Span::styled(
+                    line[i + 2..i + 2 + end].to_string(),
+                    Style::default()
+                        .fg(Color::Rgb(17, 24, 39))      // gray-900 foreground on amber
+                        .bg(Color::Rgb(251, 191, 36)),    // amber-400 background
+                ));
+                i += end + 4;
+                continue;
+            }
+        }
+
+        // Keyboard shortcut <kbd>text</kbd> → styled badge
+        if line[i..].starts_with("<kbd>") {
+            if let Some(end) = line[i + 5..].find("</kbd>") {
+                flush_buf(&mut buf, &mut out, body_color);
+                let key_text = &line[i + 5..i + 5 + end];
+                out.push(Span::styled(
+                    format!("⌨ {key_text}"),
+                    Style::default()
+                        .fg(Color::Rgb(203, 213, 225))   // slate-300
+                        .bg(Color::Rgb(30, 41, 59))      // slate-800
+                        .add_modifier(Modifier::BOLD),
+                ));
+                i += end + 11; // "<kbd>".len() + "</kbd>".len()
+                continue;
+            }
+        }
+
         // Italic *...*
         if bytes[i] == b'*' {
             flush_buf(&mut buf, &mut out, body_color);
