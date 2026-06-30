@@ -1771,22 +1771,47 @@ async fn run_repl(
                     if let Some(ConversationItem::Assistant { text: Some(t), .. }) =
                         session.history.last()
                     {
-                        print!("\naether › {t}");
+                        let mut rnd = LineRenderer::new();
+                        let rendered = {
+                            let mut s = rnd.push_delta(t);
+                            s.push_str(&rnd.flush());
+                            s
+                        };
+                        print!("\naether › {rendered}");
                         let _ = std::io::stdout().flush();
                     }
                 }
                 r
             } else {
+                // Streaming mode: render markdown line-by-line as each newline
+                // arrives. Partial lines (no trailing newline yet) are buffered
+                // inside LineRenderer and flushed after the stream ends.
+                let renderer = std::sync::Arc::new(std::sync::Mutex::new(LineRenderer::new()));
+                let renderer_for_sink = std::sync::Arc::clone(&renderer);
                 let mut started = false;
                 let sink: aether_llm::TextDeltaSink = Box::new(move |delta: &str| {
                     if !started {
                         print!("\naether › ");
                         started = true;
                     }
-                    print!("{delta}");
-                    let _ = std::io::stdout().flush();
+                    let mut r = renderer_for_sink.lock().unwrap();
+                    let rendered = r.push_delta(delta);
+                    if !rendered.is_empty() {
+                        print!("{rendered}");
+                        let _ = std::io::stdout().flush();
+                    }
                 });
-                agent_turn_streamed(&mut session, next_input.take(), sink).await
+                let res = agent_turn_streamed(&mut session, next_input.take(), sink).await;
+                // Flush any partial line still buffered.
+                {
+                    let mut r = renderer.lock().unwrap();
+                    let tail = r.flush();
+                    if !tail.is_empty() {
+                        print!("{tail}");
+                        std::io::stdout().flush().ok();
+                    }
+                }
+                res
             };
             let outcome = match result {
                 Ok(o) => o,
@@ -1999,6 +2024,7 @@ fn handle_slash(
         "help" | "h" | "?" => {
             eprintln!("\nslash commands:");
             eprintln!("  /help               show this help");
+            eprintln!("  /add <file>         inject a file's contents into context");
             eprintln!("  /clear              wipe in-memory conversation");
             eprintln!("  /compact            manually compact the context window now");
             eprintln!("  /model [NAME]       show or change the active model");
@@ -2125,6 +2151,29 @@ fn handle_slash(
             SlashAction::Continue
         }
         "quit" | "exit" | "q" => SlashAction::Quit,
+        "add" => {
+            // /add <path> — inject file contents into context.
+            if args.is_empty() {
+                eprintln!("[usage] /add <file-path>");
+                return SlashAction::Continue;
+            }
+            let path = std::path::Path::new(args);
+            match std::fs::read_to_string(path) {
+                Err(e) => {
+                    eprintln!("[add] cannot read {}: {e}", path.display());
+                    SlashAction::Continue
+                }
+                Ok(content) => {
+                    let line_count = content.lines().count();
+                    let msg = format!(
+                        "<file path=\"{}\" lines=\"{line_count}\">\n{content}\n</file>",
+                        path.display()
+                    );
+                    eprintln!("[add] injected {} ({line_count} lines)", path.display());
+                    SlashAction::SendAsUser(msg)
+                }
+            }
+        }
         "compact" => SlashAction::Compact,
         "sessions" => {
             let limit: usize = args.parse().unwrap_or(20);
@@ -2227,6 +2276,184 @@ fn use_color() -> bool {
         Ok(t) => !t.is_empty() && t != "dumb",
         Err(_) => false,
     }
+}
+
+/// Line-buffered streaming markdown renderer for the REPL.
+///
+/// Feed each streaming delta to `push_delta`; it returns chunks of rendered
+/// text to print immediately. Call `flush()` at the end to drain any partial
+/// line still in the buffer.
+///
+/// When color is disabled (NO_COLOR / dumb terminal), all styling is no-op.
+struct LineRenderer {
+    buf: String,
+    in_code_block: bool,
+    color: bool,
+}
+
+impl LineRenderer {
+    fn new() -> Self {
+        Self { buf: String::new(), in_code_block: false, color: use_color() }
+    }
+
+    /// Process a streaming delta; return text chunks ready to print (with
+    /// ANSI styling applied line-by-line). Each chunk ends with `\n` if the
+    /// line was complete, or has no trailing newline for partial last lines.
+    fn push_delta(&mut self, delta: &str) -> String {
+        let mut out = String::new();
+        for ch in delta.chars() {
+            if ch == '\n' {
+                let line = std::mem::take(&mut self.buf);
+                out.push_str(&self.render_line(&line));
+                out.push('\n');
+            } else {
+                self.buf.push(ch);
+            }
+        }
+        out
+    }
+
+    /// Flush any partial line still buffered (call when streaming ends).
+    fn flush(&mut self) -> String {
+        if self.buf.is_empty() {
+            return String::new();
+        }
+        let line = std::mem::take(&mut self.buf);
+        self.render_line(&line)
+    }
+
+    fn render_line(&mut self, line: &str) -> String {
+        if !self.color {
+            return line.to_string();
+        }
+        // Code fence toggle.
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            self.in_code_block = !self.in_code_block;
+            return format!("\x1b[2m{line}\x1b[0m");
+        }
+        if self.in_code_block {
+            return format!("\x1b[38;5;117m{line}\x1b[0m");
+        }
+        // Headers.
+        if let Some(r) = line.strip_prefix("### ") {
+            return format!("\x1b[1;35m### {r}\x1b[0m");
+        }
+        if let Some(r) = line.strip_prefix("## ") {
+            return format!("\x1b[1;34m## {r}\x1b[0m");
+        }
+        if let Some(r) = line.strip_prefix("# ") {
+            return format!("\x1b[1;36m# {r}\x1b[0m");
+        }
+        // Horizontal rules.
+        if trimmed == "---" || trimmed == "***" || trimmed == "___" {
+            return "\x1b[2m────────────────────────────────────────\x1b[0m".to_string();
+        }
+        // List bullets (indent 0 and 1).
+        if let Some(r) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
+            return format!("  • {}", apply_inline_md(r, true));
+        }
+        if let Some(r) = line.strip_prefix("  - ").or_else(|| line.strip_prefix("  * ")) {
+            return format!("    ◦ {}", apply_inline_md(r, true));
+        }
+        // Numbered list.
+        let numlist_rest = {
+            let mut rest = None;
+            for n in 1..=99usize {
+                let pat = format!("{n}. ");
+                if let Some(r) = line.strip_prefix(&pat) {
+                    rest = Some(format!("{n}. {}", apply_inline_md(r, true)));
+                    break;
+                }
+            }
+            rest
+        };
+        if let Some(s) = numlist_rest {
+            return s;
+        }
+        // Block-quote.
+        if let Some(r) = line.strip_prefix("> ") {
+            return format!("\x1b[2m│\x1b[0m {}", apply_inline_md(r, true));
+        }
+        // Normal text — apply inline styles.
+        apply_inline_md(line, true)
+    }
+}
+
+/// Apply inline markdown styles (**bold**, `code`, *italic*) to a line.
+/// Returns a string with ANSI escapes when `color` is true.
+fn apply_inline_md(s: &str, color: bool) -> String {
+    if !color || !use_color() {
+        return s.to_string();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    let mut in_bold = false;
+    let mut in_code = false;
+    let mut in_italic = false;
+
+    while i < chars.len() {
+        // Code span (highest priority — disables other patterns inside).
+        if chars[i] == '`' {
+            if in_code {
+                out.push_str("\x1b[0m");
+                in_code = false;
+            } else {
+                out.push_str("\x1b[38;5;117m");
+                in_code = true;
+            }
+            i += 1;
+            continue;
+        }
+        if in_code {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        // Bold+italic `***`.
+        if i + 2 < chars.len() && chars[i] == '*' && chars[i+1] == '*' && chars[i+2] == '*' {
+            if in_bold && in_italic {
+                out.push_str("\x1b[0m");
+                in_bold = false; in_italic = false;
+            } else {
+                out.push_str("\x1b[1;3m");
+                in_bold = true; in_italic = true;
+            }
+            i += 3;
+            continue;
+        }
+        // Bold `**`.
+        if i + 1 < chars.len() && chars[i] == '*' && chars[i+1] == '*' {
+            if in_bold {
+                out.push_str("\x1b[22m");
+                in_bold = false;
+            } else {
+                out.push_str("\x1b[1m");
+                in_bold = true;
+            }
+            i += 2;
+            continue;
+        }
+        // Italic `*` (only when not preceded by another `*`).
+        if chars[i] == '*' && (i == 0 || chars[i-1] != '*') {
+            if in_italic {
+                out.push_str("\x1b[23m");
+                in_italic = false;
+            } else {
+                out.push_str("\x1b[3m");
+                in_italic = true;
+            }
+            i += 1;
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    if in_bold || in_italic || in_code {
+        out.push_str("\x1b[0m");
+    }
+    out
 }
 
 fn format_tool_use(tu: &aether_core::context::RecordedToolUse) -> String {
