@@ -1673,6 +1673,9 @@ async fn run_repl(
     let mut ctrlc_armed = false; // first Ctrl-C clears input, second exits
     // Session cost cap set via /budget. Checked after each outer turn.
     let session_budget: std::cell::Cell<Option<f64>> = std::cell::Cell::new(None);
+    // Auto-compact nudge flags — each fires at most once per session.
+    let mut compact_nudge_60k_fired = false;
+    let mut compact_nudge_120k_fired = false;
 
     loop {
         let user_msg = match pending_user.take() {
@@ -2022,6 +2025,32 @@ async fn run_repl(
         }
         record_turn_delta(&session, &session_id, &pre_usage);
 
+        // Auto-compact nudge — when cumulative input tokens are high, remind
+        // the user that /compact is available. Fire once per session at each
+        // of two thresholds (60k and 120k tokens) to avoid spam.
+        {
+            let total_in = session.usage_total.input_tokens;
+            if (total_in >= 120_000 && !compact_nudge_120k_fired)
+                || (total_in >= 60_000 && !compact_nudge_60k_fired)
+            {
+                if total_in >= 120_000 && !compact_nudge_120k_fired {
+                    compact_nudge_120k_fired = true;
+                    eprintln!(
+                        "  [context] ~{:.0}k input tokens used. Consider `/compact` to \
+                         shorten history before reaching the context limit.",
+                        total_in / 1_000
+                    );
+                } else if !compact_nudge_60k_fired {
+                    compact_nudge_60k_fired = true;
+                    eprintln!(
+                        "  [context] ~{:.0}k input tokens used. \
+                         `/compact` is available if the context grows too large.",
+                        total_in / 1_000
+                    );
+                }
+            }
+        }
+
         // Budget guard — warn at 80%, stop at 100%.
         if let Some(cap) = session_budget.get() {
             let spent = estimate_cost_usd(&session.config.model, &session.usage_total);
@@ -2139,6 +2168,9 @@ fn handle_slash(
             eprintln!("  /config [field [v]] show or set session config (model/max_tokens/temperature/…)");
             eprintln!("  /notool [N]         disable tools for next N turns (default 1)");
             eprintln!("  /summarize          ask the model to summarize the conversation so far");
+            eprintln!("  /echo               reprint the last assistant response");
+            eprintln!("  /history [N]        show last N user/assistant exchanges (default 5)");
+            eprintln!("  /snippet-load <n>   inject a saved snippet as user input");
             eprintln!("  /compact            manually compact the context window now");
             eprintln!("  /model [NAME]       show or change the active model");
             eprintln!("  /tools              list registered tools");
@@ -2596,6 +2628,87 @@ fn handle_slash(
                         .to_string(),
                 )
             }
+        }
+        // /echo | /repeat — print the last assistant response again.
+        // Useful after the terminal has scrolled past it.
+        "echo" | "repeat" | "last" => {
+            let last_text = session.history.iter().rev().find_map(|item| match item {
+                ConversationItem::Assistant { text: Some(t), .. } => Some(t.as_str()),
+                _ => None,
+            });
+            match last_text {
+                None => eprintln!("[echo] no assistant response in history"),
+                Some(t) => {
+                    let mut rnd = LineRenderer::new();
+                    let rendered = {
+                        let mut s = rnd.push_delta(t);
+                        s.push_str(&rnd.flush());
+                        s
+                    };
+                    eprintln!("\n── last response ──\n{rendered}\n──────────────────");
+                }
+            }
+            SlashAction::Continue
+        }
+        // /history [N] — print last N user/assistant exchanges from in-memory
+        // history. N defaults to 5. Does not count tool-result turns.
+        "history" | "hist" | "log" => {
+            let n: usize = args.parse().unwrap_or(5);
+            let exchanges: Vec<(Option<&str>, Option<&str>)> = {
+                let mut pairs: Vec<(Option<&str>, Option<&str>)> = Vec::new();
+                let mut pending_user: Option<&str> = None;
+                for item in &session.history {
+                    match item {
+                        ConversationItem::User(u) => pending_user = Some(u.as_str()),
+                        ConversationItem::Assistant { text, .. } => {
+                            pairs.push((pending_user.take(), text.as_deref()));
+                        }
+                        ConversationItem::ToolResults(_) => {}
+                    }
+                }
+                pairs
+            };
+            if exchanges.is_empty() {
+                eprintln!("[history] no exchanges yet");
+            } else {
+                let start = exchanges.len().saturating_sub(n);
+                eprintln!("[history] last {} of {} exchange(s):", exchanges.len().min(n), exchanges.len());
+                for (i, (user, asst)) in exchanges[start..].iter().enumerate() {
+                    let idx = start + i + 1;
+                    let u = user.unwrap_or("(no text)");
+                    let a = asst.unwrap_or("(no text)");
+                    let u_short = if u.len() > 120 { &u[..120] } else { u };
+                    let a_short = if a.len() > 120 { &a[..120] } else { a };
+                    eprintln!("  [{idx}] user: {u_short}");
+                    eprintln!("       asst: {a_short}");
+                }
+            }
+            SlashAction::Continue
+        }
+        // /snippet-load <name> — load a saved snippet into the conversation
+        // as the next user message. Counterpart to /snippet-save.
+        "snippet-load" | "snippet-get" | "snip" => {
+            if args.is_empty() {
+                eprintln!("[snippet-load] usage: /snippet-load <name>");
+                eprintln!("  Lists: ls ~/.aether/snippets/");
+            } else {
+                let safe = args.chars().filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_').collect::<String>();
+                let snip_dir = std::env::var_os("HOME")
+                    .map(|h| std::path::PathBuf::from(h).join(".aether/snippets"))
+                    .unwrap_or_else(|| std::path::PathBuf::from(".aether/snippets"));
+                let path = snip_dir.join(format!("{safe}.md"));
+                match std::fs::read_to_string(&path) {
+                    Ok(content) => {
+                        eprintln!("[snippet-load] loaded '{safe}' ({} bytes) → sending as user input", content.len());
+                        return SlashAction::SendAsUser(content);
+                    }
+                    Err(_) => {
+                        eprintln!("[snippet-load] snippet '{safe}' not found at {}", path.display());
+                        eprintln!("  Create with: /snippet-save {safe}");
+                    }
+                }
+            }
+            SlashAction::Continue
         }
         "compact" => SlashAction::Compact,
         "sessions" => {
