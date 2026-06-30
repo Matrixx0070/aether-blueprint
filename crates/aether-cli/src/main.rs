@@ -7976,6 +7976,72 @@ Input shortcuts\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /pipe <shell command> — run command, inject output as AI message context
+                                cmd if cmd.starts_with("/pipe ") || cmd == "/pipe" => {
+                                    let shell_cmd = cmd.trim_start_matches("/pipe").trim();
+                                    if shell_cmd.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /pipe <shell command>\n  Runs the command and sends its output as an AI message.\n  e.g. /pipe cargo test 2>&1 | tail -20\n       /pipe git diff HEAD\n       /pipe cat Cargo.toml".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let out = std::process::Command::new("bash")
+                                        .args(["-c", shell_cmd])
+                                        .current_dir(std::env::current_dir().unwrap_or_default())
+                                        .output();
+                                    let (output_text, exit_label) = match out {
+                                        Ok(o) => {
+                                            let combined = {
+                                                let stdout = String::from_utf8_lossy(&o.stdout);
+                                                let stderr = String::from_utf8_lossy(&o.stderr);
+                                                if stderr.trim().is_empty() {
+                                                    stdout.to_string()
+                                                } else if stdout.trim().is_empty() {
+                                                    format!("stderr:\n{stderr}")
+                                                } else {
+                                                    format!("{stdout}\nstderr:\n{stderr}")
+                                                }
+                                            };
+                                            let exit = o.status.code().unwrap_or(-1);
+                                            let label = format!("exit {exit}");
+                                            // truncate: keep tail (most recent output = most interesting)
+                                            let lines: Vec<&str> = combined.trim_end().lines().collect();
+                                            let max_lines = 200;
+                                            let (omitted, shown) = if lines.len() > max_lines {
+                                                (lines.len() - max_lines, &lines[lines.len() - max_lines..])
+                                            } else {
+                                                (0, lines.as_slice())
+                                            };
+                                            let mut text = if omitted > 0 {
+                                                format!("[… {omitted} lines omitted …]\n")
+                                            } else {
+                                                String::new()
+                                            };
+                                            text.push_str(&shown.join("\n"));
+                                            (text, label)
+                                        }
+                                        Err(e) => (format!("(command failed: {e})"), "error".to_string()),
+                                    };
+                                    let ts = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    let prompt = format!(
+                                        "I ran this command and got the following output. Please analyse it and tell me what you see.\n\n$ {shell_cmd}\n```\n{output_text}\n```\n[{exit_label}]"
+                                    );
+                                    ui.chat_lines.push(ChatLine::User(
+                                        format!("/pipe {shell_cmd}  [{exit_label}]"), ts
+                                    ));
+                                    ui.follow_tail = true;
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.msg_times_secs.push(ts);
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() {
+                                        break 'outer;
+                                    }
+                                    continue;
+                                }
                                 cmd if cmd == "/tree" || cmd.starts_with("/tree ") => {
                                     use walkdir::WalkDir;
                                     let arg = cmd.trim_start_matches("/tree").trim();
@@ -18010,17 +18076,32 @@ CTF Toolkit — Aether AI-assisted\n\
                                 }
                             };
 
-                            // @file injection — expand @path tokens into inlined file content
+                            // @file injection — expand @path[:N[-M]] tokens into inlined file content
+                            // Supports:  @path/file.rs          — full file
+                            //            @path/file.rs:10       — single line 10
+                            //            @path/file.rs:10-50    — lines 10–50 (1-indexed)
                             let msg = {
-                                let mut injections: Vec<(String, String)> = Vec::new(); // (token, content)
+                                // (token_in_msg, display_label, content_to_inject)
+                                let mut injections: Vec<(String, String, String)> = Vec::new();
                                 let cwd_for_at = std::env::current_dir().unwrap_or_default();
-                                // Find @word patterns that look like paths
                                 let mut scan = msg.as_str();
                                 while let Some(at_pos) = scan.find('@') {
                                     let after = &scan[at_pos + 1..];
-                                    let path_end = after.find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '`').unwrap_or(after.len());
-                                    let raw_path = &after[..path_end];
-                                    if !raw_path.is_empty() && (raw_path.starts_with('/') || raw_path.starts_with('.') || raw_path.chars().next().map(|c| c.is_alphanumeric() || c == '_').unwrap_or(false)) {
+                                    let raw_end = after.find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '`').unwrap_or(after.len());
+                                    let raw_token = &after[..raw_end];
+                                    if !raw_token.is_empty() && (raw_token.starts_with('/') || raw_token.starts_with('.') || raw_token.chars().next().map(|c| c.is_alphanumeric() || c == '_').unwrap_or(false)) {
+                                        // Split off optional :N or :N-M range suffix
+                                        let (raw_path, line_range) = if let Some(colon_pos) = raw_token.rfind(':') {
+                                            let potential_range = &raw_token[colon_pos + 1..];
+                                            // Only treat as range if digits/dash (not a path segment like drive:/)
+                                            if potential_range.chars().all(|c| c.is_ascii_digit() || c == '-') && !potential_range.is_empty() {
+                                                (&raw_token[..colon_pos], Some(potential_range))
+                                            } else {
+                                                (raw_token, None)
+                                            }
+                                        } else {
+                                            (raw_token, None)
+                                        };
                                         let full = if raw_path.starts_with('/') {
                                             std::path::PathBuf::from(raw_path)
                                         } else {
@@ -18028,9 +18109,32 @@ CTF Toolkit — Aether AI-assisted\n\
                                         };
                                         if full.is_file() {
                                             if let Ok(content) = std::fs::read_to_string(&full) {
-                                                let token = format!("@{raw_path}");
-                                                if !injections.iter().any(|(t, _)| t == &token) {
-                                                    injections.push((token, content));
+                                                let (slice, range_label) = if let Some(range_str) = line_range {
+                                                    let parts: Vec<&str> = range_str.splitn(2, '-').collect();
+                                                    let lo: usize = parts[0].parse::<usize>().unwrap_or(1).saturating_sub(1);
+                                                    let hi: usize = if parts.len() == 2 {
+                                                        parts[1].parse().unwrap_or(usize::MAX)
+                                                    } else {
+                                                        lo + 1
+                                                    };
+                                                    let sliced: Vec<&str> = content.lines()
+                                                        .enumerate()
+                                                        .filter(|(i, _)| *i >= lo && *i < hi)
+                                                        .map(|(_, l)| l)
+                                                        .collect();
+                                                    let label = if parts.len() == 2 {
+                                                        format!("L{}–{}", lo + 1, hi)
+                                                    } else {
+                                                        format!("L{}", lo + 1)
+                                                    };
+                                                    (sliced.join("\n"), format!(":{range_str}"))
+                                                } else {
+                                                    (content.clone(), String::new())
+                                                };
+                                                let token = format!("@{raw_token}");
+                                                let label = format!("{raw_path}{range_label}");
+                                                if !injections.iter().any(|(t, _, _)| t == &token) {
+                                                    injections.push((token, label, slice));
                                                 }
                                             }
                                         }
@@ -18042,16 +18146,18 @@ CTF Toolkit — Aether AI-assisted\n\
                                 } else {
                                     let mut expanded = msg.clone();
                                     let mut appendix = String::new();
-                                    for (token, content) in &injections {
-                                        let fname = token.trim_start_matches('@');
-                                        let ext = std::path::Path::new(fname).extension()
-                                            .and_then(|e| e.to_str()).unwrap_or("").to_string();
-                                        appendix.push_str(&format!("\n\n--- {fname} ---\n```{ext}\n{content}\n```"));
-                                        expanded = expanded.replace(token.as_str(), &format!("[{fname}]"));
+                                    for (token, label, content) in &injections {
+                                        let ext = std::path::Path::new(label)
+                                            .extension()
+                                            .and_then(|e| e.to_str())
+                                            .unwrap_or("")
+                                            .to_string();
+                                        appendix.push_str(&format!("\n\n--- {label} ---\n```{ext}\n{content}\n```"));
+                                        expanded = expanded.replace(token.as_str(), &format!("[{label}]"));
                                     }
-                                    let files_note = injections.iter().map(|(t, c)| {
-                                        let lines = c.lines().count();
-                                        format!("{} ({lines}L)", t.trim_start_matches('@'))
+                                    let files_note = injections.iter().map(|(_, label, content)| {
+                                        let lines = content.lines().count();
+                                        format!("{label} ({lines}L)")
                                     }).collect::<Vec<_>>().join(", ");
                                     ui.chat_lines.push(ChatLine::SystemNote(
                                         format!("@-file inject: {files_note}")
