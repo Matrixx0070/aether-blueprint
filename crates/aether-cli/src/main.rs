@@ -6406,6 +6406,42 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 UiCommand::SetAlias(_, _) | UiCommand::RemoveAlias(_) | UiCommand::QueryAliases => {
                     continue;
                 }
+                UiCommand::SetSessionVar(name, val) => {
+                    session.session_vars.insert(name.clone(), val.clone());
+                    let preview: String = val.chars().take(50).collect();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session var: ${name} = {preview}{}",
+                        if val.len() > 50 { "…" } else { "" }
+                    )));
+                    continue;
+                }
+                UiCommand::DeleteSessionVar(name) => {
+                    let had = session.session_vars.remove(&name).is_some();
+                    let note = if had {
+                        format!("Session var: ${name} deleted.")
+                    } else {
+                        format!("Session var: ${name} not found.")
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QuerySessionVars => {
+                    let note = if session.session_vars.is_empty() {
+                        "Session vars: empty. Use /var <name> <value> to set.".to_string()
+                    } else {
+                        let mut pairs: Vec<(&String, &String)> = session.session_vars.iter().collect();
+                        pairs.sort_by_key(|(k, _)| k.as_str());
+                        let lines: Vec<String> = pairs.iter()
+                            .map(|(k, v)| {
+                                let preview: String = v.chars().take(60).collect();
+                                format!("  ${k} = {preview}{}", if v.len() > 60 { "…" } else { "" })
+                            })
+                            .collect();
+                        format!("=== Session vars ({}) ===\n{}", lines.len(), lines.join("\n"))
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::SetScopeGuard(scope_opt) => {
                     let note = match &scope_opt {
                         Some(s) => format!(
@@ -7517,6 +7553,19 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
             .await;
             push_hook_reminders(&mut session, outs, "UserPromptSubmit");
 
+            // Expand $var_name references in user message using session_vars.
+            let user_msg = if !session.session_vars.is_empty() && user_msg.contains('$') {
+                let mut expanded = user_msg.clone();
+                let mut sorted: Vec<(&String, &String)> = session.session_vars.iter().collect();
+                // Sort longest key first to avoid partial replacements (e.g., $foo before $foobar).
+                sorted.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+                for (k, v) in sorted {
+                    expanded = expanded.replace(&format!("${k}"), v);
+                }
+                expanded
+            } else {
+                user_msg
+            };
             let mut next_input: Option<String> = Some(user_msg);
             const AUTO_CONTINUE_LIMIT: usize = 50;
             let mut auto_continue_count: usize = 0;
@@ -25456,6 +25505,45 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /var <name> [value] — set or read a session variable
+                                cmd_str if cmd_str == "/var" || cmd_str.starts_with("/var ") => {
+                                    let arg = cmd_str.trim_start_matches("/var").trim();
+                                    if arg.is_empty() {
+                                        if _ctx.send(UiCommand::QuerySessionVars).is_err() { break 'outer; }
+                                    } else {
+                                        let parts: Vec<&str> = arg.splitn(2, ' ').collect();
+                                        if parts.len() == 2 {
+                                            let name = parts[0].trim_start_matches('$').to_string();
+                                            let val = parts[1].to_string();
+                                            if _ctx.send(UiCommand::SetSessionVar(name, val)).is_err() { break 'outer; }
+                                        } else {
+                                            // Read single var
+                                            if _ctx.send(UiCommand::QuerySessionVars).is_err() { break 'outer; }
+                                        }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /vars — list all session variables
+                                "/vars" => {
+                                    if _ctx.send(UiCommand::QuerySessionVars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /var-del <name> — delete a session variable
+                                cmd_str if cmd_str.starts_with("/var-del ") => {
+                                    let name = cmd_str.trim_start_matches("/var-del ").trim()
+                                        .trim_start_matches('$').to_string();
+                                    if _ctx.send(UiCommand::DeleteSessionVar(name)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /scope-set <glob> — restrict agent to files matching pattern
                                 cmd_str if cmd_str.starts_with("/scope-set ") => {
                                     let scope = cmd_str.trim_start_matches("/scope-set ").trim().to_string();
@@ -26375,6 +26463,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/scope-set ",
                             "/scope-clear",
                             "/scope-show",
+                            "/var", "/var ",
+                            "/vars",
+                            "/var-del ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

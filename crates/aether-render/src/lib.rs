@@ -287,6 +287,12 @@ pub enum UiCommand {
     RemovePlaybookEntry(usize),
     /// List all error playbook entries.
     QueryPlaybook,
+    /// Set a named session variable (name, value).
+    SetSessionVar(String, String),
+    /// Delete a named session variable.
+    DeleteSessionVar(String),
+    /// List all session variables.
+    QuerySessionVars,
     /// Set a file scope guard pattern (None = off).
     SetScopeGuard(Option<String>),
     /// Show the current scope guard.

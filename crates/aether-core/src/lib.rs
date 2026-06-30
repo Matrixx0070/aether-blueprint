@@ -304,6 +304,10 @@ pub struct Session {
     /// to only read/write files matching this pattern. Not enforced at the tool
     /// level — relies on the LLM respecting the instruction.
     pub scope_guard: Option<String>,
+
+    /// User-defined session variables (name → value). The TUI expands
+    /// `$var_name` in user input before sending to the driver.
+    pub session_vars: std::collections::HashMap<String, String>,
 }
 
 impl Session {
@@ -381,6 +385,7 @@ impl Session {
             tool_output_history: std::collections::HashMap::new(),
             agent_persona: None,
             scope_guard: None,
+            session_vars: std::collections::HashMap::new(),
         }
     }
 
