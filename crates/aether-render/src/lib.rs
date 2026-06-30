@@ -111,6 +111,8 @@ pub enum UiEvent {
     },
     Error(String),
     AwaitUser,
+    /// Informational note sent from the agent driver to the UI (no error state).
+    SystemNote(String),
 }
 
 /// Commands sent from the UI back to the session driver.
@@ -119,6 +121,10 @@ pub enum UiCommand {
     UserMessage(String),
     Cancel,
     Quit,
+    /// Directly set the agent session's active plan text.
+    SetPlan(String),
+    /// Clear the agent session's active plan.
+    ClearPlan,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
@@ -556,6 +562,9 @@ impl UiState {
             }
             UiEvent::AwaitUser => {
                 self.status_running = false;
+            }
+            UiEvent::SystemNote(note) => {
+                self.chat_lines.push(ChatLine::SystemNote(note));
             }
         }
     }

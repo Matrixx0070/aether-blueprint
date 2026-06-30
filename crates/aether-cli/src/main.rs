@@ -15,6 +15,7 @@
 
 use aether_core::context::ConversationItem;
 use aether_core::{agent_turn, agent_turn_streamed, Session, SessionConfig, TurnOutcome};
+use aether_core::planner::Plan;
 use aether_overlay::aether_hook::{Reminder, ReminderKind, Source};
 use aether_tools::{Tool, ToolError};
 use async_trait::async_trait;
@@ -5522,6 +5523,22 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 UiCommand::UserMessage(s) => s,
                 UiCommand::Cancel => continue,
                 UiCommand::Quit => break,
+                UiCommand::SetPlan(text) => {
+                    session.plan.text = text.clone();
+                    session.plan.clear_dirty();
+                    let preview = text.chars().take(80).collect::<String>();
+                    let note = format!("Plan set ({} chars): {}{}",
+                        text.len(), preview,
+                        if text.len() > 80 { "…" } else { "" }
+                    );
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::ClearPlan => {
+                    session.plan = Plan::default();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote("Plan cleared.".into()));
+                    continue;
+                }
             };
             let outs = run_hooks(
                 &hooks.user_prompt_submit,
@@ -17855,6 +17872,32 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /plan [set <text>|clear|show] — directly control the session's active plan
+                                cmd if cmd == "/plan" || cmd.starts_with("/plan ") => {
+                                    let sub = cmd.trim_start_matches("/plan").trim();
+                                    if sub.is_empty() || sub == "show" {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Plan commands:\n  /plan set <text>  — set active plan injected into system prompt\n  /plan clear       — clear the active plan\n  /plan show        — this help (plan state is managed server-side)".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    if sub == "clear" {
+                                        if _ctx.send(UiCommand::ClearPlan).is_err() { break 'outer; }
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let text = sub.trim_start_matches("set").trim().to_string();
+                                    if text.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /plan set <text>".to_string()
+                                        ));
+                                    } else if _ctx.send(UiCommand::SetPlan(text)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -17885,6 +17928,88 @@ CTF Toolkit — Aether AI-assisted\n\
                             ui.status_running = true;
                             ui.waiting_since = Some(std::time::Instant::now());
                             ui.msg_times_secs.push(ts);
+                            // @git injection — expand @git into live git context block
+                            let msg = if msg.contains("@git") {
+                                let git_status = std::process::Command::new("git")
+                                    .args(["status", "--short"])
+                                    .output()
+                                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                                    .unwrap_or_else(|_| "(git not available)".to_string());
+                                let git_diff = std::process::Command::new("git")
+                                    .args(["diff", "--stat", "HEAD"])
+                                    .output()
+                                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                                    .unwrap_or_default();
+                                let git_log = std::process::Command::new("git")
+                                    .args(["log", "--oneline", "-8"])
+                                    .output()
+                                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                                    .unwrap_or_default();
+                                let block = format!(
+                                    "\n\n<git-context>\ngit status:\n{}\n\ngit diff --stat HEAD:\n{}\n\ngit log --oneline -8:\n{}\n</git-context>",
+                                    if git_status.is_empty() { "(clean working tree)" } else { &git_status },
+                                    if git_diff.is_empty() { "(no staged/unstaged changes)" } else { &git_diff },
+                                    if git_log.is_empty() { "(no commits)" } else { &git_log },
+                                );
+                                let lines = git_status.lines().count() + git_diff.lines().count() + git_log.lines().count();
+                                ui.chat_lines.push(ChatLine::SystemNote(format!("@git inject: {} context lines", lines)));
+                                msg.replace("@git", "[git-context]") + &block
+                            } else {
+                                msg
+                            };
+
+                            // @dir injection — expand @some/dir/ into a file-tree listing
+                            let msg = {
+                                let mut dir_expansions: Vec<(String, String)> = Vec::new();
+                                let cwd_for_dir = std::env::current_dir().unwrap_or_default();
+                                let mut scan = msg.as_str();
+                                while let Some(at_pos) = scan.find('@') {
+                                    let after = &scan[at_pos + 1..];
+                                    let token_end = after.find(|c: char| c.is_whitespace() || c == '"' || c == '`').unwrap_or(after.len());
+                                    let raw = &after[..token_end];
+                                    if raw.ends_with('/') && !raw.is_empty() {
+                                        let dir_path = if raw.starts_with('/') {
+                                            std::path::PathBuf::from(raw.trim_end_matches('/'))
+                                        } else {
+                                            cwd_for_dir.join(raw.trim_end_matches('/'))
+                                        };
+                                        if dir_path.is_dir() {
+                                            let token = format!("@{raw}");
+                                            if !dir_expansions.iter().any(|(t, _)| t == &token) {
+                                                let tree = std::process::Command::new("find")
+                                                    .arg(&dir_path)
+                                                    .args(["-not", "-path", "*/.git/*", "-not", "-name", "*.o", "-not", "-name", "*.class"])
+                                                    .output()
+                                                    .map(|o| {
+                                                        let s = String::from_utf8_lossy(&o.stdout);
+                                                        s.lines().take(150).collect::<Vec<_>>().join("\n")
+                                                    })
+                                                    .unwrap_or_else(|_| "(find failed)".to_string());
+                                                dir_expansions.push((token, tree));
+                                            }
+                                        }
+                                    }
+                                    scan = &scan[at_pos + 1..];
+                                }
+                                if dir_expansions.is_empty() {
+                                    msg
+                                } else {
+                                    let mut expanded = msg.clone();
+                                    let mut appendix = String::new();
+                                    for (token, tree) in &dir_expansions {
+                                        let dname = token.trim_start_matches('@');
+                                        appendix.push_str(&format!("\n\n--- {dname} (file tree) ---\n```\n{tree}\n```"));
+                                        expanded = expanded.replace(token.as_str(), &format!("[dir:{dname}]"));
+                                    }
+                                    let dirs_note = dir_expansions.iter().map(|(t, tree)| {
+                                        let n = tree.lines().count();
+                                        format!("{} ({n} entries)", t.trim_start_matches('@'))
+                                    }).collect::<Vec<_>>().join(", ");
+                                    ui.chat_lines.push(ChatLine::SystemNote(format!("@dir inject: {dirs_note}")));
+                                    expanded + &appendix
+                                }
+                            };
+
                             // @file injection — expand @path tokens into inlined file content
                             let msg = {
                                 let mut injections: Vec<(String, String)> = Vec::new(); // (token, content)
