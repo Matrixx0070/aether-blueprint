@@ -7700,6 +7700,63 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryPlanBlockCounts => {
+                    if session.plan.block_counts.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Plan block counts: none ({} total blocks recorded).", session.plan.blocks_recorded
+                        )));
+                    } else {
+                        let mut entries: Vec<_> = session.plan.block_counts.iter().collect();
+                        entries.sort_by(|a, b| b.1.cmp(a.1));
+                        let mut lines = vec![format!(
+                            "Plan block counts ({} rules, {} total):", entries.len(), session.plan.blocks_recorded
+                        )];
+                        for (rule, count) in &entries {
+                            lines.push(format!("  {rule}: {count}x"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(lines.join("\n")));
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanLastError => {
+                    match (&session.plan.last_error_text, &session.plan.last_error_tool) {
+                        (Some(text), tool) => {
+                            let tool_label = tool.as_deref().unwrap_or("unknown");
+                            let preview = if text.len() > 300 {
+                                format!("{}… ({} chars)", &text[..300], text.len())
+                            } else {
+                                text.clone()
+                            };
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Last plan error (tool: {tool_label}):\n{preview}"
+                            )));
+                        }
+                        _ => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "No error recorded in plan yet.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanToolErrors => {
+                    if session.plan.tool_error_counts.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Plan tool error counts: all tools clean.".to_string()
+                        ));
+                    } else {
+                        let mut entries: Vec<_> = session.plan.tool_error_counts.iter()
+                            .filter(|(_, c)| **c > 0)
+                            .collect();
+                        entries.sort_by(|a, b| b.1.cmp(a.1));
+                        let mut lines = vec![format!("Plan tool consecutive errors ({} tools with errors):", entries.len())];
+                        for (tool, count) in &entries {
+                            lines.push(format!("  {tool}: {count} consecutive error(s)"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(lines.join("\n")));
+                    }
+                    continue;
+                }
                 UiCommand::QueryCurrentModel => {
                     let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
                         "Active model: {}.", session.config.model
@@ -33701,6 +33758,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /plan-block-counts — show per-rule verifier block counts
+                                "/plan-block-counts" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockCounts).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /plan-last-error — show last error from the plan
+                                "/plan-last-error" => {
+                                    if _ctx.send(UiCommand::QueryPlanLastError).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /plan-tool-errors — show per-tool consecutive error counts
+                                "/plan-tool-errors" => {
+                                    if _ctx.send(UiCommand::QueryPlanToolErrors).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -34495,6 +34570,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/current-model",
                             "/plan-text-show",
                             "/plan-goal",
+                            "/plan-block-counts",
+                            "/plan-last-error",
+                            "/plan-tool-errors",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -975,6 +975,12 @@ pub enum UiCommand {
     QueryPlanTextShow,
     /// Show the active plan goal line.
     QueryPlanGoal,
+    /// Show per-rule verifier block counts from the plan.
+    QueryPlanBlockCounts,
+    /// Show the last error text and tool name from the plan.
+    QueryPlanLastError,
+    /// Show per-tool consecutive error counts from the plan.
+    QueryPlanToolErrors,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
