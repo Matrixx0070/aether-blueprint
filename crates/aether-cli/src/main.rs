@@ -5211,7 +5211,13 @@ DevOps & code intelligence\n\
   /diff [file]            unstaged + staged diff stats for file or all\n\
   /env-check              installed dev tool versions + key env vars\n\
   /complexity <file>      cyclomatic-complexity score per function (CRITICAL/HIGH/MEDIUM/LOW)\n\
-  /docker [sub]           ps | ps-a | images | logs <n> | inspect <n> | stats"),
+  /docker [sub]           ps | ps-a | images | logs <n> | inspect <n> | stats\n\
+Crypto & encoding\n\
+  /jwt-decode <token>     decode JWT header+payload; warns if exp is in the past\n\
+  /base64 [e|d] <text>    base64 encode (default) or decode\n\
+  /hash [algo] <text|@f>  sha256 (default) / sha512 / sha1 / md5; @file syntax\n\
+  /url [e|d] <text>       URL percent-encode (default) or percent-decode\n\
+  /uuid [n]               generate n UUID v4 values from /dev/urandom (max 20)"),
                                         ("keys", &["keys", "keyboard", "shortcuts", "bindings"], "\
 Input shortcuts\n\
   ↑ ↓  / Ctrl+R           history recall / reverse-i-search\n\
@@ -5312,6 +5318,7 @@ Input shortcuts\n\
     ◈ /status /log-parse /api-test /changelog /recent          ops + project mgmt\n\
     ◈ /watch /profile /patch /rename /count-tokens             precision tools\n\
     ◈ /git-log /diff /complexity /env-check /docker           devops + intelligence\n\
+    ◈ /jwt-decode /base64 /hash /url /uuid                   crypto + encoding utils\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -10016,6 +10023,291 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // ── Batch 93: Security / crypto utilities ────────────────────────
+                                cmd if cmd.starts_with("/jwt-decode ") || cmd == "/jwt-decode" => {
+                                    // /jwt-decode <token>  — decode JWT header+payload, check exp
+                                    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+                                    let token = cmd.trim_start_matches("/jwt-decode").trim();
+                                    if token.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /jwt-decode <jwt-token>\n  Decodes header and payload; warns if expired.".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let parts: Vec<&str> = token.splitn(3, '.').collect();
+                                    if parts.len() < 2 {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Not a valid JWT (expected 3 dot-separated parts).".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let mut body = "JWT decode\n────────────────────────────────────\n".to_string();
+                                    // decode header
+                                    match URL_SAFE_NO_PAD.decode(parts[0]) {
+                                        Ok(hdr_bytes) => {
+                                            let hdr = String::from_utf8_lossy(&hdr_bytes);
+                                            body.push_str(&format!("Header:\n  {hdr}\n\n"));
+                                        }
+                                        Err(e) => { body.push_str(&format!("Header decode error: {e}\n\n")); }
+                                    }
+                                    // decode payload
+                                    match URL_SAFE_NO_PAD.decode(parts[1]) {
+                                        Ok(payload_bytes) => {
+                                            let payload = String::from_utf8_lossy(&payload_bytes).to_string();
+                                            body.push_str(&format!("Payload:\n  {payload}\n\n"));
+                                            // check exp
+                                            if let Some(exp_start) = payload.find("\"exp\"") {
+                                                let rest = &payload[exp_start + 5..];
+                                                let digits: String = rest.chars()
+                                                    .skip_while(|c| !c.is_ascii_digit())
+                                                    .take_while(|c| c.is_ascii_digit())
+                                                    .collect();
+                                                if let Ok(exp_ts) = digits.parse::<u64>() {
+                                                    let now = std::time::SystemTime::now()
+                                                        .duration_since(std::time::UNIX_EPOCH)
+                                                        .unwrap_or_default().as_secs();
+                                                    if exp_ts < now {
+                                                        let ago = now - exp_ts;
+                                                        body.push_str(&format!("  ⚠ EXPIRED  {ago}s ago (exp={exp_ts})\n"));
+                                                    } else {
+                                                        let left = exp_ts - now;
+                                                        body.push_str(&format!("  ✓ Valid for {left}s more (exp={exp_ts})\n"));
+                                                    }
+                                                }
+                                            } else {
+                                                body.push_str("  (no 'exp' claim found)\n");
+                                            }
+                                        }
+                                        Err(e) => { body.push_str(&format!("Payload decode error: {e}\n")); }
+                                    }
+                                    body.push_str(&format!("\nSignature: {} (not verified — use /owasp for auth audit)\n",
+                                        if parts.len() == 3 { parts[2] } else { "(none)" }));
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/base64 ") || cmd == "/base64" => {
+                                    // /base64 [e|d] <text>  — encode or decode base64
+                                    use base64::{Engine, engine::general_purpose::STANDARD};
+                                    let args = cmd.trim_start_matches("/base64").trim();
+                                    if args.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /base64 e <text>  — encode\n       /base64 d <text>  — decode".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let (mode, input) = if args.starts_with("e ") || args.starts_with("encode ") {
+                                        let after = args.splitn(2, ' ').nth(1).unwrap_or("").trim();
+                                        ("encode", after)
+                                    } else if args.starts_with("d ") || args.starts_with("decode ") {
+                                        let after = args.splitn(2, ' ').nth(1).unwrap_or("").trim();
+                                        ("decode", after)
+                                    } else {
+                                        // default: encode
+                                        ("encode", args)
+                                    };
+                                    let result = if mode == "encode" {
+                                        Ok(STANDARD.encode(input.as_bytes()))
+                                    } else {
+                                        STANDARD.decode(input.trim())
+                                            .map(|b| String::from_utf8_lossy(&b).to_string())
+                                            .map_err(|e| e.to_string())
+                                    };
+                                    match result {
+                                        Ok(out) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("base64 {mode}\n  input:  {input}\n  output: {out}")));
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("base64 decode error: {e}")));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/hash ") || cmd == "/hash" => {
+                                    // /hash [algo] <text|file>  — sha256/sha512/md5/sha1
+                                    use sha2::{Sha256, Sha512, Digest};
+                                    let args = cmd.trim_start_matches("/hash").trim();
+                                    if args.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /hash [sha256|sha512|sha1|md5] <text or @file>".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let (algo, data_arg) = {
+                                        let first = args.split_whitespace().next().unwrap_or("");
+                                        match first {
+                                            "sha256" | "sha512" | "sha1" | "md5" => {
+                                                let rest = args.trim_start_matches(first).trim();
+                                                (first, rest)
+                                            }
+                                            _ => ("sha256", args)
+                                        }
+                                    };
+                                    // support @file reference
+                                    let data: Vec<u8> = if data_arg.starts_with('@') {
+                                        let path = data_arg.trim_start_matches('@');
+                                        match std::fs::read(path) {
+                                            Ok(b) => b,
+                                            Err(e) => {
+                                                ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {path}: {e}")));
+                                                ui.follow_tail = true;
+                                                continue;
+                                            }
+                                        }
+                                    } else {
+                                        data_arg.as_bytes().to_vec()
+                                    };
+                                    let hash_hex = match algo {
+                                        "sha256" => {
+                                            let mut h = Sha256::new();
+                                            h.update(&data);
+                                            hex::encode(h.finalize())
+                                        }
+                                        "sha512" => {
+                                            let mut h = Sha512::new();
+                                            h.update(&data);
+                                            hex::encode(h.finalize())
+                                        }
+                                        "sha1" => {
+                                            // use sha1 via system command if available
+                                            let out = std::process::Command::new("sha1sum")
+                                                .stdin(std::process::Stdio::piped())
+                                                .stdout(std::process::Stdio::piped())
+                                                .spawn()
+                                                .and_then(|mut c| {
+                                                    use std::io::Write;
+                                                    c.stdin.as_mut().unwrap().write_all(&data)?;
+                                                    c.wait_with_output()
+                                                });
+                                            match out {
+                                                Ok(o) => String::from_utf8_lossy(&o.stdout).split_whitespace().next().unwrap_or("").to_string(),
+                                                Err(_) => "(sha1sum not available)".to_string(),
+                                            }
+                                        }
+                                        "md5" => {
+                                            let out = std::process::Command::new("md5sum")
+                                                .stdin(std::process::Stdio::piped())
+                                                .stdout(std::process::Stdio::piped())
+                                                .spawn()
+                                                .and_then(|mut c| {
+                                                    use std::io::Write;
+                                                    c.stdin.as_mut().unwrap().write_all(&data)?;
+                                                    c.wait_with_output()
+                                                });
+                                            match out {
+                                                Ok(o) => String::from_utf8_lossy(&o.stdout).split_whitespace().next().unwrap_or("").to_string(),
+                                                Err(_) => "(md5sum not available)".to_string(),
+                                            }
+                                        }
+                                        _ => unreachable!()
+                                    };
+                                    let src_label = if data_arg.starts_with('@') { data_arg } else { &format!("\"{data_arg}\"") };
+                                    ui.chat_lines.push(ChatLine::SystemNote(format!(
+                                        "hash  algo={algo}  bytes={}\n  input:  {src_label}\n  hash:   {hash_hex}",
+                                        data.len()
+                                    )));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/url ") || cmd == "/url" => {
+                                    // /url [e|d] <text>  — percent-encode or decode URL
+                                    let args = cmd.trim_start_matches("/url").trim();
+                                    if args.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /url e <text>  — percent-encode\n       /url d <text>  — percent-decode".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let (mode, input) = if args.starts_with("e ") || args.starts_with("encode ") {
+                                        let after = args.splitn(2, ' ').nth(1).unwrap_or("").trim();
+                                        ("encode", after)
+                                    } else if args.starts_with("d ") || args.starts_with("decode ") {
+                                        let after = args.splitn(2, ' ').nth(1).unwrap_or("").trim();
+                                        ("decode", after)
+                                    } else {
+                                        ("encode", args)
+                                    };
+                                    let result = if mode == "encode" {
+                                        // percent-encode everything except unreserved chars
+                                        let mut out = String::with_capacity(input.len() * 3);
+                                        for byte in input.as_bytes() {
+                                            if byte.is_ascii_alphanumeric() || b"-._~".contains(byte) {
+                                                out.push(*byte as char);
+                                            } else {
+                                                out.push('%');
+                                                out.push_str(&format!("{:02X}", byte));
+                                            }
+                                        }
+                                        Ok(out)
+                                    } else {
+                                        // percent-decode
+                                        let mut out = String::new();
+                                        let mut chars = input.chars().peekable();
+                                        let mut ok = true;
+                                        while let Some(c) = chars.next() {
+                                            if c == '%' {
+                                                let h1 = chars.next();
+                                                let h2 = chars.next();
+                                                match (h1, h2) {
+                                                    (Some(a), Some(b)) => {
+                                                        let s = format!("{a}{b}");
+                                                        if let Ok(byte) = u8::from_str_radix(&s, 16) {
+                                                            out.push(byte as char);
+                                                        } else { ok = false; break; }
+                                                    }
+                                                    _ => { ok = false; break; }
+                                                }
+                                            } else if c == '+' {
+                                                out.push(' ');
+                                            } else {
+                                                out.push(c);
+                                            }
+                                        }
+                                        if ok { Ok(out) } else { Err("invalid percent-encoding".to_string()) }
+                                    };
+                                    match result {
+                                        Ok(out) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("url {mode}\n  input:  {input}\n  output: {out}")));
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("url decode error: {e}")));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/uuid" || cmd.starts_with("/uuid ") => {
+                                    // /uuid [count]  — generate UUID v4 from /dev/urandom
+                                    let count_arg = cmd.trim_start_matches("/uuid").trim();
+                                    let count = count_arg.parse::<usize>().unwrap_or(1).min(20).max(1);
+                                    let mut body = format!("UUID v4  (×{count})\n────────────────────────────────────\n");
+                                    for _ in 0..count {
+                                        let mut bytes = [0u8; 16];
+                                        if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+                                            use std::io::Read;
+                                            let _ = f.read_exact(&mut bytes);
+                                        }
+                                        // set version 4 and variant bits
+                                        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+                                        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+                                        let uuid = format!(
+                                            "{}-{}-{}-{}-{}",
+                                            hex::encode(&bytes[0..4]),
+                                            hex::encode(&bytes[4..6]),
+                                            hex::encode(&bytes[6..8]),
+                                            hex::encode(&bytes[8..10]),
+                                            hex::encode(&bytes[10..16]),
+                                        );
+                                        body.push_str(&format!("  {uuid}\n"));
+                                    }
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -10654,7 +10946,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/bench", "/bench ", "/blame ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-log", "/git-log ", "/grep-code ", "/heatmap", "/heatmap ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/pr-review", "/pr-review ", "/profile ", "/recent", "/recent ", "/refactor ", "/rename ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/status", "/test", "/test ", "/todo-ai ", "/translate-code ", "/undo-last", "/undo-exchange", "/vulnscan", "/vulnscan ", "/watch ",
+                            "/ai-commit", "/ai-commit ", "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-log", "/git-log ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/jwt-decode ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/pr-review", "/pr-review ", "/profile ", "/recent", "/recent ", "/refactor ", "/rename ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/status", "/test", "/test ", "/todo-ai ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
