@@ -7700,6 +7700,42 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryRetryCountShow => {
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Retry-on-error: {}/{} retries used (threshold: {} errors, max: {} retries).",
+                        session.retry_on_error_count,
+                        session.retry_on_error_max,
+                        session.retry_on_error_threshold,
+                        session.retry_on_error_max,
+                    )));
+                    continue;
+                }
+                UiCommand::QueryLlmFallbackTotal => {
+                    if session.llm_fallback_count == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "LLM fallback: never triggered this session.".to_string()
+                        ));
+                    } else {
+                        let model = session.llm_fallback_model.as_deref().unwrap_or("none");
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "LLM fallback: triggered {} time(s) → fallback model: {model}.",
+                            session.llm_fallback_count
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryCostCapShow => {
+                    if session.cost_cap_usd <= 0.0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Cost cap: OFF (no hard ceiling set). Use /cost-cap <usd> to set.".to_string()
+                        ));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Cost cap: ${:.4} hard ceiling. Session stops if exceeded.", session.cost_cap_usd
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryPermissionMode => {
                     use aether_perm::PermissionMode;
                     let label = match session.config.permission_mode {
@@ -33405,6 +33441,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /retry-count-show — show retry-on-error count and config
+                                "/retry-count-show" => {
+                                    if _ctx.send(UiCommand::QueryRetryCountShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /llm-fallback-total — show total LLM fallback trigger count
+                                "/llm-fallback-total" => {
+                                    if _ctx.send(UiCommand::QueryLlmFallbackTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /cost-cap-show — show hard cost ceiling
+                                "/cost-cap-show" => {
+                                    if _ctx.send(UiCommand::QueryCostCapShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -34184,6 +34238,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/permission-mode",
                             "/max-tokens-per-turn",
                             "/context-warn-60",
+                            "/retry-count-show",
+                            "/llm-fallback-total",
+                            "/cost-cap-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

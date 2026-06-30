@@ -945,6 +945,12 @@ pub enum UiCommand {
     QueryMaxTokensPerTurn,
     /// Show whether the 60% context-fill warning has fired.
     QueryContextWarn60,
+    /// Show current retry-on-error count and config.
+    QueryRetryCountShow,
+    /// Show total LLM fallback trigger count.
+    QueryLlmFallbackTotal,
+    /// Show cost cap (hard ceiling) setting.
+    QueryCostCapShow,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
