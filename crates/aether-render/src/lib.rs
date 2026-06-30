@@ -232,6 +232,13 @@ pub enum UiCommand {
     AttachFile(String),
     /// Run a shell command and inject its output as user context.
     ShellInject(String),
+    /// Remove the last assistant turn (and any trailing tool results), re-extract the last
+    /// user message, and re-run the agent — effectively retrying the previous prompt.
+    RetryLast,
+    /// Serialise the conversation history to a Markdown file at the given path.
+    ExportSession(String),
+    /// Ask the agent to rewrite its last response with additional instructions.
+    RewriteLast(String),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

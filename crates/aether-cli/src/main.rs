@@ -6320,6 +6320,76 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::RetryLast => {
+                    use aether_core::context::ConversationItem;
+                    // Pop trailing tool results.
+                    if matches!(session.history.last(), Some(ConversationItem::ToolResults(_))) {
+                        session.history.pop();
+                    }
+                    // Pop the last assistant turn.
+                    let had_assistant = if matches!(
+                        session.history.last(),
+                        Some(ConversationItem::Assistant { .. })
+                    ) {
+                        session.history.pop();
+                        true
+                    } else {
+                        false
+                    };
+                    // Pop and extract the last user turn so the agent can re-push it.
+                    if had_assistant {
+                        let retry_text = if let Some(ConversationItem::User(t)) = session.history.pop() {
+                            t
+                        } else {
+                            "Continue.".to_string()
+                        };
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Retrying: removed last response, re-running agent with same prompt.".to_string()
+                        ));
+                        retry_text
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Nothing to retry — no assistant turn in history.".to_string()
+                        ));
+                        continue;
+                    }
+                }
+                UiCommand::ExportSession(path) => {
+                    use aether_core::context::ConversationItem;
+                    let mut md = String::from("# Aether Session Export\n\n");
+                    for (i, item) in session.history.iter().enumerate() {
+                        match item {
+                            ConversationItem::User(t) => {
+                                md.push_str(&format!("## [{i}] User\n\n{t}\n\n---\n\n"));
+                            }
+                            ConversationItem::Assistant { text, .. } => {
+                                if let Some(t) = text {
+                                    md.push_str(&format!("## [{i}] Assistant\n\n{t}\n\n---\n\n"));
+                                }
+                            }
+                            ConversationItem::ToolResults(_) => {}
+                        }
+                    }
+                    let note = match std::fs::write(&path, &md) {
+                        Ok(_) => format!("Session exported to {path} ({} bytes, {} history items).", md.len(), session.history.len()),
+                        Err(e) => format!("Export failed: {e}"),
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::RewriteLast(instructions) => {
+                    use aether_core::context::ConversationItem;
+                    let has_assistant = session.history.iter().rev()
+                        .any(|item| matches!(item, ConversationItem::Assistant { text: Some(_), .. }));
+                    if has_assistant {
+                        format!("Please rewrite your last response with these instructions: {instructions}")
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Nothing to rewrite — no assistant response found in history.".to_string()
+                        ));
+                        continue;
+                    }
+                }
                 UiCommand::QuerySessionStats => {
                     use aether_core::compaction::context_window_for_model;
                     let now = std::time::SystemTime::now()
@@ -23642,6 +23712,32 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /retry — re-run agent with the last user prompt
+                                "/retry" => {
+                                    if _ctx.send(UiCommand::RetryLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /export <path> — dump conversation to a markdown file
+                                cmd_str if cmd_str.starts_with("/export ") => {
+                                    let path = cmd_str.trim_start_matches("/export ").trim().to_string();
+                                    if _ctx.send(UiCommand::ExportSession(path)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /rewrite <instructions> — ask agent to redo its last response
+                                cmd_str if cmd_str.starts_with("/rewrite ") => {
+                                    let instr = cmd_str.trim_start_matches("/rewrite ").trim().to_string();
+                                    if _ctx.send(UiCommand::RewriteLast(instr)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /attach <path> — inject file contents as user context
                                 cmd_str if cmd_str.starts_with("/attach ") => {
                                     let path = cmd_str.trim_start_matches("/attach ").trim().to_string();
@@ -24107,6 +24203,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/next",
                             "/attach ",
                             "/shell ",
+                            "/retry",
+                            "/export ",
+                            "/rewrite ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
