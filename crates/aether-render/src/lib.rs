@@ -329,7 +329,7 @@ impl UiState {
             ChatLine::SplashRow { logo: "         ◆◆◆◆◆◆         ".to_string(), info: String::new(),                  style: SplashStyle::Title },
             ChatLine::SplashRow { logo: "           ◆◆           ".to_string(), info: String::new(),                  style: SplashStyle::Title },
             ChatLine::SplashRow { logo: String::new(), info: "/help  ·  /help power  ·  F7 theme  ·  Ctrl+G find  ·  /model switch  ·  /cost  ·  /version".to_string(), style: SplashStyle::Dim },
-            ChatLine::SplashRow { logo: String::new(), info: "Power: /scan  /secrets  /deps  /sbom  /owasp  /vulnscan  /ctf-tools  /owasp  /gen-tests  /arch-review".to_string(), style: SplashStyle::Ok },
+            ChatLine::SplashRow { logo: String::new(), info: "150+ commands — /dashboard  /scan  /secrets  /jwt-decode  /k8s  /docker  /git-log  /todo-scan  /brainstorm  /json".to_string(), style: SplashStyle::Ok },
             {
                 let tips: &[&str] = &[
                     "Tip: /copy all — copies the full conversation to clipboard",

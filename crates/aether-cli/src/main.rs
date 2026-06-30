@@ -5356,6 +5356,7 @@ Input shortcuts\n\
     ◈ /git-branches /git-stash /git-tags /todo-scan /lines      git + debt audit\n\
     ◈ /json /yaml /csv /jq /xml                                 data processing\n\
     ◈ /find-large /find-old /brainstorm /naming /pros-cons       file + creativity\n\
+    ◈ /dashboard /secret-gen /cron-explain /k8s                 ops + milestone B100\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -11564,6 +11565,246 @@ CTF Toolkit — Aether AI-assisted\n\
                                     if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
                                     continue;
                                 }
+                                // ── Batch 100: Dashboard + ops tools (milestone) ─────────────────
+                                cmd if cmd == "/dashboard" => {
+                                    // /dashboard  — mission control: git, system, todos, recent
+                                    let mut body = "── Aether Dashboard ─────────────────────────────────────────────\n".to_string();
+                                    // Git status
+                                    body.push_str("\n📂 Git\n");
+                                    if let Ok(o) = std::process::Command::new("git").args(["status", "--short", "--branch"]).output() {
+                                        let git_txt = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                                        for l in git_txt.lines().take(15) {
+                                            body.push_str(&format!("  {l}\n"));
+                                        }
+                                    } else {
+                                        body.push_str("  (not a git repo)\n");
+                                    }
+                                    // Last 5 commits
+                                    if let Ok(o) = std::process::Command::new("git")
+                                        .args(["log", "--oneline", "-5", "--format=%h %as %s"])
+                                        .output()
+                                    {
+                                        let log_txt = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                                        if !log_txt.is_empty() {
+                                            body.push_str("  Recent commits:\n");
+                                            for l in log_txt.lines() {
+                                                body.push_str(&format!("    {l}\n"));
+                                            }
+                                        }
+                                    }
+                                    // System resources
+                                    body.push_str("\n💻 System\n");
+                                    if let Ok(loadavg) = std::fs::read_to_string("/proc/loadavg") {
+                                        let la: Vec<&str> = loadavg.split_whitespace().take(3).collect();
+                                        body.push_str(&format!("  Load avg:  {}  (1m 5m 15m)\n", la.join("  ")));
+                                    }
+                                    if let Ok(meminfo) = std::fs::read_to_string("/proc/meminfo") {
+                                        let total = meminfo.lines()
+                                            .find(|l| l.starts_with("MemTotal")).and_then(|l| l.split_whitespace().nth(1))
+                                            .and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+                                        let avail = meminfo.lines()
+                                            .find(|l| l.starts_with("MemAvailable")).and_then(|l| l.split_whitespace().nth(1))
+                                            .and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+                                        if total > 0 {
+                                            let used_pct = ((total - avail) * 100) / total;
+                                            body.push_str(&format!("  Memory:    {}% used  ({} MB avail of {} MB)\n",
+                                                used_pct, avail / 1024, total / 1024));
+                                        }
+                                    }
+                                    if let Ok(o) = std::process::Command::new("df").args(["-h", "--output=target,pcent,avail", "/"]).output() {
+                                        let df_txt = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                                        if let Some(line) = df_txt.lines().nth(1) {
+                                            body.push_str(&format!("  Disk /:    {}\n", line.trim()));
+                                        }
+                                    }
+                                    // Session info
+                                    let msg_count = ui.chat_lines.iter().filter(|cl| matches!(cl, ChatLine::User(_, _))).count();
+                                    let ts_now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    body.push_str(&format!("\n💬 Session\n  Messages: {msg_count}  ·  Commands available: 150+\n"));
+                                    // active todos from session
+                                    let todo_count = ui.chat_lines.iter().filter(|cl| {
+                                        if let ChatLine::SystemNote(s) = cl { s.contains("[ ]") } else { false }
+                                    }).count();
+                                    if todo_count > 0 {
+                                        body.push_str(&format!("  Open todos: {todo_count}\n"));
+                                    }
+                                    let _ = ts_now;
+                                    body.push_str("\n  /sys /mem /disk /git-log /git-branches  for details\n");
+                                    body.push_str("────────────────────────────────────────────────────────────────\n");
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/secret-gen" || cmd.starts_with("/secret-gen ") => {
+                                    // /secret-gen [type] [length]  — generate cryptographically secure secrets
+                                    let args = cmd.trim_start_matches("/secret-gen").trim();
+                                    let mut parts = args.split_whitespace();
+                                    let kind = parts.next().unwrap_or("hex");
+                                    let length = parts.next().and_then(|s| s.parse::<usize>().ok()).unwrap_or(32).min(256);
+                                    // read random bytes
+                                    let mut rand_bytes = vec![0u8; length.max(64)];
+                                    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+                                        use std::io::Read;
+                                        let _ = f.read_exact(&mut rand_bytes);
+                                    }
+                                    let output = match kind {
+                                        "hex" => hex::encode(&rand_bytes[..length]),
+                                        "base64" => {
+                                            use base64::{Engine, engine::general_purpose::STANDARD};
+                                            STANDARD.encode(&rand_bytes[..length])
+                                        }
+                                        "password" | "pass" => {
+                                            let charset = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_+=";
+                                            rand_bytes[..length].iter()
+                                                .map(|&b| charset[(b as usize) % charset.len()] as char)
+                                                .collect()
+                                        }
+                                        "jwt" | "jwt-secret" => {
+                                            use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+                                            URL_SAFE_NO_PAD.encode(&rand_bytes[..32.min(length)])
+                                        }
+                                        "uuid" => {
+                                            let mut b = [0u8; 16];
+                                            b.copy_from_slice(&rand_bytes[..16]);
+                                            b[6] = (b[6] & 0x0f) | 0x40;
+                                            b[8] = (b[8] & 0x3f) | 0x80;
+                                            format!("{}-{}-{}-{}-{}", hex::encode(&b[0..4]), hex::encode(&b[4..6]), hex::encode(&b[6..8]), hex::encode(&b[8..10]), hex::encode(&b[10..16]))
+                                        }
+                                        "alpha" => {
+                                            let charset = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+                                            rand_bytes[..length].iter()
+                                                .map(|&b| charset[(b as usize) % charset.len()] as char)
+                                                .collect()
+                                        }
+                                        _ => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                "Usage: /secret-gen [hex|base64|password|jwt|uuid|alpha] [length]\n  Default: hex 32".to_string()
+                                            ));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(format!(
+                                        "secret-gen  type={kind}  length={}\n─────────────────────────────────────────\n  {output}\n\n  Generated from /dev/urandom — cryptographically secure.",
+                                        output.len()
+                                    )));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/cron-explain ") || cmd == "/cron-explain" => {
+                                    // /cron-explain <expr>  — parse and explain cron schedule
+                                    let expr = cmd.trim_start_matches("/cron-explain").trim();
+                                    if expr.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /cron-explain <cron expression>\n  Example: /cron-explain 0 */6 * * *\n  Format:  MIN HOUR DOM MON DOW".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let fields: Vec<&str> = expr.split_whitespace().collect();
+                                    let mut body = format!("cron: {expr}\n─────────────────────────────────────────\n");
+                                    fn explain_field(val: &str, unit: &str, min: u32, max: u32) -> String {
+                                        if val == "*" { return format!("  {unit:<8} every {unit}"); }
+                                        if val == "?" { return format!("  {unit:<8} any (wildcard)"); }
+                                        if let Ok(n) = val.parse::<u32>() { return format!("  {unit:<8} at {n}"); }
+                                        if val.starts_with("*/") {
+                                            let step = val.trim_start_matches("*/");
+                                            return format!("  {unit:<8} every {step} {unit}s");
+                                        }
+                                        if val.contains('-') {
+                                            let parts: Vec<&str> = val.splitn(2, '-').collect();
+                                            return format!("  {unit:<8} {}-{} (range)", parts[0], parts.get(1).unwrap_or(&"?"));
+                                        }
+                                        if val.contains(',') {
+                                            return format!("  {unit:<8} at {} (list)", val);
+                                        }
+                                        let _ = (min, max);
+                                        format!("  {unit:<8} {val}")
+                                    }
+                                    let labels = ["Minute", "Hour", "Day/Month", "Month", "Day/Week"];
+                                    let ranges = [(0,59), (0,23), (1,31), (1,12), (0,6)];
+                                    for (i, (label, (min, max))) in labels.iter().zip(ranges.iter()).enumerate() {
+                                        if let Some(f) = fields.get(i) {
+                                            body.push_str(&format!("{}\n", explain_field(f, label, *min, *max)));
+                                        }
+                                    }
+                                    // common patterns
+                                    let common = match expr {
+                                        "* * * * *" => Some("Every minute"),
+                                        "0 * * * *" => Some("Every hour (at minute 0)"),
+                                        "0 0 * * *" => Some("Daily at midnight"),
+                                        "0 0 * * 0" => Some("Weekly on Sunday at midnight"),
+                                        "0 0 1 * *" => Some("Monthly on the 1st at midnight"),
+                                        "0 0 1 1 *" => Some("Yearly on Jan 1st at midnight"),
+                                        "*/5 * * * *" => Some("Every 5 minutes"),
+                                        "*/15 * * * *" => Some("Every 15 minutes"),
+                                        "*/30 * * * *" => Some("Every 30 minutes"),
+                                        "0 */6 * * *" => Some("Every 6 hours"),
+                                        "0 9-17 * * 1-5" => Some("Every hour 9am-5pm Mon-Fri"),
+                                        _ => None,
+                                    };
+                                    if let Some(human) = common {
+                                        body.push_str(&format!("\n  ✓ Known pattern: {human}\n"));
+                                    }
+                                    if fields.len() < 5 { body.push_str("\n  ⚠ Expected 5 fields: MIN HOUR DOM MON DOW\n"); }
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/k8s" || cmd.starts_with("/k8s ") => {
+                                    // /k8s [get pods|services|logs <name>|describe <name>]
+                                    let sub = cmd.trim_start_matches("/k8s").trim();
+                                    let kubectl_ok = std::process::Command::new("kubectl")
+                                        .arg("version").arg("--client").output()
+                                        .map(|o| o.status.success()).unwrap_or(false);
+                                    if !kubectl_ok {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "kubectl not found or not in PATH.\n  Install: https://kubernetes.io/docs/tasks/tools/\n  Config: ~/.kube/config".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let (k8s_args, label): (Vec<&str>, String) = if sub.is_empty() || sub == "get pods" {
+                                        (vec!["get", "pods", "--all-namespaces", "-o", "wide"], "get pods".to_string())
+                                    } else if sub == "get services" || sub == "get svc" {
+                                        (vec!["get", "svc", "--all-namespaces"], "get services".to_string())
+                                    } else if sub == "get nodes" {
+                                        (vec!["get", "nodes", "-o", "wide"], "get nodes".to_string())
+                                    } else if sub == "get deployments" || sub == "get deploy" {
+                                        (vec!["get", "deploy", "--all-namespaces"], "get deployments".to_string())
+                                    } else if sub.starts_with("logs ") {
+                                        let name = sub.trim_start_matches("logs ").trim();
+                                        (vec!["logs", "--tail=50", name], format!("logs {name}"))
+                                    } else if sub.starts_with("describe ") {
+                                        let name = sub.trim_start_matches("describe ").trim();
+                                        (vec!["describe", "pod", name], format!("describe {name}"))
+                                    } else if sub == "ctx" || sub == "context" {
+                                        (vec!["config", "current-context"], "current context".to_string())
+                                    } else if sub == "ns" || sub == "namespaces" {
+                                        (vec!["get", "namespaces"], "namespaces".to_string())
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /k8s [get pods | get services | get nodes | get deployments | logs <name> | describe <name> | ctx | ns]".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    };
+                                    match std::process::Command::new("kubectl").args(&k8s_args).output() {
+                                        Ok(o) => {
+                                            let out_txt = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                                            let err_txt = String::from_utf8_lossy(&o.stderr).trim().to_string();
+                                            let body = if !out_txt.is_empty() {
+                                                format!("kubectl {label}\n─────────────────────────────────────────────────\n{out_txt}")
+                                            } else {
+                                                format!("kubectl {label} error:\n{err_txt}")
+                                            };
+                                            ui.chat_lines.push(ChatLine::SystemNote(body));
+                                        }
+                                        Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("kubectl failed: {e}"))); }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -12202,7 +12443,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/ai-fix", "/ai-fix ", "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
+                            "/ai-commit", "/ai-commit ", "/ai-fix", "/ai-fix ", "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
