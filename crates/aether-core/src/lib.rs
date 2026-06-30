@@ -295,6 +295,10 @@ pub struct Session {
     /// Stores the last two outputs per tool name for /tool-diff.
     /// Key = tool name, Value = (older_output, newer_output).
     pub tool_output_history: std::collections::HashMap<String, (String, String)>,
+
+    /// Active agent persona injected as a high-priority sticky instruction.
+    /// Examples: "senior Rust engineer", "security auditor", "skeptical reviewer".
+    pub agent_persona: Option<String>,
 }
 
 impl Session {
@@ -370,6 +374,7 @@ impl Session {
             retry_on_error_max: 0,
             retry_on_error_count: 0,
             tool_output_history: std::collections::HashMap::new(),
+            agent_persona: None,
         }
     }
 
@@ -519,6 +524,15 @@ async fn agent_turn_inner(
     }
 
     let ctx = session.activation_context();
+
+    // Agent persona: inject as the top-most reminder if configured.
+    if let Some(ref persona) = session.agent_persona {
+        session.pending_reminders.push(Reminder::new(
+            ReminderKind::SystemWarning,
+            Source::Kernel,
+            format!("[Agent persona] You are acting as: {persona}. Respond with the expertise, tone, and priorities that role entails."),
+        ));
+    }
 
     // Sticky context: high-priority snippets prepended before persistent reminders.
     // Injected first so they appear closest to the top of the assembled system prompt.

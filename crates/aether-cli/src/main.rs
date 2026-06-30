@@ -6406,6 +6406,25 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 UiCommand::SetAlias(_, _) | UiCommand::RemoveAlias(_) | UiCommand::QueryAliases => {
                     continue;
                 }
+                UiCommand::SetAgentPersona(persona_opt) => {
+                    let note = match &persona_opt {
+                        Some(p) => format!(
+                            "Agent persona: '{p}' — injected as top-priority instruction every turn."
+                        ),
+                        None => "Agent persona: cleared (default behavior).".to_string(),
+                    };
+                    session.agent_persona = persona_opt;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryAgentPersona => {
+                    let note = match &session.agent_persona {
+                        Some(p) => format!("Agent persona: '{p}'  (active)"),
+                        None => "Agent persona: off. Use /persona <description> to set.".to_string(),
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::QueryToolDiff(tool_name) => {
                     let note = if let Some((old, new)) = session.tool_output_history.get(&tool_name) {
                         if old.is_empty() {
@@ -25418,6 +25437,28 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /persona [description|off] — set agent persona
+                                cmd_str if cmd_str == "/persona" || cmd_str.starts_with("/persona ") => {
+                                    let arg = cmd_str.trim_start_matches("/persona").trim();
+                                    let persona_opt = if arg.is_empty() || arg == "off" { None } else { Some(arg.to_string()) };
+                                    let show = arg.is_empty();
+                                    if _ctx.send(UiCommand::SetAgentPersona(persona_opt)).is_err() { break 'outer; }
+                                    if show {
+                                        if _ctx.send(UiCommand::QueryAgentPersona).is_err() { break 'outer; }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /persona-show — display current persona
+                                "/persona-show" => {
+                                    if _ctx.send(UiCommand::QueryAgentPersona).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /tool-diff <name> — show diff between last two outputs of a tool
                                 cmd_str if cmd_str.starts_with("/tool-diff ") => {
                                     let name = cmd_str.trim_start_matches("/tool-diff ").trim().to_string();
@@ -26285,6 +26326,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/retry-on-error", "/retry-on-error ", "/retry-on-error off",
                             "/health",
                             "/tool-diff ",
+                            "/persona", "/persona ", "/persona off",
+                            "/persona-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
