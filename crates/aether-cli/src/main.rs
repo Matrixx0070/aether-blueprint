@@ -6427,6 +6427,256 @@ Input shortcuts\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // ── SECURITY & DEPENDENCY TOOLS ─────────────────────────────────
+                                cmd if cmd == "/deps" || cmd.starts_with("/deps ") => {
+                                    let sub = cmd.trim_start_matches("/deps").trim();
+                                    let cwd = std::env::current_dir().unwrap_or_default();
+                                    // Detect what ecosystem(s) are present
+                                    let has_cargo    = cwd.join("Cargo.toml").exists();
+                                    let has_npm      = cwd.join("package.json").exists();
+                                    let has_pip      = cwd.join("requirements.txt").exists() || cwd.join("Pipfile").exists() || cwd.join("pyproject.toml").exists();
+                                    let has_go       = cwd.join("go.mod").exists();
+                                    let has_composer = cwd.join("composer.json").exists();
+                                    if !has_cargo && !has_npm && !has_pip && !has_go && !has_composer {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "No dependency manifests found in cwd.\n  Looks for: Cargo.toml, package.json, requirements.txt, go.mod, composer.json".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let only = if sub.is_empty() { None } else { Some(sub) };
+                                    let mut results = String::from("Dependency audit\n");
+                                    let tools: &[(&str, bool, &str, &[&str])] = &[
+                                        ("cargo",    has_cargo,    "cargo-audit not found (run: cargo install cargo-audit)", &["audit"]),
+                                        ("npm",      has_npm,      "npm not found", &["audit", "--json"]),
+                                        ("pip-audit",has_pip,      "pip-audit not found (run: pip install pip-audit)", &[]),
+                                        ("osv-scanner", has_cargo || has_npm || has_pip, "osv-scanner not found (https://github.com/google/osv-scanner)", &["."]),
+                                    ];
+                                    for (tool, enabled, missing_msg, args) in tools {
+                                        if !enabled { continue; }
+                                        if let Some(f) = only { if !tool.starts_with(f) { continue; } }
+                                        match std::process::Command::new(tool).args(*args).current_dir(&cwd).output() {
+                                            Ok(out) => {
+                                                let stdout = String::from_utf8_lossy(&out.stdout);
+                                                let stderr = String::from_utf8_lossy(&out.stderr);
+                                                let combined = if stdout.trim().is_empty() { stderr.trim().to_string() } else { stdout.trim().to_string() };
+                                                let lines: Vec<&str> = combined.lines().collect();
+                                                let shown = lines.len().min(30);
+                                                results.push_str(&format!("\n── {tool} ──\n"));
+                                                results.push_str(&lines[..shown].join("\n"));
+                                                if lines.len() > shown {
+                                                    results.push_str(&format!("\n… ({} more lines)", lines.len() - shown));
+                                                }
+                                            }
+                                            Err(_) => {
+                                                results.push_str(&format!("\n── {tool} ── SKIPPED  ({missing_msg})"));
+                                            }
+                                        }
+                                    }
+                                    results.push_str("\n\n  /template audit  for AI-assisted deep analysis");
+                                    ui.chat_lines.push(ChatLine::SystemNote(results));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/sbom" => {
+                                    let cwd = std::env::current_dir().unwrap_or_default();
+                                    let mut sbom = format!("Software Bill of Materials\n  cwd: {}\n\n", cwd.display());
+                                    // Cargo.lock
+                                    if let Ok(lock) = std::fs::read_to_string(cwd.join("Cargo.lock")) {
+                                        let pkgs: Vec<&str> = lock.lines()
+                                            .filter(|l| l.starts_with("name = "))
+                                            .collect();
+                                        let vers: Vec<&str> = lock.lines()
+                                            .filter(|l| l.starts_with("version = "))
+                                            .collect();
+                                        sbom.push_str(&format!("Rust (Cargo.lock)  {} packages\n", pkgs.len()));
+                                        for (n, v) in pkgs.iter().zip(vers.iter()).take(30) {
+                                            let name = n.trim_start_matches("name = ").trim_matches('"');
+                                            let ver  = v.trim_start_matches("version = ").trim_matches('"');
+                                            sbom.push_str(&format!("  {name} {ver}\n"));
+                                        }
+                                        if pkgs.len() > 30 { sbom.push_str(&format!("  … ({} more)\n", pkgs.len() - 30)); }
+                                        sbom.push('\n');
+                                    }
+                                    // package-lock.json or package.json
+                                    if let Ok(pkg) = std::fs::read_to_string(cwd.join("package.json")) {
+                                        let dep_count = pkg.matches("\"version\"").count();
+                                        sbom.push_str(&format!("Node (package.json)  ~{dep_count} deps  (run /deps npm for vuln scan)\n\n"));
+                                    }
+                                    // requirements.txt
+                                    if let Ok(reqs) = std::fs::read_to_string(cwd.join("requirements.txt")) {
+                                        let lines: Vec<&str> = reqs.lines().filter(|l| !l.trim().is_empty() && !l.starts_with('#')).collect();
+                                        sbom.push_str(&format!("Python (requirements.txt)  {} packages\n", lines.len()));
+                                        for line in lines.iter().take(20) {
+                                            sbom.push_str(&format!("  {line}\n"));
+                                        }
+                                        if lines.len() > 20 { sbom.push_str(&format!("  … ({} more)\n", lines.len() - 20)); }
+                                        sbom.push('\n');
+                                    }
+                                    // go.mod
+                                    if let Ok(gomod) = std::fs::read_to_string(cwd.join("go.mod")) {
+                                        let reqs: Vec<&str> = gomod.lines()
+                                            .filter(|l| l.trim().starts_with("require") || (l.starts_with('\t') && l.contains(' ')))
+                                            .collect();
+                                        sbom.push_str(&format!("Go (go.mod)  {} require lines\n", reqs.len()));
+                                        for r in reqs.iter().take(20) {
+                                            sbom.push_str(&format!("  {}\n", r.trim()));
+                                        }
+                                    }
+                                    if sbom.trim_end().ends_with("Materials") || sbom.contains("cwd:") && sbom.lines().count() < 5 {
+                                        sbom.push_str("  No dependency manifests found.\n  Add Cargo.toml / package.json / requirements.txt / go.mod");
+                                    }
+                                    ui.chat_lines.push(ChatLine::SystemNote(sbom));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/owasp" || cmd.starts_with("/owasp ") => {
+                                    let sub = cmd.trim_start_matches("/owasp").trim();
+                                    let items: &[(&str, &str, &str)] = &[
+                                        ("A01", "Broken Access Control",         "Verify: auth on every endpoint, RBAC enforced, no IDOR via ID guessing, path traversal blocked"),
+                                        ("A02", "Cryptographic Failures",        "Verify: HTTPS everywhere, no plaintext secrets, strong algorithms (AES-256, SHA-256+), key rotation policy"),
+                                        ("A03", "Injection",                     "Verify: parameterized queries, no eval/exec on user input, command injection blocked, LDAP/XPath escaping"),
+                                        ("A04", "Insecure Design",               "Verify: threat model exists, secure design patterns used, rate limiting, business logic abuse cases covered"),
+                                        ("A05", "Security Misconfiguration",     "Verify: default creds changed, debug off in prod, CORS tight, security headers set, unnecessary features disabled"),
+                                        ("A06", "Vulnerable Components",         "Verify: deps up to date, SBOM maintained, /deps audit clean, no EOL runtimes, supply chain integrity"),
+                                        ("A07", "Auth & Session Failures",       "Verify: MFA available, account lockout, secure session tokens, no credential stuffing exposure, logout works"),
+                                        ("A08", "Software Integrity Failures",   "Verify: CI/CD pipeline signed, artifacts verified (cosign), no untrusted plugins, update integrity checks"),
+                                        ("A09", "Logging & Monitoring Failures", "Verify: all auth events logged, anomaly alerting, log integrity protected, SIEM integration, incident plan"),
+                                        ("A10", "SSRF",                          "Verify: URL allowlists enforced, internal metadata endpoints blocked, DNS rebinding mitigation, output sanitized"),
+                                    ];
+                                    if sub.is_empty() {
+                                        // Show full checklist
+                                        let mut msg = "OWASP Top 10 (2021)  —  /owasp <A01..A10> to deep-dive with AI\n\n".to_string();
+                                        for (id, name, check) in items {
+                                            msg.push_str(&format!("  {id}  {name}\n       {check}\n\n"));
+                                        }
+                                        msg.push_str("  Use /template audit  to get AI analysis of specific code\n");
+                                        msg.push_str("  Use /scan <file>  for pattern-based quick scan");
+                                        ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                    } else {
+                                        // Send deep-dive to AI for a specific category
+                                        let upper = sub.to_uppercase();
+                                        if let Some(&(id, name, check)) = items.iter().find(|(i, _, _)| *i == upper.as_str() || upper == i.trim_start_matches('A')) {
+                                            let prompt = format!(
+                                                "OWASP {id} — {name}\n\n\
+                                                 Please audit our codebase/system for this vulnerability category.\n\n\
+                                                 Key checks for {id}:\n{check}\n\n\
+                                                 Provide:\n\
+                                                 1. What to look for in code\n\
+                                                 2. Specific test cases / attack payloads\n\
+                                                 3. Detection techniques\n\
+                                                 4. Concrete remediation steps\n\
+                                                 5. Code example of secure implementation"
+                                            );
+                                            let ts = std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default().as_secs();
+                                            ui.chat_lines.push(ChatLine::User(prompt.clone(), ts));
+                                            ui.follow_tail = true;
+                                            ui.status_running = true;
+                                            ui.waiting_since = Some(std::time::Instant::now());
+                                            ui.msg_times_secs.push(ts);
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                        } else {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("Unknown OWASP category '{sub}'. Use A01..A10 (e.g. /owasp A03 for Injection)")
+                                            ));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/secrets" || cmd.starts_with("/secrets ") => {
+                                    let file_arg = cmd.trim_start_matches("/secrets").trim();
+                                    let (content, source_label) = if file_arg.is_empty() {
+                                        let cwd = std::env::current_dir().unwrap_or_default();
+                                        // Scan entire cwd for secrets using walkdir
+                                        use walkdir::WalkDir;
+                                        let mut all = String::new();
+                                        let mut scanned = 0usize;
+                                        for entry in WalkDir::new(&cwd)
+                                            .max_depth(4)
+                                            .into_iter()
+                                            .filter_entry(|e| {
+                                                let n = e.file_name().to_string_lossy();
+                                                !n.starts_with('.') && n != "target" && n != "node_modules"
+                                            })
+                                            .filter_map(|e| e.ok())
+                                            .filter(|e| e.file_type().is_file())
+                                        {
+                                            let ext = entry.path().extension()
+                                                .and_then(|e| e.to_str()).unwrap_or("");
+                                            // Only scan text-like files
+                                            if matches!(ext, "rs"|"py"|"js"|"ts"|"go"|"rb"|"php"|"sh"|"env"|"toml"|"yaml"|"yml"|"json"|"conf"|"cfg"|"ini"|"xml"|"txt"|"md"|"lock") {
+                                                if let Ok(text) = std::fs::read_to_string(entry.path()) {
+                                                    let rel = entry.path().strip_prefix(&cwd).unwrap_or(entry.path());
+                                                    all.push_str(&format!("\n### {}\n{}", rel.display(), text));
+                                                    scanned += 1;
+                                                    if scanned > 200 { break; }
+                                                }
+                                            }
+                                        }
+                                        (all, format!("cwd ({scanned} files)"))
+                                    } else {
+                                        let fpath = std::env::current_dir().unwrap_or_default().join(file_arg);
+                                        (std::fs::read_to_string(&fpath).unwrap_or_default(), file_arg.to_string())
+                                    };
+                                    // High-confidence secret patterns with regex
+                                    use regex::Regex;
+                                    let secret_patterns: &[(&str, &str, &str)] = &[
+                                        ("CRITICAL", r#"(?i)(api[_-]?key|apikey|api[_-]?secret)\s*[=:]\s*['"]?[A-Za-z0-9+/]{20,}"#, "API key"),
+                                        ("CRITICAL", r#"(?i)(password|passwd|pwd)\s*[=:]\s*['"][^'"]{6,}"#, "Hardcoded password"),
+                                        ("CRITICAL", r#"(?i)(secret[_-]?key|secret)\s*[=:]\s*['"]?[A-Za-z0-9+/]{16,}"#, "Secret key"),
+                                        ("CRITICAL", r"AKIA[0-9A-Z]{16}", "AWS access key"),
+                                        ("CRITICAL", r"(?i)aws[_-]?secret[_-]?access[_-]?key\s*[=:]\s*[A-Za-z0-9+/]{40}", "AWS secret key"),
+                                        ("HIGH",     r"ghp_[A-Za-z0-9]{36}", "GitHub personal access token"),
+                                        ("HIGH",     r"ghs_[A-Za-z0-9]{36}", "GitHub app token"),
+                                        ("HIGH",     r"sk-[A-Za-z0-9]{48}", "OpenAI API key"),
+                                        ("HIGH",     r"xoxb-[0-9]+-[A-Za-z0-9]+", "Slack bot token"),
+                                        ("HIGH",     r"(?i)private[_-]?key\s*[=:]\s*-----BEGIN", "Private key"),
+                                        ("HIGH",     r"Bearer\s+[A-Za-z0-9\-._~+/]{20,}", "Bearer token"),
+                                        ("MEDIUM",   r#"(?i)(auth|authorization)\s*[=:]\s*['"]?[A-Za-z0-9+/=]{20,}"#, "Auth header"),
+                                        ("MEDIUM",   r"(?i)mongodb(\+srv)?://[^@\s]+@", "MongoDB connection string"),
+                                        ("MEDIUM",   r"(?i)postgres://[^@\s]+@|mysql://[^@\s]+@", "Database URL with credentials"),
+                                    ];
+                                    let mut findings: Vec<(String, String, String, usize)> = Vec::new();
+                                    let lines: Vec<&str> = content.lines().collect();
+                                    let mut current_file = String::from("<unknown>");
+                                    for (lnum, line) in lines.iter().enumerate() {
+                                        if line.starts_with("### ") { current_file = line[4..].to_string(); continue; }
+                                        for (sev, pattern, label) in secret_patterns {
+                                            if let Ok(re) = Regex::new(pattern) {
+                                                if re.is_match(line) {
+                                                    let preview: String = line.trim().chars().take(80).collect();
+                                                    findings.push((sev.to_string(), label.to_string(), current_file.clone(), lnum + 1));
+                                                    let _ = preview;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if findings.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("secrets scan  {source_label}\n  ✓ No high-confidence secret patterns found\n  Note: run gitleaks for git-history scanning: /git log | /shell gitleaks detect")
+                                        ));
+                                    } else {
+                                        let critical = findings.iter().filter(|(s, _, _, _)| s == "CRITICAL").count();
+                                        let high = findings.iter().filter(|(s, _, _, _)| s == "HIGH").count();
+                                        let med  = findings.iter().filter(|(s, _, _, _)| s == "MEDIUM").count();
+                                        let mut msg = format!(
+                                            "secrets scan  {source_label}\n  {} CRITICAL  {} HIGH  {} MEDIUM\n\n",
+                                            critical, high, med
+                                        );
+                                        for (sev, label, file, line) in &findings {
+                                            msg.push_str(&format!("  [{sev}] {label}  in {file}:{line}\n"));
+                                        }
+                                        msg.push_str("\n  Rotate any exposed credentials immediately\n");
+                                        msg.push_str("  /template crypto  for remediation guidance");
+                                        ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // ── FUNCTIONAL POWER TOOLS ───────────────────────────────────────
                                 cmd if cmd.starts_with("/run ") || cmd == "/run" => {
                                     let file_arg = cmd.trim_start_matches("/run").trim();
@@ -7552,9 +7802,9 @@ Input shortcuts\n\
                         // Slash command completion: Tab while buffer starts with '/'
                         const SLASH_CMDS: &[&str] = &[
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
-                            "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
+                            "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/outline", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/scan", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
+                            "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
