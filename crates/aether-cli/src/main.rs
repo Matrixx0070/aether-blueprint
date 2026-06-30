@@ -5355,6 +5355,7 @@ Input shortcuts\n\
     ◈ /standup /release-notes /code-tour /explain-regex /ai-fix  AI workflow\n\
     ◈ /git-branches /git-stash /git-tags /todo-scan /lines      git + debt audit\n\
     ◈ /json /yaml /csv /jq /xml                                 data processing\n\
+    ◈ /find-large /find-old /brainstorm /naming /pros-cons       file + creativity\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -11386,6 +11387,183 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // ── Batch 99: File search + AI creativity tools ──────────────────
+                                cmd if cmd == "/find-large" || cmd.starts_with("/find-large ") => {
+                                    // /find-large [dir] [n]  — n largest files by size (default 20)
+                                    let args = cmd.trim_start_matches("/find-large").trim();
+                                    let mut parts = args.split_whitespace();
+                                    let first = parts.next().unwrap_or(".");
+                                    let (dir, n) = if first.parse::<usize>().is_ok() {
+                                        (".", first.parse::<usize>().unwrap_or(20))
+                                    } else {
+                                        let second = parts.next().unwrap_or("20");
+                                        (first, second.parse::<usize>().unwrap_or(20).min(100))
+                                    };
+                                    use walkdir::WalkDir;
+                                    let mut files: Vec<(u64, String)> = WalkDir::new(dir)
+                                        .follow_links(false)
+                                        .into_iter()
+                                        .filter_map(|e| e.ok())
+                                        .filter(|e| e.file_type().is_file())
+                                        .filter(|e| {
+                                            !e.path().components().any(|c| {
+                                                let s = c.as_os_str().to_string_lossy();
+                                                s == "target" || s == ".git" || s == "node_modules"
+                                            })
+                                        })
+                                        .filter_map(|e| {
+                                            e.metadata().ok().map(|m| {
+                                                (m.len(), e.path().to_string_lossy().into_owned())
+                                            })
+                                        })
+                                        .collect();
+                                    files.sort_by(|a, b| b.0.cmp(&a.0));
+                                    let mut body = format!("Largest {} files — {dir}\n", n.min(files.len()));
+                                    body.push_str("─────────────────────────────────────────────────────\n");
+                                    for (sz, path) in files.iter().take(n) {
+                                        let human = if *sz >= 1_048_576 {
+                                            format!("{:.1}MB", *sz as f64 / 1_048_576.0)
+                                        } else if *sz >= 1024 {
+                                            format!("{:.1}KB", *sz as f64 / 1024.0)
+                                        } else {
+                                            format!("{sz}B")
+                                        };
+                                        body.push_str(&format!("  {:>8}  {path}\n", human));
+                                    }
+                                    if files.is_empty() { body.push_str("  (no files found)\n"); }
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/find-old" || cmd.starts_with("/find-old ") => {
+                                    // /find-old [dir] [days]  — files not modified in N days (default 30)
+                                    let args = cmd.trim_start_matches("/find-old").trim();
+                                    let mut parts = args.split_whitespace();
+                                    let first = parts.next().unwrap_or(".");
+                                    let (dir, days) = if first.parse::<u64>().is_ok() {
+                                        (".", first.parse::<u64>().unwrap_or(30))
+                                    } else {
+                                        let second = parts.next().unwrap_or("30");
+                                        (first, second.parse::<u64>().unwrap_or(30))
+                                    };
+                                    let threshold_secs = days * 86_400;
+                                    use walkdir::WalkDir;
+                                    let now = std::time::SystemTime::now();
+                                    let mut old_files: Vec<(u64, String)> = WalkDir::new(dir)
+                                        .follow_links(false)
+                                        .into_iter()
+                                        .filter_map(|e| e.ok())
+                                        .filter(|e| e.file_type().is_file())
+                                        .filter(|e| {
+                                            !e.path().components().any(|c| {
+                                                let s = c.as_os_str().to_string_lossy();
+                                                s == "target" || s == ".git" || s == "node_modules"
+                                            })
+                                        })
+                                        .filter_map(|e| {
+                                            e.metadata().ok().and_then(|m| {
+                                                m.modified().ok().and_then(|mtime| {
+                                                    now.duration_since(mtime).ok().map(|age| {
+                                                        (age.as_secs(), e.path().to_string_lossy().into_owned())
+                                                    })
+                                                })
+                                            })
+                                        })
+                                        .filter(|(age, _)| *age >= threshold_secs)
+                                        .collect();
+                                    old_files.sort_by(|a, b| b.0.cmp(&a.0));
+                                    let mut body = format!("Files not modified in {}+ days — {dir}  ({} found)\n", days, old_files.len());
+                                    body.push_str("─────────────────────────────────────────────────────\n");
+                                    for (age_secs, path) in old_files.iter().take(40) {
+                                        let age_days = age_secs / 86_400;
+                                        body.push_str(&format!("  {:>5}d  {path}\n", age_days));
+                                    }
+                                    if old_files.len() > 40 {
+                                        body.push_str(&format!("  … {} more\n", old_files.len() - 40));
+                                    }
+                                    if old_files.is_empty() { body.push_str("  (no files older than threshold)\n"); }
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/brainstorm ") || cmd == "/brainstorm" => {
+                                    // /brainstorm <topic>  — AI generates 10 creative ideas
+                                    let topic = cmd.trim_start_matches("/brainstorm").trim();
+                                    if topic.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /brainstorm <topic>\n  AI generates 10 creative ideas or approaches.".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Generate 10 creative and actionable ideas or approaches for: {topic}\n\n\
+                                        Format as a numbered list. For each idea: one bold title line + one sentence explanation.\n\
+                                        Range from conventional to unconventional. Be specific and practical."
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/brainstorm  {topic}"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/naming ") || cmd == "/naming" => {
+                                    // /naming <context>  — AI suggests good names for variables/functions/classes
+                                    let context = cmd.trim_start_matches("/naming").trim();
+                                    if context.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /naming <description>\n  Example: /naming function that validates email addresses in TypeScript\n  AI suggests 8 concise, idiomatic names.".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Suggest 8 excellent names for: {context}\n\n\
+                                        Provide: variable names, function names, class/type names (whichever applies).\n\
+                                        For each name: show camelCase, snake_case, PascalCase variants as appropriate for the language.\n\
+                                        Briefly explain WHY each name is good. Flag which is your top pick."
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/naming  {context}"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/pros-cons ") || cmd == "/pros-cons" => {
+                                    // /pros-cons <decision>  — AI structured pros/cons analysis
+                                    let decision = cmd.trim_start_matches("/pros-cons").trim();
+                                    if decision.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /pros-cons <tech decision or trade-off>\n  Example: /pros-cons using Redis vs Postgres for session storage".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Provide a structured technical pros/cons analysis for: {decision}\n\n\
+                                        Format:\n\
+                                        ## Pros (5 points)\n\
+                                        ## Cons (5 points)\n\
+                                        ## When to choose this\n\
+                                        ## When NOT to choose this\n\
+                                        ## Recommendation\n\n\
+                                        Be specific, cite real trade-offs, avoid generic statements."
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/pros-cons  {decision}"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -12024,7 +12202,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/ai-fix", "/ai-fix ", "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
+                            "/ai-commit", "/ai-commit ", "/ai-fix", "/ai-fix ", "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
