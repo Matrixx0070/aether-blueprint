@@ -6169,6 +6169,30 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::SetCompactionThreshold(pct) => {
+                    let note = if pct == 0 {
+                        session.compaction_threshold_pct = 0.0;
+                        "Compaction threshold: default (80% normal, 70% when stuck).".to_string()
+                    } else {
+                        let p = (pct as f64 / 100.0).clamp(0.10, 0.99);
+                        session.compaction_threshold_pct = p;
+                        format!("Compaction threshold set to {pct}% (stuck: {}%).",
+                            (pct.saturating_sub(10)).max(10))
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::SetTokenBudget(n) => {
+                    session.token_budget = n;
+                    let note = if n == 0 {
+                        "Token budget: unlimited.".to_string()
+                    } else {
+                        let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
+                        format!("Token budget set to {n} tokens (currently used: {used}).")
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::QuerySessionStats => {
                     use aether_core::compaction::context_window_for_model;
                     let now = std::time::SystemTime::now()
@@ -18931,6 +18955,29 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /compact-at N — set compaction threshold percentage
+                                cmd_str if cmd_str.starts_with("/compact-at ") || cmd_str == "/compact-at" => {
+                                    let arg = cmd_str.trim_start_matches("/compact-at").trim();
+                                    let pct: u8 = if arg.is_empty() { 0 } else { arg.parse().unwrap_or(80) };
+                                    if _ctx.send(UiCommand::SetCompactionThreshold(pct)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /token-budget N — set total session token budget (0=unlimited)
+                                cmd_str if cmd_str.starts_with("/token-budget ") || cmd_str == "/token-budget" => {
+                                    let arg = cmd_str.trim_start_matches("/token-budget").trim();
+                                    let n: u64 = if arg.is_empty() || arg == "off" { 0 }
+                                        else if arg.ends_with('k') || arg.ends_with('K') {
+                                            arg[..arg.len()-1].parse::<u64>().unwrap_or(0) * 1000
+                                        } else { arg.parse().unwrap_or(0) };
+                                    if _ctx.send(UiCommand::SetTokenBudget(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /tool-stats — per-tool lifetime success/failure rates
                                 "/tool-stats" => {
                                     if _ctx.send(UiCommand::QueryToolStats).is_err() { break 'outer; }
@@ -23821,6 +23868,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/stats-reset",
                             "/tool-stats",
                             "/set-window", "/set-window ",
+                            "/compact-at", "/compact-at ",
+                            "/token-budget", "/token-budget ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

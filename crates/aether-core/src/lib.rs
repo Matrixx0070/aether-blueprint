@@ -143,6 +143,16 @@ pub struct Session {
     /// Injected after the stuck-tool check and before assembly so they always
     /// appear in the system prompt alongside other kernel reminders.
     pub persistent_reminders: Vec<String>,
+
+    /// Custom compaction threshold (0.0–1.0). When > 0.0, overrides the
+    /// default COMPACTION_THRESHOLD_PCT (0.80). The stuck-tool deduction
+    /// (−0.10) still applies on top of this value.
+    pub compaction_threshold_pct: f64,
+
+    /// Total session token budget (input + output combined). When > 0 and
+    /// cumulative token usage exceeds this value, a SystemNote warning is
+    /// pushed so the user knows they're over budget. 0 = unlimited.
+    pub token_budget: u64,
 }
 
 impl Session {
@@ -181,6 +191,8 @@ impl Session {
             compaction_happened: false,
             max_turns: 0,
             persistent_reminders: Vec::new(),
+            compaction_threshold_pct: 0.0,
+            token_budget: 0,
         }
     }
 
@@ -410,6 +422,23 @@ async fn agent_turn_inner(
     session.llm_ms_total += llm_elapsed_ms;
     if let Some(u) = &resp.usage {
         session.usage_total.add(u);
+    }
+
+    // Token budget check — warn the user when total usage exceeds the budget.
+    if session.token_budget > 0 {
+        let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
+        if used >= session.token_budget {
+            session.pending_reminders.push(Reminder::new(
+                ReminderKind::SystemWarning,
+                Source::Kernel,
+                format!(
+                    "Token budget exceeded: {used} / {} tokens used. \
+                     Consider running /compact or /trim-history to reduce context, \
+                     or raise the budget with /token-budget.",
+                    session.token_budget
+                ),
+            ));
+        }
     }
 
     let mut text_parts: Vec<String> = Vec::new();

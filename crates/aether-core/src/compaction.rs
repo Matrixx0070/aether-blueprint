@@ -153,10 +153,15 @@ async fn compact_inner(session: &mut Session, force: bool) -> Result<bool, Agent
         .tool_error_counts
         .values()
         .any(|&n| n >= crate::planner::TOOL_ERROR_THRESHOLD);
-    let threshold = if has_stuck_tools {
-        COMPACTION_THRESHOLD_PCT - 0.10
+    let base = if session.compaction_threshold_pct > 0.0 {
+        session.compaction_threshold_pct.clamp(0.10, 0.99)
     } else {
         COMPACTION_THRESHOLD_PCT
+    };
+    let threshold = if has_stuck_tools {
+        (base - 0.10).max(0.10)
+    } else {
+        base
     };
     if !force && !over_threshold(&session.usage_total, &session.config.model, threshold) {
         return Ok(false);

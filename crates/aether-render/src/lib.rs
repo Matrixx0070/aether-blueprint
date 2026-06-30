@@ -212,6 +212,10 @@ pub enum UiCommand {
     QueryToolStats,
     /// Configure the planner sliding-window size (0 = monotonic/no window).
     SetPlanWindow(usize),
+    /// Set the compaction threshold (1–99 percent; 0 = use default 80%).
+    SetCompactionThreshold(u8),
+    /// Set the total session token budget (0 = unlimited).
+    SetTokenBudget(u64),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
