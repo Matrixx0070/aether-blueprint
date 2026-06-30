@@ -18410,6 +18410,15 @@ CTF Toolkit — Aether AI-assisted\n\
                                     if let Some(cwd) = std::env::current_dir().ok() {
                                         msg.push_str(&format!("cwd          : {}\n", cwd.display()));
                                     }
+                                    // Enhanced info: new Batch Z+ fields
+                                    msg.push_str(&format!("context files: {} file(s)\n", ui.context_files.len()));
+                                    msg.push_str(&format!("auto-diff    : {}\n", if ui.auto_diff_enabled { "on" } else { "off" }));
+                                    let cost_limit_str = match ui.cost_limit_usd {
+                                        Some(l) => format!("${l:.4}"),
+                                        None => "none".to_string(),
+                                    };
+                                    msg.push_str(&format!("cost limit   : {cost_limit_str}\n"));
+                                    msg.push_str(&format!("session vars : {} set\n", ui.session_env_vars.len()));
                                     ui.chat_lines.push(ChatLine::SystemNote(msg.trim_end().to_string()));
                                     ui.follow_tail = true;
                                     continue;
@@ -18708,6 +18717,134 @@ CTF Toolkit — Aether AI-assisted\n\
                                             "Auto-diff disabled."
                                         })
                                     ));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /run-last [args] — execute last AI code block in a temp file
+                                cmd_str if cmd_str == "/run-last" || cmd_str.starts_with("/run-last ") => {
+                                    let args_str = cmd_str.trim_start_matches("/run-last").trim();
+                                    // Find last Assistant message
+                                    let last_ai = ui.chat_lines.iter().rev().find_map(|cl| match cl {
+                                        ChatLine::Assistant(text, _, _) => Some(text.clone()),
+                                        _ => None,
+                                    });
+                                    match last_ai {
+                                        None => {
+                                            ui.chat_lines.push(ChatLine::SystemNote("No AI response to run.".into()));
+                                        }
+                                        Some(ai_text) => {
+                                            // Extract first fenced code block and its language
+                                            let (lang, code) = {
+                                                let mut result_lang = "";
+                                                let mut result_code: Option<String> = None;
+                                                let mut in_block = false;
+                                                let mut block_lines: Vec<&str> = Vec::new();
+                                                for line in ai_text.lines() {
+                                                    if !in_block && (line.starts_with("```") || line.starts_with("~~~")) {
+                                                        let fence: &str = if line.starts_with("```") { "```" } else { "~~~" };
+                                                        result_lang = line.trim_start_matches(fence).trim();
+                                                        in_block = true;
+                                                    } else if in_block && (line.starts_with("```") || line.starts_with("~~~")) {
+                                                        result_code = Some(block_lines.join("\n"));
+                                                        break;
+                                                    } else if in_block {
+                                                        block_lines.push(line);
+                                                    }
+                                                }
+                                                (result_lang, result_code)
+                                            };
+                                            match code {
+                                                None => {
+                                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                                        "No fenced code block found in last AI response.".into()
+                                                    ));
+                                                }
+                                                Some(code_text) => {
+                                                    // Determine interpreter and extension
+                                                    let (interp, ext) = match lang.to_lowercase().as_str() {
+                                                        "python" | "python3" | "py" => ("python3", "py"),
+                                                        "bash" | "sh" | "shell" => ("bash", "sh"),
+                                                        "javascript" | "js" | "node" => ("node", "js"),
+                                                        "typescript" | "ts" => ("npx ts-node", "ts"),
+                                                        "ruby" | "rb" => ("ruby", "rb"),
+                                                        "perl" => ("perl", "pl"),
+                                                        _ => ("bash", "sh"),
+                                                    };
+                                                    let ts3 = std::time::SystemTime::now()
+                                                        .duration_since(std::time::UNIX_EPOCH)
+                                                        .unwrap_or_default()
+                                                        .as_secs();
+                                                    let tmp_path = format!("/tmp/aether-run-{ts3}.{ext}");
+                                                    match std::fs::write(&tmp_path, &code_text) {
+                                                        Err(e) => {
+                                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                                format!("/run-last: could not write temp file: {e}")
+                                                            ));
+                                                        }
+                                                        Ok(_) => {
+                                                            let cmd_run = if args_str.is_empty() {
+                                                                format!("{interp} {tmp_path}")
+                                                            } else {
+                                                                format!("{interp} {tmp_path} {args_str}")
+                                                            };
+                                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                                format!("Running ({lang}): {cmd_run}")
+                                                            ));
+                                                            let out = std::process::Command::new("sh")
+                                                                .args(["-c", &cmd_run])
+                                                                .output();
+                                                            match out {
+                                                                Ok(o) => {
+                                                                    let stdout = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                                                                    let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
+                                                                    let exit_code = o.status.code().unwrap_or(-1);
+                                                                    let mut result = format!("Exit: {exit_code}");
+                                                                    if !stdout.is_empty() {
+                                                                        result.push_str(&format!("\nstdout:\n{stdout}"));
+                                                                    }
+                                                                    if !stderr.is_empty() {
+                                                                        result.push_str(&format!("\nstderr:\n{stderr}"));
+                                                                    }
+                                                                    let _ = std::fs::remove_file(&tmp_path);
+                                                                    ui.chat_lines.push(ChatLine::SystemNote(result));
+                                                                }
+                                                                Err(e) => {
+                                                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                                                        format!("/run-last: execution failed: {e}")
+                                                                    ));
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /prompt-history [N] — list last N user prompts with timestamps
+                                cmd_str if cmd_str == "/prompt-history" || cmd_str.starts_with("/prompt-history ") => {
+                                    let n_arg = cmd_str.trim_start_matches("/prompt-history").trim();
+                                    let n: usize = n_arg.parse().unwrap_or(10).min(100);
+                                    let prompts: Vec<(&str, u64)> = ui.chat_lines.iter()
+                                        .filter_map(|cl| match cl {
+                                            ChatLine::User(text, ts) => Some((text.as_str(), *ts)),
+                                            _ => None,
+                                        })
+                                        .collect();
+                                    if prompts.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("No user messages yet.".into()));
+                                    } else {
+                                        let show = prompts.iter().rev().take(n).collect::<Vec<_>>();
+                                        let mut note = format!("Last {} user prompt(s) (most recent first):", show.len());
+                                        for (i, (text, ts)) in show.iter().enumerate() {
+                                            let preview: String = text.lines().next().unwrap_or("").chars().take(60).collect();
+                                            let suffix = if text.chars().count() > 60 { "…" } else { "" };
+                                            note.push_str(&format!("\n  [{i}] ts={ts}  {preview}{suffix}"));
+                                        }
+                                        ui.chat_lines.push(ChatLine::SystemNote(note));
+                                    }
                                     ui.follow_tail = true;
                                     continue;
                                 }
@@ -19385,6 +19522,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/retry-last", "/retry-last ", "/cost-history", "/cost-breakdown", "/auto-diff",
                             "/write-last", "/write-last ", "/debug-context", "/ctx-debug", "/env-list", "/env-vars-session",
                             "/persona ", "/persona off", "/persona show",
+                            "/run-last", "/run-last ", "/prompt-history", "/prompt-history ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
