@@ -277,6 +277,10 @@ pub enum UiCommand {
     SetFailFast(usize),
     /// Query session elapsed wall time.
     QueryElapsed,
+    /// Enable or disable the auto-status summary after each agent cycle.
+    SetAutoStatus(bool),
+    /// Show all active budget/limit configurations and current usage.
+    QueryBudgetCheck,
     /// Add a (pattern, hint) entry to the error playbook.
     AddPlaybookEntry(String, String),
     /// Remove a playbook entry by 0-based index.

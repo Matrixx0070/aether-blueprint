@@ -216,6 +216,10 @@ pub struct Session {
     /// When a tool error contains a pattern, the corresponding hint is injected
     /// as a reminder so the agent gets targeted guidance, not just a generic error.
     pub error_playbook: Vec<(String, String)>,
+
+    /// When true, a compact status summary (cost, tokens, progress) is emitted
+    /// as a SystemNote after each complete agent cycle before awaiting user input.
+    pub auto_status: bool,
 }
 
 impl Session {
@@ -271,6 +275,7 @@ impl Session {
             auto_compact_on_stuck: false,
             fail_fast_errors: 0,
             error_playbook: Vec::new(),
+            auto_status: false,
         }
     }
 

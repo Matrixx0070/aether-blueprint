@@ -6320,6 +6320,50 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::SetAutoStatus(enabled) => {
+                    session.auto_status = enabled;
+                    let note = if enabled {
+                        "Auto-status: ON — a cost/token/progress summary will print after each agent cycle.".to_string()
+                    } else {
+                        "Auto-status: off.".to_string()
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryBudgetCheck => {
+                    use aether_core::compaction::context_window_for_model;
+                    let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
+                    let window = context_window_for_model(&session.config.model);
+                    let ctx_pct = if window > 0 { used * 100 / window as u64 } else { 0 };
+                    let cost = estimate_cost_usd(&session.config.model, &session.usage_total);
+                    let total_errs: usize = session.plan.tool_call_stats.values().map(|(_, e)| e).sum();
+                    let total_calls: usize = session.plan.tool_call_stats.values().map(|(ok, err)| ok + err).sum();
+                    fn status(active: bool) -> &'static str { if active { "ON" } else { "off" } }
+                    let note = format!(
+                        "=== Budget Check ===\n\
+                         Context:      {used}/{window} tokens ({ctx_pct}%)\n\
+                         Cost:         ${cost:.4} (limit: {})\n\
+                         Turn budget:  {}/{} ({})\n\
+                         Token budget: {}/{} ({})\n\
+                         Fail-fast:    {total_errs}/{} errors ({})\n\
+                         Checkpoint:   {total_calls}/{} tool calls ({})\n\
+                         Compaction:   at {}%\n\
+                         Auto-status:  {}",
+                        if let Some(lim) = session.usage_total.input_tokens.checked_add(0).map(|_| "?") { format!("${lim}") } else { "none".to_string() },
+                        session.turn_index, if session.max_turns == 0 { "∞".to_string() } else { session.max_turns.to_string() },
+                        status(session.max_turns > 0),
+                        used, if session.token_budget == 0 { u64::MAX } else { session.token_budget },
+                        status(session.token_budget > 0),
+                        if session.fail_fast_errors == 0 { "∞".to_string() } else { session.fail_fast_errors.to_string() },
+                        status(session.fail_fast_errors > 0),
+                        if session.checkpoint_every_tools == 0 { "∞".to_string() } else { session.checkpoint_every_tools.to_string() },
+                        status(session.checkpoint_every_tools > 0),
+                        if session.compaction_threshold_pct == 0.0 { 80 } else { (session.compaction_threshold_pct * 100.0) as u64 },
+                        status(session.auto_status),
+                    );
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::AddPlaybookEntry(pattern, hint) => {
                     session.error_playbook.push((pattern.clone(), hint.clone()));
                     let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
@@ -7045,6 +7089,25 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     TurnOutcome::Exit => break,
                 }
+            }
+            // Auto-status: emit a compact turn summary before awaiting user input.
+            if session.auto_status {
+                use aether_core::compaction::context_window_for_model;
+                let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
+                let window = context_window_for_model(&session.config.model);
+                let ctx_pct = if window > 0 { used * 100 / window as u64 } else { 0 };
+                let cost = estimate_cost_usd(&session.config.model, &session.usage_total);
+                let progress_line = if session.progress_items.is_empty() {
+                    String::new()
+                } else {
+                    let done = session.progress_items.iter().filter(|(_, d)| *d).count();
+                    format!("  |  Progress: {done}/{}", session.progress_items.len())
+                };
+                let total_errs: usize = session.plan.tool_call_stats.values().map(|(_, e)| e).sum();
+                let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                    "[Auto-status] Turn {turn}  |  ${cost:.4}  |  {used}/{window} tokens ({ctx_pct}%)  |  Errors: {total_errs}{progress_line}",
+                    turn = session.turn_index
+                )));
             }
             let _ = etx_for_driver.send(UiEvent::AwaitUser);
         }
@@ -24211,6 +24274,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /auto-status on|off — emit cost/tokens/progress after each cycle
+                                cmd_str if cmd_str == "/auto-status" || cmd_str.starts_with("/auto-status ") => {
+                                    let arg = cmd_str.trim_start_matches("/auto-status").trim();
+                                    let enabled = arg != "off";
+                                    if _ctx.send(UiCommand::SetAutoStatus(enabled)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /budget-check — show all active budget limits and current usage
+                                "/budget-check" => {
+                                    if _ctx.send(UiCommand::QueryBudgetCheck).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /playbook-add <pattern>|<hint> — add error pattern → hint
                                 cmd_str if cmd_str.starts_with("/playbook-add ") => {
                                     let arg = cmd_str.trim_start_matches("/playbook-add ").trim();
@@ -25064,6 +25145,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/playbook-add ",
                             "/playbook-rm ",
                             "/playbook-list",
+                            "/auto-status", "/auto-status on", "/auto-status off",
+                            "/budget-check",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
