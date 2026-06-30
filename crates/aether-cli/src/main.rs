@@ -5229,7 +5229,13 @@ Network & HTTP\n\
   /ping <host>            ICMP ping × 4 with RTT stats\n\
   /dns <host>             dig A/AAAA/MX/TXT/NS; fallback to nslookup\n\
   /ip                     all local interface IPs (ip addr / ifconfig)\n\
-  /cert <host[:port]>     TLS cert subject, issuer, notBefore/notAfter via openssl"),
+  /cert <host[:port]>     TLS cert subject, issuer, notBefore/notAfter via openssl\n\
+AI workflow\n\
+  /standup [h]            AI daily standup from last N hours of git commits + todos\n\
+  /release-notes [range]  AI structured release notes (feat/fix/security sections)\n\
+  /code-tour [file]       AI onboarding guide for file or project structure\n\
+  /explain-regex <pat>    AI explains regex step by step with match examples\n\
+  /ai-fix [hint]          AI suggests specific fix for last error in session"),
                                         ("keys", &["keys", "keyboard", "shortcuts", "bindings"], "\
 Input shortcuts\n\
   ↑ ↓  / Ctrl+R           history recall / reverse-i-search\n\
@@ -5333,6 +5339,7 @@ Input shortcuts\n\
     ◈ /jwt-decode /base64 /hash /url /uuid                   crypto + encoding utils\n\
     ◈ /sys /mem /disk /port /proc                            system monitoring\n\
     ◈ /curl /ping /dns /ip /cert                             network + HTTP utils\n\
+    ◈ /standup /release-notes /code-tour /explain-regex /ai-fix  AI workflow\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -10727,6 +10734,202 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // ── Batch 96: AI workflow tools ──────────────────────────────────
+                                cmd if cmd == "/standup" || cmd.starts_with("/standup ") => {
+                                    // /standup [hours]  — AI-generated daily standup from recent commits
+                                    let hours_arg = cmd.trim_start_matches("/standup").trim();
+                                    let hours = hours_arg.parse::<u32>().unwrap_or(24).min(168);
+                                    let since = format!("{hours} hours ago");
+                                    let git_log = std::process::Command::new("git")
+                                        .args(["log", "--oneline", "--no-merges",
+                                               &format!("--since={since}"),
+                                               "--format=%h %s"])
+                                        .output()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                                        .unwrap_or_default();
+                                    let todo_list: Vec<String> = ui.chat_lines.iter().filter_map(|cl| {
+                                        if let ChatLine::SystemNote(s) = cl {
+                                            if s.starts_with("TODO") || s.contains("[ ]") || s.contains("[x]") {
+                                                Some(s.clone())
+                                            } else { None }
+                                        } else { None }
+                                    }).collect();
+                                    let commits_section = if git_log.is_empty() {
+                                        "(no commits in the last {hours}h)".to_string()
+                                    } else {
+                                        format!("Recent commits ({hours}h):\n{git_log}")
+                                    };
+                                    let todos_section = if todo_list.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!("\n\nActive todos:\n{}", todo_list.join("\n"))
+                                    };
+                                    let prompt = format!(
+                                        "Generate a concise daily standup update (3 short bullet-point sections: \
+                                        ✅ What I did, 🔨 What I'm working on, 🚧 Blockers) based on:\n\n\
+                                        {commits_section}{todos_section}\n\n\
+                                        Keep it professional and under 150 words total."
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/standup  (last {hours}h)"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd == "/release-notes" || cmd.starts_with("/release-notes ") => {
+                                    // /release-notes [v1..v2 | n]  — AI-generated structured release notes
+                                    let range_arg = cmd.trim_start_matches("/release-notes").trim();
+                                    let git_log = if range_arg.contains("..") {
+                                        // explicit range like v0.34.0..v0.35.0
+                                        std::process::Command::new("git")
+                                            .args(["log", "--oneline", "--no-merges", range_arg,
+                                                   "--format=%h %s"])
+                                            .output()
+                                            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                                            .unwrap_or_default()
+                                    } else {
+                                        let n = range_arg.parse::<usize>().unwrap_or(30).min(200);
+                                        std::process::Command::new("git")
+                                            .args(["log", "--oneline", "--no-merges",
+                                                   &format!("-{n}"),
+                                                   "--format=%h %s"])
+                                            .output()
+                                            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                                            .unwrap_or_default()
+                                    };
+                                    if git_log.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("No commits found for the given range.".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Generate structured release notes from these git commits.\n\
+                                        Format with Markdown sections: ## Features, ## Bug Fixes, ## Performance, ## Security, ## Breaking Changes\n\
+                                        Only include sections that have relevant commits. Write user-facing descriptions, not raw commit messages.\n\n\
+                                        Commits:\n{git_log}"
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    let label = if range_arg.is_empty() { "last 30 commits".to_string() } else { range_arg.to_string() };
+                                    ui.chat_lines.push(ChatLine::User(format!("/release-notes  ({label})"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd == "/code-tour" || cmd.starts_with("/code-tour ") => {
+                                    // /code-tour [file]  — AI onboarding walkthrough of file or cwd
+                                    let file_arg = cmd.trim_start_matches("/code-tour").trim();
+                                    let (source_label, content) = if file_arg.is_empty() {
+                                        // show project structure + key files
+                                        let tree = std::process::Command::new("find")
+                                            .args([".", "-type", "f",
+                                                   "-not", "-path", "*/target/*",
+                                                   "-not", "-path", "*/.git/*",
+                                                   "-not", "-path", "*/node_modules/*"])
+                                            .output()
+                                            .map(|o| String::from_utf8_lossy(&o.stdout).lines()
+                                                .take(60).collect::<Vec<_>>().join("\n"))
+                                            .unwrap_or_default();
+                                        ("project structure".to_string(), tree)
+                                    } else {
+                                        match std::fs::read_to_string(file_arg) {
+                                            Ok(src) => {
+                                                let preview: String = src.chars().take(6000).collect();
+                                                (file_arg.to_string(), preview)
+                                            }
+                                            Err(e) => {
+                                                ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {file_arg}: {e}")));
+                                                ui.follow_tail = true;
+                                                continue;
+                                            }
+                                        }
+                                    };
+                                    let prompt = format!(
+                                        "Generate a friendly code tour / onboarding guide for a new contributor.\n\
+                                        Explain: what this does, how it's organized, key entry points, important patterns, and what to read first.\n\
+                                        Keep it practical and under 400 words.\n\n\
+                                        Source ({source_label}):\n```\n{content}\n```"
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/code-tour  {source_label}"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/explain-regex ") || cmd == "/explain-regex" => {
+                                    // /explain-regex <pattern>  — AI explains what the regex matches
+                                    let pattern = cmd.trim_start_matches("/explain-regex").trim();
+                                    if pattern.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /explain-regex <pattern>\n  AI explains the regex in plain English with examples.".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Explain this regular expression in plain English. Break down each part, describe what strings it matches and doesn't match, and give 3 concrete examples.\n\n\
+                                        Pattern: `{pattern}`"
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/explain-regex  {pattern}"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd == "/ai-fix" || cmd.starts_with("/ai-fix ") => {
+                                    // /ai-fix [hint]  — AI suggests fix for last error in session
+                                    let hint = cmd.trim_start_matches("/ai-fix").trim();
+                                    // find last error note or system note
+                                    let last_error = ui.chat_lines.iter().rev().find_map(|cl| {
+                                        match cl {
+                                            ChatLine::SystemNote(s) if s.to_lowercase().contains("error")
+                                                || s.to_lowercase().contains("failed")
+                                                || s.to_lowercase().contains("cannot")
+                                                || s.to_lowercase().contains("panic") => Some(s.clone()),
+                                            _ => None,
+                                        }
+                                    });
+                                    // also look for last assistant message
+                                    let last_ai_msg = ui.chat_lines.iter().rev().find_map(|cl| {
+                                        if let ChatLine::Assistant(s, _, _) = cl { Some(s.clone()) } else { None }
+                                    });
+                                    let context = match (&last_error, &last_ai_msg) {
+                                        (Some(err), _) => format!("Error message:\n{err}"),
+                                        (None, Some(ai)) => {
+                                            let excerpt: String = ai.chars().take(2000).collect();
+                                            format!("Last AI response:\n{excerpt}")
+                                        }
+                                        (None, None) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote("No recent error found in session to fix.".to_string()));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                    };
+                                    let hint_section = if hint.is_empty() { String::new() } else { format!("\n\nAdditional context: {hint}") };
+                                    let prompt = format!(
+                                        "Provide a specific, actionable fix for this error. Include the exact command or code change needed.\n\n\
+                                        {context}{hint_section}"
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User("/ai-fix".to_string(), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -11365,7 +11568,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/curl ", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-log", "/git-log ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jwt-decode ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/recent", "/recent ", "/refactor ", "/rename ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ",
+                            "/ai-commit", "/ai-commit ", "/ai-fix", "/ai-fix ", "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/curl ", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-log", "/git-log ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jwt-decode ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
