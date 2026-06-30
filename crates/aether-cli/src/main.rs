@@ -6778,6 +6778,61 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::AnnotateHistory(idx, note) => {
+                    if idx >= session.history.len() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "History index {idx} out of range (len={}). ", session.history.len()
+                        )));
+                    } else {
+                        session.history_annotations.push((idx, note.clone()));
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Annotation #{} added to history[{idx}]: \"{note}\"", session.history_annotations.len() - 1
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryAnnotations => {
+                    if session.history_annotations.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No history annotations. Use /history-annotate <idx> <note>.".to_string()));
+                    } else {
+                        let lines: Vec<String> = session.history_annotations.iter().enumerate().map(|(i, (idx, note))| {
+                            format!("  #{i}: [hist:{idx}] {note}")
+                        }).collect();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "History annotations ({}):\n{}", lines.len(), lines.join("\n")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryCostSinceReset => {
+                    let total_cost: f64 = session.turn_cost_log.iter().map(|&(_, _, _, c)| c).sum();
+                    let reset_turn = session.metrics_reset_turn;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Cost since last reset (turn {reset_turn}):\n  Accumulated: ${total_cost:.6}\n  Turns recorded: {}\n  (Use /session-reset-metrics to reset counter)", session.turn_cost_log.len()
+                    )));
+                    continue;
+                }
+                UiCommand::SetToolTimeout(secs) => {
+                    session.tool_timeout_secs = secs;
+                    if secs == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Tool timeout cleared (using executor default).".to_string()));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Tool timeout set to {secs}s. Note: enforced at executor level for bash commands."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolTimeout => {
+                    if session.tool_timeout_secs == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Tool timeout: OFF (executor default applies).".to_string()));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Tool timeout: {}s.", session.tool_timeout_secs
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -7904,6 +7959,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     session.turn_wall_ms.clear();
                     session.turn_models.clear();
                     session.cost_alert_fired = false;
+                    session.metrics_reset_turn = session.turn_index;
                     let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
                         "Session metrics reset. Cleared {n} turn cost record(s), wall-time entries, and model history. History and plan unchanged."
                     )));
@@ -30659,6 +30715,66 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /history-annotate <idx> <note> — add annotation to history item
+                                cmd_str if cmd_str.starts_with("/history-annotate ") => {
+                                    let rest = cmd_str.trim_start_matches("/history-annotate ").trim();
+                                    if let Some(space) = rest.find(' ') {
+                                        let idx_str = &rest[..space];
+                                        let note = rest[space + 1..].trim().to_string();
+                                        if let Ok(idx) = idx_str.parse::<usize>() {
+                                            if _ctx.send(UiCommand::AnnotateHistory(idx, note)).is_err() { break 'outer; }
+                                        } else {
+                                            ui.chat_lines.push(ChatLine::SystemNote("Usage: /history-annotate <hist_idx> <note>".to_string()));
+                                        }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /history-annotate <hist_idx> <note>".to_string()));
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-annotations — list all history annotations
+                                "/history-annotations" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAnnotations).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /cost-since-reset — cost since last /session-reset-metrics
+                                "/cost-since-reset" => {
+                                    if _ctx.send(UiCommand::QueryCostSinceReset).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /set-tool-timeout <secs> | off — set tool execution timeout
+                                cmd_str if cmd_str == "/set-tool-timeout off" || cmd_str.starts_with("/set-tool-timeout ") => {
+                                    if cmd_str == "/set-tool-timeout off" {
+                                        if _ctx.send(UiCommand::SetToolTimeout(0)).is_err() { break 'outer; }
+                                    } else {
+                                        let arg = cmd_str.trim_start_matches("/set-tool-timeout ").trim();
+                                        if let Ok(s) = arg.parse::<u64>() {
+                                            if _ctx.send(UiCommand::SetToolTimeout(s)).is_err() { break 'outer; }
+                                        } else {
+                                            ui.chat_lines.push(ChatLine::SystemNote("Usage: /set-tool-timeout <seconds>  or  /set-tool-timeout off".to_string()));
+                                        }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tool-timeout-show — show current tool timeout
+                                "/tool-timeout-show" => {
+                                    if _ctx.send(UiCommand::QueryToolTimeout).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /set-max-response-length <n> — append max word count to system suffix
                                 cmd_str if cmd_str.starts_with("/set-max-response-length ") => {
                                     let arg = cmd_str.trim_start_matches("/set-max-response-length ").trim();
@@ -31972,6 +32088,11 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-export-jsonl ",
                             "/session-intent ", "/session-intent off",
                             "/session-intent-show",
+                            "/history-annotate ",
+                            "/history-annotations",
+                            "/cost-since-reset",
+                            "/set-tool-timeout ", "/set-tool-timeout off",
+                            "/tool-timeout-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

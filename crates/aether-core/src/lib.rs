@@ -404,6 +404,15 @@ pub struct Session {
 
     /// High-level session intent set by the user — surfaced in reports.
     pub session_intent: Option<String>,
+
+    /// User-defined annotations on history items: (history_idx, note).
+    pub history_annotations: Vec<(usize, String)>,
+
+    /// Turn index at which metrics were last reset (for /cost-since-reset).
+    pub metrics_reset_turn: usize,
+
+    /// Per-tool-call execution timeout in seconds (0 = off, uses executor default).
+    pub tool_timeout_secs: u64,
 }
 
 impl Session {
@@ -509,6 +518,9 @@ impl Session {
             focus_mode: None,
             history_size_warn_bytes: 0,
             session_intent: None,
+            history_annotations: Vec::new(),
+            metrics_reset_turn: 0,
+            tool_timeout_secs: 0,
         }
     }
 

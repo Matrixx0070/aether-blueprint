@@ -751,6 +751,16 @@ pub enum UiCommand {
     SetSessionIntent(String),
     /// Show the current session intent.
     QuerySessionIntent,
+    /// Add an annotation note to a specific history item by index.
+    AnnotateHistory(usize, String),
+    /// List all history annotations.
+    QueryHistoryAnnotations,
+    /// Show cost accumulated since last /session-reset-metrics call.
+    QueryCostSinceReset,
+    /// Set a per-tool-call execution timeout in seconds (0 = off).
+    SetToolTimeout(u64),
+    /// Show the current tool timeout setting.
+    QueryToolTimeout,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
