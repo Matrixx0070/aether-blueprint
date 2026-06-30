@@ -417,6 +417,12 @@ pub enum UiCommand {
     JumpBookmark(usize),
     /// Delete a bookmark by 0-based index.
     DeleteBookmark(usize),
+    /// Show turns/hour, cost/hour, tokens/hour for the session.
+    QuerySessionVelocity,
+    /// Show input vs output token split as percentage and absolute counts.
+    QueryTokenBreakdown,
+    /// Show the last N history items in compact form.
+    QueryHistoryTail(usize),
     /// Set auto-bookmark interval: add a bookmark every N turns automatically.
     SetAutoBookmarkEvery(usize),
     /// Clear the auto-bookmark interval (disable auto-bookmarks).

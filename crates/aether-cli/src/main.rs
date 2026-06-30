@@ -6707,6 +6707,70 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::QuerySessionVelocity => {
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                    let elapsed_s = now.saturating_sub(session.started_at).max(1);
+                    let elapsed_h = elapsed_s as f64 / 3600.0;
+                    let turns = session.turn_index as f64;
+                    let total_cost: f64 = session.turn_cost_log.iter().map(|&(_, _, _, c)| c).sum();
+                    let total_in: u64 = session.turn_cost_log.iter().map(|&(_, i, _, _)| i).sum();
+                    let total_out: u64 = session.turn_cost_log.iter().map(|&(_, _, o, _)| o).sum();
+                    let turns_per_hour = turns / elapsed_h;
+                    let cost_per_hour = total_cost / elapsed_h;
+                    let tokens_per_hour = (total_in + total_out) as f64 / elapsed_h;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session velocity  ({elapsed_s}s elapsed)\n  Turns/hour:   {turns_per_hour:.1}\n  Cost/hour:    ${cost_per_hour:.4}\n  Tokens/hour:  {tokens_per_hour:.0}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTokenBreakdown => {
+                    let total_in = session.usage_total.input_tokens;
+                    let total_out = session.usage_total.output_tokens;
+                    let total = total_in + total_out;
+                    if total == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No tokens recorded yet.".to_string()));
+                    } else {
+                        let in_pct = total_in as f64 / total as f64 * 100.0;
+                        let out_pct = total_out as f64 / total as f64 * 100.0;
+                        let bar_width = 30usize;
+                        let in_filled = ((in_pct / 100.0) * bar_width as f64).round() as usize;
+                        let out_filled = bar_width - in_filled;
+                        let bar = format!("{}{}",  "▓".repeat(in_filled), "░".repeat(out_filled));
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Token breakdown  ({total} total)\n  Input:  {total_in} ({in_pct:.1}%)  [{bar}]\n  Output: {total_out} ({out_pct:.1}%)\n  Ratio:  {:.2}x more input than output", total_in as f64 / total_out.max(1) as f64
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryTail(n) => {
+                    use aether_core::context::ConversationItem;
+                    let count = n.min(session.history.len());
+                    if count == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("History is empty.".to_string()));
+                    } else {
+                        let start = session.history.len() - count;
+                        let mut msg = format!("History tail (last {count} of {} items):\n", session.history.len());
+                        for (i, item) in session.history[start..].iter().enumerate() {
+                            let abs_idx = start + i;
+                            match item {
+                                ConversationItem::User(t) => {
+                                    let p: String = t.chars().take(80).collect();
+                                    msg.push_str(&format!("  [{abs_idx}] User:    {p}{}\n", if t.len() > 80 { "…" } else { "" }));
+                                }
+                                ConversationItem::Assistant { text, tool_uses } => {
+                                    let tlen = text.as_ref().map(|t| t.len()).unwrap_or(0);
+                                    msg.push_str(&format!("  [{abs_idx}] Asst:    {tlen} chars, {} tool(s)\n", tool_uses.len()));
+                                }
+                                ConversationItem::ToolResults(r) => {
+                                    let errs: usize = r.iter().filter(|x| x.is_error).count();
+                                    msg.push_str(&format!("  [{abs_idx}] Tools:   {} result(s), {errs} err(s)\n", r.len()));
+                                }
+                            }
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
                 UiCommand::SetAutoBookmarkEvery(n) => {
                     session.auto_bookmark_every = n;
                     if n == 0 {
@@ -28647,6 +28711,32 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /session-velocity — turns/hour, cost/hour, tokens/hour
+                                "/session-velocity" => {
+                                    if _ctx.send(UiCommand::QuerySessionVelocity).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /token-breakdown — input vs output token split
+                                "/token-breakdown" => {
+                                    if _ctx.send(UiCommand::QueryTokenBreakdown).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-tail <n> — show last n history items compactly
+                                cmd_str if cmd_str.starts_with("/history-tail ") => {
+                                    let arg = cmd_str.trim_start_matches("/history-tail ").trim();
+                                    let n = arg.parse::<usize>().unwrap_or(5);
+                                    if _ctx.send(UiCommand::QueryHistoryTail(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /auto-bookmark-every <n> | off — auto-bookmark every n turns
                                 cmd_str if cmd_str == "/auto-bookmark-every off" || cmd_str.starts_with("/auto-bookmark-every ") => {
                                     if cmd_str == "/auto-bookmark-every off" {
@@ -29778,6 +29868,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/auto-bookmark-show",
                             "/clear-bookmarks",
                             "/find-code-blocks", "/find-code-blocks ",
+                            "/session-velocity",
+                            "/token-breakdown",
+                            "/history-tail ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
