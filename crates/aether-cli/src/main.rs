@@ -6564,6 +6564,44 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::SetThinkAloud(enabled) => {
+                    session.think_aloud = enabled;
+                    let note = if enabled {
+                        let preamble = if session.think_aloud_prompt.is_empty() {
+                            "(default preamble)".to_string()
+                        } else {
+                            format!("custom: \"{}\"", session.think_aloud_prompt.chars().take(60).collect::<String>())
+                        };
+                        format!("Think-aloud: ON  {preamble}. Agent will show reasoning before each answer.")
+                    } else {
+                        "Think-aloud: OFF.".to_string()
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::SetThinkAloudPrompt(prompt) => {
+                    let preview: String = prompt.chars().take(80).collect();
+                    session.think_aloud_prompt = prompt.clone();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Think-aloud preamble set: \"{preview}{}\"",
+                        if prompt.len() > 80 { "…" } else { "" }
+                    )));
+                    continue;
+                }
+                UiCommand::QueryThinkAloud => {
+                    let note = if session.think_aloud {
+                        let preamble = if session.think_aloud_prompt.is_empty() {
+                            "(default: show THINKING: then ANSWER:)".to_string()
+                        } else {
+                            format!("custom: \"{}\"", session.think_aloud_prompt.chars().take(80).collect::<String>())
+                        };
+                        format!("Think-aloud: ON  — {preamble}")
+                    } else {
+                        "Think-aloud: off. Use /think-aloud on to enable.".to_string()
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::SetNextTurnModel(model) => {
                     let prev = session.next_turn_model.replace(model.clone());
                     let note = if let Some(p) = prev {
@@ -8320,6 +8358,17 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     expanded = expanded.replace(&format!("${k}"), v);
                 }
                 expanded
+            } else {
+                user_msg
+            };
+            // Think-aloud: prepend reasoning instruction to user message.
+            let user_msg = if session.think_aloud {
+                let preamble = if session.think_aloud_prompt.is_empty() {
+                    "Before answering, show your step-by-step reasoning. Label it \"THINKING:\" and then give your final answer labeled \"ANSWER:\".".to_string()
+                } else {
+                    session.think_aloud_prompt.clone()
+                };
+                format!("{preamble}\n\n{user_msg}")
             } else {
                 user_msg
             };
@@ -26831,6 +26880,29 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /think-aloud [on|off] — toggle reasoning-first mode
+                                cmd_str if cmd_str == "/think-aloud" || cmd_str.starts_with("/think-aloud ") => {
+                                    let arg = cmd_str.trim_start_matches("/think-aloud").trim();
+                                    if arg.is_empty() {
+                                        if _ctx.send(UiCommand::QueryThinkAloud).is_err() { break 'outer; }
+                                    } else {
+                                        let enabled = arg != "off";
+                                        if _ctx.send(UiCommand::SetThinkAloud(enabled)).is_err() { break 'outer; }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /think-aloud-prompt <text> — set custom reasoning preamble
+                                cmd_str if cmd_str.starts_with("/think-aloud-prompt ") => {
+                                    let prompt = cmd_str.trim_start_matches("/think-aloud-prompt ").trim().to_string();
+                                    if _ctx.send(UiCommand::SetThinkAloudPrompt(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /model-for-next <model> — use a specific model for the next turn only
                                 cmd_str if cmd_str.starts_with("/model-for-next ") => {
                                     let model = cmd_str.trim_start_matches("/model-for-next ").trim().to_string();
@@ -27865,6 +27937,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/model-for-next ",
                             "/model-for-next-clear",
                             "/model-for-next-show",
+                            "/think-aloud", "/think-aloud on", "/think-aloud off",
+                            "/think-aloud-prompt ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

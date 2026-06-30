@@ -409,6 +409,12 @@ pub enum UiCommand {
     ReplayLast,
     /// List past user messages with their indices.
     QueryReplayList,
+    /// Enable or disable think-aloud mode (bool). When enabling with a custom preamble, see SetThinkAloudPrompt.
+    SetThinkAloud(bool),
+    /// Set a custom think-aloud preamble (empty = use default).
+    SetThinkAloudPrompt(String),
+    /// Show current think-aloud mode and preamble.
+    QueryThinkAloud,
     /// Use a specific model for the next turn only, then revert.
     SetNextTurnModel(String),
     /// Clear any pending next-turn model override.

@@ -337,6 +337,11 @@ pub struct Session {
     /// Set by /model-for-next, cleared by the driver after one turn.
     pub next_turn_model: Option<String>,
 
+    /// When true, prepend a "show your reasoning" meta-instruction to each user message.
+    pub think_aloud: bool,
+    /// Custom think-aloud preamble. If empty, a default is used.
+    pub think_aloud_prompt: String,
+
     /// Context-fill fraction (0.0–1.0) at which a warning SystemNote fires.
     /// 0.0 = off. Fires once per session (token_budget_warn_fired tracks this).
     pub token_budget_warn_pct: f64,
@@ -430,6 +435,8 @@ impl Session {
             session_notes: Vec::new(),
             tool_call_budget: 0,
             next_turn_model: None,
+            think_aloud: false,
+            think_aloud_prompt: String::new(),
             token_budget_warn_pct: 0.0,
             token_budget_hard_pct: 0.0,
             token_budget_warn_fired: false,
