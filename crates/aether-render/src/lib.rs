@@ -269,6 +269,10 @@ pub enum UiCommand {
     SetDedupToolCalls(bool),
     /// Enable or disable auto-thinking when the agent is stuck.
     SetAutoThinkOnStuck(bool),
+    /// Enable or disable auto-compaction when the agent is stuck.
+    SetAutoCompactOnStuck(bool),
+    /// Remove ToolResults items from history (keeps User+Assistant turns).
+    SmartTrimHistory,
     /// Save current history+plan under a named in-memory snapshot.
     SaveSnapshot(String),
     /// Restore history+plan from a named in-memory snapshot.

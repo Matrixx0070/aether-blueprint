@@ -6320,6 +6320,30 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::SetAutoCompactOnStuck(enabled) => {
+                    session.auto_compact_on_stuck = enabled;
+                    let note = if enabled {
+                        "Auto-compact-on-stuck: ON — will force compaction when any tool hits the error threshold.".to_string()
+                    } else {
+                        "Auto-compact-on-stuck: off.".to_string()
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::SmartTrimHistory => {
+                    use aether_core::context::ConversationItem;
+                    let before = session.history.len();
+                    session.history.retain(|item| !matches!(item, ConversationItem::ToolResults(_)));
+                    let after = session.history.len();
+                    let removed = before - after;
+                    let note = format!(
+                        "Smart trim: removed {removed} ToolResults item(s). \
+                         History: {before} → {after} items. \
+                         User+Assistant turns preserved."
+                    );
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::SaveSnapshot(name) => {
                     let snap_name = if name.is_empty() {
                         format!("snap-{}", session.saved_snapshots.len() + 1)
@@ -6887,6 +6911,31 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 match outcome {
                     TurnOutcome::AwaitUser => { auto_continue_count = 0; break; }
                     TurnOutcome::ContinueImmediately => {
+                        // Auto-compact when stuck: fire compaction if any tool has hit the
+                        // consecutive-error threshold, clearing context to break the loop.
+                        if session.auto_compact_on_stuck {
+                            let is_stuck = session.plan.tool_call_stats.values()
+                                .any(|(_, err)| *err >= aether_core::planner::TOOL_ERROR_THRESHOLD);
+                            if is_stuck {
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                    "Auto-compact-on-stuck: agent stuck, forcing compaction to clear context.".to_string()
+                                ));
+                                match aether_core::compaction::maybe_compact(&mut session).await {
+                                    Ok(true) => {
+                                        let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
+                                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                            "Auto-compaction complete. Usage: {used} tokens."
+                                        )));
+                                    }
+                                    Ok(false) => {}
+                                    Err(e) => {
+                                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                            "Auto-compact-on-stuck: compaction error: {e}"
+                                        )));
+                                    }
+                                }
+                            }
+                        }
                         // Tool-call checkpoint: pause after every N cumulative tool calls.
                         if session.checkpoint_every_tools > 0 {
                             let total_calls: usize = session.plan.tool_call_stats.values()
@@ -24087,6 +24136,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /auto-compact-stuck on|off — compact when stuck on tool errors
+                                cmd_str if cmd_str == "/auto-compact-stuck" || cmd_str.starts_with("/auto-compact-stuck ") => {
+                                    let arg = cmd_str.trim_start_matches("/auto-compact-stuck").trim();
+                                    let enabled = arg != "off";
+                                    if _ctx.send(UiCommand::SetAutoCompactOnStuck(enabled)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /smart-trim — remove tool results from history, keep conversation
+                                "/smart-trim" => {
+                                    if _ctx.send(UiCommand::SmartTrimHistory).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /snap-save [name] — save in-memory session snapshot
                                 cmd_str if cmd_str == "/snap-save" || cmd_str.starts_with("/snap-save ") => {
                                     let name = cmd_str.trim_start_matches("/snap-save").trim().to_string();
@@ -24833,6 +24900,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/snap-load ",
                             "/snap-list",
                             "/snap-clear",
+                            "/auto-compact-stuck", "/auto-compact-stuck on", "/auto-compact-stuck off",
+                            "/smart-trim",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

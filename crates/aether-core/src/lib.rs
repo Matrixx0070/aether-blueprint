@@ -203,6 +203,10 @@ pub struct Session {
     /// In-memory named snapshots of (history, plan). Allows branching and
     /// backtracking without writing files or touching git.
     pub saved_snapshots: std::collections::HashMap<String, (Vec<context::ConversationItem>, planner::Plan)>,
+
+    /// When true, automatically trigger context compaction when the agent
+    /// is stuck (any tool at TOOL_ERROR_THRESHOLD consecutive errors).
+    pub auto_compact_on_stuck: bool,
 }
 
 impl Session {
@@ -255,6 +259,7 @@ impl Session {
             last_tool_signatures: Vec::new(),
             auto_think_on_stuck: false,
             saved_snapshots: std::collections::HashMap::new(),
+            auto_compact_on_stuck: false,
         }
     }
 
