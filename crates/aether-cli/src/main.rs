@@ -6320,6 +6320,71 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::SetTurnReminderEvery(n) => {
+                    session.turn_reminder_every = n;
+                    let note = if n == 0 {
+                        "Periodic goal reminder: off.".to_string()
+                    } else {
+                        format!(
+                            "Periodic goal reminder every {n} turn(s){}.",
+                            if session.plan.goal.is_none() { " (set a goal with /goal <text> to activate)" } else { "" }
+                        )
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryContextHealth => {
+                    use aether_core::context::ConversationItem;
+                    use aether_core::compaction::context_window_for_model;
+                    let mut user_chars: usize = 0;
+                    let mut asst_chars: usize = 0;
+                    let mut tool_chars: usize = 0;
+                    let mut user_items: usize = 0;
+                    let mut asst_items: usize = 0;
+                    let mut tool_items: usize = 0;
+                    for item in &session.history {
+                        match item {
+                            ConversationItem::User(t) => {
+                                user_items += 1;
+                                user_chars += t.len();
+                            }
+                            ConversationItem::Assistant { text, tool_uses } => {
+                                asst_items += 1;
+                                if let Some(t) = text { asst_chars += t.len(); }
+                                for tu in tool_uses { asst_chars += tu.input.to_string().len(); }
+                            }
+                            ConversationItem::ToolResults(results) => {
+                                tool_items += 1;
+                                for r in results { tool_chars += r.content.len(); }
+                            }
+                        }
+                    }
+                    let total_chars = user_chars + asst_chars + tool_chars;
+                    let pct = |n: usize| if total_chars > 0 { n * 100 / total_chars } else { 0 };
+                    let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
+                    let window = context_window_for_model(&session.config.model);
+                    let token_pct = if window > 0 { used * 100 / window as u64 } else { 0 };
+                    let note = format!(
+                        "=== Context Health ===\n\
+                         Total history chars: {total_chars} (~{est_tokens} est. tokens)\n\
+                         Actual token usage:  {used}/{window} ({token_pct}% of window)\n\
+                         \n\
+                         User    : {user_items:>3} items  {user_chars:>8} chars  ({u_pct}%)\n\
+                         Assistant: {asst_items:>3} items  {asst_chars:>8} chars  ({a_pct}%)\n\
+                         Tool out: {tool_items:>3} items  {tool_chars:>8} chars  ({t_pct}%)\n\
+                         \n\
+                         Pinned reminders: {pins}\n\
+                         Persistent reminders: {prems}",
+                        est_tokens = total_chars / 4,
+                        u_pct = pct(user_chars),
+                        a_pct = pct(asst_chars),
+                        t_pct = pct(tool_chars),
+                        pins = session.persistent_reminders.iter().filter(|r| r.starts_with("[PINNED:")).count(),
+                        prems = session.persistent_reminders.len(),
+                    );
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::PinHistoryItem(idx) => {
                     use aether_core::context::ConversationItem;
                     let text = session.history.get(idx).and_then(|item| match item {
@@ -23761,6 +23826,30 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /remind-every <N>|off — re-inject goal every N turns
+                                cmd_str if cmd_str == "/remind-every" || cmd_str.starts_with("/remind-every ") => {
+                                    let arg = cmd_str.trim_start_matches("/remind-every").trim();
+                                    let cmd = if arg.is_empty() || arg == "off" {
+                                        UiCommand::SetTurnReminderEvery(0)
+                                    } else if let Ok(n) = arg.parse::<usize>() {
+                                        UiCommand::SetTurnReminderEvery(n)
+                                    } else {
+                                        UiCommand::SetTurnReminderEvery(0)
+                                    };
+                                    if _ctx.send(cmd).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /context-health — show context usage breakdown by item type
+                                "/context-health" => {
+                                    if _ctx.send(UiCommand::QueryContextHealth).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /pin <n> — pin history[n] content to survive compaction
                                 cmd_str if cmd_str.starts_with("/pin ") => {
                                     let arg = cmd_str.trim_start_matches("/pin ").trim();
@@ -24292,6 +24381,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/pin ",
                             "/unpin ",
                             "/pins",
+                            "/remind-every ", "/remind-every off",
+                            "/context-health",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

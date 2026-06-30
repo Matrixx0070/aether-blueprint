@@ -166,6 +166,10 @@ pub struct Session {
     /// When false, the D7 self-check verifier is skipped entirely, trading
     /// safety for speed. Default: true. Toggle via `/verify on|off`.
     pub verify_enabled: bool,
+
+    /// When > 0, the session goal is re-injected as a reminder every N turns.
+    /// Keeps long autonomous runs from drifting off-target. 0 = off.
+    pub turn_reminder_every: usize,
 }
 
 impl Session {
@@ -209,6 +213,7 @@ impl Session {
             llm_timeout_secs: 0,
             context_warned_60pct: false,
             verify_enabled: true,
+            turn_reminder_every: 0,
         }
     }
 
@@ -368,6 +373,25 @@ async fn agent_turn_inner(
             Source::Kernel,
             format!("[Standing instruction] {body}"),
         ));
+    }
+
+    // Periodic goal re-injection: if turn_reminder_every > 0 and the current
+    // turn index is a multiple of it, re-surface the session goal so long
+    // autonomous runs stay on track.
+    if session.turn_reminder_every > 0
+        && session.turn_index > 0
+        && session.turn_index % session.turn_reminder_every == 0
+    {
+        if let Some(ref goal) = session.plan.goal {
+            session.pending_reminders.push(Reminder::new(
+                ReminderKind::SystemWarning,
+                Source::Kernel,
+                format!(
+                    "[Turn-{} goal reminder] {}",
+                    session.turn_index, goal
+                ),
+            ));
+        }
     }
 
     // ── perceive (assemble) — D1 + D6 fire here ──────────────────────

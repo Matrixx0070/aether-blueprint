@@ -245,6 +245,10 @@ pub enum UiCommand {
     ExportSession(String),
     /// Ask the agent to rewrite its last response with additional instructions.
     RewriteLast(String),
+    /// Set the periodic goal-reminder interval (0 = off).
+    SetTurnReminderEvery(usize),
+    /// Show a breakdown of context usage by history item type.
+    QueryContextHealth,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
