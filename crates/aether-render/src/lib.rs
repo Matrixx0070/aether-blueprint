@@ -172,6 +172,10 @@ pub enum UiCommand {
     QuerySessionStats,
     /// Show the most recent tool error text + tool name.
     QueryLastError,
+    /// Set max tool calls per turn (0 = unlimited).
+    SetMaxToolsPerTurn(usize),
+    /// Full diagnostic dump of session state.
+    QueryDebugSession,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

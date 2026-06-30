@@ -1295,6 +1295,7 @@ async fn run_print_agent(
         temperature: None,
         tools_disabled_turns: 0,
         system_suffix: None,
+        max_tool_calls_per_turn: 20,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("self-check gate: {e}"))?;
@@ -1558,6 +1559,7 @@ async fn run_repl(
         temperature: None,
         tools_disabled_turns: 0,
         system_suffix: None,
+        max_tool_calls_per_turn: 20,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("self-check gate: {e}"))?;
@@ -4639,6 +4641,7 @@ async fn complete_run_one_turn(
         temperature: None,
         tools_disabled_turns: 0,
         system_suffix: None,
+        max_tool_calls_per_turn: 20,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -5138,6 +5141,7 @@ async fn ws_run_one_turn_streamed(
         temperature: None,
         tools_disabled_turns: 0,
         system_suffix: None,
+        max_tool_calls_per_turn: 20,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -5276,6 +5280,7 @@ async fn serve_one_turn(
         temperature: None,
         tools_disabled_turns: 0,
         system_suffix: None,
+        max_tool_calls_per_turn: 20,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -5347,6 +5352,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
         temperature: None,
         tools_disabled_turns: 0,
         system_suffix: None,
+        max_tool_calls_per_turn: 20,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("self-check gate: {e}"))?;
@@ -5764,6 +5770,61 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         (Some(tool), Some(text)) => format!("Last tool error ({tool}):\n{text}"),
                         _ => "No tool errors recorded in this session.".to_string(),
                     };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::SetMaxToolsPerTurn(n) => {
+                    session.config.max_tool_calls_per_turn = n;
+                    let note = if n == 0 {
+                        "Tool-call budget: unlimited (no per-turn cap).".to_string()
+                    } else {
+                        format!("Tool-call budget: max {n} tool call(s) per turn.")
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryDebugSession => {
+                    use aether_core::compaction::context_window_for_model;
+                    let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
+                    let window = context_window_for_model(&session.config.model);
+                    let pct = if window > 0 { (used as f64 / window as f64 * 100.0) as u64 } else { 0 };
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let wall = now.saturating_sub(session.started_at);
+                    let mut stuck_lines = String::new();
+                    let mut stuck: Vec<(String, usize)> = session.plan.tool_error_counts
+                        .iter().filter(|(_, &n)| n > 0).map(|(k, &n)| (k.clone(), n)).collect();
+                    stuck.sort_by_key(|(k, _)| k.clone());
+                    for (name, n) in &stuck {
+                        stuck_lines.push_str(&format!("\n    {name}: {n} error(s)"));
+                    }
+                    if stuck_lines.is_empty() { stuck_lines = " none".to_string(); }
+                    let note = format!(
+                        "=== Session Debug Dump ===\n\
+                         Model: {model}\n\
+                         Turn: {turn}  History items: {hist}\n\
+                         Wall time: {wall}s  LLM: last={last}ms avg={avg}ms total={total}ms\n\
+                         Context: {used}/{window} tokens ({pct}%)\n\
+                         Cost: ${cost:.6}\n\
+                         Tool cap: {cap_desc}\n\
+                         Stuck tools:{stuck_lines}\n\
+                         Last error tool: {last_err_tool}\n\
+                         Session goal: {goal}\n\
+                         Plan text:\n{plan}",
+                        model = session.config.model,
+                        turn = session.turn_index,
+                        hist = session.history.len(),
+                        last = session.llm_ms_last,
+                        avg = if session.turn_index > 0 { session.llm_ms_total / session.turn_index as u64 } else { 0 },
+                        total = session.llm_ms_total,
+                        cost = estimate_cost_usd(&session.config.model, &session.usage_total),
+                        cap_desc = if session.config.max_tool_calls_per_turn == 0 { "unlimited".to_string() } else { session.config.max_tool_calls_per_turn.to_string() },
+                        last_err_tool = session.plan.last_error_tool.as_deref().unwrap_or("none"),
+                        goal = session.plan.goal.as_deref().unwrap_or("none"),
+                        plan = if session.plan.text.trim().is_empty() { "(empty)".to_string() } else { session.plan.text.clone() },
+                    );
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
@@ -22729,6 +22790,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /debug-session — full diagnostic dump of session state
+                                "/debug-session" => {
+                                    if _ctx.send(UiCommand::QueryDebugSession).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /set-max-tools [N] — cap tool calls per turn (0=unlimited)
+                                cmd_str if cmd_str.starts_with("/set-max-tools ") || cmd_str == "/set-max-tools" => {
+                                    let arg = cmd_str.trim_start_matches("/set-max-tools").trim();
+                                    let n = if arg.is_empty() || arg == "off" { 0usize } else { arg.parse().unwrap_or(20) };
+                                    if _ctx.send(UiCommand::SetMaxToolsPerTurn(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /auto-fix — AI diagnoses the last tool error and proposes a concrete fix
                                 "/auto-fix" => {
                                     let last_error_info = ui.chat_lines.iter().rev().find_map(|cl| {
@@ -23180,6 +23259,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-status", "/stuck", "/reset-errors",
                             "/goal", "/goal ", "/context-info", "/session-stats",
                             "/last-error", "/auto-fix",
+                            "/debug-session", "/set-max-tools", "/set-max-tools ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
@@ -23991,6 +24071,7 @@ async fn review_security_file(
         temperature: None,
         tools_disabled_turns: 0,
         system_suffix: None,
+        max_tool_calls_per_turn: 20,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     // Review mode produces a STRUCTURED report (lots of short keyword
@@ -25414,6 +25495,7 @@ async fn run_threat_model(
         temperature: None,
         tools_disabled_turns: 0,
         system_suffix: None,
+        max_tool_calls_per_turn: 20,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     // Empty ruleset — same reasoning as run_review (structured analysis output).
@@ -25519,6 +25601,7 @@ async fn run_ctf(
         temperature: None,
         tools_disabled_turns: 0,
         system_suffix: None,
+        max_tool_calls_per_turn: 20,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(Vec::new()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -26065,6 +26148,7 @@ async fn run_eval_case(
         temperature: None,
         tools_disabled_turns: 0,
         system_suffix: None,
+        max_tool_calls_per_turn: 20,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -33225,6 +33309,7 @@ impl Tool for AgentTool {
             temperature: None,
             tools_disabled_turns: 0,
             system_suffix: None,
+            max_tool_calls_per_turn: 20,
         };
         let overlay = Fable5Overlay::new(OverlayConfig::default());
         let gate = Gate::new(default_rules())

@@ -299,6 +299,26 @@ fn json_to_match_string(v: &serde_json::Value) -> String {
     }
 }
 
+/// Maximum characters allowed in a single tool result before truncation.
+/// Beyond this size a result burns too much context budget for a single read.
+/// The agent is told to use a more targeted query.
+pub const MAX_TOOL_OUTPUT_CHARS: usize = 50_000;
+
+/// Truncate a large tool result and append a guidance note so the agent
+/// knows data was dropped and can request a more targeted follow-up.
+fn maybe_truncate_output(tool_name: &str, content: String) -> String {
+    if content.len() <= MAX_TOOL_OUTPUT_CHARS {
+        return content;
+    }
+    let dropped = content.len() - MAX_TOOL_OUTPUT_CHARS;
+    let mut truncated: String = content.chars().take(MAX_TOOL_OUTPUT_CHARS).collect();
+    truncated.push_str(&format!(
+        "\n\n[OUTPUT TRUNCATED: {dropped} chars dropped — \
+         use {tool_name} with a more specific pattern, offset/limit, or smaller scope]"
+    ));
+    truncated
+}
+
 /// Prepend a structured recovery header to failed tool output so the agent
 /// sees an actionable hint exactly at the point of failure — not buried in
 /// the system prompt. Keeps the hint terse (2 lines) to avoid burning tokens.
@@ -506,6 +526,11 @@ impl Executor {
             (content, false)
         };
 
+        // Truncate oversized outputs before they enter history. Large reads
+        // (e.g. a 5000-line file) otherwise consume the entire context budget
+        // for a single tool call, leaving no room for the agent to reason.
+        let content = maybe_truncate_output(&tu.name, content);
+
         // PostToolUse hook: always fires after a call attempt (even
         // refused ones) so operators can audit failed permission decisions.
         if let Some(h) = &self.tool_hook {
@@ -641,6 +666,29 @@ mod tests {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(self.name.to_string())
         }
+    }
+
+    #[test]
+    fn maybe_truncate_output_passthrough_below_limit() {
+        let small = "a".repeat(1000);
+        let out = super::maybe_truncate_output("Read", small.clone());
+        assert_eq!(out, small, "small output must pass through unchanged");
+    }
+
+    #[test]
+    fn maybe_truncate_output_caps_at_limit_and_adds_note() {
+        let big = "x".repeat(super::MAX_TOOL_OUTPUT_CHARS + 10_000);
+        let out = super::maybe_truncate_output("Bash", big);
+        assert!(
+            out.len() > super::MAX_TOOL_OUTPUT_CHARS,
+            "output should be slightly above limit due to the truncation note"
+        );
+        // The retained content is exactly MAX_TOOL_OUTPUT_CHARS x-chars
+        let x_count = out.chars().take(super::MAX_TOOL_OUTPUT_CHARS).filter(|&c| c == 'x').count();
+        assert_eq!(x_count, super::MAX_TOOL_OUTPUT_CHARS, "first {MAX} chars must be original content",
+            MAX = super::MAX_TOOL_OUTPUT_CHARS);
+        assert!(out.contains("OUTPUT TRUNCATED"), "truncation note missing: {out:.100}...");
+        assert!(out.contains("Bash"), "tool name missing in truncation note: {out:.100}...");
     }
 
     #[test]

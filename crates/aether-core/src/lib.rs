@@ -56,7 +56,15 @@ pub struct SessionConfig {
     /// Set via `/persona <text>`, cleared with `/persona off`.
     #[serde(default)]
     pub system_suffix: Option<String>,
+    /// Maximum tool calls allowed per turn. When the model emits more than
+    /// this many tool_use blocks in a single response, the excess are dropped
+    /// and a warning reminder is pushed for the next turn. 0 = unlimited.
+    /// Default: 20 (same as Claude Code's internal limit).
+    #[serde(default = "default_max_tool_calls_per_turn")]
+    pub max_tool_calls_per_turn: usize,
 }
+
+fn default_max_tool_calls_per_turn() -> usize { 20 }
 
 impl Default for SessionConfig {
     fn default() -> Self {
@@ -68,6 +76,7 @@ impl Default for SessionConfig {
             temperature: None,
             tools_disabled_turns: 0,
             system_suffix: None,
+            max_tool_calls_per_turn: 20,
         }
     }
 }
@@ -383,6 +392,24 @@ async fn agent_turn_inner(
     } else {
         Some(text_parts.join("\n"))
     };
+
+    // Tool-call budget: drop excess tool_uses beyond the per-turn cap.
+    // A reminder is queued so the next LLM call sees explicit guidance
+    // about why some of its requested tool calls were dropped.
+    let cap = session.config.max_tool_calls_per_turn;
+    if cap > 0 && tool_uses.len() > cap {
+        let dropped = tool_uses.len() - cap;
+        tool_uses.truncate(cap);
+        session.pending_reminders.push(Reminder::new(
+            ReminderKind::SystemWarning,
+            Source::Kernel,
+            format!(
+                "Tool-call budget exceeded: {dropped} tool call(s) were dropped this turn \
+                 (limit = {cap} per turn). Request fewer tool calls per response or \
+                 increase the limit with /set-max-tools."
+            ),
+        ));
+    }
 
     // ── verify — D7 runs BEFORE we commit anything to history so a
     // rewrite lands in history correctly and a block can choose not to
