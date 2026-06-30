@@ -18591,6 +18591,133 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /snapshot [tag] — create a git stash restore-point
+                                // /snapshot-list   — list all stash entries
+                                // /snapshot-pop    — pop (restore) the latest stash
+                                cmd_str if cmd_str == "/snapshot-list" => {
+                                    let out = std::process::Command::new("git")
+                                        .args(["stash", "list"])
+                                        .output()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                                        .unwrap_or_else(|e| format!("(git error: {e})"));
+                                    let note = if out.is_empty() {
+                                        "No snapshots yet. Use /snapshot to create one.".to_string()
+                                    } else {
+                                        format!("Snapshots (git stash list):\n{out}\n\n  /snapshot-pop  to restore latest")
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(note));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd_str if cmd_str == "/snapshot-pop" => {
+                                    let out = std::process::Command::new("git")
+                                        .args(["stash", "pop"])
+                                        .output();
+                                    let note = match out {
+                                        Ok(o) if o.status.success() => {
+                                            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                                            format!("Snapshot restored.\n{s}")
+                                        }
+                                        Ok(o) => {
+                                            let s = String::from_utf8_lossy(&o.stderr).trim().to_string();
+                                            format!("Snapshot pop failed: {s}")
+                                        }
+                                        Err(e) => format!("git error: {e}"),
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(note));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd_str if cmd_str == "/snapshot" || cmd_str.starts_with("/snapshot ") => {
+                                    let tag = cmd_str.trim_start_matches("/snapshot").trim();
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    let label = if tag.is_empty() {
+                                        format!("aether-snapshot-{ts2}")
+                                    } else {
+                                        format!("aether-{tag}-{ts2}")
+                                    };
+                                    let out = std::process::Command::new("git")
+                                        .args(["stash", "push", "--include-untracked", "-m", &label])
+                                        .output();
+                                    let note = match out {
+                                        Ok(o) if o.status.success() => {
+                                            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                                            format!("Snapshot created: {label}\n{s}\n\n  /snapshot-list to view  ·  /snapshot-pop to restore")
+                                        }
+                                        Ok(o) => {
+                                            let s = String::from_utf8_lossy(&o.stderr).trim().to_string();
+                                            format!("Snapshot failed: {s}")
+                                        }
+                                        Err(e) => format!("git error: {e}"),
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(note));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /set-cost-limit <USD>|off — guard AI calls once budget is hit
+                                cmd_str if cmd_str == "/set-cost-limit" || cmd_str.starts_with("/set-cost-limit ") => {
+                                    let arg = cmd_str.trim_start_matches("/set-cost-limit").trim();
+                                    if arg.is_empty() {
+                                        let info = match ui.cost_limit_usd {
+                                            Some(l) => format!("Cost limit: ${l:.4}  (current: ${:.4})", ui.cost_usd),
+                                            None => format!("No cost limit set (current: ${:.4}).\n  Usage: /set-cost-limit <USD>  e.g. /set-cost-limit 1.00", ui.cost_usd),
+                                        };
+                                        ui.chat_lines.push(ChatLine::SystemNote(info));
+                                    } else if arg == "off" || arg == "none" || arg == "clear" {
+                                        ui.cost_limit_usd = None;
+                                        ui.chat_lines.push(ChatLine::SystemNote("Cost limit cleared.".into()));
+                                    } else {
+                                        match arg.parse::<f64>() {
+                                            Ok(v) if v > 0.0 => {
+                                                ui.cost_limit_usd = Some(v);
+                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                    format!("Cost limit set: ${v:.4}  (current: ${:.4})", ui.cost_usd)
+                                                ));
+                                            }
+                                            _ => {
+                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                    "Usage: /set-cost-limit <USD>  e.g. /set-cost-limit 0.50\n  Use /set-cost-limit off to clear.".into()
+                                                ));
+                                            }
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /model-context — show context window usage for current model
+                                "/model-context" | "/ctx-bar" => {
+                                    let model = &ui.model;
+                                    let max_ctx: u64 = if model.contains("opus-4") || model.contains("opus-3-5") {
+                                        200_000
+                                    } else if model.contains("sonnet-4") || model.contains("sonnet-3-5") || model.contains("sonnet-3") {
+                                        200_000
+                                    } else if model.contains("haiku-3-5") || model.contains("haiku-4") {
+                                        200_000
+                                    } else if model.contains("haiku-3") {
+                                        48_000
+                                    } else if model.contains("claude-2") {
+                                        100_000
+                                    } else if model.contains("claude-1") {
+                                        100_000
+                                    } else {
+                                        200_000  // safe default for unknown Claude models
+                                    };
+                                    let used = ui.tokens_in + ui.tokens_out;
+                                    let pct = if max_ctx > 0 { (used as f64 / max_ctx as f64 * 100.0).min(100.0) } else { 0.0 };
+                                    let filled = (pct / 5.0) as usize;  // 20 chars total
+                                    let bar: String = "█".repeat(filled) + &"░".repeat(20usize.saturating_sub(filled));
+                                    let remaining = max_ctx.saturating_sub(used);
+                                    let note = format!(
+                                        "Context window  [{bar}] {pct:.1}%\n  Model:     {model}\n  Max:       {max_ctx}K tokens\n  Used:      ~{used} tokens\n  Remaining: ~{remaining} tokens\n  (tokens_in={ti}  tokens_out={to})",
+                                        ti = ui.tokens_in, to = ui.tokens_out,
+                                    );
+                                    ui.chat_lines.push(ChatLine::SystemNote(note));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /multi-add <glob> — add all matching files to context_files
                                 cmd_str if cmd_str.starts_with("/multi-add ") => {
                                     let pattern = cmd_str[11..].trim();
@@ -18637,6 +18764,21 @@ CTF Toolkit — Aether AI-assisted\n\
                             // Push to history (deduplicate consecutive identical entries)
                             if ui.input_history.last().map(|s| s.as_str()) != Some(&msg) {
                                 ui.input_history.push(msg.clone());
+                            }
+                            // Cost budget guard — block AI calls when limit exceeded
+                            if let Some(limit) = ui.cost_limit_usd {
+                                if ui.cost_usd >= limit {
+                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                        format!(
+                                            "Cost limit reached: ${:.4} used ≥ ${:.4} limit.\n  Use /set-cost-limit off to clear, or /set-cost-limit <N> to raise.",
+                                            ui.cost_usd, limit
+                                        )
+                                    ));
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                             }
                             let ts = std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
@@ -18967,6 +19109,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/context-rm ", "/context-clear", "/ctx-clear",
                             "/temp ", "/temp default", "/max-tokens ",
                             "/export", "/export json", "/multi-add ",
+                            "/snapshot", "/snapshot ", "/snapshot-list", "/snapshot-pop",
+                            "/set-cost-limit ", "/set-cost-limit off", "/model-context", "/ctx-bar",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

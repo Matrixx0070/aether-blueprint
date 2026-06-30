@@ -142,6 +142,10 @@ pub enum UiCommand {
     ForceCompact,
     /// Inject a message into session history as a User turn (AI sees it as context, no LLM call).
     InjectContext(String),
+    /// Set session sampling temperature. None = API default (1.0).
+    SetTemperature(Option<f32>),
+    /// Set per-turn max_tokens cap.
+    SetMaxTokens(u32),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
@@ -319,6 +323,9 @@ pub struct UiState {
     /// Ring-buffer of the last 50 streaming output lines from the running
     /// Bash tool. Cleared on ToolDone. Shown in the tool panel while running.
     pub tool_stream_lines: Vec<String>,
+    /// When set, a new AI call is blocked if `cost_usd >= cost_limit_usd`.
+    /// Cleared with `/set-cost-limit off`.
+    pub cost_limit_usd: Option<f64>,
 }
 
 impl UiState {
@@ -460,6 +467,7 @@ impl UiState {
             last_response_chars: 0,
             context_files: Vec::new(),
             tool_stream_lines: Vec::new(),
+            cost_limit_usd: None,
         }
     }
 
