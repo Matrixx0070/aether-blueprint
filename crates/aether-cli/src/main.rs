@@ -21036,6 +21036,234 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /summarize-session — AI summarizes the entire conversation so far
+                                "/summarize-session" => {
+                                    let exchanges: Vec<String> = ui.chat_lines.iter().filter_map(|cl| match cl {
+                                        ChatLine::User(t, _) => Some(format!("User: {}", t.chars().take(100).collect::<String>())),
+                                        ChatLine::Assistant(t, _, _) => Some(format!("AI: {}", t.chars().take(150).collect::<String>())),
+                                        _ => None,
+                                    }).take(40).collect();
+                                    if exchanges.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("/summarize-session: no conversation yet.".into()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let transcript = exchanges.join("\n");
+                                    let prompt = format!(
+                                        "Please summarize this session in 3 sections:\n\
+                                         ## What we accomplished\n(bullet list of completed tasks)\n\
+                                         ## Key decisions made\n(bullet list of choices and their rationale)\n\
+                                         ## Open items / next steps\n(what remains to be done)\n\n\
+                                         Session transcript:\n```\n{transcript}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /git-log-ai [N] — AI narrates the last N commits
+                                cmd_str if cmd_str == "/git-log-ai" || cmd_str.starts_with("/git-log-ai ") => {
+                                    let n_arg = cmd_str.trim_start_matches("/git-log-ai").trim();
+                                    let n: u32 = n_arg.parse().unwrap_or(10).min(50);
+                                    let log = std::process::Command::new("git")
+                                        .args(["log", &format!("-{n}"), "--format=%h %an (%ar)%n%s%n%b", "--no-merges"])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    if log.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("/git-log-ai: no commits found.".into()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Write a narrative account of the last {n} commits, as if explaining the project's evolution to a new team member. \
+                                         Group related commits into themes. Identify the main feature areas being worked on and any patterns in the development.\n\n\
+                                         ```\n{log}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /check-types — run type checker and send errors to AI
+                                "/check-types" => {
+                                    let (cmd, args): (&str, Vec<&str>) = if std::path::Path::new("tsconfig.json").exists() {
+                                        ("npx", vec!["tsc", "--noEmit", "--pretty", "false"])
+                                    } else if std::path::Path::new("mypy.ini").exists() || std::path::Path::new("setup.cfg").exists() {
+                                        ("mypy", vec![".", "--ignore-missing-imports"])
+                                    } else if std::path::Path::new("Cargo.toml").exists() {
+                                        ("cargo", vec!["check", "--message-format=short"])
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("/check-types: no tsconfig.json, mypy.ini, or Cargo.toml found.".into()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    };
+                                    let out = std::process::Command::new(cmd)
+                                        .args(&args)
+                                        .output()
+                                        .ok()
+                                        .map(|o| {
+                                            let s = String::from_utf8_lossy(&o.stderr).to_string();
+                                            let out2 = String::from_utf8_lossy(&o.stdout).to_string();
+                                            let combined = format!("{out2}{s}");
+                                            if o.status.success() {
+                                                format!("[exit 0 — no type errors]\n{combined}")
+                                            } else {
+                                                combined
+                                            }
+                                        })
+                                        .unwrap_or_default();
+                                    let errors: Vec<&str> = out.lines()
+                                        .filter(|l| l.contains("error") || l.contains("Error"))
+                                        .collect();
+                                    if errors.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("/check-types: no type errors! All types check out.".into()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let truncated: String = errors.join("\n").chars().take(5000).collect();
+                                    let prompt = format!(
+                                        "Here are type errors from the type checker. For each: \
+                                         1) explain the root cause, 2) show the exact fix, 3) indicate if it's a type annotation issue or a real bug.\n\n```\n{truncated}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /format-all — run code formatter and report changes
+                                "/format-all" => {
+                                    let mut results: Vec<String> = Vec::new();
+                                    if std::path::Path::new("Cargo.toml").exists() {
+                                        let out = std::process::Command::new("cargo")
+                                            .args(["fmt", "--", "--check"])
+                                            .output();
+                                        match out {
+                                            Ok(o) if o.status.success() => results.push("  Rust (rustfmt): already formatted".into()),
+                                            Ok(_) => {
+                                                let _ = std::process::Command::new("cargo").args(["fmt"]).output();
+                                                results.push("  Rust (rustfmt): formatted".into());
+                                            }
+                                            Err(e) => results.push(format!("  Rust (rustfmt): failed — {e}")),
+                                        }
+                                    }
+                                    if std::path::Path::new("package.json").exists() {
+                                        let out = std::process::Command::new("npx")
+                                            .args(["prettier", "--write", "."])
+                                            .output();
+                                        match out {
+                                            Ok(o) if o.status.success() => results.push("  JS/TS (prettier): formatted".into()),
+                                            Ok(o) => results.push(format!("  JS/TS (prettier): {}", String::from_utf8_lossy(&o.stderr).chars().take(200).collect::<String>())),
+                                            Err(e) => results.push(format!("  JS/TS (prettier): failed — {e}")),
+                                        }
+                                    }
+                                    if std::path::Path::new("pyproject.toml").exists() || std::path::Path::new("setup.cfg").exists() {
+                                        let out = std::process::Command::new("black")
+                                            .arg(".")
+                                            .output();
+                                        match out {
+                                            Ok(o) if o.status.success() => results.push("  Python (black): formatted".into()),
+                                            Ok(o) => results.push(format!("  Python (black): {}", String::from_utf8_lossy(&o.stderr).chars().take(200).collect::<String>())),
+                                            Err(_) => results.push("  Python (black): not installed".into()),
+                                        }
+                                    }
+                                    if results.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("/format-all: no Cargo.toml, package.json, or pyproject.toml found.".into()));
+                                    } else {
+                                        let report = format!("/format-all results:\n{}", results.join("\n"));
+                                        ui.chat_lines.push(ChatLine::SystemNote(report));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /rewrite-prompt — AI rewrites the last user message more clearly/precisely
+                                "/rewrite-prompt" => {
+                                    let last_user = ui.chat_lines.iter().rev().find_map(|cl| match cl {
+                                        ChatLine::User(t, _) => Some(t.clone()),
+                                        _ => None,
+                                    });
+                                    match last_user {
+                                        None => {
+                                            ui.chat_lines.push(ChatLine::SystemNote("No previous user message to rewrite.".into()));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                        Some(prev) => {
+                                            let prompt = format!(
+                                                "Rewrite the following user message to be more precise, clear, and actionable for an AI assistant. \
+                                                 Preserve the original intent. Return ONLY the rewritten message, no explanation.\n\nOriginal:\n{prev}"
+                                            );
+                                            let ts2 = std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs();
+                                            ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                        }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /coverage-ai — run test coverage and ask AI to generate missing tests
+                                "/coverage-ai" => {
+                                    let cov_out = if std::path::Path::new("Cargo.toml").exists() {
+                                        std::process::Command::new("cargo")
+                                            .args(["test", "--", "--nocapture"])
+                                            .env("CARGO_INCREMENTAL", "0")
+                                            .env("RUSTFLAGS", "-C instrument-coverage")
+                                            .output()
+                                            .ok()
+                                            .map(|o| String::from_utf8_lossy(&o.stderr).to_string())
+                                    } else if std::path::Path::new("package.json").exists() {
+                                        std::process::Command::new("npx")
+                                            .args(["jest", "--coverage", "--coverageReporters=text-summary"])
+                                            .output()
+                                            .ok()
+                                            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                    } else {
+                                        None
+                                    }.unwrap_or_else(|| String::from("(coverage tool not available)"));
+                                    let truncated: String = cov_out.chars().take(4000).collect();
+                                    let ctx_files = if !ui.context_files.is_empty() {
+                                        format!("\nFocus files: {}", ui.context_files.join(", "))
+                                    } else { String::new() };
+                                    let prompt = format!(
+                                        "Based on this coverage output, identify the most important uncovered code paths \
+                                         and generate test cases for the top 3. Prioritize code that handles errors, \
+                                         edge cases, or security-sensitive operations.{ctx_files}\n\n```\n{truncated}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -21419,6 +21647,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/ai-migration ",
                             "/think-plan ", "/next-step",
                             "/explain-regex ", "/ai-regex ", "/gen-types ", "/tech-debt-report",
+                            "/summarize-session", "/git-log-ai", "/git-log-ai ",
+                            "/check-types", "/format-all", "/rewrite-prompt", "/coverage-ai",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
