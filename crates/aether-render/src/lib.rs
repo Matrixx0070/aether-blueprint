@@ -939,6 +939,12 @@ pub enum UiCommand {
     QueryThinkingBudgetShow,
     /// Show configured LLM temperature.
     QueryTemperatureShow,
+    /// Show the active permission mode.
+    QueryPermissionMode,
+    /// Show max-tokens-per-turn config.
+    QueryMaxTokensPerTurn,
+    /// Show whether the 60% context-fill warning has fired.
+    QueryContextWarn60,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

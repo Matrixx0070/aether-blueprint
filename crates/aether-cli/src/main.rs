@@ -7700,6 +7700,37 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryPermissionMode => {
+                    use aether_perm::PermissionMode;
+                    let label = match session.config.permission_mode {
+                        PermissionMode::Default => "Default (prompt on risky ops)",
+                        PermissionMode::AcceptEdits => "AcceptEdits (auto-approve file edits)",
+                        PermissionMode::Plan => "Plan (read-only, no writes)",
+                        PermissionMode::BypassPermissions => "BypassPermissions (full autonomy)",
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Permission mode: {label}."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryMaxTokensPerTurn => {
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Max tokens per turn: {}.", session.config.max_tokens_per_turn
+                    )));
+                    continue;
+                }
+                UiCommand::QueryContextWarn60 => {
+                    if session.context_warned_60pct {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Context 60% warning: FIRED — consider /compact soon.".to_string()
+                        ));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Context 60% warning: not yet fired.".to_string()
+                        ));
+                    }
+                    continue;
+                }
                 UiCommand::QueryCompactionHappened => {
                     if session.compaction_happened {
                         let _ = etx_for_driver.send(UiEvent::SystemNote(
@@ -33356,6 +33387,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /permission-mode — show active permission mode
+                                "/permission-mode" => {
+                                    if _ctx.send(UiCommand::QueryPermissionMode).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /max-tokens-per-turn — show max tokens per turn config
+                                "/max-tokens-per-turn" => {
+                                    if _ctx.send(UiCommand::QueryMaxTokensPerTurn).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /context-warn-60 — show if 60% context fill warning fired
+                                "/context-warn-60" => {
+                                    if _ctx.send(UiCommand::QueryContextWarn60).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -34132,6 +34181,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/compaction-happened",
                             "/thinking-budget-show",
                             "/temperature-show",
+                            "/permission-mode",
+                            "/max-tokens-per-turn",
+                            "/context-warn-60",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
