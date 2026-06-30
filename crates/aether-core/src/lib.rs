@@ -220,6 +220,11 @@ pub struct Session {
     /// When true, a compact status summary (cost, tokens, progress) is emitted
     /// as a SystemNote after each complete agent cycle before awaiting user input.
     pub auto_status: bool,
+
+    /// Queued tasks executed sequentially. When the queue is non-empty and the
+    /// agent finishes a turn cycle (AwaitUser), the next task is auto-injected
+    /// as a user message instead of waiting for interactive input.
+    pub task_queue: std::collections::VecDeque<String>,
 }
 
 impl Session {
@@ -276,6 +281,7 @@ impl Session {
             fail_fast_errors: 0,
             error_playbook: Vec::new(),
             auto_status: false,
+            task_queue: std::collections::VecDeque::new(),
         }
     }
 

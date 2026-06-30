@@ -5535,10 +5535,15 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
     let driver_handle = tokio::spawn(async move {
         let mut session = session;
         let hooks = hooks;
+        let mut pending_task: Option<String> = None;
         loop {
-            let cmd = match crx.recv().await {
-                Some(c) => c,
-                None => break,
+            let cmd = if let Some(task) = pending_task.take() {
+                UiCommand::UserMessage(task)
+            } else {
+                match crx.recv().await {
+                    Some(c) => c,
+                    None => break,
+                }
             };
             let user_msg = match cmd {
                 UiCommand::UserMessage(s) => s,
@@ -6395,6 +6400,48 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::AddTask(text) => {
+                    session.task_queue.push_back(text.clone());
+                    let n = session.task_queue.len();
+                    let preview: String = text.chars().take(60).collect();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Task queued [{n}]: {preview}{}",
+                        if text.len() > 60 { "…" } else { "" }
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTasks => {
+                    let note = if session.task_queue.is_empty() {
+                        "Task queue is empty. Use /task-add <text> to enqueue a task.".to_string()
+                    } else {
+                        let lines: Vec<String> = session.task_queue.iter().enumerate()
+                            .map(|(i, t)| format!("  [{i}] {}", t.chars().take(80).collect::<String>()))
+                            .collect();
+                        format!("=== Task queue ({} pending) ===\n{}", session.task_queue.len(), lines.join("\n"))
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::ClearTasks => {
+                    let n = session.task_queue.len();
+                    session.task_queue.clear();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Task queue cleared ({n} task(s) removed)."
+                    )));
+                    continue;
+                }
+                UiCommand::SkipTask => {
+                    let note = if let Some(task) = session.task_queue.pop_front() {
+                        let preview: String = task.chars().take(60).collect();
+                        format!("Skipped next task: {preview}{}  ({} remaining)",
+                            if task.len() > 60 { "…" } else { "" },
+                            session.task_queue.len())
+                    } else {
+                        "Task queue is already empty.".to_string()
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::SetFailFast(n) => {
                     session.fail_fast_errors = n;
                     let note = if n == 0 {
@@ -7108,6 +7155,13 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     "[Auto-status] Turn {turn}  |  ${cost:.4}  |  {used}/{window} tokens ({ctx_pct}%)  |  Errors: {total_errs}{progress_line}",
                     turn = session.turn_index
                 )));
+            }
+            // Dequeue next task before awaiting user — auto-inject if queued.
+            if let Some(next) = session.task_queue.pop_front() {
+                let _ = etx_for_driver.send(UiEvent::SystemNote(
+                    format!("[Task queue] Auto-running next task: {}", next.chars().take(80).collect::<String>())
+                ));
+                pending_task = Some(next);
             }
             let _ = etx_for_driver.send(UiEvent::AwaitUser);
         }
@@ -24680,6 +24734,39 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /task-add <text> — append a task to the sequential task queue
+                                cmd_str if cmd_str.starts_with("/task-add ") => {
+                                    let text = cmd_str.trim_start_matches("/task-add ").trim().to_string();
+                                    if _ctx.send(UiCommand::AddTask(text)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tasks — list all queued tasks
+                                "/tasks" => {
+                                    if _ctx.send(UiCommand::QueryTasks).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /task-clear — remove all queued tasks
+                                "/task-clear" => {
+                                    if _ctx.send(UiCommand::ClearTasks).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /task-skip — pop the next queued task without executing it
+                                "/task-skip" => {
+                                    if _ctx.send(UiCommand::SkipTask).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -25147,6 +25234,10 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/playbook-list",
                             "/auto-status", "/auto-status on", "/auto-status off",
                             "/budget-check",
+                            "/task-add ",
+                            "/tasks",
+                            "/task-clear",
+                            "/task-skip",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

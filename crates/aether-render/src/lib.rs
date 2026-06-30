@@ -287,6 +287,14 @@ pub enum UiCommand {
     RemovePlaybookEntry(usize),
     /// List all error playbook entries.
     QueryPlaybook,
+    /// Add a task string to the sequential task queue.
+    AddTask(String),
+    /// List all queued tasks (index + text).
+    QueryTasks,
+    /// Remove all tasks from the queue.
+    ClearTasks,
+    /// Skip the next queued task (pop without executing).
+    SkipTask,
     /// Save current history+plan under a named in-memory snapshot.
     SaveSnapshot(String),
     /// Restore history+plan from a named in-memory snapshot.
