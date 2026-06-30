@@ -5235,7 +5235,14 @@ AI workflow\n\
   /release-notes [range]  AI structured release notes (feat/fix/security sections)\n\
   /code-tour [file]       AI onboarding guide for file or project structure\n\
   /explain-regex <pat>    AI explains regex step by step with match examples\n\
-  /ai-fix [hint]          AI suggests specific fix for last error in session"),
+  /ai-fix [hint]          AI suggests specific fix for last error in session\n\
+Git advanced\n\
+  /git-branches [all]     branches sorted by last commit date with author + SHA\n\
+  /git-stash [show n]     stash list; /git-stash show n diffs entry n\n\
+  /git-tags [n]           tag list sorted newest first with date + message\n\
+Code debt\n\
+  /todo-scan [dir]        scan TODO/FIXME/HACK/XXX/BUG in source files (9 tags)\n\
+  /lines [dir]            lines-of-code count grouped by file extension"),
                                         ("keys", &["keys", "keyboard", "shortcuts", "bindings"], "\
 Input shortcuts\n\
   ↑ ↓  / Ctrl+R           history recall / reverse-i-search\n\
@@ -5340,6 +5347,7 @@ Input shortcuts\n\
     ◈ /sys /mem /disk /port /proc                            system monitoring\n\
     ◈ /curl /ping /dns /ip /cert                             network + HTTP utils\n\
     ◈ /standup /release-notes /code-tour /explain-regex /ai-fix  AI workflow\n\
+    ◈ /git-branches /git-stash /git-tags /todo-scan /lines      git + debt audit\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -10930,6 +10938,227 @@ CTF Toolkit — Aether AI-assisted\n\
                                     if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
                                     continue;
                                 }
+                                // ── Batch 97: Git advanced tools + code debt scanner ─────────────
+                                cmd if cmd == "/git-branches" || cmd.starts_with("/git-branches ") => {
+                                    // /git-branches [all]  — branches with last commit date + author
+                                    let show_all = cmd.contains("all");
+                                    let mut git_args = vec!["branch", "-v", "--sort=-committerdate",
+                                                            "--format=%(HEAD) %(refname:short) %(objectname:short) %(committerdate:short) %(authorname) %(subject)"];
+                                    if show_all { git_args.push("-a"); }
+                                    let out = std::process::Command::new("git").args(&git_args).output();
+                                    match out {
+                                        Ok(o) if o.status.success() => {
+                                            let txt = String::from_utf8_lossy(&o.stdout).to_string();
+                                            let count = txt.lines().count();
+                                            let mut body = format!("git branches ({}{})\n", count, if show_all { ", all" } else { "" });
+                                            body.push_str("─────────────────────────────────────────────────────\n");
+                                            for l in txt.lines() {
+                                                let marker = if l.starts_with('*') { "▶ " } else { "  " };
+                                                body.push_str(marker);
+                                                body.push_str(l.trim_start_matches('*').trim_start_matches(' '));
+                                                body.push('\n');
+                                            }
+                                            body.push_str("\n  /git-branches all  to include remotes\n");
+                                            ui.chat_lines.push(ChatLine::SystemNote(body));
+                                        }
+                                        Ok(o) => {
+                                            let err = String::from_utf8_lossy(&o.stderr);
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("git branch failed: {err}")));
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("git not found: {e}")));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/git-stash" || cmd.starts_with("/git-stash ") => {
+                                    // /git-stash [show n]  — stash list or show stash entry
+                                    let sub = cmd.trim_start_matches("/git-stash").trim();
+                                    if sub.starts_with("show ") || sub.parse::<usize>().is_ok() {
+                                        let n = sub.trim_start_matches("show").trim().parse::<usize>().unwrap_or(0);
+                                        let out = std::process::Command::new("git")
+                                            .args(["stash", "show", "-p", &format!("stash@{{{n}}}")])
+                                            .output();
+                                        match out {
+                                            Ok(o) => {
+                                                let txt = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                                                if txt.is_empty() {
+                                                    ui.chat_lines.push(ChatLine::SystemNote(format!("stash@{{{n}}} is empty or does not exist.")));
+                                                } else {
+                                                    let preview: String = txt.chars().take(3000).collect();
+                                                    ui.chat_lines.push(ChatLine::SystemNote(format!("stash@{{{n}}} diff:\n{preview}")));
+                                                }
+                                            }
+                                            Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("git stash show failed: {e}"))); }
+                                        }
+                                    } else {
+                                        // list stashes
+                                        let out = std::process::Command::new("git")
+                                            .args(["stash", "list", "--format=%gd  %ar  %s"])
+                                            .output();
+                                        match out {
+                                            Ok(o) => {
+                                                let txt = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                                                if txt.is_empty() {
+                                                    ui.chat_lines.push(ChatLine::SystemNote("  (no stashes)  /git-stash show <n> to inspect one".to_string()));
+                                                } else {
+                                                    let count = txt.lines().count();
+                                                    let mut body = format!("git stash  ({count} entries)\n");
+                                                    body.push_str("─────────────────────────────────────────────────────\n");
+                                                    for l in txt.lines() {
+                                                        body.push_str(&format!("  {l}\n"));
+                                                    }
+                                                    body.push_str("\n  /git-stash show <n> — diff for stash entry n\n");
+                                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                                }
+                                            }
+                                            Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("git stash list failed: {e}"))); }
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/git-tags" || cmd.starts_with("/git-tags ") => {
+                                    // /git-tags  — list tags with date and message
+                                    let n_arg = cmd.trim_start_matches("/git-tags").trim();
+                                    let n = n_arg.parse::<usize>().unwrap_or(30).min(200);
+                                    let out = std::process::Command::new("git")
+                                        .args(["tag", "--sort=-creatordate",
+                                               "--format=%(refname:short)  %(creatordate:short)  %(subject)"])
+                                        .output();
+                                    match out {
+                                        Ok(o) if o.status.success() => {
+                                            let txt = String::from_utf8_lossy(&o.stdout).to_string();
+                                            let lines: Vec<&str> = txt.lines().take(n).collect();
+                                            let mut body = format!("git tags  (newest {} of {})\n", lines.len(), txt.lines().count());
+                                            body.push_str("─────────────────────────────────────────────────────\n");
+                                            for l in &lines {
+                                                body.push_str(&format!("  {l}\n"));
+                                            }
+                                            ui.chat_lines.push(ChatLine::SystemNote(body));
+                                        }
+                                        Ok(o) => {
+                                            let err = String::from_utf8_lossy(&o.stderr);
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("git tag failed: {err}")));
+                                        }
+                                        Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("git not found: {e}"))); }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/todo-scan" || cmd.starts_with("/todo-scan ") => {
+                                    // /todo-scan [dir]  — scan for TODO/FIXME/HACK/XXX comments
+                                    use walkdir::WalkDir;
+                                    let dir_arg = cmd.trim_start_matches("/todo-scan").trim();
+                                    let scan_dir = if dir_arg.is_empty() { "." } else { dir_arg };
+                                    let tags = ["TODO", "FIXME", "HACK", "XXX", "WORKAROUND", "BUG", "NOCOMMIT", "TEMP", "KLUDGE"];
+                                    let code_exts = ["rs", "py", "js", "ts", "go", "java", "c", "cpp", "h", "hpp", "rb", "swift", "kt", "cs", "php", "sh", "bash", "zig", "lua"];
+                                    struct TodoEntry { tag: String, file: String, line: usize, text: String }
+                                    let mut entries: Vec<TodoEntry> = Vec::new();
+                                    for entry in WalkDir::new(scan_dir)
+                                        .follow_links(false)
+                                        .into_iter()
+                                        .filter_map(|e| e.ok())
+                                        .filter(|e| e.file_type().is_file())
+                                    {
+                                        let path = entry.path();
+                                        let skip = path.components().any(|c| {
+                                            let s = c.as_os_str().to_string_lossy();
+                                            s == "target" || s == ".git" || s == "node_modules" || s == ".cargo"
+                                        });
+                                        if skip { continue; }
+                                        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                                        if !code_exts.contains(&ext) { continue; }
+                                        if let Ok(contents) = std::fs::read_to_string(path) {
+                                            for (ln, line) in contents.lines().enumerate() {
+                                                for tag in &tags {
+                                                    if line.contains(tag) {
+                                                        let text = line.trim().chars().take(120).collect::<String>();
+                                                        entries.push(TodoEntry {
+                                                            tag: tag.to_string(),
+                                                            file: path.to_string_lossy().trim_start_matches("./").to_string(),
+                                                            line: ln + 1,
+                                                            text,
+                                                        });
+                                                        break; // one tag per line
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    // group by tag
+                                    let total = entries.len();
+                                    let mut body = format!("Tech debt scan — {scan_dir}\n");
+                                    body.push_str("─────────────────────────────────────────────────────\n");
+                                    body.push_str(&format!("  Found {total} markers\n\n"));
+                                    for tag in &tags {
+                                        let group: Vec<&TodoEntry> = entries.iter().filter(|e| e.tag == *tag).collect();
+                                        if group.is_empty() { continue; }
+                                        body.push_str(&format!("  {} ({}):\n", tag, group.len()));
+                                        for e in group.iter().take(20) {
+                                            body.push_str(&format!("    {}:{}  {}\n", e.file, e.line, e.text));
+                                        }
+                                        if group.len() > 20 {
+                                            body.push_str(&format!("    … {} more\n", group.len() - 20));
+                                        }
+                                        body.push('\n');
+                                    }
+                                    if total == 0 {
+                                        body.push_str("  Clean! No tech debt markers found.\n");
+                                    }
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/lines" || cmd.starts_with("/lines ") => {
+                                    // /lines [dir]  — count lines of code by file extension
+                                    use walkdir::WalkDir;
+                                    let dir_arg = cmd.trim_start_matches("/lines").trim();
+                                    let scan_dir = if dir_arg.is_empty() { "." } else { dir_arg };
+                                    let mut ext_counts: std::collections::HashMap<String, (usize, usize)> = std::collections::HashMap::new(); // ext -> (files, lines)
+                                    for entry in WalkDir::new(scan_dir)
+                                        .follow_links(false)
+                                        .into_iter()
+                                        .filter_map(|e| e.ok())
+                                        .filter(|e| e.file_type().is_file())
+                                    {
+                                        let path = entry.path();
+                                        let skip = path.components().any(|c| {
+                                            let s = c.as_os_str().to_string_lossy();
+                                            s == "target" || s == ".git" || s == "node_modules" || s == ".cargo"
+                                        });
+                                        if skip { continue; }
+                                        let ext = path.extension()
+                                            .and_then(|e| e.to_str())
+                                            .unwrap_or("(no ext)")
+                                            .to_string();
+                                        if let Ok(content) = std::fs::read_to_string(path) {
+                                            let line_count = content.lines().count();
+                                            let entry_ref = ext_counts.entry(ext).or_insert((0, 0));
+                                            entry_ref.0 += 1;
+                                            entry_ref.1 += line_count;
+                                        }
+                                    }
+                                    let mut sorted: Vec<(String, usize, usize)> = ext_counts.into_iter()
+                                        .map(|(ext, (files, lines))| (ext, files, lines))
+                                        .collect();
+                                    sorted.sort_by(|a, b| b.2.cmp(&a.2));
+                                    let total_files: usize = sorted.iter().map(|(_, f, _)| f).sum();
+                                    let total_lines: usize = sorted.iter().map(|(_, _, l)| l).sum();
+                                    let mut body = format!("Lines of code — {scan_dir}\n");
+                                    body.push_str("─────────────────────────────────────────────────────\n");
+                                    body.push_str("  Extension    Files     Lines\n");
+                                    body.push_str("  ──────────   ────────  ─────────\n");
+                                    for (ext, files, lines) in sorted.iter().take(25) {
+                                        body.push_str(&format!("  {:<12} {:>8}  {:>9}\n", ext, files, lines));
+                                    }
+                                    body.push_str("  ──────────   ────────  ─────────\n");
+                                    body.push_str(&format!("  TOTAL        {:>8}  {:>9}\n", total_files, total_lines));
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -11568,7 +11797,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/ai-fix", "/ai-fix ", "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/curl ", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-log", "/git-log ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jwt-decode ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ",
+                            "/ai-commit", "/ai-commit ", "/ai-fix", "/ai-fix ", "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/curl ", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jwt-decode ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
