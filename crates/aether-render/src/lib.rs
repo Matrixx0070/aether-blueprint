@@ -417,6 +417,12 @@ pub enum UiCommand {
     JumpBookmark(usize),
     /// Delete a bookmark by 0-based index.
     DeleteBookmark(usize),
+    /// Show min/avg/max length stats for all assistant responses in history.
+    QueryResponseStats,
+    /// Show count of each ConversationItem type in history (User/Assistant/ToolResult).
+    QueryHistoryStats,
+    /// Show the index and first 200 chars of the longest assistant response.
+    QueryLongestResponse,
     /// Show per-turn cost/token/latency log. 0 = all turns; N = last N turns.
     QueryTurnLog(usize),
     /// Show session-level efficiency metrics: tokens/dollar, avg cost, peak turn.

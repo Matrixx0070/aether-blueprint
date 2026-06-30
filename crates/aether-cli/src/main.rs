@@ -6707,6 +6707,77 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::QueryResponseStats => {
+                    use aether_core::context::ConversationItem;
+                    let lengths: Vec<usize> = session.history.iter().filter_map(|item| {
+                        if let ConversationItem::Assistant { text: Some(t), .. } = item {
+                            Some(t.len())
+                        } else { None }
+                    }).collect();
+                    if lengths.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "No assistant responses in history yet.".to_string()
+                        ));
+                    } else {
+                        let count = lengths.len();
+                        let total: usize = lengths.iter().sum();
+                        let min = lengths.iter().min().copied().unwrap_or(0);
+                        let max = lengths.iter().max().copied().unwrap_or(0);
+                        let avg = total / count;
+                        let word_counts: Vec<usize> = session.history.iter().filter_map(|item| {
+                            if let ConversationItem::Assistant { text: Some(t), .. } = item {
+                                Some(t.split_whitespace().count())
+                            } else { None }
+                        }).collect();
+                        let total_words: usize = word_counts.iter().sum();
+                        let avg_words = total_words / count;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Response stats  ({count} responses)\n  Chars: min {min}  avg {avg}  max {max}  total {total}\n  Words: avg {avg_words}  total {total_words}"
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryStats => {
+                    use aether_core::context::ConversationItem;
+                    let mut user_count = 0usize;
+                    let mut asst_count = 0usize;
+                    let mut tool_result_count = 0usize;
+                    for item in &session.history {
+                        match item {
+                            ConversationItem::User(_) => user_count += 1,
+                            ConversationItem::Assistant { .. } => asst_count += 1,
+                            ConversationItem::ToolResults(_) => tool_result_count += 1,
+                        }
+                    }
+                    let total = session.history.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History stats  ({total} items)\n  User:         {user_count}\n  Assistant:    {asst_count}\n  ToolResults:  {tool_result_count}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryLongestResponse => {
+                    use aether_core::context::ConversationItem;
+                    let result = session.history.iter().enumerate().filter_map(|(i, item)| {
+                        if let ConversationItem::Assistant { text: Some(t), .. } = item {
+                            Some((i, t.len(), t.as_str()))
+                        } else { None }
+                    }).max_by_key(|&(_, len, _)| len);
+                    match result {
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "No assistant responses in history.".to_string()
+                            ));
+                        }
+                        Some((idx, len, text)) => {
+                            let preview: String = text.chars().take(200).collect();
+                            let ellipsis = if len > 200 { "…" } else { "" };
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Longest response: history item #{idx}  ({len} chars)\n\n{preview}{ellipsis}"
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryTurnLog(count) => {
                     if session.turn_cost_log.is_empty() {
                         let _ = etx_for_driver.send(UiEvent::SystemNote(
@@ -27677,6 +27748,30 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /response-stats — min/avg/max char/word length of assistant responses
+                                "/response-stats" => {
+                                    if _ctx.send(UiCommand::QueryResponseStats).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-stats — count of each ConversationItem type in history
+                                "/history-stats" => {
+                                    if _ctx.send(UiCommand::QueryHistoryStats).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /longest-response — show index and preview of the longest assistant response
+                                "/longest-response" => {
+                                    if _ctx.send(UiCommand::QueryLongestResponse).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /turn-log [n] — show per-turn cost/token/latency table (last n, or all)
                                 cmd_str if cmd_str == "/turn-log" || cmd_str.starts_with("/turn-log ") => {
                                     let arg = cmd_str.trim_start_matches("/turn-log").trim();
@@ -28297,6 +28392,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/request-wrap-show",
                             "/turn-log", "/turn-log ",
                             "/session-efficiency",
+                            "/response-stats",
+                            "/history-stats",
+                            "/longest-response",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
