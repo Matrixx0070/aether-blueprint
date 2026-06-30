@@ -21730,6 +21730,219 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /ai-ask-file <file> <question> — ask AI a question about a specific file
+                                cmd_str if cmd_str.starts_with("/ai-ask-file ") || cmd_str == "/ai-ask-file" => {
+                                    let rest = cmd_str.trim_start_matches("/ai-ask-file").trim();
+                                    let (file_path_arg, question) = if let Some(sp) = rest.find(' ') {
+                                        (rest[..sp].trim(), rest[sp+1..].trim())
+                                    } else {
+                                        (rest, "")
+                                    };
+                                    if file_path_arg.is_empty() || question.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /ai-ask-file <file> <question>  — ask a targeted question about a specific file.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    match std::fs::read_to_string(file_path_arg) {
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("/ai-ask-file: cannot read {file_path_arg}: {e}")));
+                                        }
+                                        Ok(src) => {
+                                            let preview: String = src.chars().take(8000).collect();
+                                            let prompt = format!(
+                                                "Question about `{file_path_arg}`: **{question}**\n\nFile content:\n```\n{preview}\n```"
+                                            );
+                                            let ts2 = std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs();
+                                            ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                        }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-paraphrase — AI rewrites last AI response in different words
+                                "/ai-paraphrase" => {
+                                    let last_ai = ui.chat_lines.iter().rev().find_map(|cl| match cl {
+                                        ChatLine::Assistant(t, _, _) => Some(t.chars().take(500).collect::<String>()),
+                                        _ => None,
+                                    });
+                                    match last_ai {
+                                        None => {
+                                            ui.chat_lines.push(ChatLine::SystemNote("No AI response to paraphrase.".into()));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                        Some(prev) => {
+                                            let prompt = format!(
+                                                "Paraphrase the following response in completely different words, \
+                                                 preserving the same meaning and technical accuracy. \
+                                                 This helps verify understanding.\n\nOriginal:\n{prev}"
+                                            );
+                                            let ts2 = std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs();
+                                            ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                        }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /find-callers <fn> — like trace-call but shows file:line table
+                                cmd_str if cmd_str.starts_with("/find-callers ") || cmd_str == "/find-callers" => {
+                                    let fn_name = cmd_str.trim_start_matches("/find-callers").trim();
+                                    if fn_name.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /find-callers <function>  — shows a file:line table of all call sites (no AI).".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let out = std::process::Command::new("grep")
+                                        .args(["-rn", "--include=*.rs", "--include=*.ts", "--include=*.py", "--include=*.go",
+                                               "-E", &format!(r"\b{fn_name}\s*\("), "."])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    if out.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("/find-callers: no call sites for `{fn_name}` found.")));
+                                    } else {
+                                        let count = out.lines().count();
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("Call sites of `{fn_name}` ({count}):\n{out}")));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /find-usages <symbol> — find where a type/constant/variable is referenced
+                                cmd_str if cmd_str.starts_with("/find-usages ") || cmd_str == "/find-usages" => {
+                                    let symbol = cmd_str.trim_start_matches("/find-usages").trim();
+                                    if symbol.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /find-usages <symbol>  — finds all references to a type, constant, or variable.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let out = std::process::Command::new("grep")
+                                        .args(["-rn", "--include=*.rs", "--include=*.ts", "--include=*.py", "--include=*.go",
+                                               &format!(r"\b{symbol}\b"), "."])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    if out.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("/find-usages: no usages of `{symbol}` found.")));
+                                    } else {
+                                        let count = out.lines().count();
+                                        let preview: String = out.chars().take(3000).collect();
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("Usages of `{symbol}` ({count}):\n{preview}")));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /show-config — display current session configuration
+                                "/show-config" => {
+                                    let goal_str = match &ui.session_goal {
+                                        Some(g) => format!("  Session goal: {}", g.chars().take(60).collect::<String>()),
+                                        None => "  Session goal: (none)".to_string(),
+                                    };
+                                    let persona_str = "  Persona: (check /persona show)";
+                                    let context_str = if ui.context_files.is_empty() {
+                                        "  Context files: (none)".to_string()
+                                    } else {
+                                        format!("  Context files: {}", ui.context_files.join(", "))
+                                    };
+                                    let cost_limit_str = match ui.cost_limit_usd {
+                                        Some(l) => format!("  Cost limit: ${l:.2}"),
+                                        None => "  Cost limit: (none)".to_string(),
+                                    };
+                                    let env_count = ui.session_env_vars.len();
+                                    let report = format!(
+                                        "─── Session Configuration ───\n\
+                                           Model: {}\n\
+                                         {goal_str}\n\
+                                         {persona_str}\n\
+                                         {context_str}\n\
+                                         {cost_limit_str}\n\
+                                           Auto-diff: {}\n\
+                                           Env vars set: {env_count}\n\
+                                         ─── /help for all commands ───",
+                                        ui.model,
+                                        if ui.auto_diff_enabled { "on" } else { "off" },
+                                    );
+                                    ui.chat_lines.push(ChatLine::SystemNote(report));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-sql <query> — AI explains a SQL query
+                                cmd_str if cmd_str.starts_with("/ai-sql ") || cmd_str == "/ai-sql" => {
+                                    let query = cmd_str.trim_start_matches("/ai-sql").trim();
+                                    if query.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /ai-sql <query>  — AI explains what a SQL query does and suggests improvements.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Explain the following SQL query:\n\
+                                         1. What it does in plain English\n\
+                                         2. Performance implications (indexes, joins, scans)\n\
+                                         3. Potential issues or edge cases\n\
+                                         4. A suggested rewrite if it can be improved\n\n\
+                                         ```sql\n{query}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-shell <description> — AI generates a shell one-liner for a task
+                                cmd_str if cmd_str.starts_with("/ai-shell ") || cmd_str == "/ai-shell" => {
+                                    let desc = cmd_str.trim_start_matches("/ai-shell").trim();
+                                    if desc.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /ai-shell <task>  e.g. /ai-shell find all files modified in the last 24 hours".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Generate a shell command (bash/zsh) that: **{desc}**\n\
+                                         Return:\n\
+                                         1. The command in a ```bash block\n\
+                                         2. A breakdown of each part\n\
+                                         3. Any caveats or safe alternatives\n\
+                                         4. A variant that would work on both Linux and macOS if they differ"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -22119,6 +22332,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/open-issues", "/open-issues ", "/ai-debug",
                             "/ai-commit-all", "/file-diff", "/file-diff ",
                             "/ai-review-pr ", "/new-file ", "/project-health",
+                            "/ai-ask-file ", "/ai-paraphrase",
+                            "/find-callers ", "/find-usages ", "/show-config",
+                            "/ai-sql ", "/ai-shell ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
