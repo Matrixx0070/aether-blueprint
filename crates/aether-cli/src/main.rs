@@ -5223,7 +5223,13 @@ System monitoring\n\
   /mem                    /proc/meminfo breakdown + top memory processes\n\
   /disk [dir]             df -h + du --max-depth=2 size breakdown\n\
   /port [n]               listening sockets filtered by port (ss/lsof/netstat)\n\
-  /proc [filter]          running processes sorted by CPU; optional name filter"),
+  /proc [filter]          running processes sorted by CPU; optional name filter\n\
+Network & HTTP\n\
+  /curl [METHOD] <url>    HTTP request (GET default); shows status, headers, body\n\
+  /ping <host>            ICMP ping × 4 with RTT stats\n\
+  /dns <host>             dig A/AAAA/MX/TXT/NS; fallback to nslookup\n\
+  /ip                     all local interface IPs (ip addr / ifconfig)\n\
+  /cert <host[:port]>     TLS cert subject, issuer, notBefore/notAfter via openssl"),
                                         ("keys", &["keys", "keyboard", "shortcuts", "bindings"], "\
 Input shortcuts\n\
   ↑ ↓  / Ctrl+R           history recall / reverse-i-search\n\
@@ -5326,6 +5332,7 @@ Input shortcuts\n\
     ◈ /git-log /diff /complexity /env-check /docker           devops + intelligence\n\
     ◈ /jwt-decode /base64 /hash /url /uuid                   crypto + encoding utils\n\
     ◈ /sys /mem /disk /port /proc                            system monitoring\n\
+    ◈ /curl /ping /dns /ip /cert                             network + HTTP utils\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -10514,6 +10521,212 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // ── Batch 95: Network + HTTP utilities ───────────────────────────
+                                cmd if cmd.starts_with("/curl ") || cmd == "/curl" => {
+                                    // /curl [METHOD] <url>  — HTTP request; shows status, headers, body excerpt
+                                    let args = cmd.trim_start_matches("/curl").trim();
+                                    if args.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /curl [GET|POST|HEAD|DELETE] <url>\n  Fetches URL, shows status + headers + body (first 2000 chars).".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let parts: Vec<&str> = args.splitn(2, ' ').collect();
+                                    let (method, url) = if parts.len() == 2 {
+                                        let m = parts[0].to_uppercase();
+                                        if m == "GET" || m == "POST" || m == "HEAD" || m == "DELETE" || m == "PUT" || m == "PATCH" {
+                                            (m, parts[1].trim())
+                                        } else {
+                                            ("GET".to_string(), args)
+                                        }
+                                    } else {
+                                        ("GET".to_string(), args)
+                                    };
+                                    let curl_out = std::process::Command::new("curl")
+                                        .args(["-s", "-i", "-X", &method, "--max-time", "10",
+                                               "-A", "aether/0.35", url])
+                                        .output();
+                                    match curl_out {
+                                        Ok(o) => {
+                                            let raw = String::from_utf8_lossy(&o.stdout).to_string();
+                                            let err = String::from_utf8_lossy(&o.stderr).to_string();
+                                            if raw.is_empty() && !err.is_empty() {
+                                                ui.chat_lines.push(ChatLine::SystemNote(format!("curl error:\n  {}", err.trim())));
+                                            } else {
+                                                // split headers from body
+                                                let (headers, body) = if let Some(idx) = raw.find("\r\n\r\n") {
+                                                    (&raw[..idx + 4], &raw[idx + 4..])
+                                                } else if let Some(idx) = raw.find("\n\n") {
+                                                    (&raw[..idx + 2], &raw[idx + 2..])
+                                                } else {
+                                                    (raw.as_str(), "")
+                                                };
+                                                let status_line = headers.lines().next().unwrap_or("").trim();
+                                                let body_preview: String = body.chars().take(2000).collect();
+                                                let body_note = if body.chars().count() > 2000 {
+                                                    format!("  (truncated — {} more chars)\n", body.chars().count() - 2000)
+                                                } else { String::new() };
+                                                let mut result = format!("curl {method} {url}\n");
+                                                result.push_str("─────────────────────────────────────────\n");
+                                                result.push_str(&format!("  Status:  {status_line}\n\n"));
+                                                result.push_str("  Headers:\n");
+                                                for hdr in headers.lines().skip(1).filter(|l| !l.trim().is_empty()) {
+                                                    result.push_str(&format!("    {hdr}\n"));
+                                                }
+                                                if !body_preview.is_empty() {
+                                                    result.push_str("\n  Body:\n");
+                                                    for line in body_preview.lines().take(50) {
+                                                        result.push_str(&format!("    {line}\n"));
+                                                    }
+                                                    result.push_str(&body_note);
+                                                }
+                                                ui.chat_lines.push(ChatLine::SystemNote(result));
+                                            }
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("curl not found: {e}")));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/ping ") || cmd == "/ping" => {
+                                    // /ping <host>  — ping 4 times, show RTT
+                                    let host = cmd.trim_start_matches("/ping").trim();
+                                    if host.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /ping <host>".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let out = std::process::Command::new("ping")
+                                        .args(["-c", "4", "-W", "3", host])
+                                        .output();
+                                    match out {
+                                        Ok(o) => {
+                                            let txt = String::from_utf8_lossy(&o.stdout).to_string();
+                                            let err = String::from_utf8_lossy(&o.stderr).to_string();
+                                            let body = if txt.trim().is_empty() { err.trim().to_string() } else { txt.trim().to_string() };
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("ping {host}\n────────────────────────────────────\n{body}")));
+                                        }
+                                        Err(_) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("ping not found — try: /curl {host}")));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/dns ") || cmd == "/dns" => {
+                                    // /dns <host>  — dig A/AAAA/MX/TXT or fallback to nslookup
+                                    let host = cmd.trim_start_matches("/dns").trim();
+                                    if host.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /dns <hostname>".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let mut body = format!("DNS lookup: {host}\n─────────────────────────────────────────\n");
+                                    let record_types = ["A", "AAAA", "MX", "TXT", "NS"];
+                                    let mut any_found = false;
+                                    for rtype in &record_types {
+                                        let out = std::process::Command::new("dig")
+                                            .args(["+short", host, rtype])
+                                            .output();
+                                        match out {
+                                            Ok(o) if o.status.success() => {
+                                                let txt = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                                                if !txt.is_empty() {
+                                                    body.push_str(&format!("  {rtype:<6} {txt}\n"));
+                                                    any_found = true;
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    if !any_found {
+                                        // fallback to nslookup
+                                        if let Ok(o) = std::process::Command::new("nslookup").arg(host).output() {
+                                            let txt = String::from_utf8_lossy(&o.stdout).to_string();
+                                            body.push_str(&txt);
+                                        } else {
+                                            body.push_str("  (dig and nslookup not found)\n");
+                                        }
+                                    }
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/ip" => {
+                                    // /ip  — show all local interface IPs
+                                    let mut body = "Local IP addresses\n─────────────────────────────────────────\n".to_string();
+                                    // Try ip addr, fallback to ifconfig
+                                    let out = std::process::Command::new("ip").args(["addr", "show"]).output()
+                                        .or_else(|_| std::process::Command::new("ifconfig").output());
+                                    match out {
+                                        Ok(o) => {
+                                            let txt = String::from_utf8_lossy(&o.stdout).to_string();
+                                            // extract lines with inet
+                                            for l in txt.lines() {
+                                                let t = l.trim();
+                                                if t.starts_with("inet") || t.starts_with("lo") || t.starts_with("eth") || t.starts_with("wlan") || t.starts_with("en") || t.starts_with("wl") {
+                                                    body.push_str("  ");
+                                                    body.push_str(t);
+                                                    body.push('\n');
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            body.push_str(&format!("  (ip / ifconfig not found: {e})\n"));
+                                        }
+                                    }
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/cert ") || cmd == "/cert" => {
+                                    // /cert <host[:port]>  — TLS certificate expiry and subject
+                                    let host_arg = cmd.trim_start_matches("/cert").trim();
+                                    if host_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /cert <host>  or  /cert <host>:<port>\n  Checks TLS certificate via openssl s_client.".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let (host, port) = if host_arg.contains(':') {
+                                        let mut it = host_arg.rsplitn(2, ':');
+                                        let p = it.next().unwrap_or("443");
+                                        let h = it.next().unwrap_or(host_arg);
+                                        (h, p)
+                                    } else {
+                                        (host_arg, "443")
+                                    };
+                                    let out = std::process::Command::new("sh")
+                                        .arg("-c")
+                                        .arg(format!("echo | openssl s_client -servername {host} -connect {host}:{port} 2>/dev/null | openssl x509 -noout -subject -dates -issuer 2>/dev/null"))
+                                        .output();
+                                    match out {
+                                        Ok(o) if !o.stdout.is_empty() => {
+                                            let txt = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                                            let mut body = format!("TLS cert: {host}:{port}\n─────────────────────────────────────────\n");
+                                            for l in txt.lines() {
+                                                body.push_str(&format!("  {l}\n"));
+                                            }
+                                            // warn if expiring soon
+                                            if let Some(not_after) = txt.lines().find(|l| l.starts_with("notAfter")) {
+                                                body.push_str(&format!("\n  Expiry: {not_after}\n"));
+                                            }
+                                            ui.chat_lines.push(ChatLine::SystemNote(body));
+                                        }
+                                        Ok(_) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("  Could not retrieve cert for {host}:{port}\n  (openssl may not be installed, or host is unreachable)")));
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("openssl / sh not available: {e}")));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -11152,7 +11365,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-log", "/git-log ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/jwt-decode ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/recent", "/recent ", "/refactor ", "/rename ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ",
+                            "/ai-commit", "/ai-commit ", "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/curl ", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-log", "/git-log ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jwt-decode ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/recent", "/recent ", "/refactor ", "/rename ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
