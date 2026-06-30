@@ -8946,6 +8946,200 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // ── BATCH 86: OPERATIONS + REAL-TIME INTELLIGENCE ─────────────────
+                                cmd if cmd == "/status" || cmd.starts_with("/status ") => {
+                                    // Comprehensive project status dashboard
+                                    let cwd = std::env::current_dir().unwrap_or_default();
+                                    let mut msg = format!("Project Status — {}\n", cwd.display());
+                                    // Git status
+                                    if let Ok(gs) = std::process::Command::new("git").args(["status", "--short"]).current_dir(&cwd).output() {
+                                        let gs_out = String::from_utf8_lossy(&gs.stdout);
+                                        let uncommitted = gs_out.trim().lines().count();
+                                        if let Ok(bl) = std::process::Command::new("git").args(["log", "--oneline", "@{u}..HEAD"]).current_dir(&cwd).output() {
+                                            let ahead = String::from_utf8_lossy(&bl.stdout).trim().lines().count();
+                                            let branch = std::process::Command::new("git").args(["branch", "--show-current"]).current_dir(&cwd).output()
+                                                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_else(|_| "?".to_string());
+                                            msg.push_str(&format!("\n  Git\n    branch:      {}\n    uncommitted: {} file{}\n    ahead:       {} commit{}\n",
+                                                branch, uncommitted, if uncommitted == 1 { "" } else { "s" }, ahead, if ahead == 1 { "" } else { "s" }));
+                                        }
+                                    }
+                                    // Test status
+                                    let test_files = if cwd.join("Cargo.toml").exists() {
+                                        let out = std::process::Command::new("sh").args(["-c", "grep -r '#\\[test\\]\\|#\\[cfg(test)\\]' --include='*.rs' -l . 2>/dev/null | wc -l"]).current_dir(&cwd).output();
+                                        out.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default()
+                                    } else { String::new() };
+                                    if !test_files.is_empty() { msg.push_str(&format!("  Tests\n    test files: {}\n", test_files.trim())); }
+                                    // Env check
+                                    let mut tools_ok: Vec<&str> = Vec::new();
+                                    let mut tools_miss: Vec<&str> = Vec::new();
+                                    for tool in &["cargo", "git", "node", "python3", "docker", "make"] {
+                                        if std::process::Command::new("which").arg(tool).output().map(|o| o.status.success()).unwrap_or(false) {
+                                            tools_ok.push(tool);
+                                        } else {
+                                            tools_miss.push(tool);
+                                        }
+                                    }
+                                    msg.push_str(&format!("\n  Tools\n    available: {}\n    missing:   {}\n",
+                                        if tools_ok.is_empty() { "none".to_string() } else { tools_ok.join(", ") },
+                                        if tools_miss.is_empty() { "none".to_string() } else { tools_miss.join(", ") }));
+                                    // Session info
+                                    let exchange_count = ui.chat_lines.iter().filter(|cl| matches!(cl, ChatLine::User(_, _))).count();
+                                    msg.push_str(&format!("\n  Session\n    exchanges: {exchange_count}\n    cost:      ${:.4}\n    tokens in: {}  out: {}\n",
+                                        ui.cost_usd, ui.tokens_in, ui.tokens_out));
+                                    ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/log-parse ") || cmd == "/log-parse" => {
+                                    let file_arg = cmd.trim_start_matches("/log-parse").trim();
+                                    let content = if file_arg.is_empty() {
+                                        // Try common log locations
+                                        let candidates = ["/var/log/syslog", "/var/log/messages", "/tmp/app.log", "app.log", "server.log", "error.log"];
+                                        candidates.iter().find_map(|p| std::fs::read_to_string(p).ok())
+                                            .unwrap_or_else(|| "No log file specified and no common log found.".to_string())
+                                    } else {
+                                        let fpath = if file_arg.starts_with('/') { std::path::PathBuf::from(file_arg) }
+                                                   else { std::env::current_dir().unwrap_or_default().join(file_arg) };
+                                        match std::fs::read_to_string(&fpath) {
+                                            Ok(c) => c,
+                                            Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {file_arg}: {e}"))); ui.follow_tail = true; continue; }
+                                        }
+                                    };
+                                    // Pattern-based log analysis
+                                    let mut error_count = 0usize;
+                                    let mut warn_count = 0usize;
+                                    let mut error_samples: Vec<String> = Vec::new();
+                                    let mut warn_samples: Vec<String> = Vec::new();
+                                    let total_lines = content.lines().count();
+                                    for line in content.lines() {
+                                        let lower = line.to_lowercase();
+                                        if lower.contains("error") || lower.contains("fatal") || lower.contains("panic") || lower.contains("critical") {
+                                            error_count += 1;
+                                            if error_samples.len() < 5 { error_samples.push(line.trim().chars().take(120).collect()); }
+                                        } else if lower.contains("warn") || lower.contains("warning") {
+                                            warn_count += 1;
+                                            if warn_samples.len() < 3 { warn_samples.push(line.trim().chars().take(120).collect()); }
+                                        }
+                                    }
+                                    let info_count = total_lines - error_count - warn_count;
+                                    let source = if file_arg.is_empty() { "log".to_string() } else { file_arg.to_string() };
+                                    let mut result = format!("log-parse {source}  ({total_lines} lines)\n  {} ERROR/FATAL  {} WARN  {} INFO/other\n",
+                                        error_count, warn_count, info_count);
+                                    if !error_samples.is_empty() {
+                                        result.push_str("\n  Top errors:\n");
+                                        for s in &error_samples { result.push_str(&format!("  ✗ {s}\n")); }
+                                    }
+                                    if !warn_samples.is_empty() {
+                                        result.push_str("\n  Top warnings:\n");
+                                        for s in &warn_samples { result.push_str(&format!("  ⚠ {s}\n")); }
+                                    }
+                                    if error_count > 0 {
+                                        result.push_str("\n  Ask: analyse these log errors and suggest root causes");
+                                    }
+                                    ui.chat_lines.push(ChatLine::SystemNote(result));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/api-test ") || cmd == "/api-test" => {
+                                    // Quick HTTP API test using curl
+                                    let rest = cmd.trim_start_matches("/api-test").trim();
+                                    if rest.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /api-test <URL> [METHOD] [body JSON]\n  e.g. /api-test https://api.example.com/users GET\n       /api-test https://api.example.com/login POST {\"user\":\"alice\",\"pass\":\"secret\"}\n  Also supports: HEAD PUT PATCH DELETE".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let parts: Vec<&str> = rest.splitn(3, char::is_whitespace).collect();
+                                    let url = parts[0];
+                                    let method = parts.get(1).copied().unwrap_or("GET").to_uppercase();
+                                    let body = parts.get(2).copied().unwrap_or("");
+                                    let mut curl_args: Vec<String> = vec!["-s".into(), "-w".into(), "\n[HTTP %{http_code}  %{time_total}s  %{size_download}b]".into(),
+                                        "-X".into(), method.clone()];
+                                    if !body.is_empty() {
+                                        curl_args.push("-H".into()); curl_args.push("Content-Type: application/json".into());
+                                        curl_args.push("-d".into()); curl_args.push(body.to_string());
+                                    }
+                                    curl_args.push(url.to_string());
+                                    match std::process::Command::new("curl").args(&curl_args).output() {
+                                        Ok(out) => {
+                                            let resp = String::from_utf8_lossy(&out.stdout);
+                                            let lines: Vec<&str> = resp.trim_end().lines().collect();
+                                            let shown = lines.len().min(50);
+                                            let mut msg = format!("{} {}\n```json\n", method, url);
+                                            msg.push_str(&lines[..shown].join("\n"));
+                                            if lines.len() > shown { msg.push_str(&format!("\n… ({} more lines)", lines.len() - shown)); }
+                                            msg.push_str("\n```");
+                                            ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("curl not found: {e}\n  Install: apt-get install curl")));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/vulnscan" || cmd.starts_with("/vulnscan ") => {
+                                    // Run available CVE/vuln scan tools
+                                    let target = cmd.trim_start_matches("/vulnscan").trim();
+                                    let cwd = std::env::current_dir().unwrap_or_default();
+                                    let mut results: Vec<String> = Vec::new();
+                                    // Try cargo audit
+                                    if cwd.join("Cargo.lock").exists() {
+                                        let has_audit = std::process::Command::new("cargo").args(["audit", "--version"]).output().map(|o| o.status.success()).unwrap_or(false);
+                                        if has_audit {
+                                            let out = std::process::Command::new("cargo").args(["audit"]).current_dir(&cwd).output();
+                                            if let Ok(o) = out {
+                                                let stdout = String::from_utf8_lossy(&o.stdout);
+                                                let vulns: Vec<&str> = stdout.lines().filter(|l| l.contains("RUSTSEC") || l.contains("Vulnerability")).collect();
+                                                if vulns.is_empty() {
+                                                    results.push("✓ cargo audit: no known vulnerabilities".to_string());
+                                                } else {
+                                                    results.push(format!("✗ cargo audit: {} vulnerability findings", vulns.len()));
+                                                    for v in vulns.iter().take(5) { results.push(format!("  {v}")); }
+                                                }
+                                            }
+                                        } else {
+                                            results.push("  cargo audit: not installed (cargo install cargo-audit)".to_string());
+                                        }
+                                    }
+                                    // Try npm audit
+                                    if cwd.join("package-lock.json").exists() || cwd.join("yarn.lock").exists() {
+                                        let out = std::process::Command::new("npm").args(["audit", "--json"]).current_dir(&cwd).output();
+                                        if let Ok(o) = out {
+                                            let raw = String::from_utf8_lossy(&o.stdout);
+                                            let vuln_count = raw.matches("\"severity\"").count();
+                                            if vuln_count == 0 {
+                                                results.push("✓ npm audit: no known vulnerabilities".to_string());
+                                            } else {
+                                                results.push(format!("✗ npm audit: {} vulnerability reference{}", vuln_count, if vuln_count == 1 { "" } else { "s" }));
+                                            }
+                                        }
+                                    }
+                                    // Try trivy if available (container/fs scanner)
+                                    let has_trivy = std::process::Command::new("which").arg("trivy").output().map(|o| o.status.success()).unwrap_or(false);
+                                    if has_trivy {
+                                        let scan_target = if target.is_empty() { cwd.to_string_lossy().to_string() } else { target.to_string() };
+                                        let out = std::process::Command::new("trivy").args(["fs", "--exit-code", "0", "--format", "table", "--severity", "HIGH,CRITICAL", &scan_target]).output();
+                                        if let Ok(o) = out {
+                                            let stdout = String::from_utf8_lossy(&o.stdout);
+                                            let high_crit: Vec<&str> = stdout.lines().filter(|l| l.contains("HIGH") || l.contains("CRITICAL")).collect();
+                                            if high_crit.is_empty() {
+                                                results.push("✓ trivy: no HIGH/CRITICAL CVEs".to_string());
+                                            } else {
+                                                results.push(format!("✗ trivy: {} HIGH/CRITICAL CVE{}", high_crit.len(), if high_crit.len() == 1 { "" } else { "s" }));
+                                                for h in high_crit.iter().take(5) { results.push(format!("  {h}")); }
+                                            }
+                                        }
+                                    }
+                                    if results.is_empty() {
+                                        results.push("No supported scanners found.\n  Install: cargo install cargo-audit  or  apt-get install trivy".to_string());
+                                    }
+                                    let msg = format!("vulnscan{}\n\n{}", if target.is_empty() { String::new() } else { format!(" {target}") }, results.join("\n"));
+                                    ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -9584,7 +9778,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/arch-review", "/arch-review ", "/ask-code ", "/bench", "/bench ", "/blame ", "/changelog", "/changelog ", "/code-review ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/debug-ai ", "/doc-gen ", "/flow ", "/gen-tests ", "/grep-code ", "/heatmap", "/heatmap ", "/lint", "/lint ", "/metrics", "/metrics ", "/mock ", "/optimize ", "/patch", "/patch ", "/pr-review", "/pr-review ", "/profile ", "/recent", "/recent ", "/refactor ", "/rename ", "/setup-env", "/test", "/test ", "/todo-ai ", "/translate-code ", "/watch ",
+                            "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/bench", "/bench ", "/blame ", "/changelog", "/changelog ", "/code-review ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/debug-ai ", "/doc-gen ", "/flow ", "/gen-tests ", "/grep-code ", "/heatmap", "/heatmap ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/metrics", "/metrics ", "/mock ", "/optimize ", "/patch", "/patch ", "/pr-review", "/pr-review ", "/profile ", "/recent", "/recent ", "/refactor ", "/rename ", "/setup-env", "/status", "/test", "/test ", "/todo-ai ", "/translate-code ", "/vulnscan", "/vulnscan ", "/watch ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
