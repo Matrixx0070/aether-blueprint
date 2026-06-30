@@ -6564,6 +6564,55 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::AddNote(text) => {
+                    let ts = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let preview: String = text.chars().take(72).collect();
+                    session.session_notes.push((text.clone(), ts));
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Note #{} saved: \"{preview}{}\"",
+                        session.session_notes.len() - 1,
+                        if text.len() > 72 { "…" } else { "" }
+                    )));
+                    continue;
+                }
+                UiCommand::DeleteNote(idx) => {
+                    if idx < session.session_notes.len() {
+                        let (text, _) = session.session_notes.remove(idx);
+                        let preview: String = text.chars().take(60).collect();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Note #{idx} deleted: \"{preview}{}\"  ({} remaining)",
+                            if text.len() > 60 { "…" } else { "" },
+                            session.session_notes.len()
+                        )));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Note #{idx} not found. {} note(s) in the session notepad.",
+                            session.session_notes.len()
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryNotes => {
+                    let note = if session.session_notes.is_empty() {
+                        "Session notepad: empty. Use /note-add <text> to add.".to_string()
+                    } else {
+                        let lines: Vec<String> = session.session_notes.iter().enumerate()
+                            .map(|(i, (text, ts))| {
+                                let preview: String = text.chars().take(72).collect();
+                                format!(
+                                    "  #{i} [ts={ts}] {preview}{}",
+                                    if text.len() > 72 { "…" } else { "" }
+                                )
+                            })
+                            .collect();
+                        format!("=== Session notepad ({} note(s)) ===\n{}", lines.len(), lines.join("\n"))
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::QueryToolStatsDetail => {
                     let stats = &session.plan.tool_call_stats;
                     if stats.is_empty() {
@@ -26550,6 +26599,38 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /note-add <text> — add a note to the session notepad
+                                cmd_str if cmd_str.starts_with("/note-add ") => {
+                                    let text = cmd_str.trim_start_matches("/note-add ").trim().to_string();
+                                    if _ctx.send(UiCommand::AddNote(text)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /notes — list all session notes
+                                "/notes" => {
+                                    if _ctx.send(UiCommand::QueryNotes).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /note-del <n> — delete a note by index
+                                cmd_str if cmd_str.starts_with("/note-del ") => {
+                                    let arg = cmd_str.trim_start_matches("/note-del ").trim();
+                                    if let Ok(n) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::DeleteNote(n)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /note-del <index>  (use /notes to see indices)".to_string()
+                                        ));
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /tool-stats-detail — per-tool ok/err breakdown sorted by call count
                                 "/tool-stats-detail" => {
                                     if _ctx.send(UiCommand::QueryToolStatsDetail).is_err() { break 'outer; }
@@ -27373,6 +27454,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-stats-detail",
                             "/tool-top", "/tool-top ",
                             "/tool-errors",
+                            "/note-add ",
+                            "/notes",
+                            "/note-del ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

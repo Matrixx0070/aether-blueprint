@@ -409,6 +409,12 @@ pub enum UiCommand {
     ReplayLast,
     /// List past user messages with their indices.
     QueryReplayList,
+    /// Add a note to the in-session notepad (text).
+    AddNote(String),
+    /// Remove a note by 0-based index.
+    DeleteNote(usize),
+    /// List all session notes.
+    QueryNotes,
     /// Show detailed per-tool breakdown: ok/err counts and call order.
     QueryToolStatsDetail,
     /// Show the top N tools by total call count.
