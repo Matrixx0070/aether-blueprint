@@ -5358,6 +5358,7 @@ Input shortcuts\n\
     ◈ /find-large /find-old /brainstorm /naming /pros-cons       file + creativity\n\
     ◈ /dashboard /secret-gen /cron-explain /k8s                 ops + milestone B100\n\
     ◈ /ai-improve /ai-simplify /ai-secure /ai-review-diff /ai-perf  AI analysis suite\n\
+    ◈ /flashcard /quiz /teach /man-ai /compare                  learning + productivity\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -11999,6 +12000,158 @@ CTF Toolkit — Aether AI-assisted\n\
                                     }
                                     continue;
                                 }
+                                // ── Batch 102: Learning + productivity tools ──────────────────────
+                                cmd if cmd.starts_with("/flashcard ") || cmd == "/flashcard" => {
+                                    // /flashcard <topic>  — AI generates 5 Q&A flashcards
+                                    let topic = cmd.trim_start_matches("/flashcard").trim();
+                                    if topic.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /flashcard <topic>\n  Example: /flashcard Rust ownership and borrowing".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Generate 5 high-quality flashcards for learning: {topic}\n\n\
+                                        Format each as:\n\
+                                        **Q{n}:** [clear, specific question]\n\
+                                        **A{n}:** [concise but complete answer; include a code example if relevant]\n\n\
+                                        Range from fundamental to advanced. Cover different aspects of the topic.\n\
+                                        Questions should test understanding, not just memorization.",
+                                        n = 1
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/flashcard  {topic}"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/quiz ") || cmd == "/quiz" => {
+                                    // /quiz <topic>  — AI generates 5-question multiple choice quiz
+                                    let topic = cmd.trim_start_matches("/quiz").trim();
+                                    if topic.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /quiz <topic>\n  Example: /quiz async/await in JavaScript".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Create a 5-question multiple-choice quiz on: {topic}\n\n\
+                                        For each question:\n\
+                                        **Q[n].** [question text]\n\
+                                        a) [option]\n\
+                                        b) [option]\n\
+                                        c) [option]\n\
+                                        d) [option]\n\n\
+                                        Then after all 5 questions, provide an **Answers** section:\n\
+                                        **Answers:** Q1=a, Q2=c, ... with one-sentence explanation for each.\n\n\
+                                        Include one deliberately tricky question. Vary difficulty."
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/quiz  {topic}"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/teach ") || cmd == "/teach" => {
+                                    // /teach <concept>  — AI explains concept with analogies + examples
+                                    let concept = cmd.trim_start_matches("/teach").trim();
+                                    if concept.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /teach <concept>\n  Example: /teach how TCP three-way handshake works".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Teach me: {concept}\n\n\
+                                        Structure your explanation:\n\
+                                        1. **One-sentence summary** — the core idea in plain English\n\
+                                        2. **Real-world analogy** — compare to something familiar\n\
+                                        3. **How it works** — step-by-step mechanism (3-5 steps)\n\
+                                        4. **Code example** — minimal, runnable demonstration\n\
+                                        5. **Common mistakes** — 2-3 pitfalls to avoid\n\
+                                        6. **When to use / avoid** — practical guidance\n\n\
+                                        Target audience: experienced developer learning this specific concept."
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/teach  {concept}"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/man-ai ") || cmd == "/man-ai" => {
+                                    // /man-ai <command>  — AI explains a CLI tool better than man pages
+                                    let tool = cmd.trim_start_matches("/man-ai").trim();
+                                    if tool.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /man-ai <command>\n  Example: /man-ai awk  or  /man-ai git rebase".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    // also check if tool exists and grab --help
+                                    let help_snippet = tool.split_whitespace().next()
+                                        .and_then(|t| std::process::Command::new(t).arg("--help").output().ok())
+                                        .map(|o| {
+                                            let h = String::from_utf8_lossy(&o.stdout).to_string()
+                                                + &String::from_utf8_lossy(&o.stderr);
+                                            h.chars().take(1500).collect::<String>()
+                                        })
+                                        .unwrap_or_default();
+                                    let help_section = if help_snippet.is_empty() { String::new() } else {
+                                        format!("\n\nFor reference, here is `{tool} --help`:\n```\n{help_snippet}\n```")
+                                    };
+                                    let prompt = format!(
+                                        "Explain `{tool}` better than the man page would.\n\
+                                        Structure:\n\
+                                        1. **What it does** — one sentence\n\
+                                        2. **Most useful flags** — 5-8 flags with practical examples\n\
+                                        3. **Golden patterns** — 5 real-world command combinations I'd actually type\n\
+                                        4. **What trips people up** — common mistakes and misconceptions\n\
+                                        5. **Power user tips** — 2-3 lesser-known tricks\n\
+                                        Make every example something I'd plausibly use today.{help_section}"
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/man-ai  {tool}"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/compare ") || cmd == "/compare" => {
+                                    // /compare <A> vs <B>  — AI head-to-head technical comparison
+                                    let args = cmd.trim_start_matches("/compare").trim();
+                                    if args.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /compare <A> vs <B>\n  Example: /compare Redis vs Memcached  or  /compare async/await vs promises".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Compare: {args}\n\n\
+                                        Use this structured format:\n\
+                                        | Dimension | Option A | Option B |\n\
+                                        |-----------|----------|----------|\n\
+                                        (fill in 8-10 dimensions relevant to this comparison)\n\n\
+                                        Then:\n\
+                                        **Choose A when:** [3 bullet points]\n\
+                                        **Choose B when:** [3 bullet points]\n\
+                                        **Verdict:** [1-2 sentence recommendation for most use cases]\n\n\
+                                        Be opinionated and specific. Avoid hedging on every point."
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/compare  {args}"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -12637,7 +12790,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
+                            "/ai-commit", "/ai-commit ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/flashcard ", "/man-ai ", "/quiz ", "/teach ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
