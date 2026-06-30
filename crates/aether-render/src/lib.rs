@@ -969,6 +969,12 @@ pub enum UiCommand {
     QueryAutoContinueCooldown,
     /// Show last tool call signatures (dedup detection).
     QueryLastToolSigs,
+    /// Show the current active model name.
+    QueryCurrentModel,
+    /// Show the full current plan text.
+    QueryPlanTextShow,
+    /// Show the active plan goal line.
+    QueryPlanGoal,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

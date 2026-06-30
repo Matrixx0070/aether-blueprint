@@ -7700,6 +7700,40 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryCurrentModel => {
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Active model: {}.", session.config.model
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlanTextShow => {
+                    let text = session.plan.text.trim();
+                    if text.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Plan: empty. Use /set-plan <text> or /goal <text> to define one.".to_string()
+                        ));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Current plan:\n{text}"
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanGoal => {
+                    match &session.plan.goal {
+                        Some(g) if !g.trim().is_empty() => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Plan goal: {g}"
+                            )));
+                        }
+                        _ => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Plan goal: not set. Use /goal <text> to define the mission.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryHistoryAnnotationList => {
                     if session.history_annotations.is_empty() {
                         let _ = etx_for_driver.send(UiEvent::SystemNote(
@@ -33649,6 +33683,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /current-model — show active model name
+                                "/current-model" => {
+                                    if _ctx.send(UiCommand::QueryCurrentModel).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /plan-text-show — show full current plan text
+                                "/plan-text-show" => {
+                                    if _ctx.send(UiCommand::QueryPlanTextShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /plan-goal — show active plan goal line
+                                "/plan-goal" => {
+                                    if _ctx.send(UiCommand::QueryPlanGoal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -34440,6 +34492,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-annotation-list",
                             "/auto-continue-cooldown-show",
                             "/last-tool-sigs",
+                            "/current-model",
+                            "/plan-text-show",
+                            "/plan-goal",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
