@@ -957,6 +957,12 @@ pub enum UiCommand {
     QuerySystemSuffixShow,
     /// Show whether the cost alert has fired.
     QueryCostAlertFired,
+    /// List all session environment variables.
+    QuerySessionEnvList,
+    /// List all prompt macros.
+    QueryPromptMacrosList,
+    /// Show current turn index.
+    QueryTurnIndexShow,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

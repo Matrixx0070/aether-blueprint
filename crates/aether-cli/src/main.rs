@@ -7700,6 +7700,50 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QuerySessionEnvList => {
+                    if session.session_env.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Session env: no variables set. Use /env-set <KEY> <VALUE> to add one.".to_string()
+                        ));
+                    } else {
+                        let mut pairs: Vec<String> = session.session_env
+                            .iter()
+                            .map(|(k, v)| format!("  {k}={v:?}"))
+                            .collect();
+                        pairs.sort();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session env ({} vars):\n{}", session.session_env.len(), pairs.join("\n")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryPromptMacrosList => {
+                    if session.prompt_macros.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Prompt macros: none defined. Use /macro <name> <text> to add one.".to_string()
+                        ));
+                    } else {
+                        let mut entries: Vec<String> = session.prompt_macros
+                            .iter()
+                            .map(|(k, v)| {
+                                let preview = if v.len() > 60 { format!("{}…", &v[..60]) } else { v.clone() };
+                                format!("  !{k} → {preview}")
+                            })
+                            .collect();
+                        entries.sort();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Prompt macros ({}):\n{}", session.prompt_macros.len(), entries.join("\n")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnIndexShow => {
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Current turn index: {} (next AI turn will be turn {}).",
+                        session.turn_index, session.turn_index + 1
+                    )));
+                    continue;
+                }
                 UiCommand::QueryToolsDisabledTurns => {
                     let n = session.config.tools_disabled_turns;
                     if n == 0 {
@@ -33527,6 +33571,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /session-env-list — list all session environment variables
+                                "/session-env-list" => {
+                                    if _ctx.send(UiCommand::QuerySessionEnvList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /prompt-macros-list — list all prompt macros
+                                "/prompt-macros-list" => {
+                                    if _ctx.send(UiCommand::QueryPromptMacrosList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /turn-index-show — show current turn index
+                                "/turn-index-show" => {
+                                    if _ctx.send(UiCommand::QueryTurnIndexShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -34312,6 +34374,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tools-disabled-turns",
                             "/system-suffix-show",
                             "/cost-alert-fired",
+                            "/session-env-list",
+                            "/prompt-macros-list",
+                            "/turn-index-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
