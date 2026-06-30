@@ -647,6 +647,12 @@ pub enum UiCommand {
     QueryAliasExpand(String),
     /// Analyse gaps between turns: show per-turn wall-time deltas and flag long pauses.
     QueryTurnGapAnalysis,
+    /// Inject a timestamped annotation as a SystemNote into the chat log.
+    SessionAnnotate(String),
+    /// Show each history item as a single-line type:length:preview summary.
+    QueryHistoryCompact,
+    /// Given N more turns at current avg token burn, forecast context exhaustion.
+    QueryTokenForecast(usize),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

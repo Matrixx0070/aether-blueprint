@@ -6778,6 +6778,61 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::SessionAnnotate(text) => {
+                    let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!("[{ts}] ANNOTATION: {text}")));
+                    continue;
+                }
+                UiCommand::QueryHistoryCompact => {
+                    if session.history.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("History is empty.".to_string()));
+                    } else {
+                        let mut lines = format!("History compact ({} items):\n", session.history.len());
+                        for (i, item) in session.history.iter().enumerate() {
+                            let (kind, len, preview) = match item {
+                                ConversationItem::User(t) => {
+                                    let p: String = t.chars().take(50).collect::<String>().replace('\n', " ");
+                                    ("User", t.len(), p)
+                                }
+                                ConversationItem::Assistant { text, tool_uses } => {
+                                    let tlen = text.as_deref().map(|t| t.len()).unwrap_or(0);
+                                    let p: String = text.as_deref().unwrap_or("").chars().take(50).collect::<String>().replace('\n', " ");
+                                    let label = if !tool_uses.is_empty() { "Asst+Tools" } else { "Asst" };
+                                    (label, tlen, p)
+                                }
+                                ConversationItem::ToolResults(r) => {
+                                    let total: usize = r.iter().map(|rr| rr.content.len()).sum();
+                                    ("ToolRes", total, format!("{} result(s)", r.len()))
+                                }
+                            };
+                            lines.push_str(&format!("  [{i:>3}] {kind:<10}  {len:>6}B  {preview}\n"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(lines));
+                    }
+                    continue;
+                }
+                UiCommand::QueryTokenForecast(n) => {
+                    let turns = session.turn_cost_log.len();
+                    if turns == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No turn data yet for forecast.".to_string()));
+                    } else {
+                        let total_in: u64 = session.turn_cost_log.iter().map(|&(_, tin, _, _)| tin as u64).sum();
+                        let total_out: u64 = session.turn_cost_log.iter().map(|&(_, _, tout, _)| tout as u64).sum();
+                        let avg_in = total_in / turns as u64;
+                        let avg_out = total_out / turns as u64;
+                        let avg_per_turn = avg_in + avg_out;
+                        let budget = session.config.max_tokens_per_turn as u64;
+                        let used: u64 = total_in + total_out;
+                        let remaining = budget.saturating_sub(used);
+                        let turns_left = if avg_per_turn > 0 { remaining / avg_per_turn } else { u64::MAX };
+                        let forecast_cost: f64 = session.turn_cost_log.iter().map(|&(_, _, _, c)| c).sum::<f64>()
+                            / turns as f64 * n as f64;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Token forecast ({n} more turns at current avg):\n  Avg tokens/turn: {avg_per_turn} (in:{avg_in} out:{avg_out})\n  Used so far:     {used}\n  Budget:          {budget}\n  Turns until full: ~{turns_left}\n  Projected cost for {n} turns: ${forecast_cost:.6}"
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::HistoryGrepReplace(old, new) => {
                     let mut replaced = false;
                     for item in session.history.iter_mut().rev() {
@@ -29559,6 +29614,37 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /session-annotate <text> — add timestamped annotation to chat log
+                                cmd_str if cmd_str.starts_with("/session-annotate ") => {
+                                    let text = cmd_str.trim_start_matches("/session-annotate ").trim().to_string();
+                                    if text.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /session-annotate <text>".to_string()));
+                                    } else if _ctx.send(UiCommand::SessionAnnotate(text)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-compact-show — one-line summary per history item
+                                "/history-compact-show" => {
+                                    if _ctx.send(UiCommand::QueryHistoryCompact).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /token-forecast <n> — forecast context exhaustion after n more turns
+                                cmd_str if cmd_str.starts_with("/token-forecast ") => {
+                                    let arg = cmd_str.trim_start_matches("/token-forecast ").trim();
+                                    let n = arg.parse::<usize>().unwrap_or(10);
+                                    if _ctx.send(UiCommand::QueryTokenForecast(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /history-grep-replace <old>|<new> — replace text in last user message
                                 cmd_str if cmd_str.starts_with("/history-grep-replace ") => {
                                     let rest = cmd_str.trim_start_matches("/history-grep-replace ").trim();
@@ -30257,6 +30343,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-grep-replace ",
                             "/alias-expand ",
                             "/turn-gap-analysis",
+                            "/session-annotate ",
+                            "/history-compact-show",
+                            "/token-forecast ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
