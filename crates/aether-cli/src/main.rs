@@ -6707,6 +6707,81 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::SetSmartPause(pattern) => {
+                    let preview: String = pattern.chars().take(60).collect();
+                    session.smart_pause_pattern = Some(pattern);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Smart-pause set: \"{preview}\"\n  Agent will pause after any turn whose response contains this pattern."
+                    )));
+                    continue;
+                }
+                UiCommand::ClearSmartPause => {
+                    session.smart_pause_pattern = None;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote("Smart-pause cleared.".to_string()));
+                    continue;
+                }
+                UiCommand::QuerySmartPause => {
+                    let note = match &session.smart_pause_pattern {
+                        Some(p) => format!("Smart-pause: active — pattern \"{p}\""),
+                        None => "Smart-pause: off. Use /smart-pause <pattern> to set.".to_string(),
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryDebugTools => {
+                    use aether_core::context::ConversationItem;
+                    let last_asst = session.history.iter().enumerate().rev().find(|(_, item)| matches!(item, ConversationItem::Assistant { .. }));
+                    match last_asst {
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote("No assistant turn in history.".to_string()));
+                        }
+                        Some((asst_idx, ConversationItem::Assistant { tool_uses, .. })) => {
+                            if tool_uses.is_empty() {
+                                let _ = etx_for_driver.send(UiEvent::SystemNote("Last assistant turn had no tool calls.".to_string()));
+                            } else {
+                                let mut msg = format!("Debug tools (last turn, {} call(s)):\n", tool_uses.len());
+                                for tu in tool_uses {
+                                    msg.push_str(&format!("\n── {} ──\nInput: {}\n", tu.name, serde_json::to_string_pretty(&tu.input).unwrap_or_else(|_| tu.input.to_string())));
+                                }
+                                if asst_idx + 1 < session.history.len() {
+                                    if let ConversationItem::ToolResults(results) = &session.history[asst_idx + 1] {
+                                        for r in results {
+                                            let status = if r.is_error { "ERROR" } else { "ok" };
+                                            let preview: String = r.content.chars().take(300).collect();
+                                            msg.push_str(&format!("Output [{status}]: {preview}{}\n", if r.content.len() > 300 { "…" } else { "" }));
+                                        }
+                                    }
+                                }
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                            }
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionReport => {
+                    use aether_core::compaction::context_window_for_model;
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                    let elapsed = now.saturating_sub(session.started_at);
+                    let (h, m, s) = (elapsed / 3600, (elapsed % 3600) / 60, elapsed % 60);
+                    let total_cost: f64 = session.turn_cost_log.iter().map(|&(_, _, _, c)| c).sum();
+                    let total_in: u64 = session.turn_cost_log.iter().map(|&(_, i, _, _)| i).sum();
+                    let total_out: u64 = session.turn_cost_log.iter().map(|&(_, _, o, _)| o).sum();
+                    let total_err: usize = session.plan.tool_call_stats.values().map(|(_, e)| *e).sum();
+                    let total_ok: usize = session.plan.tool_call_stats.values().map(|(o, _)| *o).sum();
+                    let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
+                    let window = context_window_for_model(&session.config.model);
+                    let fill_pct = if window > 0 { used * 100 / window } else { 0 };
+                    let avg_wall = if session.turn_wall_ms.is_empty() { 0 } else { session.turn_wall_ms.iter().sum::<u64>() / session.turn_wall_ms.len() as u64 };
+                    let notes_count = session.session_notes.len();
+                    let bookmarks_count = session.bookmarks.len();
+                    let tags_str = if session.session_tags.is_empty() { "none".to_string() } else { session.session_tags.join(", ") };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session report\n  Duration:      {h:02}:{m:02}:{s:02}\n  Turns:         {}\n  Model:         {}\n  Tokens in:     {total_in}\n  Tokens out:    {total_out}\n  Context fill:  {fill_pct}%\n  Total cost:    ${total_cost:.6}\n  Tool calls:    ok {total_ok}  err {total_err}\n  Avg wall/turn: {avg_wall}ms\n  Notes:         {notes_count}\n  Bookmarks:     {bookmarks_count}\n  Tags:          {tags_str}",
+                        session.turn_index, session.config.model
+                    )));
+                    continue;
+                }
                 UiCommand::ExportMarkdown(path) => {
                     use aether_core::context::ConversationItem;
                     use std::io::Write;
@@ -9662,6 +9737,20 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                          Threshold: {:.0}%. Consider /compact or shortening history.",
                         fill * 100.0, session.token_budget_warn_pct * 100.0
                     )));
+                }
+            }
+            // Smart-pause: if a pattern is set and matches the latest response, pause now.
+            if let Some(ref pattern) = session.smart_pause_pattern.clone() {
+                use aether_core::context::ConversationItem;
+                if let Some(latest) = session.history.iter().rev().find_map(|item| {
+                    if let ConversationItem::Assistant { text: Some(t), .. } = item { Some(t.as_str()) } else { None }
+                }) {
+                    if latest.to_lowercase().contains(&pattern.to_lowercase()) {
+                        session.pause_now = true;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Smart-pause triggered: pattern \"{pattern}\" matched in response. Agent paused after this turn."
+                        )));
+                    }
                 }
             }
             // Cost alert: fire a soft warning when cumulative cost crosses the threshold.
@@ -28280,6 +28369,43 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /smart-pause <pattern> | off — pause agent when pattern matches response
+                                cmd_str if cmd_str == "/smart-pause off" || cmd_str.starts_with("/smart-pause ") => {
+                                    if cmd_str == "/smart-pause off" {
+                                        if _ctx.send(UiCommand::ClearSmartPause).is_err() { break 'outer; }
+                                    } else {
+                                        let pat = cmd_str.trim_start_matches("/smart-pause ").trim().to_string();
+                                        if _ctx.send(UiCommand::SetSmartPause(pat)).is_err() { break 'outer; }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /smart-pause-show — show current smart-pause setting
+                                "/smart-pause-show" => {
+                                    if _ctx.send(UiCommand::QuerySmartPause).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /debug-tools — show full input/output of last turn's tool calls
+                                "/debug-tools" => {
+                                    if _ctx.send(UiCommand::QueryDebugTools).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-report — comprehensive session summary
+                                "/session-report" => {
+                                    if _ctx.send(UiCommand::QuerySessionReport).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /export-md <path> — export conversation as markdown
                                 cmd_str if cmd_str.starts_with("/export-md ") => {
                                     let path = cmd_str.trim_start_matches("/export-md ").trim().to_string();
@@ -29214,6 +29340,10 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/export-md ",
                             "/context-map",
                             "/clear-notes",
+                            "/smart-pause ", "/smart-pause off",
+                            "/smart-pause-show",
+                            "/debug-tools",
+                            "/session-report",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

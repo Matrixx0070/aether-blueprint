@@ -379,6 +379,10 @@ pub struct Session {
     /// Model name used for each outer turn, in order.
     /// Recorded by the driver after the inner loop exits.
     pub turn_models: Vec<String>,
+
+    /// When Some, pause the agent after any turn whose assistant response contains
+    /// this substring (case-insensitive). Cleared with /smart-pause off.
+    pub smart_pause_pattern: Option<String>,
 }
 
 impl Session {
@@ -477,6 +481,7 @@ impl Session {
             cost_alert_fired: false,
             session_tags: Vec::new(),
             turn_models: Vec::new(),
+            smart_pause_pattern: None,
         }
     }
 

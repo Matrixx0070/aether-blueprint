@@ -417,6 +417,16 @@ pub enum UiCommand {
     JumpBookmark(usize),
     /// Delete a bookmark by 0-based index.
     DeleteBookmark(usize),
+    /// Set a pattern that pauses the agent when found in an assistant response.
+    SetSmartPause(String),
+    /// Clear the smart-pause pattern.
+    ClearSmartPause,
+    /// Show the current smart-pause pattern and status.
+    QuerySmartPause,
+    /// Show full input/output of every tool call from the last assistant turn.
+    QueryDebugTools,
+    /// Show a comprehensive end-of-session report.
+    QuerySessionReport,
     /// Export the conversation history as a markdown file to the given path.
     ExportMarkdown(String),
     /// Show a per-turn token-usage chart (mini bar chart of tokens in+out per turn).
