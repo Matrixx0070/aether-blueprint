@@ -417,6 +417,12 @@ pub enum UiCommand {
     JumpBookmark(usize),
     /// Delete a bookmark by 0-based index.
     DeleteBookmark(usize),
+    /// Show remaining tokens before context compaction threshold is hit.
+    QueryContextHeadroom,
+    /// List all assistant responses longer than N characters with their history indices.
+    QueryFindLongResponses(usize),
+    /// Show a compact summary of the Nth user exchange (0-based exchange index).
+    QueryTurnSummary(usize),
     /// Compute and show a quality score for the last assistant response.
     QueryResponseQuality,
     /// Show a line-diff between two history items by 0-based history index.

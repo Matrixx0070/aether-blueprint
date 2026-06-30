@@ -6707,6 +6707,80 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::QueryContextHeadroom => {
+                    use aether_core::compaction::context_window_for_model;
+                    let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
+                    let window = context_window_for_model(&session.config.model);
+                    let threshold = if session.compaction_threshold_pct > 0.0 {
+                        (window as f64 * session.compaction_threshold_pct) as u64
+                    } else {
+                        (window as f64 * 0.80) as u64
+                    };
+                    let headroom = threshold.saturating_sub(used);
+                    let fill_pct = if window > 0 { used as f64 / window as f64 * 100.0 } else { 0.0 };
+                    let threshold_pct = if window > 0 { threshold as f64 / window as f64 * 100.0 } else { 0.0 };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Context headroom:\n  Used:      {used} tokens ({fill_pct:.1}%)\n  Window:    {window} tokens\n  Threshold: {threshold} tokens ({threshold_pct:.1}%)\n  Headroom:  {headroom} tokens before compaction\n  Model: {}", session.config.model
+                    )));
+                    continue;
+                }
+                UiCommand::QueryFindLongResponses(min_chars) => {
+                    use aether_core::context::ConversationItem;
+                    let matches: Vec<(usize, usize)> = session.history.iter().enumerate().filter_map(|(i, item)| {
+                        if let ConversationItem::Assistant { text: Some(t), .. } = item {
+                            if t.len() >= min_chars { Some((i, t.len())) } else { None }
+                        } else { None }
+                    }).collect();
+                    if matches.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "No assistant responses longer than {min_chars} chars found."
+                        )));
+                    } else {
+                        let mut msg = format!("{} response(s) longer than {min_chars} chars:\n", matches.len());
+                        for (idx, len) in &matches {
+                            msg.push_str(&format!("  history[{idx}]: {len} chars\n"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnSummary(exchange_idx) => {
+                    use aether_core::context::ConversationItem;
+                    let mut user_positions: Vec<usize> = session.history.iter().enumerate()
+                        .filter_map(|(i, item)| if matches!(item, ConversationItem::User(_)) { Some(i) } else { None })
+                        .collect();
+                    match user_positions.get(exchange_idx) {
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Exchange #{exchange_idx} not found. {} user messages in history.", user_positions.len()
+                            )));
+                        }
+                        Some(&user_pos) => {
+                            let next_user = user_positions.get(exchange_idx + 1).copied().unwrap_or(session.history.len());
+                            let mut msg = format!("Turn summary: exchange #{exchange_idx} (history[{user_pos}..{next_user}])\n");
+                            for i in user_pos..next_user {
+                                if let Some(item) = session.history.get(i) {
+                                    match item {
+                                        ConversationItem::User(t) => {
+                                            let p: String = t.chars().take(100).collect();
+                                            msg.push_str(&format!("  [User]     {p}{}\n", if t.len() > 100 { "…" } else { "" }));
+                                        }
+                                        ConversationItem::Assistant { text, tool_uses } => {
+                                            let resp_len = text.as_ref().map(|t| t.len()).unwrap_or(0);
+                                            msg.push_str(&format!("  [Asst]     {} chars, {} tool call(s)\n", resp_len, tool_uses.len()));
+                                        }
+                                        ConversationItem::ToolResults(r) => {
+                                            let errs: usize = r.iter().filter(|x| x.is_error).count();
+                                            msg.push_str(&format!("  [Tools]    {} result(s), {} error(s)\n", r.len(), errs));
+                                        }
+                                    }
+                                }
+                            }
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryResponseQuality => {
                     use aether_core::context::ConversationItem;
                     let last_text = session.history.iter().rev().find_map(|item| {
@@ -28488,6 +28562,34 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /context-headroom — show tokens remaining before compaction
+                                "/context-headroom" => {
+                                    if _ctx.send(UiCommand::QueryContextHeadroom).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /find-long-responses <n> — list responses longer than n chars
+                                cmd_str if cmd_str.starts_with("/find-long-responses ") => {
+                                    let arg = cmd_str.trim_start_matches("/find-long-responses ").trim();
+                                    let n = arg.parse::<usize>().unwrap_or(500);
+                                    if _ctx.send(UiCommand::QueryFindLongResponses(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /turn-summary <n> — compact info about the nth user exchange
+                                cmd_str if cmd_str.starts_with("/turn-summary ") => {
+                                    let arg = cmd_str.trim_start_matches("/turn-summary ").trim();
+                                    let n = arg.parse::<usize>().unwrap_or(0);
+                                    if _ctx.send(UiCommand::QueryTurnSummary(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /response-quality — quality score for last assistant response
                                 "/response-quality" => {
                                     if _ctx.send(UiCommand::QueryResponseQuality).is_err() { break 'outer; }
@@ -29542,6 +29644,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/response-quality",
                             "/diff-history ",
                             "/pin-response ",
+                            "/context-headroom",
+                            "/find-long-responses ",
+                            "/turn-summary ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
