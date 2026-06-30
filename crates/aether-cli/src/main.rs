@@ -6707,6 +6707,62 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::QueryTurnLog(count) => {
+                    if session.turn_cost_log.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "No turns recorded yet. Complete at least one exchange.".to_string()
+                        ));
+                    } else {
+                        let log = &session.turn_cost_log;
+                        let slice: &[(usize, u64, u64, f64)] = if count == 0 || count >= log.len() {
+                            log
+                        } else {
+                            &log[log.len() - count..]
+                        };
+                        let mut msg = format!("Turn log  ({} of {} turns)\n", slice.len(), log.len());
+                        msg.push_str("  #   tok_in   tok_out   cost($)    wall(ms)\n");
+                        msg.push_str("  ─────────────────────────────────────────\n");
+                        for (idx, &(turn, tin, tout, cost)) in slice.iter().enumerate() {
+                            let wall = session.turn_wall_ms.get(idx + (log.len().saturating_sub(slice.len()))).copied().unwrap_or(0);
+                            msg.push_str(&format!(
+                                "  {turn:>3}  {tin:>7}  {tout:>7}  {cost:>9.6}  {wall:>8}\n"
+                            ));
+                        }
+                        let total_cost: f64 = slice.iter().map(|&(_, _, _, c)| c).sum();
+                        msg.push_str(&format!("  ─────────────────────────────────────────\n"));
+                        msg.push_str(&format!("  Total cost shown: ${total_cost:.6}"));
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionEfficiency => {
+                    let log = &session.turn_cost_log;
+                    if log.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "No turns recorded yet.".to_string()
+                        ));
+                    } else {
+                        let total_cost: f64 = log.iter().map(|&(_, _, _, c)| c).sum();
+                        let total_tokens_in: u64 = log.iter().map(|&(_, t, _, _)| t).sum();
+                        let total_tokens_out: u64 = log.iter().map(|&(_, _, t, _)| t).sum();
+                        let total_tokens = total_tokens_in + total_tokens_out;
+                        let avg_cost = total_cost / log.len() as f64;
+                        let tokens_per_dollar = if total_cost > 0.0 { total_tokens as f64 / total_cost } else { 0.0 };
+                        let avg_wall = if session.turn_wall_ms.is_empty() { 0 } else {
+                            session.turn_wall_ms.iter().sum::<u64>() / session.turn_wall_ms.len() as u64
+                        };
+                        let peak_turn = log.iter().max_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal));
+                        let peak_str = match peak_turn {
+                            Some(&(idx, _, _, cost)) => format!("turn {idx} (${cost:.6})"),
+                            None => "—".to_string(),
+                        };
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session efficiency\n  Turns:           {}\n  Total tokens:    {} (in {total_tokens_in} / out {total_tokens_out})\n  Total cost:      ${total_cost:.6}\n  Avg cost/turn:   ${avg_cost:.6}\n  Tokens/$:        {tokens_per_dollar:.0}\n  Avg wall time:   {avg_wall}ms\n  Peak cost turn:  {peak_str}",
+                            log.len(), total_tokens
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::SetRequestPrefix(text) => {
                     let preview: String = text.chars().take(60).collect();
                     let ellipsis = if text.len() > 60 { "…" } else { "" };
@@ -27621,6 +27677,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /turn-log [n] — show per-turn cost/token/latency table (last n, or all)
+                                cmd_str if cmd_str == "/turn-log" || cmd_str.starts_with("/turn-log ") => {
+                                    let arg = cmd_str.trim_start_matches("/turn-log").trim();
+                                    let count = arg.parse::<usize>().unwrap_or(0);
+                                    if _ctx.send(UiCommand::QueryTurnLog(count)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-efficiency — efficiency metrics: tokens/$, avg cost, peak turn
+                                "/session-efficiency" => {
+                                    if _ctx.send(UiCommand::QuerySessionEfficiency).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /request-prefix <text> | off — prepend text to every user message
                                 cmd_str if cmd_str == "/request-prefix off" || cmd_str.starts_with("/request-prefix ") => {
                                     if cmd_str == "/request-prefix off" {
@@ -28221,6 +28295,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/request-prefix ", "/request-prefix off",
                             "/request-suffix ", "/request-suffix off",
                             "/request-wrap-show",
+                            "/turn-log", "/turn-log ",
+                            "/session-efficiency",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

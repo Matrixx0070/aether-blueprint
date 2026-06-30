@@ -417,6 +417,10 @@ pub enum UiCommand {
     JumpBookmark(usize),
     /// Delete a bookmark by 0-based index.
     DeleteBookmark(usize),
+    /// Show per-turn cost/token/latency log. 0 = all turns; N = last N turns.
+    QueryTurnLog(usize),
+    /// Show session-level efficiency metrics: tokens/dollar, avg cost, peak turn.
+    QuerySessionEfficiency,
     /// Set a text prefix prepended to every user message before AI dispatch.
     SetRequestPrefix(String),
     /// Clear the per-request prefix.
