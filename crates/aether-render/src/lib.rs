@@ -783,6 +783,12 @@ pub enum UiCommand {
     ExportSessionNotes(String),
     /// Show total tool calls used vs budget this session.
     QueryToolBudgetRemaining,
+    /// Count tool-use entries across all history items.
+    QueryHistoryToolCount,
+    /// Show count of active sticky context entries.
+    QueryStickyCount,
+    /// Export session notes as a markdown file.
+    ExportNotesMd(String),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

@@ -7017,6 +7017,56 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryHistoryToolCount => {
+                    let tool_use_count: usize = session.history.iter().map(|item| {
+                        if let ConversationItem::Assistant { tool_uses, .. } = item {
+                            tool_uses.len()
+                        } else { 0 }
+                    }).sum();
+                    let tool_result_count: usize = session.history.iter().map(|item| {
+                        if let ConversationItem::ToolResults(r) = item { r.len() } else { 0 }
+                    }).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Tool usage in history:\n  Tool calls issued: {tool_use_count}\n  Tool results:      {tool_result_count}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryStickyCount => {
+                    let count = session.sticky_context.len();
+                    if count == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No sticky context entries. Use /sticky-add <text> to add one.".to_string()));
+                    } else {
+                        let preview: Vec<String> = session.sticky_context.iter().enumerate().map(|(i, s)| {
+                            let short = if s.len() > 60 { format!("{}...", &s[..60]) } else { s.clone() };
+                            format!("  [{i}] {short}")
+                        }).collect();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Sticky context ({count} entries):\n{}", preview.join("\n")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::ExportNotesMd(path) => {
+                    if session.session_notes.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No session notes to export.".to_string()));
+                    } else {
+                        let mut md = String::from("# Session Notes\n\n");
+                        for (i, (text, ts)) in session.session_notes.iter().enumerate() {
+                            md.push_str(&format!("## Note {}\n\n*Timestamp: {}*\n\n{}\n\n---\n\n", i + 1, ts, text));
+                        }
+                        match std::fs::write(&path, &md) {
+                            Ok(_) => {
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                    "Exported {} notes as Markdown to {}.", session.session_notes.len(), path
+                                )));
+                            }
+                            Err(e) => {
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Export failed: {}", e)));
+                            }
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -31694,6 +31744,35 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /history-tool-count — count tool-use entries across all history items
+                                "/history-tool-count" => {
+                                    if _ctx.send(UiCommand::QueryHistoryToolCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /sticky-count — show count of sticky context entries
+                                "/sticky-count" => {
+                                    if _ctx.send(UiCommand::QueryStickyCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /notes-export-md <path> — export notes as markdown
+                                cmd_str if cmd_str.starts_with("/notes-export-md ") => {
+                                    let path = cmd_str.trim_start_matches("/notes-export-md ").trim().to_string();
+                                    if path.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /notes-export-md <path>".to_string()));
+                                    } else if _ctx.send(UiCommand::ExportNotesMd(path)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -32392,6 +32471,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-lines",
                             "/session-notes-export ",
                             "/tool-budget-remaining",
+                            "/history-tool-count",
+                            "/sticky-count",
+                            "/notes-export-md ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
