@@ -7067,6 +7067,42 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryHistoryAssistantCount => {
+                    let count = session.history.iter().filter(|item| {
+                        matches!(item, ConversationItem::Assistant { .. })
+                    }).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Assistant responses in history: {count} (total items: {})", session.history.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySnapshotCount => {
+                    let count = session.saved_snapshots.len();
+                    if count == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No in-memory snapshots. Use /snap-save <name> to create one.".to_string()));
+                    } else {
+                        let names: Vec<&str> = session.saved_snapshots.keys().map(|s| s.as_str()).collect();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Snapshots ({count}): {}", names.join(", ")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnModelShow(n) => {
+                    match session.turn_models.get(n) {
+                        Some(model) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Turn {n} used model: {model}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "No turn {n} recorded. Turns recorded: 0..{}", session.turn_models.len().saturating_sub(1)
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -31773,6 +31809,32 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /history-assistant-count — count Assistant items in history
+                                "/history-assistant-count" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAssistantCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /snapshot-count — count in-memory named snapshots
+                                "/snapshot-count" => {
+                                    if _ctx.send(UiCommand::QuerySnapshotCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /turn-model-show <n> — model used for turn N
+                                cmd_str if cmd_str.starts_with("/turn-model-show ") => {
+                                    let n: usize = cmd_str.trim_start_matches("/turn-model-show ").trim()
+                                        .parse().unwrap_or(0);
+                                    if _ctx.send(UiCommand::QueryTurnModelShow(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -32474,6 +32536,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-tool-count",
                             "/sticky-count",
                             "/notes-export-md ",
+                            "/history-assistant-count",
+                            "/snapshot-count",
+                            "/turn-model-show ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -789,6 +789,12 @@ pub enum UiCommand {
     QueryStickyCount,
     /// Export session notes as a markdown file.
     ExportNotesMd(String),
+    /// Count Assistant-role items in conversation history.
+    QueryHistoryAssistantCount,
+    /// Count in-memory named snapshots.
+    QuerySnapshotCount,
+    /// Show which model was used for a specific turn index.
+    QueryTurnModelShow(usize),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
