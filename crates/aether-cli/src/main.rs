@@ -19935,6 +19935,203 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /ai-review <file> — thorough code review of a file
+                                cmd_str if cmd_str.starts_with("/ai-review ") || cmd_str == "/ai-review" => {
+                                    let file_arg = cmd_str.trim_start_matches("/ai-review").trim();
+                                    let file_path_arg = if file_arg.is_empty() {
+                                        ui.context_files.first().cloned().unwrap_or_default()
+                                    } else {
+                                        file_arg.to_string()
+                                    };
+                                    if file_path_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /ai-review <file>  — gives a thorough code review.\n  /add <file> first to set context, then /ai-review will use it.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    match std::fs::read_to_string(&file_path_arg) {
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("/ai-review: cannot read {file_path_arg}: {e}")));
+                                        }
+                                        Ok(src) => {
+                                            let truncated: String = src.chars().take(10000).collect();
+                                            let prompt = format!(
+                                                "Please give a thorough code review of `{file_path_arg}`. \
+                                                 Cover: correctness, error handling, security issues, performance, \
+                                                 readability, and test coverage gaps. \
+                                                 Rate each concern as BLOCKER / HIGH / MEDIUM / LOW with file:line citations.\n\n```\n{truncated}\n```"
+                                            );
+                                            let ts2 = std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs();
+                                            ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                        }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /summarize-file <file> — AI one-page summary of any file
+                                cmd_str if cmd_str.starts_with("/summarize-file ") || cmd_str == "/summarize-file" => {
+                                    let file_arg = cmd_str.trim_start_matches("/summarize-file").trim();
+                                    let file_path_arg = if file_arg.is_empty() {
+                                        ui.context_files.first().cloned().unwrap_or_default()
+                                    } else {
+                                        file_arg.to_string()
+                                    };
+                                    if file_path_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /summarize-file <file>  — AI one-page summary of any source file.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    match std::fs::read_to_string(&file_path_arg) {
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("/summarize-file: cannot read {file_path_arg}: {e}")));
+                                        }
+                                        Ok(src) => {
+                                            let truncated: String = src.chars().take(10000).collect();
+                                            let prompt = format!(
+                                                "Summarize `{file_path_arg}` on one page. Include: purpose, key types/functions/classes, \
+                                                 important dependencies, how it fits in the system, and any notable quirks or TODOs.\n\n```\n{truncated}\n```"
+                                            );
+                                            let ts2 = std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs();
+                                            ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                        }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /deps-audit — run cargo audit or npm audit and send findings to AI
+                                "/deps-audit" => {
+                                    let has_cargo = std::path::Path::new("Cargo.toml").exists();
+                                    let has_npm = std::path::Path::new("package.json").exists();
+                                    let (audit_cmd, audit_args) = if has_cargo {
+                                        ("cargo", vec!["audit", "--color", "never"])
+                                    } else if has_npm {
+                                        ("npm", vec!["audit", "--json"])
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("/deps-audit: no Cargo.toml or package.json found.".into()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    };
+                                    let out = std::process::Command::new(audit_cmd)
+                                        .args(&audit_args)
+                                        .output()
+                                        .ok()
+                                        .map(|o| {
+                                            let stdout = String::from_utf8_lossy(&o.stdout).to_string();
+                                            let stderr = String::from_utf8_lossy(&o.stderr).to_string();
+                                            format!("{stdout}{stderr}")
+                                        })
+                                        .unwrap_or_else(|| format!("Failed to run {audit_cmd}"));
+                                    if out.trim().is_empty() || out.contains("No vulnerabilities found") {
+                                        ui.chat_lines.push(ChatLine::SystemNote("/deps-audit: no vulnerabilities found! Dependencies look clean.".into()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let truncated: String = out.chars().take(6000).collect();
+                                    let prompt = format!(
+                                        "Here is the dependency audit output for this project. \
+                                         Please summarise the vulnerabilities by severity, \
+                                         explain the impact of each, and recommend specific fixes or upgrades.\n\n```\n{truncated}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-fix-error <msg> — AI diagnoses and fixes a pasted error
+                                cmd_str if cmd_str.starts_with("/ai-fix-error ") || cmd_str == "/ai-fix-error" => {
+                                    let err_msg = cmd_str.trim_start_matches("/ai-fix-error").trim();
+                                    if err_msg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /ai-fix-error <error message>  — paste an error and AI will diagnose and fix it.\n  Tip: multi-line errors can be pasted directly.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let context_hint = if !ui.context_files.is_empty() {
+                                        format!("\n\nContext files: {}", ui.context_files.join(", "))
+                                    } else {
+                                        String::new()
+                                    };
+                                    let prompt = format!(
+                                        "I got the following error. Please:\n\
+                                         1. Identify the root cause\n\
+                                         2. Show the exact fix with the corrected code\n\
+                                         3. Explain why the error occurred\n\
+                                         {context_hint}\n\nError:\n```\n{err_msg}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /complexity-check — find large functions and ask AI to simplify
+                                "/complexity-check" => {
+                                    // Count lines per function by looking for fn/function/def with large bodies
+                                    let output = std::process::Command::new("sh")
+                                        .arg("-c")
+                                        .arg(r#"grep -rn --include="*.rs" --include="*.ts" --include="*.py" --include="*.go" -E "^(pub )?(async )?(fn |def |function |func )" . | head -100"#)
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    if output.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("/complexity-check: no source functions found in cwd.".into()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    // Also count total lines per file to give a rough complexity signal
+                                    let wc = std::process::Command::new("sh")
+                                        .arg("-c")
+                                        .arg(r#"find . -not -path "./.git/*" \( -name "*.rs" -o -name "*.ts" -o -name "*.py" -o -name "*.go" \) -exec wc -l {} \; 2>/dev/null | sort -rn | head -20"#)
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    let prompt = format!(
+                                        "Here is a complexity overview of this codebase. \
+                                         Please identify the top 3–5 functions or files most likely to have high complexity, \
+                                         explain why, and suggest concrete refactoring strategies.\n\n\
+                                         ## Function declarations\n```\n{output}\n```\n\
+                                         ## File sizes (lines)\n```\n{wc}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -20307,6 +20504,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/refactor-to ", "/inline-explain",
                             "/security-scan", "/changelog-entry",
                             "/test-gen ", "/hotkey-ref",
+                            "/ai-review", "/ai-review ", "/summarize-file", "/summarize-file ",
+                            "/deps-audit", "/ai-fix-error ", "/complexity-check",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
