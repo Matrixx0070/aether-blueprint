@@ -5362,6 +5362,7 @@ Input shortcuts\n\
     ◈ /scaffold /impl /gen-readme /gen-api-docs /pseudocode     code generation\n\
     ◈ /session-summary /ai-plan /workflow /prompt-engineer /ai-debug  AI session tools\n\
     ◈ /env-vars /dotenv /config-lint /path /which-all             env + config mgmt\n\
+    ◈ /duck /wiki /cve /gh-search                                web search + research\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -12750,6 +12751,244 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // ── Batch 106: Web search + research tools ───────────────────────
+                                cmd if cmd.starts_with("/duck ") || cmd == "/duck" => {
+                                    // /duck <query>  — DuckDuckGo Instant Answer (free, no API key)
+                                    let query = cmd.trim_start_matches("/duck").trim();
+                                    if query.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /duck <search query>".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let encoded: String = query.chars().map(|c| {
+                                        if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' { c.to_string() }
+                                        else { format!("%{:02X}", c as u32) }
+                                    }).collect();
+                                    let url = format!("https://api.duckduckgo.com/?q={encoded}&format=json&no_html=1&skip_disambig=1");
+                                    let out = std::process::Command::new("curl")
+                                        .args(["-s", "--max-time", "8", "-A", "aether/0.35", &url])
+                                        .output();
+                                    match out {
+                                        Ok(o) if !o.stdout.is_empty() => {
+                                            let raw = String::from_utf8_lossy(&o.stdout).to_string();
+                                            match serde_json::from_str::<serde_json::Value>(&raw) {
+                                                Ok(v) => {
+                                                    let mut body = format!("DuckDuckGo: {query}\n────────────────────────────────────────────────\n");
+                                                    // Abstract (instant answer)
+                                                    if let Some(abs) = v["Abstract"].as_str().filter(|s| !s.is_empty()) {
+                                                        body.push_str(&format!("  {abs}\n\n"));
+                                                    }
+                                                    // Answer (e.g., calculator results)
+                                                    if let Some(ans) = v["Answer"].as_str().filter(|s| !s.is_empty()) {
+                                                        body.push_str(&format!("  Answer: {ans}\n\n"));
+                                                    }
+                                                    // Definition
+                                                    if let Some(def) = v["Definition"].as_str().filter(|s| !s.is_empty()) {
+                                                        body.push_str(&format!("  Definition: {def}\n\n"));
+                                                    }
+                                                    // Related Topics
+                                                    if let Some(topics) = v["RelatedTopics"].as_array() {
+                                                        let results: Vec<String> = topics.iter()
+                                                            .filter_map(|t| {
+                                                                let text = t["Text"].as_str().filter(|s| !s.is_empty())?;
+                                                                let url = t["FirstURL"].as_str().unwrap_or("");
+                                                                Some(format!("  • {text}\n    {url}"))
+                                                            })
+                                                            .take(8)
+                                                            .collect();
+                                                        if !results.is_empty() {
+                                                            body.push_str("Related:\n");
+                                                            body.push_str(&results.join("\n"));
+                                                            body.push('\n');
+                                                        }
+                                                    }
+                                                    // Source URL
+                                                    if let Some(src) = v["AbstractURL"].as_str().filter(|s| !s.is_empty()) {
+                                                        body.push_str(&format!("\n  Source: {src}\n"));
+                                                    }
+                                                    if body.trim_end_matches(['─', '\n', ' ']).ends_with("DuckDuckGo: ") ||
+                                                       body.lines().count() <= 3 {
+                                                        body.push_str("  (No instant answer — try refining your query)\n");
+                                                    }
+                                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                                }
+                                                Err(_) => {
+                                                    ui.chat_lines.push(ChatLine::SystemNote(format!("DuckDuckGo: Could not parse response for '{query}'")));
+                                                }
+                                            }
+                                        }
+                                        Ok(_) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("DuckDuckGo: no response for '{query}' (network issue?)")));
+                                        }
+                                        Err(_) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote("curl not found — /duck requires curl to be installed.".to_string()));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/wiki ") || cmd == "/wiki" => {
+                                    // /wiki <topic>  — Wikipedia article summary
+                                    let topic = cmd.trim_start_matches("/wiki").trim();
+                                    if topic.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /wiki <topic>".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let encoded: String = topic.replace(' ', "_")
+                                        .chars().map(|c| {
+                                            if c.is_alphanumeric() || c == '_' || c == '-' || c == '(' || c == ')' { c.to_string() }
+                                            else { format!("%{:02X}", c as u32) }
+                                        }).collect();
+                                    let url = format!("https://en.wikipedia.org/api/rest_v1/page/summary/{encoded}");
+                                    let out = std::process::Command::new("curl")
+                                        .args(["-s", "--max-time", "8", "-A", "aether/0.35",
+                                               "-H", "Accept: application/json", &url])
+                                        .output();
+                                    match out {
+                                        Ok(o) if !o.stdout.is_empty() => {
+                                            let raw = String::from_utf8_lossy(&o.stdout).to_string();
+                                            match serde_json::from_str::<serde_json::Value>(&raw) {
+                                                Ok(v) => {
+                                                    let title = v["title"].as_str().unwrap_or(topic);
+                                                    let summary = v["extract"].as_str().unwrap_or("(no summary)");
+                                                    let wiki_url = v["content_urls"]["desktop"]["page"].as_str().unwrap_or("");
+                                                    let mut body = format!("Wikipedia: {title}\n────────────────────────────────────────────────\n");
+                                                    // wrap summary at ~80 chars
+                                                    let mut line_len = 0usize;
+                                                    body.push_str("  ");
+                                                    for word in summary.split_whitespace() {
+                                                        if line_len + word.len() + 1 > 80 {
+                                                            body.push('\n'); body.push_str("  ");
+                                                            line_len = 0;
+                                                        }
+                                                        body.push_str(word); body.push(' ');
+                                                        line_len += word.len() + 1;
+                                                    }
+                                                    body.push('\n');
+                                                    if !wiki_url.is_empty() {
+                                                        body.push_str(&format!("\n  Source: {wiki_url}\n"));
+                                                    }
+                                                    if let Some(err) = v["type"].as_str().filter(|&t| t == "disambiguation") {
+                                                        let _ = err;
+                                                        body.push_str("\n  (disambiguation page — try a more specific topic)\n");
+                                                    }
+                                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                                }
+                                                Err(_) => { ui.chat_lines.push(ChatLine::SystemNote(format!("Wikipedia: could not parse response for '{topic}'"))); }
+                                            }
+                                        }
+                                        Ok(_) => { ui.chat_lines.push(ChatLine::SystemNote(format!("Wikipedia: topic not found or network error: '{topic}'"))); }
+                                        Err(_) => { ui.chat_lines.push(ChatLine::SystemNote("curl not found — /wiki requires curl.".to_string())); }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/cve ") || cmd == "/cve" => {
+                                    // /cve <CVE-ID>  — CVE vulnerability lookup via NIST NVD
+                                    let cve_id = cmd.trim_start_matches("/cve").trim().to_uppercase();
+                                    if cve_id.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /cve <CVE-ID>\n  Example: /cve CVE-2021-44228".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let url = format!("https://services.nvd.nist.gov/rest/json/cves/2.0?cveId={cve_id}");
+                                    let out = std::process::Command::new("curl")
+                                        .args(["-s", "--max-time", "10", "-A", "aether/0.35", &url])
+                                        .output();
+                                    match out {
+                                        Ok(o) if !o.stdout.is_empty() => {
+                                            let raw = String::from_utf8_lossy(&o.stdout).to_string();
+                                            match serde_json::from_str::<serde_json::Value>(&raw) {
+                                                Ok(v) => {
+                                                    let mut body = format!("CVE: {cve_id}\n────────────────────────────────────────────────\n");
+                                                    if let Some(vuln) = v["vulnerabilities"].as_array().and_then(|a| a.first()) {
+                                                        let cve = &vuln["cve"];
+                                                        // Description
+                                                        if let Some(descs) = cve["descriptions"].as_array() {
+                                                            if let Some(en) = descs.iter().find(|d| d["lang"].as_str() == Some("en")) {
+                                                                let desc = en["value"].as_str().unwrap_or("");
+                                                                body.push_str(&format!("  {desc}\n\n"));
+                                                            }
+                                                        }
+                                                        // CVSS score
+                                                        if let Some(metrics) = cve["metrics"]["cvssMetricV31"].as_array().and_then(|a| a.first()) {
+                                                            let score = metrics["cvssData"]["baseScore"].as_f64().unwrap_or(0.0);
+                                                            let severity = metrics["cvssData"]["baseSeverity"].as_str().unwrap_or("UNKNOWN");
+                                                            let vector = metrics["cvssData"]["vectorString"].as_str().unwrap_or("");
+                                                            body.push_str(&format!("  CVSS v3.1: {:.1} {severity}  {vector}\n", score));
+                                                        }
+                                                        // Published date
+                                                        if let Some(pub_date) = cve["published"].as_str() {
+                                                            body.push_str(&format!("  Published: {}\n", &pub_date[..10]));
+                                                        }
+                                                        // References (first 3)
+                                                        if let Some(refs) = cve["references"].as_array() {
+                                                            body.push_str("\n  References:\n");
+                                                            for r in refs.iter().take(3) {
+                                                                if let Some(url) = r["url"].as_str() {
+                                                                    body.push_str(&format!("    {url}\n"));
+                                                                }
+                                                            }
+                                                        }
+                                                    } else {
+                                                        body.push_str("  (CVE not found in NVD)\n");
+                                                    }
+                                                    body.push_str(&format!("\n  Full details: https://nvd.nist.gov/vuln/detail/{cve_id}\n"));
+                                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                                }
+                                                Err(_) => { ui.chat_lines.push(ChatLine::SystemNote(format!("CVE: could not parse NVD response for {cve_id}"))); }
+                                            }
+                                        }
+                                        Ok(_) => { ui.chat_lines.push(ChatLine::SystemNote(format!("CVE: no data returned for {cve_id}"))); }
+                                        Err(_) => { ui.chat_lines.push(ChatLine::SystemNote("curl not found — /cve requires curl.".to_string())); }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/gh-search ") || cmd == "/gh-search" => {
+                                    // /gh-search <query>  — search GitHub repos/issues via gh CLI
+                                    let query = cmd.trim_start_matches("/gh-search").trim();
+                                    if query.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /gh-search <query>\n  Searches GitHub repos. Requires gh CLI + auth.".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let out = std::process::Command::new("gh")
+                                        .args(["search", "repos", query, "--limit", "10",
+                                               "--json", "name,description,stargazersCount,url,language"])
+                                        .output();
+                                    match out {
+                                        Ok(o) if o.status.success() => {
+                                            let raw = String::from_utf8_lossy(&o.stdout).to_string();
+                                            match serde_json::from_str::<serde_json::Value>(&raw) {
+                                                Ok(v) => {
+                                                    let mut body = format!("GitHub search: {query}\n────────────────────────────────────────────────\n");
+                                                    if let Some(repos) = v.as_array() {
+                                                        for r in repos {
+                                                            let name = r["name"].as_str().unwrap_or("?");
+                                                            let desc = r["description"].as_str().unwrap_or("(no description)");
+                                                            let stars = r["stargazersCount"].as_u64().unwrap_or(0);
+                                                            let lang = r["language"].as_str().unwrap_or("");
+                                                            let url = r["url"].as_str().unwrap_or("");
+                                                            body.push_str(&format!("  ★{stars:<6}  {name}  [{lang}]\n    {desc}\n    {url}\n\n"));
+                                                        }
+                                                        if repos.is_empty() { body.push_str("  (no results)\n"); }
+                                                    }
+                                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                                }
+                                                Err(_) => { ui.chat_lines.push(ChatLine::SystemNote(format!("gh search: could not parse results for '{query}'"))); }
+                                            }
+                                        }
+                                        Ok(o) => {
+                                            let err = String::from_utf8_lossy(&o.stderr).trim().to_string();
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("gh search failed: {err}\n  Try: gh auth login")));
+                                        }
+                                        Err(_) => { ui.chat_lines.push(ChatLine::SystemNote("gh CLI not found — install: https://cli.github.com/".to_string())); }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -13388,7 +13627,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/dotenv", "/dotenv ", "/env-vars", "/env-vars ", "/flashcard ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/impl ", "/man-ai ", "/path", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/session-summary", "/teach ", "/which-all ", "/workflow", "/workflow ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
+                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/cve ", "/dotenv", "/dotenv ", "/duck ", "/env-vars", "/env-vars ", "/flashcard ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/gh-search ", "/impl ", "/man-ai ", "/path", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/session-summary", "/teach ", "/which-all ", "/wiki ", "/workflow", "/workflow ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
