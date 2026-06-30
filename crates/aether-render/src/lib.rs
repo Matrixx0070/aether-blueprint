@@ -409,6 +409,10 @@ pub enum UiCommand {
     ReplayLast,
     /// List past user messages with their indices.
     QueryReplayList,
+    /// Full-text search across conversation history items (returns matches).
+    SearchHistory(String),
+    /// Full-text search across tool output history (tool_output_history values).
+    SearchToolOutputs(String),
     /// Schedule a pause after N more autonomous turns (0 = clear).
     SetPauseAfter(usize),
     /// Pause the agent after the current turn completes.

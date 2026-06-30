@@ -6564,6 +6564,82 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::SearchHistory(query) => {
+                    use aether_core::context::ConversationItem;
+                    let q = query.to_ascii_lowercase();
+                    let mut results: Vec<String> = Vec::new();
+                    for (i, item) in session.history.iter().enumerate() {
+                        let (kind, text) = match item {
+                            ConversationItem::User(t) => ("User", t.as_str()),
+                            ConversationItem::Assistant { text: Some(t), .. } => ("Assistant", t.as_str()),
+                            ConversationItem::Assistant { text: None, .. } => continue,
+                            ConversationItem::ToolResults(_) => continue,
+                        };
+                        let lc = text.to_ascii_lowercase();
+                        if lc.contains(&q) {
+                            // Find and show up to 2 matching lines.
+                            let mut shown = 0usize;
+                            for line in text.lines() {
+                                if line.to_ascii_lowercase().contains(&q) {
+                                    let preview: String = line.chars().take(90).collect();
+                                    results.push(format!(
+                                        "  [item {i}, {kind}] {preview}{}",
+                                        if line.len() > 90 { "…" } else { "" }
+                                    ));
+                                    shown += 1;
+                                    if shown >= 2 { break; }
+                                }
+                            }
+                        }
+                    }
+                    let note = if results.is_empty() {
+                        format!("Search history: no matches for \"{query}\" ({} items searched).", session.history.len())
+                    } else {
+                        format!(
+                            "Search history: {} match(es) for \"{query}\" ({} items searched):\n{}",
+                            results.len(), session.history.len(), results.join("\n")
+                        )
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::SearchToolOutputs(query) => {
+                    let q = query.to_ascii_lowercase();
+                    let mut results: Vec<String> = Vec::new();
+                    let mut names: Vec<&String> = session.tool_output_history.keys().collect();
+                    names.sort();
+                    for name in names {
+                        let (_, latest) = &session.tool_output_history[name];
+                        let lc = latest.to_ascii_lowercase();
+                        if lc.contains(&q) {
+                            let mut shown = 0usize;
+                            for line in latest.lines() {
+                                if line.to_ascii_lowercase().contains(&q) {
+                                    let preview: String = line.chars().take(90).collect();
+                                    results.push(format!(
+                                        "  [tool: {name}] {preview}{}",
+                                        if line.len() > 90 { "…" } else { "" }
+                                    ));
+                                    shown += 1;
+                                    if shown >= 2 { break; }
+                                }
+                            }
+                        }
+                    }
+                    let note = if results.is_empty() {
+                        format!(
+                            "Search tool outputs: no matches for \"{query}\" ({} tools tracked).",
+                            session.tool_output_history.len()
+                        )
+                    } else {
+                        format!(
+                            "Search tool outputs: {} match(es) for \"{query}\":\n{}",
+                            results.len(), results.join("\n")
+                        )
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::SetPauseAfter(n) => {
                     session.pause_after_turns = n;
                     session.pause_now = false;
@@ -26404,6 +26480,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /search-history <query> — full-text search conversation history
+                                cmd_str if cmd_str.starts_with("/search-history ") => {
+                                    let query = cmd_str.trim_start_matches("/search-history ").trim().to_string();
+                                    if _ctx.send(UiCommand::SearchHistory(query)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /search-tools <query> — full-text search tool output history
+                                cmd_str if cmd_str.starts_with("/search-tools ") => {
+                                    let query = cmd_str.trim_start_matches("/search-tools ").trim().to_string();
+                                    if _ctx.send(UiCommand::SearchToolOutputs(query)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /pause-after <n> — schedule a pause after N more autonomous turns
                                 cmd_str if cmd_str.starts_with("/pause-after ") => {
                                     let arg = cmd_str.trim_start_matches("/pause-after ").trim();
@@ -27178,6 +27272,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/pause-now",
                             "/resume",
                             "/pause-status",
+                            "/search-history ",
+                            "/search-tools ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
