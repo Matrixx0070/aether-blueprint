@@ -6778,6 +6778,73 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::ResetSessionMetrics => {
+                    let n = session.turn_cost_log.len();
+                    session.turn_cost_log.clear();
+                    session.turn_wall_ms.clear();
+                    session.turn_models.clear();
+                    session.cost_alert_fired = false;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session metrics reset. Cleared {n} turn cost record(s), wall-time entries, and model history. History and plan unchanged."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryMultiSearch(patterns_str) => {
+                    let patterns: Vec<String> = patterns_str.split('|').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect();
+                    if patterns.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No patterns provided. Usage: /multi-search <p1>|<p2>".to_string()));
+                    } else {
+                        let mut results: Vec<String> = Vec::new();
+                        for (idx, item) in session.history.iter().enumerate() {
+                            let entry: Option<(&str, &str)> = match item {
+                                ConversationItem::User(t) => Some(("User", t.as_str())),
+                                ConversationItem::Assistant { text: Some(t), .. } => Some(("Asst", t.as_str())),
+                                _ => None,
+                            };
+                            if let Some((role, text)) = entry {
+                                let lower = text.to_lowercase();
+                                for pat in &patterns {
+                                    if lower.contains(pat.as_str()) {
+                                        let preview: String = text.chars().take(80).collect::<String>().replace('\n', " ");
+                                        results.push(format!("[{idx}] {role}: {preview}"));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if results.is_empty() {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Multi-search [{}]: no matches in {} history item(s).", patterns_str, session.history.len()
+                            )));
+                        } else {
+                            let msg = format!("Multi-search [{}]: {} match(es)\n{}", patterns_str, results.len(), results.join("\n"));
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolTimeline => {
+                    let mut lines: Vec<String> = Vec::new();
+                    let mut turn = 0usize;
+                    for item in &session.history {
+                        match item {
+                            ConversationItem::User(_) => { turn += 1; }
+                            ConversationItem::Assistant { tool_uses, .. } => {
+                                for tu in tool_uses {
+                                    lines.push(format!("  Turn {turn:>3}  {}", tu.name));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    if lines.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No tool calls in history.".to_string()));
+                    } else {
+                        let msg = format!("Tool timeline ({} total call(s)):\n{}", lines.len(), lines.join("\n"));
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
                 UiCommand::QueryCostTimeline => {
                     if session.turn_cost_log.is_empty() {
                         let _ = etx_for_driver.send(UiEvent::SystemNote("No turns recorded yet.".to_string()));
@@ -29448,6 +29515,35 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /session-reset-metrics — clear cost/timing/model metrics without clearing history
+                                "/session-reset-metrics" => {
+                                    if _ctx.send(UiCommand::ResetSessionMetrics).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /multi-search <p1>|<p2> — OR-search history for any pattern
+                                cmd_str if cmd_str.starts_with("/multi-search ") => {
+                                    let patterns = cmd_str.trim_start_matches("/multi-search ").trim().to_string();
+                                    if patterns.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /multi-search <pattern1>|<pattern2>|...".to_string()));
+                                    } else if _ctx.send(UiCommand::QueryMultiSearch(patterns)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tool-timeline — chronological log of all tool calls by turn
+                                "/tool-timeline" => {
+                                    if _ctx.send(UiCommand::QueryToolTimeline).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -30071,6 +30167,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/find-todos",
                             "/export-csv ",
                             "/turn-cost ",
+                            "/session-reset-metrics",
+                            "/multi-search ",
+                            "/tool-timeline",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

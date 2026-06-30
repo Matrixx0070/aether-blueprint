@@ -635,6 +635,12 @@ pub enum UiCommand {
     PopHistory,
     /// Show the number of items in the conversation history.
     QueryHistoryLen,
+    /// Reset session metrics (turn_cost_log, turn_wall_ms, turn_models) without clearing history.
+    ResetSessionMetrics,
+    /// OR-search across conversation history for any of the given pipe-separated patterns.
+    QueryMultiSearch(String),
+    /// Show a chronological log of all tool calls grouped by turn index.
+    QueryToolTimeline,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
