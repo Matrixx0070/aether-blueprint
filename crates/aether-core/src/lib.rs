@@ -361,6 +361,11 @@ pub struct Session {
     /// When Some, this string is appended to every user message before AI dispatch.
     /// Applied after think-aloud. Cleared with /request-suffix off.
     pub request_suffix: Option<String>,
+
+    /// Auto-tag rules: (substring_pattern, bookmark_label).
+    /// After each turn, if the assistant response contains the pattern, a bookmark
+    /// is automatically added at that turn with the given label.
+    pub auto_tag_rules: Vec<(String, String)>,
 }
 
 impl Session {
@@ -454,6 +459,7 @@ impl Session {
             token_budget_warn_fired: false,
             request_prefix: None,
             request_suffix: None,
+            auto_tag_rules: Vec::new(),
         }
     }
 

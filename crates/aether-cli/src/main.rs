@@ -6707,6 +6707,84 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::QueryResponseGrep(pattern) => {
+                    use aether_core::context::ConversationItem;
+                    let pat_lower = pattern.to_lowercase();
+                    let mut matches: Vec<(usize, usize, String)> = Vec::new();
+                    for (hist_idx, item) in session.history.iter().enumerate() {
+                        if let ConversationItem::Assistant { text: Some(t), .. } = item {
+                            for (line_no, line) in t.lines().enumerate() {
+                                if line.to_lowercase().contains(&pat_lower) {
+                                    matches.push((hist_idx, line_no + 1, line.trim().to_string()));
+                                }
+                            }
+                        }
+                    }
+                    if matches.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "No matches for \"{pattern}\" in assistant responses."
+                        )));
+                    } else {
+                        let mut msg = format!("{} match(es) for \"{pattern}\":\n", matches.len());
+                        for (hist_idx, line_no, line) in &matches {
+                            let preview: String = line.chars().take(120).collect();
+                            let ellipsis = if line.len() > 120 { "…" } else { "" };
+                            msg.push_str(&format!("  [hist#{hist_idx} line {line_no}] {preview}{ellipsis}\n"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
+                UiCommand::AddAutoTag(pattern, label) => {
+                    session.auto_tag_rules.push((pattern.clone(), label.clone()));
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Auto-tag rule #{}: pattern=\"{pattern}\" label=\"{label}\". {} rule(s) active.",
+                        session.auto_tag_rules.len() - 1, session.auto_tag_rules.len()
+                    )));
+                    continue;
+                }
+                UiCommand::DelAutoTag(idx) => {
+                    if idx < session.auto_tag_rules.len() {
+                        let (pat, lbl) = session.auto_tag_rules.remove(idx);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Auto-tag rule #{idx} deleted: pattern=\"{pat}\" label=\"{lbl}\". {} remaining.",
+                            session.auto_tag_rules.len()
+                        )));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "No auto-tag rule #{idx}. {} rule(s) active.", session.auto_tag_rules.len()
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryAutoTags => {
+                    if session.auto_tag_rules.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "No auto-tag rules. Use /auto-tag <pattern> <label> to add one.".to_string()
+                        ));
+                    } else {
+                        let mut msg = format!("Auto-tag rules  ({} active)\n", session.auto_tag_rules.len());
+                        for (i, (pat, lbl)) in session.auto_tag_rules.iter().enumerate() {
+                            msg.push_str(&format!("  [{i}] pattern=\"{pat}\"  label=\"{lbl}\"\n"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
+                UiCommand::RepeatLast => {
+                    use aether_core::context::ConversationItem;
+                    match session.history.iter().rev().find_map(|item| {
+                        if let ConversationItem::User(s) = item { Some(s.clone()) } else { None }
+                    }) {
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "No previous user message to repeat.".to_string()
+                            ));
+                            continue;
+                        }
+                        Some(last_msg) => last_msg
+                    }
+                }
                 UiCommand::QueryShowCode => {
                     use aether_core::context::ConversationItem;
                     let last_text = session.history.iter().rev().find_map(|item| {
@@ -9139,6 +9217,25 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 if !buf.is_empty() {
                     let _ = cf.write_all(buf.as_bytes());
                     capture_bytes += buf.len() as u64;
+                }
+            }
+            // Auto-tag: check each rule against the latest assistant response.
+            if !session.auto_tag_rules.is_empty() {
+                use aether_core::context::ConversationItem;
+                if let Some(latest) = session.history.iter().rev().find_map(|item| {
+                    if let ConversationItem::Assistant { text: Some(t), .. } = item { Some(t.clone()) } else { None }
+                }) {
+                    let lower = latest.to_lowercase();
+                    for (pat, lbl) in session.auto_tag_rules.clone() {
+                        if lower.contains(&pat.to_lowercase()) {
+                            let turn = session.turn_index;
+                            let hist_len = session.history.len();
+                            session.bookmarks.push((turn, hist_len, lbl.clone()));
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Auto-tag: pattern \"{pat}\" matched — bookmark added: \"{lbl}\" at turn {turn}."
+                            )));
+                        }
+                    }
                 }
             }
             // Post-turn hook: if configured and tools were used this turn, run the
@@ -27842,6 +27939,64 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /response-grep <pattern> — grep all assistant responses for pattern
+                                cmd_str if cmd_str.starts_with("/response-grep ") => {
+                                    let pattern = cmd_str.trim_start_matches("/response-grep ").trim().to_string();
+                                    if _ctx.send(UiCommand::QueryResponseGrep(pattern)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /auto-tag <pattern> <label> — add an auto-bookmark rule
+                                cmd_str if cmd_str.starts_with("/auto-tag ") && !cmd_str.starts_with("/auto-tag-") => {
+                                    let rest = cmd_str.trim_start_matches("/auto-tag ").trim();
+                                    let mut parts = rest.splitn(2, ' ');
+                                    let pattern = parts.next().unwrap_or("").trim().to_string();
+                                    let label = parts.next().unwrap_or("").trim().to_string();
+                                    if pattern.is_empty() || label.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /auto-tag <pattern> <label>".to_string()
+                                        ));
+                                    } else if _ctx.send(UiCommand::AddAutoTag(pattern, label)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /auto-tag-list — list all auto-tag rules
+                                "/auto-tag-list" => {
+                                    if _ctx.send(UiCommand::QueryAutoTags).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /auto-tag-del <n> — delete auto-tag rule by index
+                                cmd_str if cmd_str.starts_with("/auto-tag-del ") => {
+                                    let arg = cmd_str.trim_start_matches("/auto-tag-del ").trim();
+                                    if let Ok(n) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::DelAutoTag(n)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /auto-tag-del <index>".to_string()
+                                        ));
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /repeat-last — resend the last user message
+                                "/repeat-last" => {
+                                    if _ctx.send(UiCommand::RepeatLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /show-code — extract all fenced code blocks from last response
                                 "/show-code" => {
                                     if _ctx.send(UiCommand::QueryShowCode).is_err() { break 'outer; }
@@ -28518,6 +28673,11 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/show-code",
                             "/show-urls",
                             "/cost-since ",
+                            "/response-grep ",
+                            "/auto-tag ",
+                            "/auto-tag-list",
+                            "/auto-tag-del ",
+                            "/repeat-last",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -417,6 +417,16 @@ pub enum UiCommand {
     JumpBookmark(usize),
     /// Delete a bookmark by 0-based index.
     DeleteBookmark(usize),
+    /// Search all assistant responses for a substring pattern (case-insensitive).
+    QueryResponseGrep(String),
+    /// Add an auto-tag rule: (pattern, label) — bookmark added when response matches.
+    AddAutoTag(String, String),
+    /// Remove an auto-tag rule by 0-based index.
+    DelAutoTag(usize),
+    /// List all auto-tag rules.
+    QueryAutoTags,
+    /// Resend the last user message as a new user turn.
+    RepeatLast,
     /// Extract and display all fenced code blocks from the last assistant response.
     QueryShowCode,
     /// Extract and display all URLs from the last assistant response.
