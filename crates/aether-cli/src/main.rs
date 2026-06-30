@@ -6406,6 +6406,49 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 UiCommand::SetAlias(_, _) | UiCommand::RemoveAlias(_) | UiCommand::QueryAliases => {
                     continue;
                 }
+                UiCommand::AddStickyContext(snippet) => {
+                    let preview: String = snippet.chars().take(60).collect();
+                    session.sticky_context.push(snippet.clone());
+                    let n = session.sticky_context.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Sticky context [{n}] added: {preview}{}",
+                        if snippet.len() > 60 { "…" } else { "" }
+                    )));
+                    continue;
+                }
+                UiCommand::RemoveStickyContext(idx) => {
+                    let note = if idx < session.sticky_context.len() {
+                        let removed: String = session.sticky_context.remove(idx).chars().take(50).collect();
+                        format!("Sticky context [{idx}] removed: {removed}…")
+                    } else {
+                        format!("No sticky context at index {idx}.")
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryStickyContext => {
+                    let note = if session.sticky_context.is_empty() {
+                        "Sticky context: empty. Use /sticky-add <text> to add snippets.".to_string()
+                    } else {
+                        let lines: Vec<String> = session.sticky_context.iter().enumerate()
+                            .map(|(i, s)| {
+                                let preview: String = s.chars().take(80).collect();
+                                format!("  [{i}] {preview}{}", if s.len() > 80 { "…" } else { "" })
+                            })
+                            .collect();
+                        format!("=== Sticky context ({} entry/entries) ===\n{}", lines.len(), lines.join("\n"))
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::ClearStickyContext => {
+                    let n = session.sticky_context.len();
+                    session.sticky_context.clear();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Sticky context cleared ({n} entry/entries removed)."
+                    )));
+                    continue;
+                }
                 UiCommand::ExportTurns(path, fmt) => {
                     use aether_core::context::ConversationItem;
                     let log = &session.turn_cost_log;
@@ -25206,6 +25249,42 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /sticky-add <text> — add to sticky context (prepended to system prompt)
+                                cmd_str if cmd_str.starts_with("/sticky-add ") => {
+                                    let text = cmd_str.trim_start_matches("/sticky-add ").trim().to_string();
+                                    if _ctx.send(UiCommand::AddStickyContext(text)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /sticky-rm <n> — remove a sticky context entry by index
+                                cmd_str if cmd_str.starts_with("/sticky-rm ") => {
+                                    let arg = cmd_str.trim_start_matches("/sticky-rm ").trim();
+                                    if let Ok(n) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::RemoveStickyContext(n)).is_err() { break 'outer; }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /sticky-list — show all sticky context entries
+                                "/sticky-list" => {
+                                    if _ctx.send(UiCommand::QueryStickyContext).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /sticky-clear — remove all sticky context entries
+                                "/sticky-clear" => {
+                                    if _ctx.send(UiCommand::ClearStickyContext).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /export-turns [path] — export full session turn log (json or md)
                                 cmd_str if cmd_str == "/export-turns" || cmd_str.starts_with("/export-turns ") => {
                                     let arg = cmd_str.trim_start_matches("/export-turns").trim();
@@ -25960,6 +26039,10 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/format", "/format json", "/format markdown", "/format plain", "/format off",
                             "/format-show",
                             "/export-turns", "/export-turns ",
+                            "/sticky-add ",
+                            "/sticky-rm ",
+                            "/sticky-list",
+                            "/sticky-clear",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

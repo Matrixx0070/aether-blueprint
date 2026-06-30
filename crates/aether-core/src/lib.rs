@@ -274,6 +274,11 @@ pub struct Session {
     /// None = no format constraint. Options: "json", "markdown", "plain", or
     /// a custom string.
     pub response_format: Option<String>,
+
+    /// Sticky context snippets prepended to the system prompt every turn.
+    /// Higher priority than persistent_reminders — injected before the
+    /// conversation history so the LLM sees them as "ground truth."
+    pub sticky_context: Vec<String>,
 }
 
 impl Session {
@@ -343,6 +348,7 @@ impl Session {
             tool_deny: Vec::new(),
             session_env: std::collections::HashMap::new(),
             response_format: None,
+            sticky_context: Vec::new(),
         }
     }
 
@@ -492,6 +498,16 @@ async fn agent_turn_inner(
     }
 
     let ctx = session.activation_context();
+
+    // Sticky context: high-priority snippets prepended before persistent reminders.
+    // Injected first so they appear closest to the top of the assembled system prompt.
+    for (i, snippet) in session.sticky_context.iter().enumerate() {
+        session.pending_reminders.push(Reminder::new(
+            ReminderKind::SystemWarning,
+            Source::Kernel,
+            format!("[Sticky context {i}] {snippet}"),
+        ));
+    }
 
     // Re-inject persistent (standing) reminders set by the user via
     // `/remind`. These fire every turn and survive compaction — they're

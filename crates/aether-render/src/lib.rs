@@ -287,6 +287,14 @@ pub enum UiCommand {
     RemovePlaybookEntry(usize),
     /// List all error playbook entries.
     QueryPlaybook,
+    /// Add a snippet to the sticky context list (prepended to system prompt every turn).
+    AddStickyContext(String),
+    /// Remove a sticky context entry by 0-based index.
+    RemoveStickyContext(usize),
+    /// List all sticky context entries.
+    QueryStickyContext,
+    /// Clear all sticky context entries.
+    ClearStickyContext,
     /// Export the full session turn log to a file (path, format: "json"|"md").
     ExportTurns(String, String),
     /// Set the preferred response format ("json", "markdown", "plain", or custom).
