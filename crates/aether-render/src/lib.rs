@@ -228,6 +228,10 @@ pub enum UiCommand {
     ClearAll,
     /// Pause autonomous agent at next AwaitUser by setting max_turns to turn_index.
     PauseAtNext,
+    /// Read a file and inject its content as user context into session history.
+    AttachFile(String),
+    /// Run a shell command and inject its output as user context.
+    ShellInject(String),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

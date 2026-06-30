@@ -5814,12 +5814,33 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         stuck_lines.push_str(&format!("\n    {name}: {n} error(s)"));
                     }
                     if stuck_lines.is_empty() { stuck_lines = " none".to_string(); }
+                    let compact_pct = if session.compaction_threshold_pct > 0.0 {
+                        format!("{:.0}% (custom)", session.compaction_threshold_pct * 100.0)
+                    } else {
+                        "80% (default)".to_string()
+                    };
+                    let turn_budget = if session.max_turns == 0 {
+                        "unlimited".to_string()
+                    } else {
+                        format!("{}/{}", session.turn_index, session.max_turns)
+                    };
+                    let timeout_desc = if session.llm_timeout_secs == 0 {
+                        "none".to_string()
+                    } else {
+                        format!("{}s", session.llm_timeout_secs)
+                    };
+                    let token_budget_desc = if session.token_budget == 0 {
+                        "unlimited".to_string()
+                    } else {
+                        format!("{}/{}", used, session.token_budget)
+                    };
                     let note = format!(
                         "=== Session Debug Dump ===\n\
-                         Model: {model}\n\
-                         Turn: {turn}  History items: {hist}\n\
+                         Model: {model}  |  Turn budget: {turn_budget}\n\
+                         Turn: {turn}  History items: {hist}  Persistent reminders: {prem}\n\
                          Wall time: {wall}s  LLM: last={last}ms avg={avg}ms total={total}ms\n\
-                         Context: {used}/{window} tokens ({pct}%)\n\
+                         Context: {used}/{window} tokens ({pct}%)  Compact at: {compact_pct}\n\
+                         Tokens: {token_budget_desc}  Timeout: {timeout_desc}  Verify: {verify}\n\
                          Cost: ${cost:.6}\n\
                          Tool cap: {cap_desc}\n\
                          Stuck tools:{stuck_lines}\n\
@@ -5829,11 +5850,13 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         model = session.config.model,
                         turn = session.turn_index,
                         hist = session.history.len(),
+                        prem = session.persistent_reminders.len(),
                         last = session.llm_ms_last,
                         avg = if session.turn_index > 0 { session.llm_ms_total / session.turn_index as u64 } else { 0 },
                         total = session.llm_ms_total,
                         cost = estimate_cost_usd(&session.config.model, &session.usage_total),
                         cap_desc = if session.config.max_tool_calls_per_turn == 0 { "unlimited".to_string() } else { session.config.max_tool_calls_per_turn.to_string() },
+                        verify = if session.verify_enabled { "on" } else { "OFF" },
                         last_err_tool = session.plan.last_error_tool.as_deref().unwrap_or("none"),
                         goal = session.plan.goal.as_deref().unwrap_or("none"),
                         plan = if session.plan.text.trim().is_empty() { "(empty)".to_string() } else { session.plan.text.clone() },
@@ -6253,6 +6276,48 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     session.max_turns = session.turn_index;
                     let _ = etx_for_driver.send(UiEvent::SystemNote(
                         format!("Pause scheduled: agent will stop after turn {}.", session.turn_index)));
+                    continue;
+                }
+                UiCommand::AttachFile(path) => {
+                    use aether_core::context::ConversationItem;
+                    let note = match std::fs::read_to_string(&path) {
+                        Err(e) => format!("Cannot read {path}: {e}"),
+                        Ok(content) => {
+                            let bytes = content.len();
+                            let lines = content.lines().count();
+                            let msg = format!(
+                                "[File attached: {path} ({lines} lines, {bytes} bytes)]\n\n```\n{content}\n```"
+                            );
+                            session.history.push(ConversationItem::User(msg));
+                            format!("Attached {path} ({lines} lines) as context (use /history 1 to verify).")
+                        }
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::ShellInject(cmd) => {
+                    use aether_core::context::ConversationItem;
+                    let note = match std::process::Command::new("sh")
+                        .arg("-c")
+                        .arg(&cmd)
+                        .output()
+                    {
+                        Err(e) => format!("Shell error: {e}"),
+                        Ok(out) => {
+                            let stdout = String::from_utf8_lossy(&out.stdout);
+                            let stderr = String::from_utf8_lossy(&out.stderr);
+                            let combined = if stderr.is_empty() {
+                                stdout.to_string()
+                            } else {
+                                format!("{stdout}\n[stderr]\n{stderr}")
+                            };
+                            let lines = combined.lines().count();
+                            let msg = format!("[Shell output: $ {cmd}]\n\n```\n{combined}\n```");
+                            session.history.push(ConversationItem::User(msg));
+                            format!("Injected shell output ({lines} lines) from: {cmd}")
+                        }
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
                 UiCommand::QuerySessionStats => {
@@ -23577,6 +23642,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /attach <path> — inject file contents as user context
+                                cmd_str if cmd_str.starts_with("/attach ") => {
+                                    let path = cmd_str.trim_start_matches("/attach ").trim().to_string();
+                                    if _ctx.send(UiCommand::AttachFile(path)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /shell <cmd> — run shell command and inject output as user context
+                                cmd_str if cmd_str.starts_with("/shell ") => {
+                                    let cmd = cmd_str.trim_start_matches("/shell ").trim().to_string();
+                                    if _ctx.send(UiCommand::ShellInject(cmd)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /goal [text] — set or show session goal (survives compaction)
                                 cmd_str if cmd_str.starts_with("/goal ") || cmd_str == "/goal" => {
                                     let arg = cmd_str.trim_start_matches("/goal").trim();
@@ -24022,6 +24105,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/clear-all",
                             "/pause",
                             "/next",
+                            "/attach ",
+                            "/shell ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
