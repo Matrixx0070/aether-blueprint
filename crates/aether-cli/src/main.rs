@@ -6707,6 +6707,69 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::QueryCostTimeline => {
+                    if session.turn_cost_log.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No turns recorded yet.".to_string()));
+                    } else {
+                        let bar_width = 25usize;
+                        let total_cost: f64 = session.turn_cost_log.iter().map(|&(_, _, _, c)| c).sum();
+                        let mut cumulative = 0.0f64;
+                        let mut msg = format!("Cost timeline  (total ${total_cost:.6})\n  # turn  cumulative     bar\n");
+                        for &(turn, _, _, cost) in &session.turn_cost_log {
+                            cumulative += cost;
+                            let filled = if total_cost > 0.0 { ((cumulative / total_cost) * bar_width as f64).round() as usize } else { 0 };
+                            let bar: String = "█".repeat(filled.min(bar_width)) + &"░".repeat(bar_width - filled.min(bar_width));
+                            msg.push_str(&format!("  {turn:>3}    ${cumulative:<12.6} {bar}\n"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
+                UiCommand::QueryAvgResponseTime => {
+                    if session.turn_wall_ms.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No turn times recorded yet.".to_string()));
+                    } else {
+                        let count = session.turn_wall_ms.len();
+                        let total: u64 = session.turn_wall_ms.iter().sum();
+                        let avg = total / count as u64;
+                        let min = session.turn_wall_ms.iter().min().copied().unwrap_or(0);
+                        let max = session.turn_wall_ms.iter().max().copied().unwrap_or(0);
+                        let median = {
+                            let mut sorted = session.turn_wall_ms.clone();
+                            sorted.sort_unstable();
+                            sorted[sorted.len() / 2]
+                        };
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Response time stats  ({count} turns)\n  Min:    {min}ms\n  Avg:    {avg}ms\n  Median: {median}ms\n  Max:    {max}ms\n  Total:  {total}ms ({:.1}s)", total as f64 / 1000.0
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::SaveLastResponse(path) => {
+                    use aether_core::context::ConversationItem;
+                    use std::io::Write;
+                    let last_text = session.history.iter().rev().find_map(|item| {
+                        if let ConversationItem::Assistant { text: Some(t), .. } = item { Some(t.clone()) } else { None }
+                    });
+                    match last_text {
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote("No assistant response in history.".to_string()));
+                        }
+                        Some(text) => {
+                            match std::fs::File::create(&path).and_then(|mut f| { f.write_all(text.as_bytes())?; Ok(text.len()) }) {
+                                Ok(bytes) => {
+                                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                        "Last response saved: {path}  ({bytes} bytes)"
+                                    )));
+                                }
+                                Err(e) => {
+                                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Error saving {path}: {e}")));
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVelocity => {
                     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
                     let elapsed_s = now.saturating_sub(session.started_at).max(1);
@@ -28711,6 +28774,35 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /cost-timeline — cumulative cost bar chart
+                                "/cost-timeline" => {
+                                    if _ctx.send(UiCommand::QueryCostTimeline).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /avg-response-time — min/avg/median/max turn wall time
+                                "/avg-response-time" => {
+                                    if _ctx.send(UiCommand::QueryAvgResponseTime).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /save-response <path> — save last assistant response to file
+                                cmd_str if cmd_str.starts_with("/save-response ") => {
+                                    let path = cmd_str.trim_start_matches("/save-response ").trim().to_string();
+                                    if path.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /save-response <path>".to_string()));
+                                    } else if _ctx.send(UiCommand::SaveLastResponse(path)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /session-velocity — turns/hour, cost/hour, tokens/hour
                                 "/session-velocity" => {
                                     if _ctx.send(UiCommand::QuerySessionVelocity).is_err() { break 'outer; }
@@ -29871,6 +29963,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-velocity",
                             "/token-breakdown",
                             "/history-tail ",
+                            "/cost-timeline",
+                            "/avg-response-time",
+                            "/save-response ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

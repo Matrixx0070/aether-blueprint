@@ -417,6 +417,12 @@ pub enum UiCommand {
     JumpBookmark(usize),
     /// Delete a bookmark by 0-based index.
     DeleteBookmark(usize),
+    /// Show cumulative cost growth turn by turn as a mini bar chart.
+    QueryCostTimeline,
+    /// Show average/min/max response times from turn_wall_ms.
+    QueryAvgResponseTime,
+    /// Save the last assistant response text to the given file path.
+    SaveLastResponse(String),
     /// Show turns/hour, cost/hour, tokens/hour for the session.
     QuerySessionVelocity,
     /// Show input vs output token split as percentage and absolute counts.
