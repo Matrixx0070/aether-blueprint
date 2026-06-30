@@ -6130,6 +6130,45 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         "Session stats reset (tokens, cost, LLM timing, wall clock).".to_string()));
                     continue;
                 }
+                UiCommand::QueryToolStats => {
+                    let stats = &session.plan.tool_call_stats;
+                    if stats.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "No tool calls recorded yet.".to_string()));
+                    } else {
+                        let mut entries: Vec<(String, usize, usize)> = stats.iter()
+                            .map(|(name, (ok, err))| (name.clone(), *ok, *err))
+                            .collect();
+                        entries.sort_by(|a, b| {
+                            let total_a = a.1 + a.2;
+                            let total_b = b.1 + b.2;
+                            total_b.cmp(&total_a)
+                        });
+                        let mut lines = format!("=== Tool call statistics ({} tools) ===\n", entries.len());
+                        lines.push_str(&format!("  {:<28} {:>6} {:>6} {:>6}  {}\n",
+                            "Tool", "OK", "Err", "Total", "Error%"));
+                        lines.push_str(&"─".repeat(62));
+                        lines.push('\n');
+                        for (name, ok, err) in &entries {
+                            let total = ok + err;
+                            let pct = if total > 0 { *err as f64 / total as f64 * 100.0 } else { 0.0 };
+                            lines.push_str(&format!("  {:<28} {:>6} {:>6} {:>6}  {:.1}%\n",
+                                name, ok, err, total, pct));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(lines));
+                    }
+                    continue;
+                }
+                UiCommand::SetPlanWindow(n) => {
+                    session.plan.window = if n == 0 { None } else { Some(n) };
+                    let note = if n == 0 {
+                        "Planner window: monotonic (no expiry).".to_string()
+                    } else {
+                        format!("Planner window: {n} turns (blocks expire after {n} clean turns).")
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::QuerySessionStats => {
                     use aether_core::compaction::context_window_for_model;
                     let now = std::time::SystemTime::now()
@@ -18892,6 +18931,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /tool-stats — per-tool lifetime success/failure rates
+                                "/tool-stats" => {
+                                    if _ctx.send(UiCommand::QueryToolStats).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /set-window N — configure planner sliding window (0 = monotonic)
+                                cmd_str if cmd_str.starts_with("/set-window ") || cmd_str == "/set-window" => {
+                                    let arg = cmd_str.trim_start_matches("/set-window").trim();
+                                    let n = if arg.is_empty() { 0usize } else { arg.parse().unwrap_or(0) };
+                                    if _ctx.send(UiCommand::SetPlanWindow(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /plan-save [path] — export active plan to file
                                 cmd_str if cmd_str.starts_with("/plan-save ") || cmd_str == "/plan-save" => {
                                     let arg = cmd_str.trim_start_matches("/plan-save").trim();
@@ -23762,6 +23819,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-save", "/plan-save ",
                             "/plan-load ",
                             "/stats-reset",
+                            "/tool-stats",
+                            "/set-window", "/set-window ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

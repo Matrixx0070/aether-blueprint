@@ -208,6 +208,10 @@ pub enum UiCommand {
     LoadPlan(String),
     /// Reset per-session LLM timing and token counters.
     ResetStats,
+    /// Show per-tool lifetime call statistics (successes, failures, error rate).
+    QueryToolStats,
+    /// Configure the planner sliding-window size (0 = monotonic/no window).
+    SetPlanWindow(usize),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

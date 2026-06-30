@@ -77,6 +77,12 @@ pub struct Plan {
     #[serde(default)]
     pub last_error_tool: Option<String>,
 
+    /// Lifetime call statistics per tool: (successes, failures).
+    /// Incremented by record_tool_success / record_tool_error.
+    /// Does NOT reset on error unlike tool_error_counts.
+    #[serde(default)]
+    pub tool_call_stats: HashMap<String, (usize, usize)>,
+
     dirty: bool,
 }
 
@@ -183,6 +189,8 @@ impl Plan {
         if *count >= TOOL_ERROR_THRESHOLD {
             self.dirty = true;
         }
+        let stats = self.tool_call_stats.entry(tool_name.to_string()).or_insert((0, 0));
+        stats.1 += 1;
     }
 
     /// Reset the consecutive error count for a tool (call on success). Marks
@@ -194,6 +202,8 @@ impl Plan {
             }
             *n = 0;
         }
+        let stats = self.tool_call_stats.entry(tool_name.to_string()).or_insert((0, 0));
+        stats.0 += 1;
     }
 
     /// Drop `block_turns` entries where `t + window <= current_turn` and
