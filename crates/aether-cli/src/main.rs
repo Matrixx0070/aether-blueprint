@@ -20586,6 +20586,240 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /branch-summary — AI describes what this branch adds vs main
+                                "/branch-summary" => {
+                                    let base = {
+                                        let ok = std::process::Command::new("git")
+                                            .args(["rev-parse", "--verify", "main"])
+                                            .output().map(|o| o.status.success()).unwrap_or(false);
+                                        if ok { "main" } else { "master" }
+                                    };
+                                    let log = std::process::Command::new("git")
+                                        .args(["log", "--oneline", &format!("{base}..HEAD")])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    let stat = std::process::Command::new("git")
+                                        .args(["diff", "--stat", &format!("{base}...HEAD")])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    let branch = std::process::Command::new("git")
+                                        .args(["branch", "--show-current"])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                                        .unwrap_or_else(|| "HEAD".to_string());
+                                    if log.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("/branch-summary: branch `{branch}` has no commits ahead of `{base}`.")));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Write a 3–5 sentence narrative summary of what branch `{branch}` adds vs `{base}`. \
+                                         Then list the key changes as bullet points. Be specific — don't just restate commit messages.\n\n\
+                                         ## Commits\n```\n{log}\n```\n## Changed files\n```\n{stat}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /stash-note [hint] — AI generates descriptive stash message + stashes
+                                cmd_str if cmd_str == "/stash-note" || cmd_str.starts_with("/stash-note ") => {
+                                    let hint = cmd_str.trim_start_matches("/stash-note").trim().to_string();
+                                    let diff = std::process::Command::new("git")
+                                        .args(["diff", "HEAD", "--stat"])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    if diff.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("/stash-note: nothing to stash (no changes vs HEAD).".into()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let hint_line = if !hint.is_empty() { format!("\nHint: {hint}") } else { String::new() };
+                                    let prompt = format!(
+                                        "Generate a concise git stash message (max 70 chars) for these changes. \
+                                         Return ONLY the message text, no quotes, no markdown.{hint_line}\n\n```\n{diff}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /doc-check — find public items without doc comments
+                                "/doc-check" => {
+                                    let out = std::process::Command::new("sh")
+                                        .arg("-c")
+                                        .arg(r##"grep -rn --include="*.rs" -E "^(pub |pub\(crate\) )?(fn |struct |enum |trait |type |const )" . | grep -v "///" | grep -v "#[" | head -60"##)
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    if out.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("/doc-check: all public items appear to have doc comments, or no Rust source found.".into()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let truncated: String = out.chars().take(5000).collect();
+                                    let prompt = format!(
+                                        "Here are public Rust items that may lack doc comments. \
+                                         Please: 1) identify which are most important to document, \
+                                         2) draft a one-line doc comment for the top 5, and \
+                                         3) suggest which items are safe to leave undocumented.\n\n```\n{truncated}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-ci — read CI config and explain + suggest improvements
+                                "/ai-ci" => {
+                                    let ci_paths = [
+                                        ".github/workflows", ".gitlab-ci.yml", ".circleci/config.yml",
+                                        "Jenkinsfile", ".travis.yml", "azure-pipelines.yml",
+                                    ];
+                                    let mut ci_content = String::new();
+                                    for path in &ci_paths {
+                                        if std::path::Path::new(path).is_dir() {
+                                            if let Ok(entries) = std::fs::read_dir(path) {
+                                                for entry in entries.flatten() {
+                                                    if let Ok(text) = std::fs::read_to_string(entry.path()) {
+                                                        let preview: String = text.chars().take(3000).collect();
+                                                        ci_content.push_str(&format!("### {}\n```yaml\n{preview}\n```\n", entry.path().display()));
+                                                    }
+                                                }
+                                            }
+                                        } else if let Ok(text) = std::fs::read_to_string(path) {
+                                            let preview: String = text.chars().take(3000).collect();
+                                            ci_content.push_str(&format!("### {path}\n```yaml\n{preview}\n```\n"));
+                                        }
+                                    }
+                                    if ci_content.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("/ai-ci: no CI configuration found (.github/workflows, .gitlab-ci.yml, etc.)".into()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Please review this CI configuration. For each workflow/job: \
+                                         1) explain what it does, 2) identify performance optimizations (caching, parallelism), \
+                                         3) flag any security issues (secret exposure, overly broad permissions), \
+                                         and 4) suggest missing checks (lint, security scanning, coverage).\n\n{ci_content}"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /extract-api <file> — extract all public function signatures
+                                cmd_str if cmd_str.starts_with("/extract-api ") || cmd_str == "/extract-api" => {
+                                    let file_arg = cmd_str.trim_start_matches("/extract-api").trim();
+                                    let file_path_arg = if file_arg.is_empty() {
+                                        ui.context_files.first().cloned().unwrap_or_default()
+                                    } else {
+                                        file_arg.to_string()
+                                    };
+                                    if file_path_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /extract-api <file>  — extracts all public function/type signatures.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    match std::fs::read_to_string(&file_path_arg) {
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("/extract-api: cannot read {file_path_arg}: {e}")));
+                                        }
+                                        Ok(src) => {
+                                            let sigs: Vec<&str> = src.lines()
+                                                .filter(|l| {
+                                                    let t = l.trim();
+                                                    t.starts_with("pub fn") || t.starts_with("pub async fn")
+                                                    || t.starts_with("pub struct") || t.starts_with("pub enum")
+                                                    || t.starts_with("pub trait") || t.starts_with("pub type")
+                                                    || t.starts_with("pub const") || t.starts_with("export function")
+                                                    || t.starts_with("export class") || t.starts_with("export interface")
+                                                    || t.starts_with("def ") || t.starts_with("async def ")
+                                                })
+                                                .collect();
+                                            if sigs.is_empty() {
+                                                ui.chat_lines.push(ChatLine::SystemNote(format!("/extract-api: no public signatures found in {file_path_arg}.")));
+                                            } else {
+                                                let report = format!(
+                                                    "Public API of `{file_path_arg}` ({} items):\n```\n{}\n```",
+                                                    sigs.len(), sigs.join("\n")
+                                                );
+                                                ui.chat_lines.push(ChatLine::SystemNote(report));
+                                            }
+                                        }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-migration <old> <new> — AI generates migration guide between libs/versions
+                                cmd_str if cmd_str.starts_with("/ai-migration ") || cmd_str == "/ai-migration" => {
+                                    let args = cmd_str.trim_start_matches("/ai-migration").trim();
+                                    let parts: Vec<&str> = args.splitn(2, ' ').collect();
+                                    if parts.len() < 2 || parts[1].trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /ai-migration <old> <new>  e.g. /ai-migration tokio-0.2 tokio-1.0\n  AI generates a step-by-step migration guide.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let (from_lib, to_lib) = (parts[0].trim(), parts[1].trim());
+                                    let ctx_hint = if !ui.context_files.is_empty() {
+                                        format!("\n\nProject context files: {}", ui.context_files.join(", "))
+                                    } else { String::new() };
+                                    let prompt = format!(
+                                        "Write a step-by-step migration guide from `{from_lib}` to `{to_lib}`. Include:\n\
+                                         1. Key API differences and breaking changes\n\
+                                         2. Find-and-replace patterns for common idioms\n\
+                                         3. New features to adopt from `{to_lib}`\n\
+                                         4. Common pitfalls and how to avoid them\n\
+                                         5. A minimal working example of the same code in both versions{ctx_hint}"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -20964,6 +21198,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/time-budget", "/time-budget ", "/env-doctor", "/git-blame-ai ",
                             "/compare-files ", "/ai-standup", "/lint-ai",
                             "/context-summary", "/perf-ai", "/perf-ai ",
+                            "/branch-summary", "/stash-note", "/stash-note ",
+                            "/doc-check", "/ai-ci", "/extract-api", "/extract-api ",
+                            "/ai-migration ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
