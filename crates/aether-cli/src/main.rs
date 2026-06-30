@@ -7582,6 +7582,41 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryTurnReminderShow => {
+                    if session.turn_reminder_every == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn-reminder: OFF. Use /remind-every <n> to re-inject goal every N turns.".to_string()
+                        ));
+                    } else {
+                        let next = session.turn_reminder_every - (session.turn_index % session.turn_reminder_every);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn-reminder every {} turns (next in {next} turn(s), current turn: {}).",
+                            session.turn_reminder_every, session.turn_index
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryCompactionThresholdShow => {
+                    let pct = session.compaction_threshold_pct;
+                    if pct <= 0.0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Compaction threshold: default (auto). Use /compact-at <pct> to override.".to_string()
+                        ));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Compaction threshold: {pct:.0}% context fill triggers compaction."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryAutoCommitShow => {
+                    let status = if session.auto_commit { "ON" } else { "OFF" };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Auto-commit: {status}. Template: {:?}. Use /auto-commit on|off to toggle.",
+                        session.auto_commit_template
+                    )));
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -32617,6 +32652,30 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /turn-reminder-show — show turn-reminder-every frequency
+                                "/turn-reminder-show" => {
+                                    if _ctx.send(UiCommand::QueryTurnReminderShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /compaction-threshold-show — show compaction threshold %
+                                "/compaction-threshold-show" => {
+                                    if _ctx.send(UiCommand::QueryCompactionThresholdShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /auto-commit-show — show auto-commit setting
+                                "/auto-commit-show" => {
+                                    if _ctx.send(UiCommand::QueryAutoCommitShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -33357,6 +33416,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/auto-compact-show",
                             "/llm-timeout-show",
                             "/verify-show",
+                            "/turn-reminder-show",
+                            "/compaction-threshold-show",
+                            "/auto-commit-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

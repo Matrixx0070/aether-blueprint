@@ -867,6 +867,12 @@ pub enum UiCommand {
     QueryLlmTimeoutShow,
     /// Show whether the D7 verifier is enabled.
     QueryVerifyShow,
+    /// Show the turn-reminder-every frequency setting.
+    QueryTurnReminderShow,
+    /// Show the context compaction threshold percentage.
+    QueryCompactionThresholdShow,
+    /// Show the auto-commit setting and template.
+    QueryAutoCommitShow,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
