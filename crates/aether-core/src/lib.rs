@@ -313,6 +313,10 @@ pub struct Session {
     /// the saved text as a user message without typing it again.
     pub prompt_macros: std::collections::HashMap<String, String>,
 
+    /// Per-turn wall-clock elapsed time in milliseconds.
+    /// Appended by the driver after each agent turn for /turn-time and /latency-log.
+    pub turn_wall_ms: Vec<u64>,
+
     /// Context-fill fraction (0.0–1.0) at which a warning SystemNote fires.
     /// 0.0 = off. Fires once per session (token_budget_warn_fired tracks this).
     pub token_budget_warn_pct: f64,
@@ -400,6 +404,7 @@ impl Session {
             scope_guard: None,
             session_vars: std::collections::HashMap::new(),
             prompt_macros: std::collections::HashMap::new(),
+            turn_wall_ms: Vec::new(),
             token_budget_warn_pct: 0.0,
             token_budget_hard_pct: 0.0,
             token_budget_warn_fired: false,

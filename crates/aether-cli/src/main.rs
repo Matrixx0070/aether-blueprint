@@ -6564,6 +6564,56 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::QueryTurnTime => {
+                    let note = match session.turn_wall_ms.last() {
+                        Some(&ms) => {
+                            if ms >= 1000 {
+                                format!("Last turn: {:.2}s  ({ms}ms)", ms as f64 / 1000.0)
+                            } else {
+                                format!("Last turn: {ms}ms")
+                            }
+                        }
+                        None => "No turns completed yet this session.".to_string(),
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryTurnTimeAvg => {
+                    let note = if session.turn_wall_ms.is_empty() {
+                        "No turns completed yet this session.".to_string()
+                    } else {
+                        let total: u64 = session.turn_wall_ms.iter().sum();
+                        let avg = total / session.turn_wall_ms.len() as u64;
+                        let max = session.turn_wall_ms.iter().max().copied().unwrap_or(0);
+                        let min = session.turn_wall_ms.iter().min().copied().unwrap_or(0);
+                        format!(
+                            "Turn latency ({} turns): avg={avg}ms min={min}ms max={max}ms total={}ms",
+                            session.turn_wall_ms.len(), total
+                        )
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryLatencyLog => {
+                    let note = if session.turn_wall_ms.is_empty() {
+                        "Latency log: empty (no turns yet).".to_string()
+                    } else {
+                        let lines: Vec<String> = session.turn_wall_ms.iter().enumerate()
+                            .map(|(i, &ms)| {
+                                let s = if ms >= 1000 { format!("{:.2}s", ms as f64 / 1000.0) } else { format!("{ms}ms") };
+                                format!("  Turn {i:>3}: {s}")
+                            })
+                            .collect();
+                        let total: u64 = session.turn_wall_ms.iter().sum();
+                        let avg = total / session.turn_wall_ms.len() as u64;
+                        format!(
+                            "=== Latency log ({} turns, avg {avg}ms) ===\n{}",
+                            session.turn_wall_ms.len(), lines.join("\n")
+                        )
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::SaveMacro(name, text) => {
                     let preview: String = text.chars().take(60).collect();
                     session.prompt_macros.insert(name.clone(), text.clone());
@@ -7853,6 +7903,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
             let mut auto_continue_count: usize = 0;
             let mut context_60_note_shown: bool = false;
             let hist_before = session.history.len();
+            let turn_wall_start = std::time::Instant::now();
             loop {
                 let etx_inner = etx_for_driver.clone();
                 let mut started = false;
@@ -8145,6 +8196,8 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     TurnOutcome::Exit => break,
                 }
             }
+            // Record wall-clock elapsed for this outer turn cycle.
+            session.turn_wall_ms.push(turn_wall_start.elapsed().as_millis() as u64);
             // Capture: write new assistant responses to the capture file.
             if let Some(ref mut cf) = capture_file {
                 use std::io::Write;
@@ -26292,6 +26345,30 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /turn-time — show elapsed time for the last agent turn
+                                "/turn-time" => {
+                                    if _ctx.send(UiCommand::QueryTurnTime).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /turn-time-avg — show average/min/max turn latency this session
+                                "/turn-time-avg" => {
+                                    if _ctx.send(UiCommand::QueryTurnTimeAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /latency-log — show full per-turn wall-clock latency history
+                                "/latency-log" => {
+                                    if _ctx.send(UiCommand::QueryLatencyLog).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /macro-save <name> <text> — save a named prompt macro
                                 cmd_str if cmd_str.starts_with("/macro-save ") => {
                                     let arg = cmd_str.trim_start_matches("/macro-save ").trim();
@@ -27001,6 +27078,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/macro-run ",
                             "/macro-del ",
                             "/macro-list",
+                            "/turn-time",
+                            "/turn-time-avg",
+                            "/latency-log",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

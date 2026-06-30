@@ -409,6 +409,12 @@ pub enum UiCommand {
     ReplayLast,
     /// List past user messages with their indices.
     QueryReplayList,
+    /// Show elapsed time for the last agent turn.
+    QueryTurnTime,
+    /// Show average elapsed time across all agent turns this session.
+    QueryTurnTimeAvg,
+    /// Show full per-turn wall-clock latency history.
+    QueryLatencyLog,
     /// Save a named prompt macro (name, text).
     SaveMacro(String, String),
     /// Delete a named prompt macro by name.
