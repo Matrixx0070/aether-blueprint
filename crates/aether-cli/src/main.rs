@@ -5296,7 +5296,7 @@ AI workflow\n\
   /ai-refactor <f> [inst] AI refactors code preserving behavior (default: clean up)\n\
   /ai-doc-gen <file>      AI adds docstrings/comments in language-appropriate style\n\
   /ai-improve-commit      AI rewrites last/staged commit message to best practices\n\
-  /ai-translate <f> <lng> AI translates source file to another programming language\nSession & environment\n  /env-set <KEY>=<val>    set (or unset) env var in this aether process session\n  /git-amend [msg]        show last commit info; with msg: amend commit message\n  /ai-estimate <task>     AI estimates complexity + time for a described task\n  /clipboard [get|clear]  paste clipboard into chat, or clear it (xclip/xsel/pbpaste)\n  /ai-standup-report [h]  AI writes standup from last N hours of git + TODOs\nCode intelligence\n  /loc [dir]              lines-of-code breakdown by language (sorted by size)\n  /git-undo [n]           soft-reset last N commits — changes stay staged\n  /ai-rename-symbol <f> <sym>  AI suggests 3 rename options + all call sites\n  /ai-complexity-report [f]    cyclomatic/cognitive complexity audit + refactor tips\n  /ai-changelog-commit [n]     AI writes CHANGELOG.md entry from last N commits\nDiff & project tools\n  /diff-stat [base]       rich git diff with file-type add/del breakdown\n  /ai-explain-diff [base] AI explains what the current diff actually changes\n  /file-watch <path>      show last 20 lines of a file (re-run to refresh)\n  /ai-onboard            AI writes onboarding guide from tree + README + manifest\n  /deps-outdated         list outdated deps (cargo-outdated / npm outdated / pip)\nQuery & HTTP tools\n  /token-count <file>    estimate token count + context % for 4K/32K/200K windows\n  /http-mock [method] <url>  HTTP request preview (curl wrapper with response summary)\n  /ai-sql-explain <sql>  AI explains + optimizes a SQL query with index suggestions\n  /ai-migrate <from> [to]  AI writes step-by-step migration guide between tech stacks\n  /git-bisect-ai <good> [bad]  AI guides binary search to find a regression commit"),
+  /ai-translate <f> <lng> AI translates source file to another programming language\nSession & environment\n  /env-set <KEY>=<val>    set (or unset) env var in this aether process session\n  /git-amend [msg]        show last commit info; with msg: amend commit message\n  /ai-estimate <task>     AI estimates complexity + time for a described task\n  /clipboard [get|clear]  paste clipboard into chat, or clear it (xclip/xsel/pbpaste)\n  /ai-standup-report [h]  AI writes standup from last N hours of git + TODOs\nCode intelligence\n  /loc [dir]              lines-of-code breakdown by language (sorted by size)\n  /git-undo [n]           soft-reset last N commits — changes stay staged\n  /ai-rename-symbol <f> <sym>  AI suggests 3 rename options + all call sites\n  /ai-complexity-report [f]    cyclomatic/cognitive complexity audit + refactor tips\n  /ai-changelog-commit [n]     AI writes CHANGELOG.md entry from last N commits\nDiff & project tools\n  /diff-stat [base]       rich git diff with file-type add/del breakdown\n  /ai-explain-diff [base] AI explains what the current diff actually changes\n  /file-watch <path>      show last 20 lines of a file (re-run to refresh)\n  /ai-onboard            AI writes onboarding guide from tree + README + manifest\n  /deps-outdated         list outdated deps (cargo-outdated / npm outdated / pip)\nQuery & HTTP tools\n  /token-count <file>    estimate token count + context % for 4K/32K/200K windows\n  /http-mock [method] <url>  HTTP request preview (curl wrapper with response summary)\n  /ai-sql-explain <sql>  AI explains + optimizes a SQL query with index suggestions\n  /ai-migrate <from> [to]  AI writes step-by-step migration guide between tech stacks\n  /git-bisect-ai <good> [bad]  AI guides binary search to find a regression commit\nTeam & audit tools\n  /git-contributors [n]   ranked contributor table with commit count + % share\n  /git-hotspot [n]       top N most-changed files (high churn = bug risk)\n  /env-template [dir]   scan codebase for env var references → emit .env.example\n  /ai-pr-checklist [base]  AI generates PR review checklist from current diff\n  /ai-data-model <file>  AI extracts entities/relationships + ASCII ER diagram"),
                                         ("keys", &["keys", "keyboard", "shortcuts", "bindings"], "\
 Input shortcuts\n\
   ↑ ↓  / Ctrl+R           history recall / reverse-i-search\n\
@@ -5423,6 +5423,7 @@ Input shortcuts\n\
     ◈ /loc /git-undo /ai-rename-symbol /ai-complexity-report /ai-changelog-commit  B116\n\
     ◈ /diff-stat /ai-explain-diff /file-watch /ai-onboard /deps-outdated        B117\n\
     ◈ /token-count /http-mock /ai-sql-explain /ai-migrate /git-bisect-ai       B118\n\
+    ◈ /git-contributors /git-hotspot /env-template /ai-pr-checklist /ai-data-model  B119\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -15098,6 +15099,144 @@ CTF Toolkit — Aether AI-assisted\n\
                                     if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
                                     continue;
                                 }
+                                // /git-contributors [n] — contributor stats from git log
+                                cmd if cmd == "/git-contributors" || cmd.starts_with("/git-contributors ") => {
+                                    let n_raw = cmd.trim_start_matches("/git-contributors").trim();
+                                    let n: usize = n_raw.parse().unwrap_or(10).max(1).min(50);
+                                    let out = std::process::Command::new("git")
+                                        .args(["shortlog", "-sn", "--no-merges", &format!("-{}", n * 5)])
+                                        .output().ok();
+                                    let raw = out.as_ref().map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+                                    if raw.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("git-contributors: no commits found or not in a git repo.".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let rows: Vec<&str> = raw.lines().take(n).collect();
+                                    let total_commits: usize = rows.iter()
+                                        .map(|l| l.trim().split_whitespace().next().unwrap_or("0").parse::<usize>().unwrap_or(0))
+                                        .sum();
+                                    let sep = "─".repeat(40);
+                                    let mut body = format!("git contributors (top {n})  —  {total} total commits\n\n{r:<6}  {c:<7}  {a}\n{sep}", n=n, total=total_commits, r="Rank", c="Commits", a="Author", sep=sep);
+                                    for (i, row) in rows.iter().enumerate() {
+                                        let row = row.trim();
+                                        let mut parts = row.splitn(2, '\t');
+                                        let count: usize = parts.next().unwrap_or("0").trim().parse().unwrap_or(0);
+                                        let author = parts.next().unwrap_or("").trim();
+                                        let pct = if total_commits > 0 { count * 100 / total_commits } else { 0 };
+                                        body.push_str(&format!("\n#{:<5}  {:>5}  {} ({}%)", i + 1, count, author, pct));
+                                    }
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /git-hotspot [n] — find most-changed files (bug magnets) in history
+                                cmd if cmd == "/git-hotspot" || cmd.starts_with("/git-hotspot ") => {
+                                    let n_raw = cmd.trim_start_matches("/git-hotspot").trim();
+                                    let n: usize = n_raw.parse().unwrap_or(15).max(1).min(50);
+                                    let out = std::process::Command::new("sh").arg("-c")
+                                        .arg("git log --name-only --pretty=format: | grep -v '^$' | sort | uniq -c | sort -rn")
+                                        .output().ok();
+                                    let raw = out.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+                                    if raw.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("git-hotspot: could not compute file churn — not in a git repo or no history.".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let rows: Vec<&str> = raw.lines().take(n).collect();
+                                    let mut body = format!("git hotspots (top {} most-changed files)\n\n{:>8}  File", "Changes", n);
+                                    body.push_str(&format!("\n{}", "─".repeat(60)));
+                                    for row in &rows {
+                                        let row = row.trim();
+                                        let mut parts = row.splitn(2, ' ');
+                                        let count = parts.next().unwrap_or("?");
+                                        let file = parts.next().unwrap_or("").trim();
+                                        body.push_str(&format!("\n{:>8}  {}", count, file));
+                                    }
+                                    body.push_str("\n\nHigh churn = high bug risk. Consider refactoring top entries.");
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /env-template [dir] — scan code for env var references and emit .env.example
+                                cmd if cmd == "/env-template" || cmd.starts_with("/env-template ") => {
+                                    let dir = cmd.trim_start_matches("/env-template").trim();
+                                    let target = if dir.is_empty() { "." } else { dir };
+                                    // Single shell pipeline: match env-access patterns, extract uppercase names
+                                    let cmd_str = format!(
+                                        "grep -rhoE '(getenv|env::var|process\\.env\\.|os\\.environ|os\\.getenv|ENV\\[)[\\[\\(\"\\']+([A-Z_][A-Z0-9_]+)' {} 2>/dev/null | grep -oE '[A-Z_][A-Z0-9_]{{3,}}' | sort -u",
+                                        target
+                                    );
+                                    let out = std::process::Command::new("sh").arg("-c").arg(&cmd_str).output().ok();
+                                    let raw = out.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+                                    let found: Vec<&str> = raw.lines().filter(|l| !l.is_empty()).collect();
+                                    if found.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("env-template: no env var references found in '{}'", target)));
+                                    } else {
+                                        let mut template = "# .env.example — generated by aether /env-template\n# Copy to .env and fill in values\n\n".to_string();
+                                        for key in &found {
+                                            template.push_str(&format!("{}=\n", key));
+                                        }
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("env-template ({} vars found):\n\n{}", found.len(), template.trim())));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-pr-checklist [base] — AI generates PR review checklist from diff
+                                cmd if cmd == "/ai-pr-checklist" || cmd.starts_with("/ai-pr-checklist ") => {
+                                    let base = cmd.trim_start_matches("/ai-pr-checklist").trim();
+                                    let base = if base.is_empty() { "main" } else { base };
+                                    let log_range = format!("{}..HEAD", base);
+                                    let diff_out = std::process::Command::new("git")
+                                        .args(["diff", base])
+                                        .output().ok();
+                                    let diff_raw = diff_out.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+                                    let log_out = std::process::Command::new("git")
+                                        .args(["log", &log_range, "--oneline"])
+                                        .output().ok();
+                                    let log_raw = log_out.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+                                    if diff_raw.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("ai-pr-checklist: no changes found vs '{}'", base)));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "You are a senior code reviewer. Based on this PR diff, generate a thorough PR review checklist.\n\nCommits:\n```\n{}\n```\n\nDiff (vs {}):\n```diff\n{}\n```\n\nGenerate a checklist with these sections (use - [ ] for unchecked items):\n## Functionality\n## Security\n## Performance  \n## Testing\n## Documentation\n## Code Quality\n\nMake items specific to THIS diff, not generic. Flag any items that are blocking vs nice-to-have.",
+                                        log_raw.trim(),
+                                        base,
+                                        diff_raw.chars().take(5000).collect::<String>()
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts));
+                                    ui.follow_tail = true;
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.msg_times_secs.push(ts);
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                // /ai-data-model <file> — AI generates data model / entity diagram from code
+                                cmd if cmd.starts_with("/ai-data-model ") || cmd == "/ai-data-model" => {
+                                    let path = cmd.trim_start_matches("/ai-data-model").trim();
+                                    if path.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /ai-data-model <file>\n  Example: /ai-data-model src/models.rs\n  AI extracts entities and relationships, outputs an ASCII diagram + description.".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let content = std::fs::read_to_string(path).unwrap_or_else(|e| format!("[could not read {}: {}]", path, e));
+                                    let prompt = format!(
+                                        "You are a data architect. Analyze this code file and extract the data model.\n\nFile: {path}\n```\n{}\n```\n\nOutput:\n1. **Entities** — list each entity/struct/model with its key fields and types\n2. **Relationships** — foreign keys, associations, cardinality (1:1, 1:N, M:N)\n3. **ASCII ER diagram** — draw entities as boxes with field lists, connect with relationship lines\n4. **Key observations** — any design issues, missing indexes, normalization gaps",
+                                        content.chars().take(5000).collect::<String>(), path = path
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts));
+                                    ui.follow_tail = true;
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.msg_times_secs.push(ts);
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -15736,7 +15875,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/cve ", "/dotenv", "/dotenv ", "/calc ", "/chars", "/chars ", "/ai-arch", "/ai-arch ", "/ai-explain ", "/cheat ", "/color ", "/duck ", "/env-diff ", "/env-vars", "/env-vars ", "/flashcard ", "/format-sql ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/gh-search ", "/http-codes", "/http-codes ", "/impl ", "/json-schema ", "/man-ai ", "/mkscript ", "/open ", "/path", "/ai-bugs ", "/ai-code-review ", "/ai-doc-gen ", "/ai-improve-commit", "/ai-optimize ", "/ai-pr", "/ai-pr ", "/ai-refactor ", "/ai-security ", "/ai-test-gen ", "/ai-translate ", "/bundle-size", "/bundle-size ", "/changelog-ai", "/changelog-ai ", "/codebase-summary", "/git-cherry", "/git-cherry ", "/git-conflicts", "/git-log-file ", "/git-remote", "/git-remote ", "/git-show ", "/net-stat", "/perf-diff ", "/pwd", "/regex-test ", "/run-test ", "/ssh-key", "/ssh-key ", "/tail ", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/semver ", "/session-summary", "/spell ", "/teach ", "/time", "/time ", "/which-all ", "/wiki ", "/workflow", "/workflow ", "/ai-estimate ", "/ai-standup-report", "/ai-standup-report ", "/clipboard", "/clipboard ", "/env-set ", "/git-amend", "/git-amend ", "/ai-changelog-commit", "/ai-changelog-commit ", "/ai-complexity-report", "/ai-complexity-report ", "/ai-rename-symbol ", "/git-undo", "/git-undo ", "/loc", "/loc ", "/ai-explain-diff", "/ai-explain-diff ", "/ai-onboard", "/deps-outdated", "/diff-stat", "/diff-stat ", "/file-watch ", "/ai-migrate ", "/ai-sql-explain ", "/git-bisect-ai", "/git-bisect-ai ", "/http-mock ", "/token-count ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
+                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/cve ", "/dotenv", "/dotenv ", "/calc ", "/chars", "/chars ", "/ai-arch", "/ai-arch ", "/ai-explain ", "/cheat ", "/color ", "/duck ", "/env-diff ", "/env-vars", "/env-vars ", "/flashcard ", "/format-sql ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/gh-search ", "/http-codes", "/http-codes ", "/impl ", "/json-schema ", "/man-ai ", "/mkscript ", "/open ", "/path", "/ai-bugs ", "/ai-code-review ", "/ai-doc-gen ", "/ai-improve-commit", "/ai-optimize ", "/ai-pr", "/ai-pr ", "/ai-refactor ", "/ai-security ", "/ai-test-gen ", "/ai-translate ", "/bundle-size", "/bundle-size ", "/changelog-ai", "/changelog-ai ", "/codebase-summary", "/git-cherry", "/git-cherry ", "/git-conflicts", "/git-log-file ", "/git-remote", "/git-remote ", "/git-show ", "/net-stat", "/perf-diff ", "/pwd", "/regex-test ", "/run-test ", "/ssh-key", "/ssh-key ", "/tail ", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/semver ", "/session-summary", "/spell ", "/teach ", "/time", "/time ", "/which-all ", "/wiki ", "/workflow", "/workflow ", "/ai-estimate ", "/ai-standup-report", "/ai-standup-report ", "/clipboard", "/clipboard ", "/env-set ", "/git-amend", "/git-amend ", "/ai-changelog-commit", "/ai-changelog-commit ", "/ai-complexity-report", "/ai-complexity-report ", "/ai-rename-symbol ", "/git-undo", "/git-undo ", "/loc", "/loc ", "/ai-explain-diff", "/ai-explain-diff ", "/ai-onboard", "/deps-outdated", "/diff-stat", "/diff-stat ", "/file-watch ", "/ai-migrate ", "/ai-sql-explain ", "/git-bisect-ai", "/git-bisect-ai ", "/http-mock ", "/token-count ", "/ai-data-model ", "/ai-pr-checklist", "/ai-pr-checklist ", "/env-template", "/env-template ", "/git-contributors", "/git-contributors ", "/git-hotspot", "/git-hotspot ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
