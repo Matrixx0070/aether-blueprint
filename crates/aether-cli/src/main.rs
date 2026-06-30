@@ -8558,6 +8558,194 @@ CTF Toolkit — Aether AI-assisted\n\
                                     if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
                                     continue;
                                 }
+                                // ── BATCH 84: DEEP AI WORKFLOWS ──────────────────────────────────
+                                cmd if cmd.starts_with("/optimize ") || cmd == "/optimize" => {
+                                    let rest = cmd.trim_start_matches("/optimize").trim();
+                                    if rest.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /optimize <file> [target: speed|memory|readability|size]\n  e.g. /optimize src/parser.rs speed\n       /optimize app.py memory".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let mut parts = rest.splitn(2, char::is_whitespace);
+                                    let file_part = parts.next().unwrap_or("");
+                                    let target = parts.next().unwrap_or("").trim();
+                                    let fpath = if file_part.starts_with('/') { std::path::PathBuf::from(file_part) }
+                                               else { std::env::current_dir().unwrap_or_default().join(file_part) };
+                                    let content = match std::fs::read_to_string(&fpath) {
+                                        Ok(c) => c,
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {file_part}: {e}")));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                    };
+                                    let lines = content.lines().count();
+                                    let ext = fpath.extension().and_then(|e| e.to_str()).unwrap_or("");
+                                    let lang = match ext { "rs" => "rust", "py" => "python", "js"|"mjs" => "javascript", "ts"|"tsx" => "typescript", "go" => "go", other => other };
+                                    let opt_goal = match target {
+                                        "speed"|"performance" => "CPU performance and throughput (reduce allocations, use SIMD-friendly patterns, avoid unnecessary copies, prefer iterators, cache-friendly data layouts)",
+                                        "memory"|"mem" => "memory usage (reduce allocations, prefer stack over heap, use streaming instead of buffering, avoid cloning)",
+                                        "readability"|"clarity" => "code clarity and maintainability (extract named functions, add types, simplify control flow, improve naming)",
+                                        "size"|"binary" => "binary/bundle size (remove dead code, tree-shaking hints, minimize deps, avoid monomorphisation bloat)",
+                                        _ => "overall quality (balance speed, clarity, and correctness)",
+                                    };
+                                    let prompt = format!(
+                                        "Optimization goal: {opt_goal}\n\n{file_part}  ({lines} lines)\n```{lang}\n{}\n```\n\n\
+                                         Provide:\n\
+                                         1. ## Analysis — current bottlenecks/issues (be specific with line numbers)\n\
+                                         2. ## Optimized Code — complete optimized version in a code block\n\
+                                         3. ## What Changed — bullet list of each optimization and expected impact\n\
+                                         4. ## Benchmarks Needed — what to measure to validate the improvement\n\
+                                         5. ```diff — patch-ready diff for /patch apply",
+                                        content.lines().take(350).collect::<Vec<_>>().join("\n")
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/optimize {file_part}{}", if target.is_empty() { String::new() } else { format!(" [{target}]") }), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/debug-ai ") || cmd == "/debug-ai" => {
+                                    // AI-powered debugging: describe symptom, AI generates debug plan
+                                    let symptom = cmd.trim_start_matches("/debug-ai").trim();
+                                    if symptom.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /debug-ai <symptom or error message>\n  AI creates a systematic debug plan\n  e.g. /debug-ai segfault on large input\n       /debug-ai TypeError: Cannot read property 'x' of undefined at line 42".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    // Grab last AI response and last user message for context
+                                    let last_ctx: String = ui.chat_lines.iter().rev()
+                                        .filter_map(|cl| match cl {
+                                            ChatLine::Assistant(m, _, _) => Some(format!("Previous AI context:\n{}\n", &m[..m.len().min(500)])),
+                                            _ => None,
+                                        })
+                                        .next()
+                                        .unwrap_or_default();
+                                    let prompt = format!(
+                                        "{last_ctx}Debugging request: {symptom}\n\n\
+                                         Create a structured debugging plan:\n\
+                                         ## Root Cause Hypotheses\n(most likely → least likely, with reasoning)\n\
+                                         ## Immediate Checks\n(commands to run RIGHT NOW to narrow it down)\n\
+                                         ## Debug Code\n(add these print/log statements or assertions to isolate the issue)\n\
+                                         ## Tools\n(debugger commands, profilers, or observability tools to use)\n\
+                                         ## Fix Candidates\n(probable fixes for each hypothesis)\n\
+                                         ## Prevention\n(how to detect this earlier — tests, types, assertions)"
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/debug-ai {}", &symptom[..symptom.len().min(60)]), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/translate-code ") || cmd == "/translate-code" => {
+                                    let rest = cmd.trim_start_matches("/translate-code").trim();
+                                    if rest.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /translate-code <file> <target-language>\n  Translate code to another language preserving logic\n  e.g. /translate-code parser.py rust\n       /translate-code auth.js typescript\n       /translate-code main.go python".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let mut parts = rest.splitn(2, char::is_whitespace);
+                                    let file_part = parts.next().unwrap_or("");
+                                    let target_lang = parts.next().unwrap_or("").trim();
+                                    if target_lang.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Missing target language.\n  e.g. /translate-code main.py rust".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let fpath = if file_part.starts_with('/') { std::path::PathBuf::from(file_part) }
+                                               else { std::env::current_dir().unwrap_or_default().join(file_part) };
+                                    let content = match std::fs::read_to_string(&fpath) {
+                                        Ok(c) => c,
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {file_part}: {e}")));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                    };
+                                    let lines = content.lines().count();
+                                    let src_ext = fpath.extension().and_then(|e| e.to_str()).unwrap_or("");
+                                    let src_lang = match src_ext { "rs" => "Rust", "py" => "Python", "js"|"mjs" => "JavaScript", "ts"|"tsx" => "TypeScript", "go" => "Go", "java" => "Java", "rb" => "Ruby", "c"|"h" => "C", "cpp" => "C++", other => other };
+                                    let prompt = format!(
+                                        "Translate this {src_lang} code to {target_lang}:\n\n{file_part}  ({lines} lines)\n```{src_ext}\n{}\n```\n\n\
+                                         Rules:\n\
+                                         - Use idiomatic {target_lang} patterns (not line-by-line literal translation)\n\
+                                         - Preserve all business logic exactly\n\
+                                         - Use {target_lang}'s native error handling, data structures, and conventions\n\
+                                         - Add a ## Translation Notes section explaining non-obvious mappings\n\
+                                         - Output the complete translated file in a single code block",
+                                        content.lines().take(300).collect::<Vec<_>>().join("\n")
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/translate-code {file_part} → {target_lang}"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd == "/arch-review" || cmd.starts_with("/arch-review ") => {
+                                    // Architecture review of the whole project
+                                    let focus = cmd.trim_start_matches("/arch-review").trim();
+                                    use walkdir::WalkDir;
+                                    let cwd = std::env::current_dir().unwrap_or_default();
+                                    let skip = ["target", "node_modules", ".git", "dist", "__pycache__"];
+                                    // Collect file tree for context
+                                    let mut tree_lines: Vec<String> = Vec::new();
+                                    for entry in WalkDir::new(&cwd).max_depth(4)
+                                        .into_iter()
+                                        .filter_entry(|e| { let n = e.file_name().to_string_lossy(); !n.starts_with('.') && !skip.contains(&n.as_ref()) })
+                                        .filter_map(|e| e.ok())
+                                        .take(120)
+                                    {
+                                        let depth = entry.depth();
+                                        let indent = "  ".repeat(depth);
+                                        let name = entry.file_name().to_string_lossy();
+                                        let suffix = if entry.file_type().is_dir() { "/" } else { "" };
+                                        tree_lines.push(format!("{indent}{name}{suffix}"));
+                                    }
+                                    // Read key config files
+                                    let cargo_toml = std::fs::read_to_string(cwd.join("Cargo.toml")).unwrap_or_default();
+                                    let pkg_json = std::fs::read_to_string(cwd.join("package.json")).unwrap_or_default();
+                                    let readme = std::fs::read_to_string(cwd.join("README.md"))
+                                        .unwrap_or_else(|_| std::fs::read_to_string(cwd.join("readme.md")).unwrap_or_default());
+                                    let context = format!("Project tree:\n{}\n\nCargo.toml:\n{}\n\npackage.json:\n{}\n\nREADME:\n{}",
+                                        tree_lines.join("\n"),
+                                        &cargo_toml[..cargo_toml.len().min(800)],
+                                        &pkg_json[..pkg_json.len().min(400)],
+                                        &readme[..readme.len().min(600)]);
+                                    let focus_str = if focus.is_empty() { String::new() } else { format!("\n\nFocus area: {focus}") };
+                                    let prompt = format!(
+                                        "{context}{focus_str}\n\n\
+                                         Perform a software architecture review covering:\n\
+                                         ## Project Overview\n(what it is, tech stack, scale)\n\
+                                         ## Architectural Strengths\n(what's done well)\n\
+                                         ## Architectural Risks\n(scalability, coupling, single points of failure)\n\
+                                         ## Missing Patterns\n(caching, circuit breakers, observability, auth, etc.)\n\
+                                         ## Recommended Roadmap\n(5 highest-impact architectural improvements, ordered by effort)\n\
+                                         ## Grade\n(A–F with rationale)"
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/arch-review{}", if focus.is_empty() { String::new() } else { format!(" [{focus}]") }), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -9196,7 +9384,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ask-code ", "/bench", "/bench ", "/blame ", "/changelog", "/changelog ", "/code-review ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/doc-gen ", "/flow ", "/grep-code ", "/heatmap", "/heatmap ", "/lint", "/lint ", "/metrics", "/metrics ", "/patch", "/patch ", "/pr-review", "/pr-review ", "/profile ", "/recent", "/recent ", "/refactor ", "/setup-env", "/test", "/test ", "/todo-ai ", "/watch ",
+                            "/arch-review", "/arch-review ", "/ask-code ", "/bench", "/bench ", "/blame ", "/changelog", "/changelog ", "/code-review ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/debug-ai ", "/doc-gen ", "/flow ", "/grep-code ", "/heatmap", "/heatmap ", "/lint", "/lint ", "/metrics", "/metrics ", "/optimize ", "/patch", "/patch ", "/pr-review", "/pr-review ", "/profile ", "/recent", "/recent ", "/refactor ", "/setup-env", "/test", "/test ", "/todo-ai ", "/translate-code ", "/watch ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
