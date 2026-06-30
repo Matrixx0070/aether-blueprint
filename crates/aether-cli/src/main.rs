@@ -6707,6 +6707,78 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::ExportMarkdown(path) => {
+                    use aether_core::context::ConversationItem;
+                    use std::io::Write;
+                    let result = (|| -> std::io::Result<usize> {
+                        let mut f = std::fs::File::create(&path)?;
+                        writeln!(f, "# Aether Session Export\n")?;
+                        writeln!(f, "Model: {}  |  Turn: {}\n", session.config.model, session.turn_index)?;
+                        let mut item_count = 0usize;
+                        for item in &session.history {
+                            match item {
+                                ConversationItem::User(text) => {
+                                    writeln!(f, "---\n\n**User:**\n\n{text}\n")?;
+                                    item_count += 1;
+                                }
+                                ConversationItem::Assistant { text, tool_uses } => {
+                                    if let Some(t) = text {
+                                        writeln!(f, "**Assistant:**\n\n{t}\n")?;
+                                        item_count += 1;
+                                    }
+                                    for tu in tool_uses {
+                                        writeln!(f, "> 🔧 `{}` called\n", tu.name)?;
+                                    }
+                                }
+                                ConversationItem::ToolResults(results) => {
+                                    for r in results {
+                                        let status = if r.is_error { "error" } else { "ok" };
+                                        let preview: String = r.content.chars().take(200).collect();
+                                        writeln!(f, "> ← tool result [{status}]: {preview}\n")?;
+                                    }
+                                }
+                            }
+                        }
+                        Ok(item_count)
+                    })();
+                    match result {
+                        Ok(n) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "History exported as Markdown: {path}  ({n} conversation items)"
+                            )));
+                        }
+                        Err(e) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Export failed: {e}")));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryContextMap => {
+                    if session.turn_cost_log.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No turns recorded yet.".to_string()));
+                    } else {
+                        let max_tokens: u64 = session.turn_cost_log.iter().map(|&(_, i, o, _)| i + o).max().unwrap_or(1).max(1);
+                        let bar_width = 30usize;
+                        let mut msg = format!("Context token map  ({} turns, max {max_tokens} tok/turn)\n", session.turn_cost_log.len());
+                        msg.push_str("  #    tokens      bar\n");
+                        for &(turn, tin, tout, _) in &session.turn_cost_log {
+                            let total = tin + tout;
+                            let filled = ((total as f64 / max_tokens as f64) * bar_width as f64).round() as usize;
+                            let bar: String = "█".repeat(filled) + &"░".repeat(bar_width - filled);
+                            msg.push_str(&format!("  {turn:>3}  {total:>7}  {bar}\n"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
+                UiCommand::ClearNotes => {
+                    let n = session.session_notes.len();
+                    session.session_notes.clear();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session notes cleared ({n} note(s) removed)."
+                    )));
+                    continue;
+                }
                 UiCommand::QueryCostProjection(extra_turns) => {
                     let turns_done = session.turn_cost_log.len();
                     let total_cost: f64 = session.turn_cost_log.iter().map(|&(_, _, _, c)| c).sum();
@@ -28208,6 +28280,35 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /export-md <path> — export conversation as markdown
+                                cmd_str if cmd_str.starts_with("/export-md ") => {
+                                    let path = cmd_str.trim_start_matches("/export-md ").trim().to_string();
+                                    if path.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /export-md <path>".to_string()));
+                                    } else if _ctx.send(UiCommand::ExportMarkdown(path)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /context-map — show per-turn token bar chart
+                                "/context-map" => {
+                                    if _ctx.send(UiCommand::QueryContextMap).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /clear-notes — remove all session notes
+                                "/clear-notes" => {
+                                    if _ctx.send(UiCommand::ClearNotes).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /cost-project <n> — project cost for n more turns at current avg
                                 cmd_str if cmd_str.starts_with("/cost-project ") => {
                                     let arg = cmd_str.trim_start_matches("/cost-project ").trim();
@@ -29110,6 +29211,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/cost-project ",
                             "/quick-status",
                             "/history-size",
+                            "/export-md ",
+                            "/context-map",
+                            "/clear-notes",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -417,6 +417,12 @@ pub enum UiCommand {
     JumpBookmark(usize),
     /// Delete a bookmark by 0-based index.
     DeleteBookmark(usize),
+    /// Export the conversation history as a markdown file to the given path.
+    ExportMarkdown(String),
+    /// Show a per-turn token-usage chart (mini bar chart of tokens in+out per turn).
+    QueryContextMap,
+    /// Clear all session notes (session_notes Vec).
+    ClearNotes,
     /// Project future cost: given N more turns at current avg burn rate, show total projected cost.
     QueryCostProjection(usize),
     /// Show a compact one-line status: turn, cost, context-fill, tool errors.
