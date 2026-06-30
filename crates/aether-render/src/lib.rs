@@ -933,6 +933,12 @@ pub enum UiCommand {
     QueryLlmMsTotal,
     /// Show max-tool-calls-per-turn config.
     QueryMaxToolCallsShow,
+    /// Show whether compaction has happened in this session.
+    QueryCompactionHappened,
+    /// Show configured thinking budget.
+    QueryThinkingBudgetShow,
+    /// Show configured LLM temperature.
+    QueryTemperatureShow,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

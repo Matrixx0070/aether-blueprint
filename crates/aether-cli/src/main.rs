@@ -7700,6 +7700,48 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryCompactionHappened => {
+                    if session.compaction_happened {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Compaction: YES — context has been compacted in this session.".to_string()
+                        ));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Compaction: NO — context has not been compacted in this session.".to_string()
+                        ));
+                    }
+                    continue;
+                }
+                UiCommand::QueryThinkingBudgetShow => {
+                    match session.config.thinking_budget {
+                        Some(budget) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Thinking budget: {budget} tokens. Extended thinking is enabled."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Thinking budget: OFF (extended thinking disabled).".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryTemperatureShow => {
+                    match session.config.temperature {
+                        Some(t) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "LLM temperature: {t:.2}. Use /temperature <n> to adjust."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "LLM temperature: default (not overridden). Use /temperature <n> to set.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryUsageTotal => {
                     let inp = session.usage_total.input_tokens;
                     let out = session.usage_total.output_tokens;
@@ -33296,6 +33338,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /compaction-happened — show if compaction occurred this session
+                                "/compaction-happened" => {
+                                    if _ctx.send(UiCommand::QueryCompactionHappened).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /thinking-budget-show — show configured thinking budget
+                                "/thinking-budget-show" => {
+                                    if _ctx.send(UiCommand::QueryThinkingBudgetShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /temperature-show — show configured LLM temperature
+                                "/temperature-show" => {
+                                    if _ctx.send(UiCommand::QueryTemperatureShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -34069,6 +34129,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/usage-total",
                             "/llm-ms-total",
                             "/max-tool-calls-show",
+                            "/compaction-happened",
+                            "/thinking-budget-show",
+                            "/temperature-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
