@@ -5946,6 +5946,72 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::LoadSession(path) => {
+                    #[derive(serde::Deserialize)]
+                    struct SavedItem {
+                        role: String,
+                        text: Option<String>,
+                        #[allow(dead_code)]
+                        tools: Option<Vec<String>>,
+                    }
+                    let note = match std::fs::read_to_string(&path) {
+                        Err(e) => format!("Load failed: {e}"),
+                        Ok(json) => match serde_json::from_str::<Vec<SavedItem>>(&json) {
+                            Err(e) => format!("Parse failed: {e}"),
+                            Ok(items) => {
+                                use aether_core::context::ConversationItem;
+                                let loaded: Vec<ConversationItem> = items.into_iter().filter_map(|item| {
+                                    match item.role.as_str() {
+                                        "user" => item.text.map(ConversationItem::User),
+                                        "assistant" => Some(ConversationItem::Assistant {
+                                            text: item.text,
+                                            tool_uses: vec![],
+                                        }),
+                                        _ => None,
+                                    }
+                                }).collect();
+                                let n = loaded.len();
+                                session.history = loaded;
+                                format!("Session loaded from {path} ({n} items).")
+                            }
+                        }
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryCostEstimate => {
+                    let m = &session.config.model;
+                    let ml = m.to_ascii_lowercase();
+                    let (in_pm, out_pm, tier) = if ml.contains("opus") {
+                        (15.0_f64, 75.0_f64, "Opus")
+                    } else if ml.contains("sonnet") {
+                        (3.0, 15.0, "Sonnet")
+                    } else if ml.contains("haiku") {
+                        (0.80, 4.0, "Haiku")
+                    } else {
+                        (3.0, 15.0, "Sonnet-class")
+                    };
+                    let u = &session.usage_total;
+                    let input_cost = u.input_tokens as f64 * in_pm / 1_000_000.0;
+                    let output_cost = u.output_tokens as f64 * out_pm / 1_000_000.0;
+                    let cache_w_cost = u.cache_creation_input_tokens as f64 * (in_pm * 1.25) / 1_000_000.0;
+                    let cache_r_cost = u.cache_read_input_tokens as f64 * (in_pm * 0.10) / 1_000_000.0;
+                    let total = input_cost + output_cost + cache_w_cost + cache_r_cost;
+                    let note = format!(
+                        "=== Cost Estimate ({tier} @ ${in_pm:.2}/$3.00 in / ${out_pm:.2}/$15.00 out per 1M) ===\n\
+                         Input:        {:>8} tokens × ${in_pm:.2}/M = ${input_cost:.6}\n\
+                         Output:       {:>8} tokens × ${out_pm:.2}/M = ${output_cost:.6}\n\
+                         Cache write:  {:>8} tokens × ${:.2}/M = ${cache_w_cost:.6}\n\
+                         Cache read:   {:>8} tokens × ${:.2}/M = ${cache_r_cost:.6}\n\
+                         ─────────────────────────────────────────\n\
+                         Total this session: ${total:.6}",
+                        u.input_tokens, u.output_tokens,
+                        u.cache_creation_input_tokens, in_pm * 1.25,
+                        u.cache_read_input_tokens, in_pm * 0.10,
+                    );
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::QuerySessionStats => {
                     use aether_core::compaction::context_window_for_model;
                     let now = std::time::SystemTime::now()
@@ -5985,6 +6051,8 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
             push_hook_reminders(&mut session, outs, "UserPromptSubmit");
 
             let mut next_input: Option<String> = Some(user_msg);
+            const AUTO_CONTINUE_LIMIT: usize = 50;
+            let mut auto_continue_count: usize = 0;
             loop {
                 let etx_inner = etx_for_driver.clone();
                 let mut started = false;
@@ -6066,9 +6134,22 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 });
 
                 match outcome {
-                    TurnOutcome::AwaitUser => break,
-                    TurnOutcome::ContinueImmediately => continue,
+                    TurnOutcome::AwaitUser => { auto_continue_count = 0; break; }
+                    TurnOutcome::ContinueImmediately => {
+                        auto_continue_count += 1;
+                        if auto_continue_count >= AUTO_CONTINUE_LIMIT {
+                            auto_continue_count = 0;
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Auto-continue safety cap reached ({AUTO_CONTINUE_LIMIT} consecutive \
+                                 autonomous turns). Pausing to await your input. \
+                                 Send any message to resume, or /max-turns to adjust the limit."
+                            )));
+                            break;
+                        }
+                        continue;
+                    }
                     TurnOutcome::Sleep { seconds } => {
+                        auto_continue_count = 0;
                         tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
                         continue;
                     }
@@ -22992,6 +23073,23 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /load-session [path] — restore history from JSON file
+                                cmd_str if cmd_str.starts_with("/load-session ") => {
+                                    let path = cmd_str.trim_start_matches("/load-session").trim().to_string();
+                                    if _ctx.send(UiCommand::LoadSession(path)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /cost-estimate — detailed token cost breakdown
+                                "/cost-estimate" => {
+                                    if _ctx.send(UiCommand::QueryCostEstimate).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /auto-fix — AI diagnoses the last tool error and proposes a concrete fix
                                 "/auto-fix" => {
                                     let last_error_info = ui.chat_lines.iter().rev().find_map(|cl| {
@@ -23450,6 +23548,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/trim-history", "/trim-history ",
                             "/switch-model ",
                             "/save-session", "/save-session ",
+                            "/load-session ",
+                            "/cost-estimate",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

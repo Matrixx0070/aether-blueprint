@@ -188,6 +188,10 @@ pub enum UiCommand {
     SetModel(String),
     /// Serialize session history to a JSON file at the given path.
     SaveSession(String),
+    /// Load history from a previously saved JSON session file.
+    LoadSession(String),
+    /// Show detailed token cost breakdown for this session.
+    QueryCostEstimate,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
