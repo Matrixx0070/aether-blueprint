@@ -7555,6 +7555,33 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryAutoCompactShow => {
+                    let status = if session.auto_compact_on_stuck { "ON" } else { "OFF" };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Auto-compact-on-stuck: {status}. Use /auto-compact-stuck on|off to toggle."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryLlmTimeoutShow => {
+                    if session.llm_timeout_secs == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "LLM timeout: OFF (no per-turn deadline). Use /timeout <secs> to set one.".to_string()
+                        ));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "LLM timeout: {}s per turn. Use /timeout <secs> to change or /timeout 0 to clear.",
+                            session.llm_timeout_secs
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryVerifyShow => {
+                    let status = if session.verify_enabled { "ON" } else { "OFF" };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier (D7): {status}. Use /verify on|off to toggle."
+                    )));
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -32566,6 +32593,30 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /auto-compact-show — show auto-compact-on-stuck setting
+                                "/auto-compact-show" => {
+                                    if _ctx.send(UiCommand::QueryAutoCompactShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /llm-timeout-show — show LLM call timeout
+                                "/llm-timeout-show" => {
+                                    if _ctx.send(UiCommand::QueryLlmTimeoutShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /verify-show — show verifier enabled status
+                                "/verify-show" => {
+                                    if _ctx.send(UiCommand::QueryVerifyShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -33303,6 +33354,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/dedup-tools-show",
                             "/checkpoint-every-show",
                             "/auto-think-show",
+                            "/auto-compact-show",
+                            "/llm-timeout-show",
+                            "/verify-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

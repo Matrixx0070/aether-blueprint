@@ -861,6 +861,12 @@ pub enum UiCommand {
     QueryCheckpointEveryShow,
     /// Show the auto-think-on-stuck setting.
     QueryAutoThinkShow,
+    /// Show the auto-compact-on-stuck setting.
+    QueryAutoCompactShow,
+    /// Show the LLM call timeout setting.
+    QueryLlmTimeoutShow,
+    /// Show whether the D7 verifier is enabled.
+    QueryVerifyShow,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
