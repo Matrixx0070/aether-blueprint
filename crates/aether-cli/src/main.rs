@@ -8066,6 +8066,244 @@ CTF Toolkit — Aether AI-assisted\n\
                                     if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
                                     continue;
                                 }
+                                // ── BATCH 82: SESSION INTELLIGENCE + PROJECT TOOLS ────────────────
+                                cmd if cmd == "/recent" || cmd.starts_with("/recent ") => {
+                                    let n = cmd.trim_start_matches("/recent").trim()
+                                        .parse::<usize>().unwrap_or(10).min(30);
+                                    let cwd = std::env::current_dir().unwrap_or_default();
+                                    match std::process::Command::new("git")
+                                        .args(["log", "--name-only", "--pretty=format:", "--no-merges", &format!("-{}", n * 3)])
+                                        .current_dir(&cwd)
+                                        .output()
+                                    {
+                                        Ok(out) if out.status.success() => {
+                                            let stdout = String::from_utf8_lossy(&out.stdout);
+                                            // Collect unique files in order of most-recent touch
+                                            let mut seen = std::collections::HashSet::new();
+                                            let mut files: Vec<String> = Vec::new();
+                                            for line in stdout.lines() {
+                                                let trimmed = line.trim();
+                                                if !trimmed.is_empty() && !trimmed.starts_with('#') {
+                                                    if seen.insert(trimmed.to_string()) {
+                                                        files.push(trimmed.to_string());
+                                                        if files.len() >= n { break; }
+                                                    }
+                                                }
+                                            }
+                                            if files.is_empty() {
+                                                ui.chat_lines.push(ChatLine::SystemNote("No recent files in git history.".to_string()));
+                                            } else {
+                                                let mut msg = format!("Recently touched files  (last {} unique)\n", files.len());
+                                                for (i, f) in files.iter().enumerate() {
+                                                    let path = cwd.join(f);
+                                                    let size = path.metadata().map(|m| format!(" {}b", m.len())).unwrap_or_default();
+                                                    msg.push_str(&format!("  {:>2}. {f}{size}\n", i + 1));
+                                                }
+                                                msg.push_str("\n  /read <file>  or  /ask-code <file> to inspect");
+                                                ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                            }
+                                        }
+                                        _ => {
+                                            // Fallback: find by modification time using walkdir
+                                            use walkdir::WalkDir;
+                                            let skip = ["target", "node_modules", ".git", "dist", "__pycache__"];
+                                            let code_exts = ["rs","py","js","ts","tsx","go","java","c","cpp","rb","sh","md","toml","json"];
+                                            let mut entries: Vec<(std::path::PathBuf, std::time::SystemTime)> = WalkDir::new(&cwd)
+                                                .into_iter()
+                                                .filter_entry(|e| { let nm = e.file_name().to_string_lossy(); !nm.starts_with('.') && !skip.contains(&nm.as_ref()) })
+                                                .filter_map(|e| e.ok())
+                                                .filter(|e| e.file_type().is_file())
+                                                .filter(|e| { let ext = e.path().extension().and_then(|x| x.to_str()).unwrap_or(""); code_exts.contains(&ext) })
+                                                .filter_map(|e| e.metadata().ok().and_then(|m| m.modified().ok()).map(|t| (e.path().to_path_buf(), t)))
+                                                .collect();
+                                            entries.sort_by(|a, b| b.1.cmp(&a.1));
+                                            let mut msg = format!("Recently modified files (by mtime, top {n})\n");
+                                            for (i, (path, _)) in entries.iter().take(n).enumerate() {
+                                                let rel = path.strip_prefix(&cwd).unwrap_or(path);
+                                                msg.push_str(&format!("  {:>2}. {}\n", i + 1, rel.display()));
+                                            }
+                                            ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/pr-review" || cmd.starts_with("/pr-review ") => {
+                                    // Structured AI review of staged/unstaged git diff
+                                    let diff_target = cmd.trim_start_matches("/pr-review").trim();
+                                    let (git_args, label) = if diff_target.is_empty() {
+                                        (vec!["diff", "HEAD"], "HEAD diff")
+                                    } else if diff_target == "staged" || diff_target == "--staged" {
+                                        (vec!["diff", "--staged"], "staged changes")
+                                    } else {
+                                        (vec!["diff", diff_target], diff_target)
+                                    };
+                                    let diff_out = std::process::Command::new("git")
+                                        .args(&git_args)
+                                        .current_dir(std::env::current_dir().unwrap_or_default())
+                                        .output();
+                                    let diff_text = match diff_out {
+                                        Ok(o) if !String::from_utf8_lossy(&o.stdout).trim().is_empty() => {
+                                            String::from_utf8_lossy(&o.stdout).to_string()
+                                        }
+                                        Ok(_) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("No diff for {label}. Stage changes first or specify a branch/commit.")
+                                            ));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("git error: {e}")));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                    };
+                                    let diff_lines: Vec<&str> = diff_text.lines().collect();
+                                    let shown_diff: String = diff_lines.iter().take(400).cloned().collect::<Vec<_>>().join("\n");
+                                    let truncated = if diff_lines.len() > 400 { format!("\n… ({} more lines)", diff_lines.len() - 400) } else { String::new() };
+                                    let prompt = format!(
+                                        "Review this git diff as a senior engineer:\n\n```diff\n{shown_diff}{truncated}\n```\n\n\
+                                         Provide structured feedback in these sections:\n\
+                                         ## Summary\n(1-2 sentences: what changed)\n\
+                                         ## Issues\n(bugs, logic errors, security risks — with line refs)\n\
+                                         ## Suggestions\n(improvements, naming, patterns)\n\
+                                         ## Verdict\n✓ Approve / ✗ Request changes / ⚠ Needs discussion"
+                                    );
+                                    let ts = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/pr-review {label}  ({} lines of diff)", diff_lines.len()), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd == "/coverage" || cmd.starts_with("/coverage ") => {
+                                    let cov_arg = cmd.trim_start_matches("/coverage").trim();
+                                    let cwd = std::env::current_dir().unwrap_or_default();
+                                    let (cov_cmd, cov_label) = if cwd.join("Cargo.toml").exists() {
+                                        // cargo-llvm-cov preferred, fall back to tarpaulin, fall back to cargo test
+                                        let has_llvm = std::process::Command::new("cargo").args(["llvm-cov", "--version"]).output().map(|o| o.status.success()).unwrap_or(false);
+                                        let has_tarp = std::process::Command::new("which").arg("cargo-tarpaulin").output().map(|o| o.status.success()).unwrap_or(false);
+                                        if has_llvm {
+                                            (format!("cargo llvm-cov {} 2>&1", cov_arg), "cargo llvm-cov")
+                                        } else if has_tarp {
+                                            (format!("cargo tarpaulin --out Stdout {} 2>&1", cov_arg), "tarpaulin")
+                                        } else {
+                                            ("cargo test 2>&1 && echo 'Install cargo-llvm-cov: cargo install cargo-llvm-cov'".to_string(), "cargo test (no coverage tool)")
+                                        }
+                                    } else if cwd.join("package.json").exists() {
+                                        (format!("npx jest --coverage {} 2>&1", cov_arg), "jest coverage")
+                                    } else if cwd.join("go.mod").exists() {
+                                        (format!("go test -cover ./... {} 2>&1", cov_arg), "go test -cover")
+                                    } else if cwd.join("pyproject.toml").exists() || cwd.join("setup.py").exists() {
+                                        (format!("python3 -m pytest --cov=. --cov-report=term-missing {} 2>&1", cov_arg), "pytest-cov")
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "No project detected. Supported: Cargo.toml, package.json, go.mod, pyproject.toml".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(format!("Running {cov_label}…")));
+                                    let start = std::time::Instant::now();
+                                    match std::process::Command::new("sh").args(["-c", &cov_cmd]).current_dir(&cwd).output() {
+                                        Ok(out) => {
+                                            let elapsed = start.elapsed();
+                                            let stdout = String::from_utf8_lossy(&out.stdout);
+                                            let badge = if out.status.success() { "✓" } else { "✗" };
+                                            // Extract coverage percentage line
+                                            let cov_pct: Option<String> = stdout.lines()
+                                                .find(|l| l.contains('%') && (l.contains("cov") || l.contains("covered") || l.contains("coverage")))
+                                                .map(|l| l.trim().to_string());
+                                            let pct_badge = cov_pct.as_deref().unwrap_or("(see output)");
+                                            let lines: Vec<&str> = stdout.trim_end().lines().collect();
+                                            let shown = lines.len().min(60);
+                                            let mut msg = format!("{badge} {cov_label}  {:.1}s\n  {pct_badge}\n```\n", elapsed.as_secs_f64());
+                                            msg.push_str(&lines[..shown].join("\n"));
+                                            if lines.len() > shown {
+                                                msg.push_str(&format!("\n… ({} more lines)", lines.len() - shown));
+                                            }
+                                            msg.push_str("\n```");
+                                            ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("{cov_label} failed: {e}")));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/test" || cmd.starts_with("/test ") => {
+                                    // Smart test runner — auto-detect project type
+                                    let test_arg = cmd.trim_start_matches("/test").trim();
+                                    let cwd = std::env::current_dir().unwrap_or_default();
+                                    let (test_cmd, test_label) = if cwd.join("Cargo.toml").exists() {
+                                        if test_arg.is_empty() {
+                                            ("cargo test 2>&1".to_string(), "cargo test")
+                                        } else {
+                                            (format!("cargo test {} 2>&1", test_arg), "cargo test")
+                                        }
+                                    } else if cwd.join("package.json").exists() {
+                                        let pkg = std::fs::read_to_string(cwd.join("package.json")).unwrap_or_default();
+                                        if pkg.contains("\"vitest\"") {
+                                            (format!("npx vitest run {} 2>&1", test_arg), "vitest")
+                                        } else if pkg.contains("\"jest\"") {
+                                            (format!("npx jest {} 2>&1", test_arg), "jest")
+                                        } else {
+                                            (format!("npm test {} 2>&1", test_arg), "npm test")
+                                        }
+                                    } else if cwd.join("go.mod").exists() {
+                                        (format!("go test ./... {} 2>&1", test_arg), "go test")
+                                    } else if cwd.join("pyproject.toml").exists() || cwd.join("pytest.ini").exists() {
+                                        (format!("python3 -m pytest -v {} 2>&1", test_arg), "pytest")
+                                    } else if cwd.join("Makefile").exists() {
+                                        ("make test 2>&1".to_string(), "make test")
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "No test runner detected. Try /shell <your-test-cmd>".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(format!("Running {test_label}…")));
+                                    let start = std::time::Instant::now();
+                                    match std::process::Command::new("sh").args(["-c", &test_cmd]).current_dir(&cwd).output() {
+                                        Ok(out) => {
+                                            let elapsed = start.elapsed();
+                                            let stdout = String::from_utf8_lossy(&out.stdout);
+                                            let exit = out.status.code().unwrap_or(-1);
+                                            let badge = if out.status.success() { "✓" } else { "✗" };
+                                            // Extract pass/fail summary line
+                                            let summary: Option<String> = stdout.lines().rev()
+                                                .find(|l| l.contains("passed") || l.contains("failed") || l.contains("ok") || l.contains("FAILED") || l.contains("test result"))
+                                                .map(|l| l.trim().to_string());
+                                            let lines: Vec<&str> = stdout.trim_end().lines().collect();
+                                            let shown = lines.len().min(80);
+                                            let mut msg = format!("{badge} {test_label}  [{exit}]  {:.1}s\n", elapsed.as_secs_f64());
+                                            if let Some(s) = summary {
+                                                msg.push_str(&format!("  {s}\n"));
+                                            }
+                                            msg.push_str("\n```\n");
+                                            msg.push_str(&lines[..shown].join("\n"));
+                                            if lines.len() > shown {
+                                                msg.push_str(&format!("\n… ({} more lines)", lines.len() - shown));
+                                            }
+                                            msg.push_str("\n```");
+                                            if !out.status.success() {
+                                                msg.push_str("\n  Ask: explain these test failures and suggest fixes");
+                                            }
+                                            ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("{test_label} error: {e}")));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -8704,7 +8942,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ask-code ", "/bench", "/bench ", "/blame ", "/changelog", "/changelog ", "/count-tokens", "/count-tokens ", "/ctf", "/ctf-tools", "/flow ", "/grep-code ", "/lint", "/lint ", "/metrics", "/metrics ", "/patch", "/patch ", "/profile ", "/todo-ai ", "/watch ",
+                            "/ask-code ", "/bench", "/bench ", "/blame ", "/changelog", "/changelog ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/flow ", "/grep-code ", "/lint", "/lint ", "/metrics", "/metrics ", "/patch", "/patch ", "/pr-review", "/pr-review ", "/profile ", "/recent", "/recent ", "/test", "/test ", "/todo-ai ", "/watch ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
