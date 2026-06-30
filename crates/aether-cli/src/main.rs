@@ -5805,8 +5805,59 @@ Input shortcuts\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
-                                "/diff" => {
-                                    // Collect last two completed AI responses
+                                cmd if cmd == "/diff" || cmd.starts_with("/diff ") => {
+                                    let diff_arg = cmd.trim_start_matches("/diff").trim();
+                                    // /diff git [args...] — run git diff and show output
+                                    if diff_arg == "git" || diff_arg == "staged" || diff_arg.starts_with("git ") || diff_arg.starts_with("HEAD") || diff_arg.starts_with("--") {
+                                        let git_args = if diff_arg == "staged" {
+                                            vec!["diff", "--staged"]
+                                        } else if diff_arg.starts_with("git ") {
+                                            diff_arg.split_whitespace().skip(1).collect::<Vec<_>>()
+                                        } else if diff_arg == "git" {
+                                            vec!["diff"]
+                                        } else {
+                                            diff_arg.split_whitespace().collect::<Vec<_>>()
+                                        };
+                                        match std::process::Command::new("git")
+                                            .args(&git_args)
+                                            .output()
+                                        {
+                                            Ok(out) => {
+                                                let stdout = String::from_utf8_lossy(&out.stdout);
+                                                let stderr = String::from_utf8_lossy(&out.stderr);
+                                                if !out.status.success() && stdout.is_empty() {
+                                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                                        format!("git diff failed: {}", stderr.trim())
+                                                    ));
+                                                } else if stdout.trim().is_empty() {
+                                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                                        "git diff: no changes".to_string()
+                                                    ));
+                                                } else {
+                                                    let lines: Vec<&str> = stdout.lines().collect();
+                                                    let shown = lines.len().min(200);
+                                                    let mut out_msg = format!("git diff  ({} lines)\n```diff\n", lines.len());
+                                                    for line in &lines[..shown] {
+                                                        out_msg.push_str(line);
+                                                        out_msg.push('\n');
+                                                    }
+                                                    if lines.len() > shown {
+                                                        out_msg.push_str(&format!("... ({} lines truncated — /export to see full)\n", lines.len() - shown));
+                                                    }
+                                                    out_msg.push_str("```");
+                                                    ui.chat_lines.push(ChatLine::SystemNote(out_msg));
+                                                }
+                                            }
+                                            Err(e) => {
+                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                    format!("git not found or error: {e}\n  Usage: /diff git  /diff staged  /diff HEAD~1")
+                                                ));
+                                            }
+                                        }
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    // /diff (no arg) — diff last two AI responses
                                     let asst_texts: Vec<&str> = ui.chat_lines.iter().rev()
                                         .filter_map(|cl| {
                                             if let ChatLine::Assistant(body, _, _) = cl { Some(body.as_str()) } else { None }
@@ -5815,7 +5866,7 @@ Input shortcuts\n\
                                         .collect();
                                     if asst_texts.len() < 2 {
                                         ui.chat_lines.push(ChatLine::SystemNote(
-                                            "Need at least 2 AI responses to diff.".to_string()
+                                            "Need at least 2 AI responses to diff.\n  Usage: /diff           — diff last two responses\n         /diff git       — show working-tree changes\n         /diff staged    — show staged changes\n         /diff HEAD~1    — diff against last commit".to_string()
                                         ));
                                     } else {
                                         let old_lines: Vec<&str> = asst_texts[1].lines().collect();
@@ -6355,6 +6406,75 @@ Input shortcuts\n\
                                             Err(e) => format!("Note save failed: {e}"),
                                         };
                                         ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/summary" | "/sum" => {
+                                    // Ask AI to summarize the conversation so far
+                                    let exchange_count = ui.chat_lines.iter()
+                                        .filter(|cl| matches!(cl, ChatLine::User(_, _)))
+                                        .count();
+                                    if exchange_count == 0 {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Nothing to summarize yet — send some messages first.".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let summary_prompt = format!(
+                                        "Please provide a concise summary of our conversation so far ({exchange_count} exchange{}).\n\
+                                         Include:\n\
+                                         1. Main topic / goal\n\
+                                         2. Key decisions or answers\n\
+                                         3. Any open questions or next steps\n\
+                                         Keep it under 200 words.",
+                                        if exchange_count == 1 { "" } else { "s" }
+                                    );
+                                    let ts = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(summary_prompt.clone(), ts));
+                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                        format!("Requesting summary of {exchange_count} exchange{}…", if exchange_count == 1 { "" } else { "s" })
+                                    ));
+                                    ui.follow_tail = true;
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.msg_times_secs.push(ts);
+                                    if _ctx.send(UiCommand::UserMessage(summary_prompt)).is_err() {
+                                        break 'outer;
+                                    }
+                                    continue;
+                                }
+                                "/ls" | "/dir" => {
+                                    let cwd = std::env::current_dir().unwrap_or_default();
+                                    match std::process::Command::new("ls")
+                                        .args(["-lah", "--color=never"])
+                                        .current_dir(&cwd)
+                                        .output()
+                                        .or_else(|_| {
+                                            std::process::Command::new("ls")
+                                                .args(["-la"])
+                                                .current_dir(&cwd)
+                                                .output()
+                                        }) {
+                                        Ok(out) => {
+                                            let listing = String::from_utf8_lossy(&out.stdout);
+                                            let lines: usize = listing.lines().count().saturating_sub(1);
+                                            let preview: String = listing.lines().take(40).collect::<Vec<_>>().join("\n");
+                                            let truncated = if listing.lines().count() > 40 {
+                                                format!("\n  … ({} more entries)", listing.lines().count() - 40)
+                                            } else { String::new() };
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("{}\n{preview}{truncated}", cwd.display())
+                                            ));
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("ls failed: {e}")
+                                            ));
+                                        }
                                     }
                                     ui.follow_tail = true;
                                     continue;
