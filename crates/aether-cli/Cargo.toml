@@ -56,5 +56,6 @@ walkdir = "2"
 crossterm = "0.28"
 axum = { version = "0.7", default-features = false, features = ["tokio", "http1", "json", "ws"] }
 futures-util.workspace = true
+glob.workspace = true
 
 [dev-dependencies]

@@ -5619,6 +5619,22 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::SetTemperature(t) => {
+                    session.config.temperature = t;
+                    let note = match t {
+                        None => "Temperature: API default (1.0)".to_string(),
+                        Some(v) => format!("Temperature: {v:.2}"),
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::SetMaxTokens(n) => {
+                    session.config.max_tokens_per_turn = n;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(
+                        format!("max_tokens_per_turn: {n}")
+                    ));
+                    continue;
+                }
             };
             let outs = run_hooks(
                 &hooks.user_prompt_submit,
@@ -18478,6 +18494,144 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /temp [value|default] — set sampling temperature
+                                cmd_str if cmd_str == "/temp" || cmd_str.starts_with("/temp ") => {
+                                    let arg = cmd_str.trim_start_matches("/temp").trim();
+                                    let budget = if arg.is_empty() || arg == "default" || arg == "off" {
+                                        None
+                                    } else {
+                                        match arg.parse::<f32>() {
+                                            Ok(v) => Some(v.clamp(0.0, 1.0)),
+                                            Err(_) => {
+                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                    "Usage: /temp [0.0–1.0|default]  e.g. /temp 0.7 or /temp default".into()
+                                                ));
+                                                ui.follow_tail = true;
+                                                continue;
+                                            }
+                                        }
+                                    };
+                                    if _ctx.send(UiCommand::SetTemperature(budget)).is_err() { break 'outer; }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /max-tokens N — set per-turn max_tokens cap
+                                cmd_str if cmd_str == "/max-tokens" || cmd_str.starts_with("/max-tokens ") => {
+                                    let arg = cmd_str.trim_start_matches("/max-tokens").trim();
+                                    if arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /max-tokens <N>  e.g. /max-tokens 8192".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    match arg.parse::<u32>() {
+                                        Ok(n) => {
+                                            if _ctx.send(UiCommand::SetMaxTokens(n)).is_err() { break 'outer; }
+                                        }
+                                        Err(_) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                "Usage: /max-tokens <N>  e.g. /max-tokens 8192".into()
+                                            ));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /export json — export chat history to a JSON file
+                                cmd_str if cmd_str == "/export" || cmd_str.starts_with("/export ") => {
+                                    let arg = cmd_str.trim_start_matches("/export").trim();
+                                    if arg == "json" || arg.is_empty() {
+                                        let ts = std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_secs();
+                                        let path = format!("aether-export-{ts}.json");
+                                        let messages: Vec<serde_json::Value> = ui.chat_lines.iter().map(|l| {
+                                            match l {
+                                                ChatLine::User(t, ts2) => serde_json::json!({"role":"user","text":t,"ts":ts2}),
+                                                ChatLine::Assistant(t, secs, cost) => serde_json::json!({"role":"assistant","text":t,"wall_secs":secs,"cost_usd":cost}),
+                                                ChatLine::AssistantPartial(t) => serde_json::json!({"role":"assistant_partial","text":t}),
+                                                ChatLine::SystemNote(t) => serde_json::json!({"role":"system","text":t}),
+                                                ChatLine::SplashRow { logo, info, .. } => serde_json::json!({"role":"splash","logo":logo,"info":info}),
+                                            }
+                                        }).collect();
+                                        let tools: Vec<serde_json::Value> = ui.tool_log.iter().map(|t| {
+                                            let (st, preview) = match &t.status {
+                                                aether_render::ToolStatus::Running => ("running", String::new()),
+                                                aether_render::ToolStatus::Ok(p) => ("ok", p.clone()),
+                                                aether_render::ToolStatus::Err(p) => ("err", p.clone()),
+                                            };
+                                            serde_json::json!({"name":&t.name,"status":st,"summary":&t.summary,"preview":preview,"elapsed_ms":t.elapsed_ms})
+                                        }).collect();
+                                        let n_msg = messages.len();
+                                        let n_tool = tools.len();
+                                        let payload = serde_json::json!({
+                                            "exported_at": ts,
+                                            "messages": messages,
+                                            "tools": tools,
+                                        });
+                                        match std::fs::write(&path, serde_json::to_string_pretty(&payload).unwrap_or_default()) {
+                                            Ok(_) => {
+                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                    format!("Exported {n_msg} messages + {n_tool} tool entries → {path}")
+                                                ));
+                                            }
+                                            Err(e) => {
+                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                    format!("Export failed: {e}")
+                                                ));
+                                            }
+                                        }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /export json  (exports chat to aether-export-<ts>.json)".into()
+                                        ));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /multi-add <glob> — add all matching files to context_files
+                                cmd_str if cmd_str.starts_with("/multi-add ") => {
+                                    let pattern = cmd_str[11..].trim();
+                                    if pattern.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /multi-add <glob>  e.g. /multi-add src/**/*.rs".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    match glob::glob(pattern) {
+                                        Ok(paths) => {
+                                            let mut added = 0usize;
+                                            let mut skipped = 0usize;
+                                            for entry in paths.flatten() {
+                                                if entry.is_file() {
+                                                    let p = entry.to_string_lossy().into_owned();
+                                                    if !ui.context_files.contains(&p) {
+                                                        ui.context_files.push(p);
+                                                        added += 1;
+                                                    } else {
+                                                        skipped += 1;
+                                                    }
+                                                }
+                                            }
+                                            let msg_text = if skipped > 0 {
+                                                format!("/multi-add: added {added} file(s), {skipped} already present.")
+                                            } else {
+                                                format!("/multi-add: added {added} file(s).")
+                                            };
+                                            ui.chat_lines.push(ChatLine::SystemNote(msg_text));
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("/multi-add: invalid glob pattern — {e}")
+                                            ));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -18811,6 +18965,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-stats", "/tstats",
                             "/add ", "/context-list", "/ctx-list", "/added",
                             "/context-rm ", "/context-clear", "/ctx-clear",
+                            "/temp ", "/temp default", "/max-tokens ",
+                            "/export", "/export json", "/multi-add ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

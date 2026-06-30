@@ -47,6 +47,7 @@ quick-xml = { version = "0.36", default-features = false }
 rsa = { version = "0.9", default-features = false, features = ["sha2", "pem"] }
 x509-parser = { version = "0.16", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+glob = "0.3"
 
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
