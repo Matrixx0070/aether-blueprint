@@ -4979,14 +4979,31 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                 cmd if cmd == "/template" || cmd.starts_with("/template ") || cmd == "/tmpl" || cmd.starts_with("/tmpl ") => {
                                     let arg = cmd.trim_start_matches("/template").trim_start_matches("/tmpl").trim();
                                     const TEMPLATES: &[(&str, &str, &str)] = &[
-                                        ("review",    "code review",   "Please review this code for correctness, performance, and style. Highlight any bugs, anti-patterns, or improvement opportunities:\n\n```\n\n```"),
-                                        ("explain",   "explain code",  "Explain what this code does, step by step. Assume I'm familiar with the language but not this specific pattern:\n\n```\n\n```"),
-                                        ("refactor",  "refactor",      "Refactor this code to be cleaner, more readable, and idiomatic. Keep the same behavior:\n\n```\n\n```"),
-                                        ("test",      "write tests",   "Write comprehensive unit tests for the following code. Cover edge cases and error paths:\n\n```\n\n```"),
-                                        ("debug",     "debug",         "Help me debug this issue. The problem is:\n\nExpected behavior:\nActual behavior:\nRelevant code:\n\n```\n\n```"),
-                                        ("plan",      "plan feature",  "Help me plan the implementation of this feature:\n\nFeature:\nConstraints:\nCurrent codebase context:"),
-                                        ("optimize",  "optimize",      "Optimize this code for performance. Show bottlenecks and suggest improvements with reasoning:\n\n```\n\n```"),
-                                        ("docs",      "write docs",    "Write clear documentation/docstring for this code. Include parameters, return values, and usage examples:\n\n```\n\n```"),
+                                        // ── Coding workflows ──────────────────────────────────
+                                        ("review",    "code review",    "Please review this code for correctness, performance, and style. Highlight any bugs, anti-patterns, or improvement opportunities:\n\n```\n\n```"),
+                                        ("explain",   "explain code",   "Explain what this code does, step by step. Assume I'm familiar with the language but not this specific pattern:\n\n```\n\n```"),
+                                        ("refactor",  "refactor",       "Refactor this code to be cleaner, more readable, and idiomatic. Keep the same behavior:\n\n```\n\n```"),
+                                        ("test",      "write tests",    "Write comprehensive unit tests for the following code. Cover edge cases and error paths:\n\n```\n\n```"),
+                                        ("debug",     "debug",          "Help me debug this issue.\n\nProblem:\nExpected behavior:\nActual behavior:\nError message:\n\nRelevant code:\n```\n\n```\n\nWhat I've tried:"),
+                                        ("plan",      "plan feature",   "Help me plan the implementation of this feature:\n\nFeature description:\nConstraints:\nPerformance requirements:\nSecurity considerations:\n\nCurrent codebase context:\n```\n\n```"),
+                                        ("optimize",  "optimize perf",  "Optimize this code for performance. Identify bottlenecks, suggest improvements, and estimate impact:\n\n```\n\n```\n\nContext: "),
+                                        ("docs",      "write docs",     "Write clear documentation for this code. Include: parameters, return values, error cases, and usage examples:\n\n```\n\n```"),
+                                        ("arch",      "architecture",   "Analyze the architecture of this system and suggest improvements:\n\nSystem description:\nCurrent pain points:\nScalability requirements:\nCode:\n```\n\n```"),
+                                        ("migrate",   "migration plan", "Help me migrate from <old> to <new>.\n\nCurrent code:\n```\n\n```\n\nTarget: \nConstraints: \nRisk tolerance: "),
+                                        // ── Security research ─────────────────────────────────
+                                        ("audit",     "security audit", "Perform a comprehensive security audit of this code. Check for:\n- Injection vulnerabilities (SQL, command, LDAP)\n- Authentication/authorization flaws\n- Insecure deserialization\n- Sensitive data exposure\n- SSRF, IDOR, path traversal\n- Cryptographic weaknesses\n- Race conditions\n- Input validation gaps\n\nCode:\n```\n\n```\n\nContext (language, framework, user-controlled inputs):"),
+                                        ("threat",    "threat model",   "Generate a STRIDE threat model for this system:\n\nSystem description:\nTrust boundaries:\nData flows:\nExternal actors:\n\nFor each STRIDE category (Spoofing, Tampering, Repudiation, Info Disclosure, DoS, Elevation of Privilege), identify:\n1. Threat scenario\n2. Attack vector\n3. Mitigation"),
+                                        ("pentest",   "pentest plan",   "Create a penetration testing plan for:\n\nTarget: \nScope: \nOut of scope: \nTime window: \nAuthorized by: \n\nInclude:\n1. Reconnaissance approach\n2. Vulnerability identification strategy\n3. Exploitation methodology\n4. Post-exploitation steps\n5. Reporting format"),
+                                        ("sqli",      "SQLi analysis",  "Analyze this code/query for SQL injection vulnerabilities:\n\n```sql\n\n```\n\nApplication code:\n```\n\n```\n\nIdentify: injectable parameters, bypass techniques, data exfiltration potential, and remediation."),
+                                        ("xss",       "XSS analysis",   "Analyze this code for XSS vulnerabilities:\n\n```\n\n```\n\nIdentify: reflection points, DOM sinks, stored XSS vectors, CSP bypasses, and remediation."),
+                                        ("privesc",   "privilege esc",  "Analyze this for privilege escalation vectors:\n\nContext (OS, service, user level):\nCode/config:\n```\n\n```\n\nCheck: SUID/capabilities, sudo misconfig, weak permissions, env injection, service exploits."),
+                                        ("crypto",    "crypto review",  "Review this cryptographic implementation:\n\n```\n\n```\n\nCheck: algorithm choice, key management, IV/nonce reuse, padding oracle risk, side channels, entropy sources."),
+                                        ("ctf",       "CTF challenge",  "Help me solve this CTF challenge:\n\nCategory: [pwn/web/crypto/rev/misc]\nChallenge description:\n\nWhat I've found so far:\nFiles/code:\n```\n\n```\n\nHint needed on:"),
+                                        ("reversing", "reverse eng",    "Help me reverse engineer this:\n\nBinary/code:\n```\n\n```\n\nContext (language, platform, obfuscation):\nGoal: [understand behavior / find vuln / extract secret]\nWhat I've identified so far:"),
+                                        ("incident",  "incident resp",  "Help with incident response:\n\nIncident type: \nTimeline:\nAffected systems:\nIOCs found:\nLogs:\n```\n\n```\n\nNeeded: containment steps, root cause analysis, remediation plan"),
+                                        // ── Research & analysis ───────────────────────────────
+                                        ("compare",   "compare impls",  "Compare these two implementations:\n\nImplementation A:\n```\n\n```\n\nImplementation B:\n```\n\n```\n\nCompare: correctness, performance, security, readability, maintainability."),
+                                        ("proto",     "protocol anal.", "Analyze this network protocol or API:\n\nProtocol/spec:\n```\n\n```\n\nCapture/requests:\n```\n\n```\n\nIdentify: authentication scheme, state machine, weaknesses, fuzzing targets."),
                                     ];
                                     if arg.is_empty() {
                                         let mut list = "Templates — /template <name> to load into input:\n".to_string();
@@ -6410,6 +6427,308 @@ Input shortcuts\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // ── FUNCTIONAL POWER TOOLS ───────────────────────────────────────
+                                cmd if cmd.starts_with("/run ") || cmd == "/run" => {
+                                    let file_arg = cmd.trim_start_matches("/run").trim();
+                                    if file_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /run <file>  — execute a code file and show output\n  Supported: .py .js .sh .rb .php .lua .pl .r .swift .go .java".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let fpath = std::env::current_dir().unwrap_or_default().join(file_arg);
+                                    if !fpath.exists() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("File not found: {}", fpath.display())
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let ext = fpath.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                                    let (interpreter, args): (&str, &[&str]) = match ext.as_str() {
+                                        "py"              => ("python3", &[]),
+                                        "js" | "mjs"      => ("node",    &[]),
+                                        "sh" | "bash"     => ("bash",    &[]),
+                                        "rb"              => ("ruby",    &[]),
+                                        "php"             => ("php",     &[]),
+                                        "lua"             => ("lua",     &[]),
+                                        "pl"              => ("perl",    &[]),
+                                        "r" | "R"         => ("Rscript", &[]),
+                                        "ts"              => ("npx", &["ts-node"]),
+                                        _                 => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("Unsupported extension '.{ext}'. Try /shell ./{file_arg} instead.")
+                                            ));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                    };
+                                    let fpath_str = fpath.to_string_lossy().to_string();
+                                    let full_args: Vec<String> = args.iter().map(|s| s.to_string())
+                                        .chain(std::iter::once(fpath_str.clone()))
+                                        .collect();
+                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                        format!("Running: {interpreter} {} …", full_args.join(" "))
+                                    ));
+                                    match std::process::Command::new(interpreter)
+                                        .args(&full_args)
+                                        .current_dir(std::env::current_dir().unwrap_or_default())
+                                        .output()
+                                    {
+                                        Ok(out) => {
+                                            let stdout = String::from_utf8_lossy(&out.stdout);
+                                            let stderr = String::from_utf8_lossy(&out.stderr);
+                                            let exit = out.status.code().unwrap_or(-1);
+                                            let exit_badge = if out.status.success() { "✓ exit 0" } else { &format!("✗ exit {exit}") };
+                                            let mut result = format!("$ {interpreter} {file_arg}  [{exit_badge}]\n```\n");
+                                            if !stdout.trim().is_empty() {
+                                                let lines: Vec<&str> = stdout.trim_end().lines().collect();
+                                                let shown = lines.len().min(100);
+                                                result.push_str(&lines[..shown].join("\n"));
+                                                if lines.len() > shown {
+                                                    result.push_str(&format!("\n… ({} more lines)", lines.len() - shown));
+                                                }
+                                            }
+                                            if !stderr.trim().is_empty() {
+                                                if !stdout.trim().is_empty() { result.push('\n'); }
+                                                result.push_str("stderr:\n");
+                                                let elines: Vec<&str> = stderr.trim_end().lines().collect();
+                                                let shown = elines.len().min(30);
+                                                result.push_str(&elines[..shown].join("\n"));
+                                                if elines.len() > shown {
+                                                    result.push_str(&format!("\n… ({} more lines)", elines.len() - shown));
+                                                }
+                                            }
+                                            result.push_str("\n```");
+                                            if stdout.trim().is_empty() && stderr.trim().is_empty() {
+                                                result.push_str("\n  (no output)");
+                                            }
+                                            ui.chat_lines.push(ChatLine::SystemNote(result));
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("Failed to run {interpreter}: {e}\n  (Is it installed?)")
+                                            ));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/tree" || cmd.starts_with("/tree ") => {
+                                    use walkdir::WalkDir;
+                                    let arg = cmd.trim_start_matches("/tree").trim();
+                                    let (start_dir, max_depth) = {
+                                        let parts: Vec<&str> = arg.split_whitespace().collect();
+                                        let mut d: Option<&str> = None;
+                                        let mut depth: usize = 3;
+                                        for p in &parts {
+                                            if let Ok(n) = p.parse::<usize>() { depth = n; }
+                                            else { d = Some(p); }
+                                        }
+                                        let base = std::env::current_dir().unwrap_or_default();
+                                        let dir = d.map(|p| base.join(p)).unwrap_or(base);
+                                        (dir, depth)
+                                    };
+                                    if !start_dir.exists() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("Directory not found: {}", start_dir.display())
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let mut tree = format!("{}\n", start_dir.display());
+                                    let mut file_count = 0usize;
+                                    let mut dir_count = 0usize;
+                                    let capped = max_depth.min(8);
+                                    for entry in WalkDir::new(&start_dir)
+                                        .max_depth(capped)
+                                        .into_iter()
+                                        .filter_entry(|e| {
+                                            let name = e.file_name().to_string_lossy();
+                                            !name.starts_with('.') && name != "target" && name != "node_modules"
+                                        })
+                                        .filter_map(|e| e.ok())
+                                        .skip(1) // skip root itself
+                                        .take(150)
+                                    {
+                                        let depth = entry.depth();
+                                        let indent = "│  ".repeat(depth.saturating_sub(1));
+                                        let name = entry.file_name().to_string_lossy();
+                                        if entry.file_type().is_dir() {
+                                            tree.push_str(&format!("{}├─ {}/\n", indent, name));
+                                            dir_count += 1;
+                                        } else {
+                                            tree.push_str(&format!("{}├─ {}\n", indent, name));
+                                            file_count += 1;
+                                        }
+                                    }
+                                    tree.push_str(&format!("\n  {} dirs, {} files (depth {capped}, hidden+target excluded)", dir_count, file_count));
+                                    ui.chat_lines.push(ChatLine::SystemNote(tree));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/read ") => {
+                                    let file_arg = cmd.trim_start_matches("/read").trim();
+                                    let fpath = if file_arg.starts_with('/') {
+                                        std::path::PathBuf::from(file_arg)
+                                    } else {
+                                        std::env::current_dir().unwrap_or_default().join(file_arg)
+                                    };
+                                    match std::fs::read_to_string(&fpath) {
+                                        Ok(content) => {
+                                            let lines = content.lines().count();
+                                            let chars = content.chars().count();
+                                            let ext = fpath.extension().and_then(|e| e.to_str()).unwrap_or("");
+                                            let lang = match ext {
+                                                "rs" => "rust", "py" => "python", "js" | "mjs" => "javascript",
+                                                "ts" | "tsx" => "typescript", "go" => "go", "c" | "h" => "c",
+                                                "cpp" | "cc" | "cxx" => "cpp", "java" => "java", "rb" => "ruby",
+                                                "sh" | "bash" => "bash", "json" => "json", "yaml" | "yml" => "yaml",
+                                                "toml" => "toml", "md" => "markdown", "sql" => "sql",
+                                                "html" | "htm" => "html", "css" => "css", "xml" => "xml",
+                                                _ => ext,
+                                            };
+                                            // Show first 200 lines, truncate if huge
+                                            let show_lines: Vec<&str> = content.lines().take(200).collect();
+                                            let truncated = if lines > 200 {
+                                                format!("\n… ({} more lines — use @{file_arg} to inject all)", lines - 200)
+                                            } else { String::new() };
+                                            let msg = format!(
+                                                "{file_arg}  ({lines}L, {chars}c)\n```{lang}\n{}{truncated}\n```",
+                                                show_lines.join("\n")
+                                            );
+                                            ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("Cannot read {}: {e}", fpath.display())
+                                            ));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/git ") || cmd == "/git" => {
+                                    let git_sub = cmd.trim_start_matches("/git").trim();
+                                    let (git_args, label): (Vec<&str>, String) = if git_sub.is_empty() {
+                                        (vec!["status"], "git status".to_string())
+                                    } else {
+                                        let args: Vec<&str> = git_sub.split_whitespace().collect();
+                                        let lbl = format!("git {git_sub}");
+                                        // For git log: add --oneline if not already customized
+                                        if args.first() == Some(&"log") && !git_sub.contains("--") {
+                                            (vec!["log", "--oneline", "--graph", "--decorate", "-20"], lbl)
+                                        } else {
+                                            (args, lbl)
+                                        }
+                                    };
+                                    match std::process::Command::new("git")
+                                        .args(&git_args)
+                                        .current_dir(std::env::current_dir().unwrap_or_default())
+                                        .output()
+                                    {
+                                        Ok(out) => {
+                                            let stdout = String::from_utf8_lossy(&out.stdout);
+                                            let stderr = String::from_utf8_lossy(&out.stderr);
+                                            if stdout.trim().is_empty() && !stderr.trim().is_empty() {
+                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                    format!("{label}\n{}", stderr.trim())
+                                                ));
+                                            } else if stdout.trim().is_empty() {
+                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                    format!("{label}\n  (no output)")
+                                                ));
+                                            } else {
+                                                let lines: Vec<&str> = stdout.trim_end().lines().collect();
+                                                let shown = lines.len().min(200);
+                                                let mut msg = format!("{label}\n```\n");
+                                                msg.push_str(&lines[..shown].join("\n"));
+                                                if lines.len() > shown {
+                                                    msg.push_str(&format!("\n… ({} more lines)", lines.len() - shown));
+                                                }
+                                                msg.push_str("\n```");
+                                                ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                            }
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("git error: {e}")
+                                            ));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/scan ") || cmd == "/scan" => {
+                                    let file_arg = cmd.trim_start_matches("/scan").trim();
+                                    let content = if file_arg.is_empty() {
+                                        // Scan last AI response
+                                        ui.chat_lines.iter().rev().find_map(|cl| {
+                                            if let ChatLine::Assistant(body, _, _) = cl { Some(body.clone()) } else { None }
+                                        }).unwrap_or_default()
+                                    } else {
+                                        let fpath = std::env::current_dir().unwrap_or_default().join(file_arg);
+                                        std::fs::read_to_string(&fpath).unwrap_or_else(|e| {
+                                            format!("Error reading file: {e}")
+                                        })
+                                    };
+                                    // Pattern-based static analysis
+                                    struct Finding { severity: &'static str, category: &'static str, desc: &'static str, line: usize }
+                                    let mut findings: Vec<Finding> = Vec::new();
+                                    let patterns: &[(&str, &[&str], &str, &str)] = &[
+                                        ("HIGH",   &["password", "passwd", "secret", "api_key", "apikey", "token", "private_key", "access_key"], "Hardcoded secret",    "Possible hardcoded credential/secret detected"),
+                                        ("HIGH",   &["eval(", "exec(", "subprocess.call", "os.system(", "popen("], "Command injection",  "User input may reach command execution"),
+                                        ("HIGH",   &["SELECT", "INSERT", "UPDATE", "DELETE", "DROP", "UNION"], "SQL in code",       "Raw SQL string — check for injection if user-controlled"),
+                                        ("HIGH",   &["innerHTML", "document.write(", "eval(", "setTimeout(\""], "XSS sink",          "DOM manipulation sink — ensure output is sanitized"),
+                                        ("MEDIUM", &["http://", "0.0.0.0", "127.0.0.1", "localhost"], "Hardcoded URL/host","Non-HTTPS or localhost URL found in code"),
+                                        ("MEDIUM", &["TODO", "FIXME", "HACK", "XXX", "BUG"], "Tech debt marker", "Known issue marker left in code"),
+                                        ("MEDIUM", &["unsafe {", "transmute(", "as_mut_ptr("], "Unsafe Rust",       "Unsafe block — verify memory safety manually"),
+                                        ("MEDIUM", &["#nosec", "# noqa", "// nolint", "nosemgrep"], "Security bypass","Lint/sec check suppression comment"),
+                                        ("LOW",    &["print(", "console.log(", "System.out.print", "println!", "fmt.Print"], "Debug output", "Debug print statement may leak data in prod"),
+                                        ("LOW",    &["MD5", "SHA1", "DES", "RC4", "ECB"], "Weak crypto",      "Deprecated/weak cryptographic algorithm"),
+                                    ];
+                                    for (sev, needles, category, desc) in patterns {
+                                        for (lnum, line) in content.lines().enumerate() {
+                                            let lower = line.to_lowercase();
+                                            for needle in *needles {
+                                                if lower.contains(&needle.to_lowercase()) {
+                                                    findings.push(Finding {
+                                                        severity: sev,
+                                                        category,
+                                                        desc,
+                                                        line: lnum + 1,
+                                                    });
+                                                    break; // one finding per pattern per line
+                                                }
+                                            }
+                                        }
+                                    }
+                                    let source_label = if file_arg.is_empty() { "last AI response".to_string() } else { file_arg.to_string() };
+                                    let total_lines = content.lines().count();
+                                    if findings.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("scan {source_label}  ({total_lines} lines)\n  ✓ No pattern-based findings (manual review still recommended)")
+                                        ));
+                                    } else {
+                                        let high = findings.iter().filter(|f| f.severity == "HIGH").count();
+                                        let med  = findings.iter().filter(|f| f.severity == "MEDIUM").count();
+                                        let low  = findings.iter().filter(|f| f.severity == "LOW").count();
+                                        let mut msg = format!(
+                                            "scan {source_label}  ({total_lines} lines)\n  {} HIGH  {} MEDIUM  {} LOW\n\n",
+                                            high, med, low
+                                        );
+                                        for f in &findings {
+                                            msg.push_str(&format!("  [{sev}] L{line:<4} {cat}  —  {desc}\n",
+                                                sev = f.severity, line = f.line, cat = f.category, desc = f.desc));
+                                        }
+                                        msg.push_str("\n  /template audit  to get AI deep-dive on findings");
+                                        ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // ─────────────────────────────────────────────────────────────────
                                 "/summary" | "/sum" => {
                                     // Ask AI to summarize the conversation so far
                                     let exchange_count = ui.chat_lines.iter()
@@ -7234,12 +7553,16 @@ Input shortcuts\n\
                         const SLASH_CMDS: &[&str] = &[
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
-                            "/find ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/outline", "/raw", "/replay ", "/reset-cost", "/retry ", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/undo", "/unpin", "/version", "/wc", "/wrap",
+                            "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
+                            "/outline", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/scan", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
-                        const TEMPLATE_SUBS: &[&str] = &["review", "explain", "refactor", "test", "debug", "plan", "optimize", "docs"];
+                        const TEMPLATE_SUBS: &[&str] = &[
+                            "arch", "audit", "compare", "crypto", "ctf", "debug", "docs", "explain",
+                            "incident", "migrate", "optimize", "pentest", "plan", "privesc", "proto",
+                            "refactor", "review", "reversing", "sqli", "test", "threat", "xss",
+                        ];
                         let buf = ui.input_buffer.trim_end().to_string();
                         // Subcommand completion: "/model <tab>", "/template <tab>", "/load <tab>"
                         let subcomp_handled = if buf == "/model " || (buf.starts_with("/model ") && !buf.trim_end().contains("  ")) {
