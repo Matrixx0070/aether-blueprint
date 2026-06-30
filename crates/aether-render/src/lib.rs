@@ -801,6 +801,12 @@ pub enum UiCommand {
     QueryHistorySizeMb,
     /// Show cost per session note as a rough efficiency metric.
     QueryCostPerNote,
+    /// Show history items in a specific index range (from, to inclusive).
+    QueryHistoryItemsRange(usize, usize),
+    /// Count session environment variables.
+    QuerySessionEnvCount,
+    /// Count user-defined turn labels.
+    QueryLabelCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

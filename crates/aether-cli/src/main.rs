@@ -7145,6 +7145,59 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryHistoryItemsRange(from, to) => {
+                    let len = session.history.len();
+                    if from >= len {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Range start {from} out of bounds (history len={len})."
+                        )));
+                    } else {
+                        let end = (to + 1).min(len);
+                        let lines: Vec<String> = session.history[from..end].iter().enumerate().map(|(i, item)| {
+                            let idx = from + i;
+                            match item {
+                                ConversationItem::User(t) => {
+                                    let preview = if t.len() > 80 { format!("{}...", &t[..80]) } else { t.clone() };
+                                    format!("  [{idx}] User: {preview}")
+                                }
+                                ConversationItem::Assistant { text, tool_uses } => {
+                                    let preview = text.as_deref().map(|t| if t.len() > 60 { format!("{}...", &t[..60]) } else { t.to_string() }).unwrap_or_default();
+                                    format!("  [{idx}] Assistant: {preview} ({} tool calls)", tool_uses.len())
+                                }
+                                ConversationItem::ToolResults(r) => {
+                                    format!("  [{idx}] ToolResults: {} results", r.len())
+                                }
+                            }
+                        }).collect();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "History [{from}..{}]:\n{}", end - 1, lines.join("\n")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionEnvCount => {
+                    let count = session.session_env.len();
+                    if count == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No session env vars. Use /env-set <key> <value>.".to_string()));
+                    } else {
+                        let keys: Vec<&str> = session.session_env.keys().map(|s| s.as_str()).collect();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session env vars ({count}): {}", keys.join(", ")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryLabelCount => {
+                    let count = session.turn_labels.len();
+                    if count == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No turn labels. Use /label <turn> <text> to add one.".to_string()));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn labels: {count}"
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -31901,6 +31954,33 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /history-items-range <from> <to> — show history items in range
+                                cmd_str if cmd_str.starts_with("/history-items-range ") => {
+                                    let args: Vec<&str> = cmd_str.trim_start_matches("/history-items-range ").split_whitespace().collect();
+                                    let from = args.first().and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+                                    let to = args.get(1).and_then(|s| s.parse::<usize>().ok()).unwrap_or(from + 5);
+                                    if _ctx.send(UiCommand::QueryHistoryItemsRange(from, to)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-env-count — count session env vars
+                                "/session-env-count" => {
+                                    if _ctx.send(UiCommand::QuerySessionEnvCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /label-count — count user-defined turn labels
+                                "/label-count" => {
+                                    if _ctx.send(UiCommand::QueryLabelCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -32608,6 +32688,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias-count",
                             "/history-size-mb",
                             "/cost-per-note",
+                            "/history-items-range ",
+                            "/session-env-count",
+                            "/label-count",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
