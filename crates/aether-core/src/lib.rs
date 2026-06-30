@@ -182,6 +182,11 @@ pub struct Session {
     /// In-session progress tracker: (description, done).
     /// When non-empty, injected as a reminder every turn so the agent sees current status.
     pub progress_items: Vec<(String, bool)>,
+
+    /// Per-tool output character limits. When a tool's output exceeds the
+    /// configured cap it is truncated before being stored in history.
+    /// Complements the global 50k cap in the executor.
+    pub tool_output_limits: std::collections::HashMap<String, usize>,
 }
 
 impl Session {
@@ -229,6 +234,7 @@ impl Session {
             checkpoint_every_tools: 0,
             warmup_files: Vec::new(),
             progress_items: Vec::new(),
+            tool_output_limits: std::collections::HashMap::new(),
         }
     }
 
@@ -653,6 +659,34 @@ async fn agent_turn_inner(
         Vec::new()
     } else {
         session.executor.execute(&session.tools, &tool_uses).await
+    };
+
+    // Apply per-tool output character limits when configured. Per-tool caps
+    // are tighter than the global 50k executor cap and let users silence
+    // verbose tools (e.g. cargo test, grep) without a global truncation.
+    let tool_results: Vec<context::RecordedToolResult> = if session.tool_output_limits.is_empty() {
+        tool_results
+    } else {
+        tool_results
+            .into_iter()
+            .map(|mut r| {
+                let tool_name = tool_uses.iter()
+                    .find(|tu| tu.id == r.tool_use_id)
+                    .map(|tu| tu.name.as_str())
+                    .unwrap_or("");
+                if let Some(&cap) = session.tool_output_limits.get(tool_name) {
+                    if r.content.len() > cap {
+                        let dropped = r.content.len() - cap;
+                        let head: String = r.content.chars().take(cap).collect();
+                        r.content = format!(
+                            "{head}\n\n[PER-TOOL LIMIT ({tool_name}): {dropped} chars dropped — \
+                             use a more specific query or raise with /tool-output-max {tool_name} <N>]"
+                        );
+                    }
+                }
+                r
+            })
+            .collect()
     };
 
     // Drain any reminders the PreToolUse / PostToolUse hooks emitted

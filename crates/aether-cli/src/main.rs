@@ -6320,6 +6320,30 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::SetToolOutputMax(tool_name, limit) => {
+                    let note = if limit == 0 {
+                        session.tool_output_limits.remove(&tool_name);
+                        format!("Per-tool limit for '{tool_name}' cleared.")
+                    } else {
+                        session.tool_output_limits.insert(tool_name.clone(), limit);
+                        format!("Per-tool output cap: '{tool_name}' → {limit} chars (global cap: 50,000).")
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryToolOutputLimits => {
+                    let note = if session.tool_output_limits.is_empty() {
+                        "No per-tool output limits set. Use /tool-output-max <tool> <N>.".to_string()
+                    } else {
+                        let mut lines: Vec<String> = session.tool_output_limits.iter()
+                            .map(|(k, v)| format!("  {k}: {v} chars"))
+                            .collect();
+                        lines.sort();
+                        format!("=== Per-tool output limits ===\n{}\n(Global cap: 50,000 chars)", lines.join("\n"))
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::AddProgressItem(text) => {
                     session.progress_items.push((text.clone(), false));
                     let note = format!(
@@ -23994,6 +24018,27 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /tool-output-max <tool> <N> — cap per-tool output (0=clear)
+                                cmd_str if cmd_str.starts_with("/tool-output-max ") => {
+                                    let arg = cmd_str.trim_start_matches("/tool-output-max ").trim();
+                                    let mut parts = arg.splitn(2, ' ');
+                                    let tool_name = parts.next().unwrap_or("").to_string();
+                                    let limit_str = parts.next().unwrap_or("0");
+                                    let limit = limit_str.parse::<usize>().unwrap_or(0);
+                                    if _ctx.send(UiCommand::SetToolOutputMax(tool_name, limit)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tool-output-limits — show all per-tool output caps
+                                "/tool-output-limits" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputLimits).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /progress-add <text> — add item to the session progress tracker
                                 cmd_str if cmd_str.starts_with("/progress-add ") => {
                                     let text = cmd_str.trim_start_matches("/progress-add ").trim().to_string();
@@ -24657,6 +24702,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/progress-done ",
                             "/progress-clear",
                             "/progress-list",
+                            "/tool-output-max ",
+                            "/tool-output-limits",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

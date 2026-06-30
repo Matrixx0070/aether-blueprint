@@ -261,6 +261,10 @@ pub enum UiCommand {
     RemoveWarmupFile(String),
     /// List all warmup files.
     QueryWarmupFiles,
+    /// Set a per-tool output character cap (0 = remove cap for that tool).
+    SetToolOutputMax(String, usize),
+    /// List all per-tool output limits.
+    QueryToolOutputLimits,
     /// Add an item to the in-session progress tracker.
     AddProgressItem(String),
     /// Mark a progress item (by 0-based index) as done.
