@@ -849,6 +849,12 @@ pub enum UiCommand {
     QueryThinkAloudShow,
     /// Show the configured LLM fallback model.
     QueryFallbackModelShow,
+    /// Show whether auto-status is enabled.
+    QueryAutoStatusShow,
+    /// Show the max-turns limit for this session.
+    QueryMaxTurnsShow,
+    /// Show the fail-fast error threshold setting.
+    QueryFailFastShow,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

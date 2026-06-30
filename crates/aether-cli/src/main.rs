@@ -7487,6 +7487,41 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryAutoStatusShow => {
+                    let status = if session.auto_status { "ON" } else { "OFF" };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Auto-status: {status}. Use /auto-status on|off to toggle."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryMaxTurnsShow => {
+                    if session.max_turns == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Max turns: unlimited. Current turn: {}. Use /max-turns <n> to set a limit.",
+                            session.turn_index
+                        )));
+                    } else {
+                        let remaining = session.max_turns.saturating_sub(session.turn_index);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Max turns: {} (turn {}/{}, {} remaining).",
+                            session.max_turns, session.turn_index, session.max_turns, remaining
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryFailFastShow => {
+                    if session.fail_fast_errors == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Fail-fast: OFF. Use /fail-fast <n> to stop after n cumulative tool errors.".to_string()
+                        ));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Fail-fast: stops after {} cumulative tool errors. Use /fail-fast off to disable.",
+                            session.fail_fast_errors
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -32450,6 +32485,30 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /auto-status-show — show auto-status setting
+                                "/auto-status-show" => {
+                                    if _ctx.send(UiCommand::QueryAutoStatusShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /max-turns-show — show max-turns limit
+                                "/max-turns-show" => {
+                                    if _ctx.send(UiCommand::QueryMaxTurnsShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /fail-fast-show — show fail-fast threshold
+                                "/fail-fast-show" => {
+                                    if _ctx.send(UiCommand::QueryFailFastShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -33181,6 +33240,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/scope-guard-show",
                             "/think-aloud-show",
                             "/fallback-model-show",
+                            "/auto-status-show",
+                            "/max-turns-show",
+                            "/fail-fast-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
