@@ -225,6 +225,11 @@ pub struct Session {
     /// agent finishes a turn cycle (AwaitUser), the next task is auto-injected
     /// as a user message instead of waiting for interactive input.
     pub task_queue: std::collections::VecDeque<String>,
+
+    /// Optional shell command to run after each agent turn that used at least
+    /// one tool. The stdout+stderr output is emitted as a SystemNote and
+    /// re-injected as a user context message so the agent sees the result.
+    pub post_turn_hook: Option<String>,
 }
 
 impl Session {
@@ -282,6 +287,7 @@ impl Session {
             error_playbook: Vec::new(),
             auto_status: false,
             task_queue: std::collections::VecDeque::new(),
+            post_turn_hook: None,
         }
     }
 

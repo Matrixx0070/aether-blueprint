@@ -6400,6 +6400,26 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::SetPostTurnHook(cmd_opt) => {
+                    let note = match &cmd_opt {
+                        Some(cmd) => format!(
+                            "Post-turn hook set: `{cmd}`\n\
+                             Will run after each tool-using turn and inject output as context."
+                        ),
+                        None => "Post-turn hook cleared.".to_string(),
+                    };
+                    session.post_turn_hook = cmd_opt;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryPostTurnHook => {
+                    let note = match &session.post_turn_hook {
+                        Some(cmd) => format!("Post-turn hook: `{cmd}`  (active)"),
+                        None => "Post-turn hook: off. Use /on-finish-run <cmd> to set one.".to_string(),
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::AddTask(text) => {
                     session.task_queue.push_back(text.clone());
                     let n = session.task_queue.len();
@@ -7135,6 +7155,43 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         continue;
                     }
                     TurnOutcome::Exit => break,
+                }
+            }
+            // Post-turn hook: if configured and tools were used this turn, run the
+            // shell command and inject stdout+stderr as context for the next turn.
+            if let Some(ref hook_cmd) = session.post_turn_hook.clone() {
+                let used_tools = session.plan.tool_call_stats.values().any(|(ok, err)| ok + err > 0);
+                if used_tools {
+                    let output = std::process::Command::new("sh")
+                        .arg("-c")
+                        .arg(hook_cmd)
+                        .output();
+                    let hook_note = match output {
+                        Ok(out) => {
+                            let stdout = String::from_utf8_lossy(&out.stdout);
+                            let stderr = String::from_utf8_lossy(&out.stderr);
+                            let combined = format!("{stdout}{stderr}").trim().to_string();
+                            let exit_str;
+                            let status: &str = if out.status.success() {
+                                "exit 0"
+                            } else {
+                                exit_str = format!("exit {}", out.status.code().unwrap_or(-1));
+                                &exit_str
+                            };
+                            if combined.is_empty() {
+                                format!("[Post-turn hook] `{hook_cmd}` → {status} (no output)")
+                            } else {
+                                let snippet: String = combined.chars().take(2000).collect();
+                                format!("[Post-turn hook] `{hook_cmd}` → {status}\n{snippet}")
+                            }
+                        }
+                        Err(e) => format!("[Post-turn hook] Failed to run `{hook_cmd}`: {e}"),
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(hook_note.clone()));
+                    // Re-inject as user context so agent sees the result next turn.
+                    session.history.push(aether_core::context::ConversationItem::User(
+                        hook_note
+                    ));
                 }
             }
             // Auto-status: emit a compact turn summary before awaiting user input.
@@ -24734,6 +24791,31 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /on-finish-run <cmd> — auto-run shell cmd after each tool-using turn
+                                cmd_str if cmd_str.starts_with("/on-finish-run ") => {
+                                    let cmd = cmd_str.trim_start_matches("/on-finish-run ").trim().to_string();
+                                    if _ctx.send(UiCommand::SetPostTurnHook(Some(cmd))).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /on-finish-clear — remove the post-turn hook
+                                "/on-finish-clear" => {
+                                    if _ctx.send(UiCommand::SetPostTurnHook(None)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /on-finish-show — display the current post-turn hook
+                                "/on-finish-show" => {
+                                    if _ctx.send(UiCommand::QueryPostTurnHook).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /task-add <text> — append a task to the sequential task queue
                                 cmd_str if cmd_str.starts_with("/task-add ") => {
                                     let text = cmd_str.trim_start_matches("/task-add ").trim().to_string();
@@ -25238,6 +25320,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tasks",
                             "/task-clear",
                             "/task-skip",
+                            "/on-finish-run ",
+                            "/on-finish-clear",
+                            "/on-finish-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -287,6 +287,10 @@ pub enum UiCommand {
     RemovePlaybookEntry(usize),
     /// List all error playbook entries.
     QueryPlaybook,
+    /// Set a shell command to auto-run after each tool-using agent turn.
+    SetPostTurnHook(Option<String>),
+    /// Show the current post-turn hook command.
+    QueryPostTurnHook,
     /// Add a task string to the sequential task queue.
     AddTask(String),
     /// List all queued tasks (index + text).
