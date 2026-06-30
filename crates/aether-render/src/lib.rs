@@ -653,6 +653,12 @@ pub enum UiCommand {
     QueryHistoryCompact,
     /// Given N more turns at current avg token burn, forecast context exhaustion.
     QueryTokenForecast(usize),
+    /// Scan all ToolResults in history and report entries with is_error=true.
+    QueryFindErrors,
+    /// Show estimated cost attribution by tool name (avg cost/call × call count).
+    QueryCostPerTool,
+    /// List all User turns in history with their index and a text preview.
+    QueryUserTurnList,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

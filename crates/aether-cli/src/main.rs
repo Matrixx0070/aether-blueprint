@@ -6778,6 +6778,75 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryFindErrors => {
+                    let mut errors: Vec<String> = Vec::new();
+                    let mut hist_idx = 0usize;
+                    for item in &session.history {
+                        match item {
+                            ConversationItem::ToolResults(results) => {
+                                for r in results {
+                                    if r.is_error {
+                                        let preview: String = r.content.chars().take(80).collect::<String>().replace('\n', " ");
+                                        errors.push(format!("  [hist:{hist_idx}] tool_use_id:{} — {preview}", r.tool_use_id));
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                        hist_idx += 1;
+                    }
+                    if errors.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No tool errors found in history.".to_string()));
+                    } else {
+                        let msg = format!("Tool errors in history ({} found):\n{}", errors.len(), errors.join("\n"));
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
+                UiCommand::QueryCostPerTool => {
+                    let stats = &session.plan.tool_call_stats;
+                    if stats.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No tool call stats yet.".to_string()));
+                    } else {
+                        let total_cost: f64 = session.turn_cost_log.iter().map(|&(_, _, _, c)| c).sum();
+                        let total_calls: usize = stats.values().map(|(ok, err)| ok + err).sum();
+                        let avg_cost_per_call = if total_calls > 0 { total_cost / total_calls as f64 } else { 0.0 };
+                        let mut rows: Vec<(String, usize, f64)> = stats.iter()
+                            .map(|(name, (ok, err))| {
+                                let calls = ok + err;
+                                (name.clone(), calls, avg_cost_per_call * calls as f64)
+                            })
+                            .collect();
+                        rows.sort_by(|a, b| b.1.cmp(&a.1));
+                        let mut msg = format!("Cost per tool  (avg ${avg_cost_per_call:.6}/call, {total_calls} total calls)\n");
+                        msg.push_str("  Tool                          Calls   Est.Cost\n");
+                        for (name, calls, cost) in &rows {
+                            msg.push_str(&format!("  {:<30}  {:>5}   ${:.6}\n", name, calls, cost));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
+                UiCommand::QueryUserTurnList => {
+                    let turns: Vec<(usize, String)> = session.history.iter().enumerate()
+                        .filter_map(|(i, item)| {
+                            if let ConversationItem::User(t) = item {
+                                let preview: String = t.chars().take(60).collect::<String>().replace('\n', " ");
+                                Some((i, preview))
+                            } else { None }
+                        })
+                        .collect();
+                    if turns.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No user turns in history.".to_string()));
+                    } else {
+                        let mut msg = format!("User turns ({}):\n", turns.len());
+                        for (idx, preview) in &turns {
+                            msg.push_str(&format!("  [{idx:>3}] {preview}\n"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
                 UiCommand::SessionAnnotate(text) => {
                     let ts = chrono::Local::now().format("%H:%M:%S").to_string();
                     let _ = etx_for_driver.send(UiEvent::SystemNote(format!("[{ts}] ANNOTATION: {text}")));
@@ -29614,6 +29683,30 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /find-errors — scan ToolResults for is_error=true entries
+                                "/find-errors" => {
+                                    if _ctx.send(UiCommand::QueryFindErrors).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /cost-per-tool — cost attribution breakdown by tool name
+                                "/cost-per-tool" => {
+                                    if _ctx.send(UiCommand::QueryCostPerTool).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /user-turns — list all User turns with index + preview
+                                "/user-turns" => {
+                                    if _ctx.send(UiCommand::QueryUserTurnList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /session-annotate <text> — add timestamped annotation to chat log
                                 cmd_str if cmd_str.starts_with("/session-annotate ") => {
                                     let text = cmd_str.trim_start_matches("/session-annotate ").trim().to_string();
@@ -30346,6 +30439,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-annotate ",
                             "/history-compact-show",
                             "/token-forecast ",
+                            "/find-errors",
+                            "/cost-per-tool",
+                            "/user-turns",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
