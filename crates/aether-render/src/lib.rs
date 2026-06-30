@@ -255,6 +255,12 @@ pub enum UiCommand {
     QueryLastTools,
     /// Show total tool call counts across the session.
     QueryToolCallCount,
+    /// Add a file path to the warmup list (re-injected as context after compaction).
+    AddWarmupFile(String),
+    /// Remove a file path from the warmup list.
+    RemoveWarmupFile(String),
+    /// List all warmup files.
+    QueryWarmupFiles,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

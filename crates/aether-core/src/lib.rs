@@ -174,6 +174,10 @@ pub struct Session {
     /// When > 0, the agent pauses for user review after every N total tool calls.
     /// Prevents runaway automation. 0 = off.
     pub checkpoint_every_tools: usize,
+
+    /// File paths that are re-injected as user context after each compaction event.
+    /// Keeps key project files visible to the model even after history is summarised.
+    pub warmup_files: Vec<String>,
 }
 
 impl Session {
@@ -219,6 +223,7 @@ impl Session {
             verify_enabled: true,
             turn_reminder_every: 0,
             checkpoint_every_tools: 0,
+            warmup_files: Vec::new(),
         }
     }
 

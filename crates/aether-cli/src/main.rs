@@ -6320,6 +6320,47 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::AddWarmupFile(path) => {
+                    let already = session.warmup_files.contains(&path);
+                    let note = if already {
+                        format!("{path} is already in the warmup list.")
+                    } else {
+                        // Validate path is readable now.
+                        match std::fs::metadata(&path) {
+                            Ok(_) => {
+                                session.warmup_files.push(path.clone());
+                                format!("Added {path} to warmup list ({} file(s) total). Will re-inject after compaction.", session.warmup_files.len())
+                            }
+                            Err(e) => format!("Cannot add {path} to warmup: {e}"),
+                        }
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::RemoveWarmupFile(path) => {
+                    let before = session.warmup_files.len();
+                    session.warmup_files.retain(|p| p != &path);
+                    let note = if session.warmup_files.len() < before {
+                        format!("Removed {path} from warmup list.")
+                    } else {
+                        format!("{path} is not in the warmup list.")
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryWarmupFiles => {
+                    let note = if session.warmup_files.is_empty() {
+                        "Warmup list is empty. Use /warmup-add <path> to add files.".to_string()
+                    } else {
+                        format!(
+                            "=== Warmup files ({}) ===\n{}",
+                            session.warmup_files.len(),
+                            session.warmup_files.join("\n")
+                        )
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::SetCheckpointEveryTools(n) => {
                     session.checkpoint_every_tools = n;
                     let note = if n == 0 {
@@ -6618,6 +6659,29 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                          Current usage: {} tokens. Use /context-info to see details.",
                         session.turn_index, used
                     )));
+                    // Re-inject warmup files so key project context survives compaction.
+                    use aether_core::context::ConversationItem;
+                    for path in &session.warmup_files.clone() {
+                        match std::fs::read_to_string(path) {
+                            Ok(content) => {
+                                let lines = content.lines().count();
+                                let msg = format!(
+                                    "[Warmup re-injection: {path} ({lines} lines)]\n\n```\n{content}\n```"
+                                );
+                                session.history.push(ConversationItem::User(msg));
+                            }
+                            Err(e) => {
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                    format!("Warmup: could not re-inject {path}: {e}")
+                                ));
+                            }
+                        }
+                    }
+                    if !session.warmup_files.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            format!("Warmup: re-injected {} file(s) after compaction.", session.warmup_files.len())
+                        ));
+                    }
                 }
 
                 // Early-warning when context crosses 60% full (fires once per session).
@@ -23885,6 +23949,32 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /warmup-add <path> — add file to post-compaction re-injection list
+                                cmd_str if cmd_str.starts_with("/warmup-add ") => {
+                                    let path = cmd_str.trim_start_matches("/warmup-add ").trim().to_string();
+                                    if _ctx.send(UiCommand::AddWarmupFile(path)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /warmup-rm <path> — remove file from warmup list
+                                cmd_str if cmd_str.starts_with("/warmup-rm ") => {
+                                    let path = cmd_str.trim_start_matches("/warmup-rm ").trim().to_string();
+                                    if _ctx.send(UiCommand::RemoveWarmupFile(path)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /warmup-list — show all warmup files
+                                "/warmup-list" => {
+                                    if _ctx.send(UiCommand::QueryWarmupFiles).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /checkpoint-every <N>|off — pause after every N tool calls
                                 cmd_str if cmd_str == "/checkpoint-every" || cmd_str.starts_with("/checkpoint-every ") => {
                                     let arg = cmd_str.trim_start_matches("/checkpoint-every").trim();
@@ -24477,6 +24567,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/checkpoint-every ", "/checkpoint-every off",
                             "/last-tools",
                             "/tool-calls",
+                            "/warmup-add ",
+                            "/warmup-rm ",
+                            "/warmup-list",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
