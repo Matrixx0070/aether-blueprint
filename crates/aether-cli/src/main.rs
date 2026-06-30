@@ -2028,6 +2028,45 @@ fn handle_slash(
             SlashAction::Continue
         }
         "quit" | "exit" | "q" => SlashAction::Quit,
+        "uptime" => {
+            let uptime_str = std::fs::read_to_string("/proc/uptime").ok()
+                .and_then(|s| s.split_whitespace().next().and_then(|n| n.parse::<f64>().ok()))
+                .map(|secs| {
+                    let t = secs as u64;
+                    let (d, h, m) = (t / 86_400, (t % 86_400) / 3_600, (t % 3_600) / 60);
+                    if d > 0 { format!("{}d {}h {}m", d, h, m) }
+                    else if h > 0 { format!("{}h {}m", h, m) }
+                    else { format!("{}m", m) }
+                })
+                .unwrap_or_else(|| "unavailable".to_string());
+            let load_str = std::fs::read_to_string("/proc/loadavg").ok()
+                .and_then(|s| {
+                    let p: Vec<&str> = s.split_whitespace().collect();
+                    if p.len() >= 3 { Some(format!("{}  {}  {}", p[0], p[1], p[2])) } else { None }
+                })
+                .unwrap_or_else(|| "unavailable".to_string());
+            let mem_str = std::fs::read_to_string("/proc/meminfo").ok()
+                .map(|s| {
+                    let (mut total, mut avail) = (0u64, 0u64);
+                    for line in s.lines() {
+                        let p: Vec<&str> = line.split_whitespace().collect();
+                        if p.len() >= 2 {
+                            if p[0] == "MemTotal:" { total = p[1].parse().unwrap_or(0); }
+                            else if p[0] == "MemAvailable:" { avail = p[1].parse().unwrap_or(0); }
+                        }
+                    }
+                    if total > 0 {
+                        let used = total.saturating_sub(avail);
+                        format!("{:.2} GiB used / {:.2} GiB total  ({:.1}%)",
+                            used as f64 / 1_048_576.0, total as f64 / 1_048_576.0,
+                            used as f64 / total as f64 * 100.0)
+                    } else { "unavailable".to_string() }
+                })
+                .unwrap_or_else(|| "unavailable".to_string());
+            eprintln!("uptime\n\n  Up:        {}\n  Load avg:  {}   (1m  5m  15m)\n  Memory:    {}",
+                uptime_str, load_str, mem_str);
+            SlashAction::Continue
+        }
         other => {
             if let Some(template) = custom.get(other) {
                 let body = substitute_args(template, args);
@@ -15398,6 +15437,85 @@ CTF Toolkit — Aether AI-assisted\n\
                                     continue;
                                 }
                                 // ─────────────────────────────────────────────────────────────────
+                                // /uptime — instant system snapshot: uptime, load avg, memory.
+                                // Non-AI: reads /proc/uptime, /proc/loadavg, /proc/meminfo directly.
+                                cmd if cmd == "/uptime" || cmd.starts_with("/uptime ") => {
+                                    // /proc/uptime: "<seconds_up> <seconds_idle>"
+                                    let uptime_line = std::fs::read_to_string("/proc/uptime").ok();
+                                    let uptime_str = match uptime_line
+                                        .as_deref()
+                                        .and_then(|s| s.split_whitespace().next())
+                                        .and_then(|s| s.parse::<f64>().ok())
+                                    {
+                                        Some(secs) => {
+                                            let total = secs as u64;
+                                            let days = total / 86_400;
+                                            let hours = (total % 86_400) / 3_600;
+                                            let mins = (total % 3_600) / 60;
+                                            if days > 0 {
+                                                format!("{}d {}h {}m", days, hours, mins)
+                                            } else if hours > 0 {
+                                                format!("{}h {}m", hours, mins)
+                                            } else {
+                                                format!("{}m", mins)
+                                            }
+                                        }
+                                        None => "unavailable".to_string(),
+                                    };
+
+                                    // /proc/loadavg: "<1m> <5m> <15m> <running/total> <last_pid>"
+                                    let load_str = match std::fs::read_to_string("/proc/loadavg") {
+                                        Ok(s) => {
+                                            let parts: Vec<&str> = s.split_whitespace().collect();
+                                            if parts.len() >= 3 {
+                                                format!("{}  {}  {}", parts[0], parts[1], parts[2])
+                                            } else {
+                                                "unavailable".to_string()
+                                            }
+                                        }
+                                        Err(_) => "unavailable".to_string(),
+                                    };
+
+                                    // /proc/meminfo: parse MemTotal / MemAvailable (kB)
+                                    let (mem_total_kb, mem_avail_kb) = match std::fs::read_to_string("/proc/meminfo") {
+                                        Ok(s) => {
+                                            let mut total = 0u64;
+                                            let mut avail = 0u64;
+                                            for line in s.lines() {
+                                                let parts: Vec<&str> = line.split_whitespace().collect();
+                                                if parts.len() >= 2 {
+                                                    if parts[0] == "MemTotal:" {
+                                                        total = parts[1].parse().unwrap_or(0);
+                                                    } else if parts[0] == "MemAvailable:" {
+                                                        avail = parts[1].parse().unwrap_or(0);
+                                                    }
+                                                }
+                                            }
+                                            (total, avail)
+                                        }
+                                        Err(_) => (0, 0),
+                                    };
+                                    let mem_str = if mem_total_kb > 0 {
+                                        let total_gb = mem_total_kb as f64 / 1_048_576.0;
+                                        let used_kb = mem_total_kb.saturating_sub(mem_avail_kb);
+                                        let used_gb = used_kb as f64 / 1_048_576.0;
+                                        let used_pct = used_kb as f64 / mem_total_kb as f64 * 100.0;
+                                        format!(
+                                            "{:.2} GiB used / {:.2} GiB total  ({:.1}%)",
+                                            used_gb, total_gb, used_pct
+                                        )
+                                    } else {
+                                        "unavailable".to_string()
+                                    };
+
+                                    ui.chat_lines.push(ChatLine::SystemNote(format!(
+                                        "uptime\n\n  Up:        {}\n  Load avg:  {}   (1m  5m  15m)\n  Memory:    {}",
+                                        uptime_str, load_str, mem_str
+                                    )));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // ─────────────────────────────────────────────────────────────────
                                 // /cpu-history — ASCII sparkline of CPU usage samples
                                 cmd if cmd == "/cpu-history" || cmd.starts_with("/cpu-history ") => {
                                     let samples_raw = cmd.trim_start_matches("/cpu-history").trim();
@@ -16740,7 +16858,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/cve ", "/dotenv", "/dotenv ", "/calc ", "/chars", "/chars ", "/ai-arch", "/ai-arch ", "/ai-explain ", "/cheat ", "/color ", "/duck ", "/env-diff ", "/env-vars", "/env-vars ", "/flashcard ", "/format-sql ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/gh-search ", "/http-codes", "/http-codes ", "/impl ", "/json-schema ", "/man-ai ", "/mkscript ", "/open ", "/path", "/ai-bugs ", "/ai-code-review ", "/ai-doc-gen ", "/ai-improve-commit", "/ai-optimize ", "/ai-pr", "/ai-pr ", "/ai-refactor ", "/ai-security ", "/ai-test-gen ", "/ai-translate ", "/bundle-size", "/bundle-size ", "/changelog-ai", "/changelog-ai ", "/codebase-summary", "/git-cherry", "/git-cherry ", "/git-conflicts", "/git-log-file ", "/git-remote", "/git-remote ", "/git-show ", "/net-stat", "/perf-diff ", "/pwd", "/regex-test ", "/run-test ", "/ssh-key", "/ssh-key ", "/tail ", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/semver ", "/session-summary", "/spell ", "/teach ", "/time", "/time ", "/which-all ", "/wiki ", "/workflow", "/workflow ", "/ai-estimate ", "/ai-standup-report", "/ai-standup-report ", "/clipboard", "/clipboard ", "/env-set ", "/git-amend", "/git-amend ", "/ai-changelog-commit", "/ai-changelog-commit ", "/ai-complexity-report", "/ai-complexity-report ", "/ai-rename-symbol ", "/git-undo", "/git-undo ", "/loc", "/loc ", "/ai-explain-diff", "/ai-explain-diff ", "/ai-onboard", "/deps-outdated", "/diff-stat", "/diff-stat ", "/file-watch ", "/ai-migrate ", "/ai-sql-explain ", "/git-bisect-ai", "/git-bisect-ai ", "/http-mock ", "/token-count ", "/ai-data-model ", "/ai-pr-checklist", "/ai-pr-checklist ", "/env-template", "/env-template ", "/git-contributors", "/git-contributors ", "/git-hotspot", "/git-hotspot ", "/ai-code-smell-fix ", "/ai-commit-lint", "/ai-commit-lint ", "/ai-test-fix", "/ai-test-fix ", "/git-tag-diff ", "/process-tree", "/process-tree ", "/ai-api-design ", "/ai-debug-crash", "/ai-debug-crash ", "/ai-incident-report", "/ai-incident-report ", "/cpu-history", "/cpu-history ", "/git-since ", "/ai-explain-error ", "/ai-naming-convention", "/ai-naming-convention ", "/ai-risk-assessment", "/ai-risk-assessment ", "/git-file-stats ", "/workspace-summary", "/ai-license-audit", "/ai-pentest-hints ", "/ai-secrets-scan", "/ai-secrets-scan ", "/ai-threat-model ", "/cve-check ", "/ai-architecture-decision ", "/ai-glossary ", "/ai-interview-prep ", "/ai-rubber-duck ", "/git-graph", "/git-graph ", "/ai-convert ", "/ai-perf-budget", "/ai-perf-budget ", "/ai-refactor-plan ", "/git-clean-branches", "/git-clean-branches ", "/snippet-save ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
+                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/cve ", "/dotenv", "/dotenv ", "/calc ", "/chars", "/chars ", "/ai-arch", "/ai-arch ", "/ai-explain ", "/cheat ", "/color ", "/duck ", "/env-diff ", "/env-vars", "/env-vars ", "/flashcard ", "/format-sql ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/gh-search ", "/http-codes", "/http-codes ", "/impl ", "/json-schema ", "/man-ai ", "/mkscript ", "/open ", "/path", "/ai-bugs ", "/ai-code-review ", "/ai-doc-gen ", "/ai-improve-commit", "/ai-optimize ", "/ai-pr", "/ai-pr ", "/ai-refactor ", "/ai-security ", "/ai-test-gen ", "/ai-translate ", "/bundle-size", "/bundle-size ", "/changelog-ai", "/changelog-ai ", "/codebase-summary", "/git-cherry", "/git-cherry ", "/git-conflicts", "/git-log-file ", "/git-remote", "/git-remote ", "/git-show ", "/net-stat", "/perf-diff ", "/pwd", "/regex-test ", "/run-test ", "/ssh-key", "/ssh-key ", "/tail ", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/semver ", "/session-summary", "/spell ", "/teach ", "/time", "/time ", "/which-all ", "/wiki ", "/workflow", "/workflow ", "/ai-estimate ", "/ai-standup-report", "/ai-standup-report ", "/clipboard", "/clipboard ", "/env-set ", "/git-amend", "/git-amend ", "/ai-changelog-commit", "/ai-changelog-commit ", "/ai-complexity-report", "/ai-complexity-report ", "/ai-rename-symbol ", "/git-undo", "/git-undo ", "/loc", "/loc ", "/ai-explain-diff", "/ai-explain-diff ", "/ai-onboard", "/deps-outdated", "/diff-stat", "/diff-stat ", "/file-watch ", "/ai-migrate ", "/ai-sql-explain ", "/git-bisect-ai", "/git-bisect-ai ", "/http-mock ", "/token-count ", "/ai-data-model ", "/ai-pr-checklist", "/ai-pr-checklist ", "/env-template", "/env-template ", "/git-contributors", "/git-contributors ", "/git-hotspot", "/git-hotspot ", "/ai-code-smell-fix ", "/ai-commit-lint", "/ai-commit-lint ", "/ai-test-fix", "/ai-test-fix ", "/git-tag-diff ", "/process-tree", "/process-tree ", "/ai-api-design ", "/ai-debug-crash", "/ai-debug-crash ", "/ai-incident-report", "/ai-incident-report ", "/cpu-history", "/cpu-history ", "/uptime", "/uptime ", "/git-since ", "/ai-explain-error ", "/ai-naming-convention", "/ai-naming-convention ", "/ai-risk-assessment", "/ai-risk-assessment ", "/git-file-stats ", "/workspace-summary", "/ai-license-audit", "/ai-pentest-hints ", "/ai-secrets-scan", "/ai-secrets-scan ", "/ai-threat-model ", "/cve-check ", "/ai-architecture-decision ", "/ai-glossary ", "/ai-interview-prep ", "/ai-rubber-duck ", "/git-graph", "/git-graph ", "/ai-convert ", "/ai-perf-budget", "/ai-perf-budget ", "/ai-refactor-plan ", "/git-clean-branches", "/git-clean-branches ", "/snippet-save ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
@@ -26853,6 +26971,7 @@ fn inject_project_context(session: &mut Session) {
 /// baseline. Sections are concatenated with provenance markers so the
 /// model can tell where each block came from.
 fn load_project_context() -> Option<String> {
+    let cwd = std::env::current_dir().ok();
     let mut sections: Vec<(String, String)> = Vec::new();
 
     // Global user file
@@ -26870,7 +26989,7 @@ fn load_project_context() -> Option<String> {
     }
 
     // Walk cwd upwards; collect AETHER.md / CLAUDE.md at each level.
-    if let Ok(start) = std::env::current_dir() {
+    if let Some(ref start) = cwd {
         let mut ancestors: Vec<PathBuf> = start.ancestors().map(|p| p.to_path_buf()).collect();
         ancestors.reverse(); // root-most first
         for dir in &ancestors {
@@ -26886,10 +27005,17 @@ fn load_project_context() -> Option<String> {
         }
     }
 
-    if sections.is_empty() {
+    // Always produce context — the cwd alone is enough to anchor the agent.
+    // Without this, the agent has no idea where it is and asks the user for paths.
+    let mut out = String::from("<project-context>\n");
+    if let Some(ref p) = cwd {
+        out.push_str(&format!("<cwd>{}</cwd>\n", p.display()));
+        out.push_str("<rule>The cwd above is your working directory. Use it immediately with tools.\n");
+        out.push_str("NEVER ask the user for a path — run Bash/ls/git ls-files first.</rule>\n");
+    }
+    if sections.is_empty() && cwd.is_none() {
         return None;
     }
-    let mut out = String::from("<project-context>\n");
     for (origin, body) in sections {
         out.push_str(&format!("\n<source path=\"{origin}\">\n"));
         out.push_str(body.trim());

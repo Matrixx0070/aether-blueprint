@@ -275,10 +275,18 @@ async fn d7_block_replaces_text_with_sentinel_records_plan_and_skips_tools() {
         session.plan.text
     );
 
-    // History tail is the Assistant turn with a sentinel — NOT the original.
-    let last = session.history.last().unwrap();
-    let ConversationItem::Assistant { text, tool_uses } = last else {
-        panic!("expected Assistant at tail, got {:?}", last);
+    // History tail is the Assistant turn with a sentinel — NOT the original —
+    // followed by a synthetic User nudge that restores U/A/U alternation so the
+    // next API call doesn't get rejected as assistant-prefill (see lib.rs near
+    // `[SYSTEM] Your previous response was blocked`).
+    assert!(
+        session.history.len() >= 2,
+        "expected at least Assistant sentinel + synthetic User nudge, got {} items",
+        session.history.len()
+    );
+    let assistant_item = &session.history[session.history.len() - 2];
+    let ConversationItem::Assistant { text, tool_uses } = assistant_item else {
+        panic!("expected Assistant sentinel at history[-2], got {:?}", assistant_item);
     };
     let t = text.as_ref().unwrap();
     assert!(
@@ -292,6 +300,21 @@ async fn d7_block_replaces_text_with_sentinel_records_plan_and_skips_tools() {
     assert!(
         tool_uses.is_empty(),
         "tool_uses must be cleared on block — they never ran"
+    );
+
+    // The trailing synthetic User nudge keeps the Anthropic role alternation
+    // valid before ContinueImmediately fires.
+    let nudge = session.history.last().unwrap();
+    let ConversationItem::User(nudge_text) = nudge else {
+        panic!("expected synthetic User nudge at tail, got {:?}", nudge);
+    };
+    assert!(
+        nudge_text.contains("blocked by the content-safety verifier"),
+        "expected content-safety nudge, got: {nudge_text}"
+    );
+    assert!(
+        !nudge_text.contains(secret),
+        "synthetic nudge must not leak the secret: {nudge_text}"
     );
 
     // A kernel reminder is queued for next turn.

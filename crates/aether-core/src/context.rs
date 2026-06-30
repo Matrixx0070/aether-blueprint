@@ -38,10 +38,24 @@ pub struct RecordedToolResult {
 }
 
 pub const KERNEL_SYSTEM_PROMPT: &str = "\
-You are AetherCode, an agentic CLI. Follow the discipline laws:\n\
+You are AetherCode, an agentic CLI built to surpass Claude Code in speed and capability.\n\
+\n\
+## ACTION-FIRST LAW (highest priority — non-negotiable)\n\
+When the user asks about files, directories, code, project structure, or anything\n\
+that requires filesystem or shell knowledge:\n\
+  1. IMMEDIATELY run the appropriate tool (Bash/Read/Glob/Grep/Edit/Write).\n\
+  2. NEVER ask the user what path or directory to use. The cwd is always known.\n\
+  3. If location is unclear: run `pwd && ls` or `git ls-files` first, then answer.\n\
+  4. Asking 'what path?', 'which directory?', or 'which project?' is FORBIDDEN when\n\
+     you have tools — it means you have not tried yet. Try first, ask never.\n\
+  5. If asked to 'list files', 'show structure', or 'inventory the project': run\n\
+     `git ls-files` or `find . -not -path './.git/*' | head -100` immediately.\n\
+\n\
+## DISCIPLINE LAWS\n\
   TRUTH — banned phrases: 'should work', 'probably', 'likely fixed', 'seems fine'.\n\
   Label unverified claims as UNVERIFIED. Verify before claiming.\n\
-  Prefer specialized tools (Glob/Grep/Read/Edit/Write) over Bash where one fits.\n";
+  Prefer specialized tools (Glob/Grep/Read/Edit/Write) over Bash where one fits.\n\
+  Do not narrate what you are about to do — execute it, then report what you found.\n";
 
 pub const LONG_CONV_DIGEST: &str = "\
 [long-conversation kernel digest]\n\
@@ -176,4 +190,40 @@ fn translate_history(items: &[ConversationItem]) -> Vec<Message> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression guard: the kernel system prompt MUST carry the ACTION-FIRST
+    /// LAW verbatim. If someone weakens or strips it, this test fails loudly
+    /// before the change ships. The law is what stops the agent from asking
+    /// "which directory?" when it already has Bash/Glob/Read in hand.
+    #[test]
+    fn kernel_prompt_contains_action_first_law() {
+        let prompt = KERNEL_SYSTEM_PROMPT;
+
+        // Header — exact text including the em-dash and parenthetical.
+        assert!(
+            prompt.contains("## ACTION-FIRST LAW (highest priority — non-negotiable)"),
+            "KERNEL_SYSTEM_PROMPT missing ACTION-FIRST LAW header. Prompt was:\n{prompt}"
+        );
+
+        // The five numbered rules — assert on a distinctive phrase from each
+        // so a partial deletion still trips the test.
+        let required_fragments = [
+            "IMMEDIATELY run the appropriate tool",
+            "NEVER ask the user what path or directory to use",
+            "If location is unclear",
+            "Try first, ask never",
+            "'list files', 'show structure', or 'inventory the project'",
+        ];
+        for fragment in required_fragments {
+            assert!(
+                prompt.contains(fragment),
+                "KERNEL_SYSTEM_PROMPT missing ACTION-FIRST fragment: {fragment:?}"
+            );
+        }
+    }
 }
