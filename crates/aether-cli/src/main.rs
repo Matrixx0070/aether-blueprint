@@ -6406,6 +6406,42 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 UiCommand::SetAlias(_, _) | UiCommand::RemoveAlias(_) | UiCommand::QueryAliases => {
                     continue;
                 }
+                UiCommand::QueryToolDiff(tool_name) => {
+                    let note = if let Some((old, new)) = session.tool_output_history.get(&tool_name) {
+                        if old.is_empty() {
+                            format!("Tool '{tool_name}' has only been called once — need 2 calls for a diff.")
+                        } else if old == new {
+                            format!("Tool '{tool_name}': last two outputs are identical.")
+                        } else {
+                            let old_lines: Vec<&str> = old.lines().collect();
+                            let new_lines: Vec<&str> = new.lines().collect();
+                            let old_set: std::collections::HashSet<&str> = old_lines.iter().copied().collect();
+                            let new_set: std::collections::HashSet<&str> = new_lines.iter().copied().collect();
+                            let mut diff = format!("=== Tool diff: {tool_name} (prev → latest) ===\n");
+                            let mut changes = 0usize;
+                            for line in &old_lines {
+                                if !new_set.contains(line) {
+                                    let preview: String = line.chars().take(100).collect();
+                                    diff.push_str(&format!("  - {preview}\n"));
+                                    changes += 1;
+                                }
+                            }
+                            for line in &new_lines {
+                                if !old_set.contains(line) {
+                                    let preview: String = line.chars().take(100).collect();
+                                    diff.push_str(&format!("  + {preview}\n"));
+                                    changes += 1;
+                                }
+                            }
+                            diff.push_str(&format!("  ── {changes} line(s) changed"));
+                            diff
+                        }
+                    } else {
+                        format!("Tool '{tool_name}' not found in history. Has it been called yet?")
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::QuerySessionHealth => {
                     use aether_core::compaction::context_window_for_model;
                     // Compute health components (0..100 each, higher = healthier).
@@ -25382,6 +25418,15 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /tool-diff <name> — show diff between last two outputs of a tool
+                                cmd_str if cmd_str.starts_with("/tool-diff ") => {
+                                    let name = cmd_str.trim_start_matches("/tool-diff ").trim().to_string();
+                                    if _ctx.send(UiCommand::QueryToolDiff(name)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /health — session health score (0-100)
                                 "/health" => {
                                     if _ctx.send(UiCommand::QuerySessionHealth).is_err() { break 'outer; }
@@ -26239,6 +26284,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/label-rm ",
                             "/retry-on-error", "/retry-on-error ", "/retry-on-error off",
                             "/health",
+                            "/tool-diff ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

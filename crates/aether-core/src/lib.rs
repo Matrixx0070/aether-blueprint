@@ -291,6 +291,10 @@ pub struct Session {
     pub retry_on_error_max: usize,
     /// Current retry count for the active user message turn.
     pub retry_on_error_count: usize,
+
+    /// Stores the last two outputs per tool name for /tool-diff.
+    /// Key = tool name, Value = (older_output, newer_output).
+    pub tool_output_history: std::collections::HashMap<String, (String, String)>,
 }
 
 impl Session {
@@ -365,6 +369,7 @@ impl Session {
             retry_on_error_threshold: 0,
             retry_on_error_max: 0,
             retry_on_error_count: 0,
+            tool_output_history: std::collections::HashMap::new(),
         }
     }
 
@@ -901,6 +906,14 @@ async fn agent_turn_inner(
             })
             .collect()
     };
+
+    // Record last two outputs per tool for /tool-diff comparison.
+    for r in &tool_results {
+        if let Some(tu) = tool_uses.iter().find(|tu| tu.id == r.tool_use_id) {
+            let entry = session.tool_output_history.entry(tu.name.clone()).or_insert_with(|| (String::new(), String::new()));
+            entry.0 = std::mem::replace(&mut entry.1, r.content.chars().take(8000).collect());
+        }
+    }
 
     // Drain any reminders the PreToolUse / PostToolUse hooks emitted
     // during execute() and queue them for the NEXT turn so the model
