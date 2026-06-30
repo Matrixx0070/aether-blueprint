@@ -21264,6 +21264,239 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /ai-compose <description> — AI writes a full implementation (code + tests)
+                                cmd_str if cmd_str.starts_with("/ai-compose ") || cmd_str == "/ai-compose" => {
+                                    let description = cmd_str.trim_start_matches("/ai-compose").trim();
+                                    if description.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /ai-compose <what to build>\n  AI writes a complete implementation with tests from scratch.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let lang_hint = if ui.context_files.iter().any(|f| f.ends_with(".rs")) { "Rust" }
+                                        else if ui.context_files.iter().any(|f| f.ends_with(".ts")) { "TypeScript" }
+                                        else if ui.context_files.iter().any(|f| f.ends_with(".py")) { "Python" }
+                                        else if ui.context_files.iter().any(|f| f.ends_with(".go")) { "Go" }
+                                        else { "Rust" };
+                                    let goal_ctx = match &ui.session_goal {
+                                        Some(g) => format!("\nSession goal context: {g}"),
+                                        None => String::new(),
+                                    };
+                                    let prompt = format!(
+                                        "Write a complete {lang_hint} implementation of: **{description}**{goal_ctx}\n\n\
+                                         Include:\n\
+                                         1. The full implementation in a properly named file\n\
+                                         2. Inline doc comments on all public items\n\
+                                         3. Unit tests in the same file (or a _test.go / *_test.rs pattern)\n\
+                                         4. A usage example in a comment or README snippet\n\n\
+                                         Make it production-quality: handle errors, validate inputs, no panics on bad input."
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /git-log-file <file> — AI explains the evolution of a specific file
+                                cmd_str if cmd_str.starts_with("/git-log-file ") || cmd_str == "/git-log-file" => {
+                                    let file_arg = cmd_str.trim_start_matches("/git-log-file").trim();
+                                    let file_path_arg = if file_arg.is_empty() {
+                                        ui.context_files.first().cloned().unwrap_or_default()
+                                    } else {
+                                        file_arg.to_string()
+                                    };
+                                    if file_path_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /git-log-file <file>  — AI explains how a file evolved over time.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let log = std::process::Command::new("git")
+                                        .args(["log", "--oneline", "--follow", "--", &file_path_arg])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    let recent_diff = std::process::Command::new("git")
+                                        .args(["diff", "HEAD~5..HEAD", "--", &file_path_arg])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    if log.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("/git-log-file: no commits found for {file_path_arg}.")));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let diff_preview: String = recent_diff.chars().take(3000).collect();
+                                    let prompt = format!(
+                                        "Explain how `{file_path_arg}` has evolved over time. \
+                                         What was added, changed, and removed? \
+                                         What do the commit messages reveal about the intent behind changes? \
+                                         Is there a clear direction of travel?\n\n\
+                                         ## Commit history\n```\n{log}\n```\n\
+                                         ## Recent changes (last 5 commits)\n```diff\n{diff_preview}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-propose-test <function> — AI proposes test cases for a named function
+                                cmd_str if cmd_str.starts_with("/ai-propose-test ") || cmd_str == "/ai-propose-test" => {
+                                    let fn_name = cmd_str.trim_start_matches("/ai-propose-test").trim();
+                                    if fn_name.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /ai-propose-test <function_name>  — AI proposes test cases for the named function.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    // Find the function in context files or nearby source
+                                    let fn_def = {
+                                        let mut found = String::new();
+                                        let search_files: Vec<String> = if !ui.context_files.is_empty() {
+                                            ui.context_files.clone()
+                                        } else {
+                                            Vec::new()
+                                        };
+                                        for file in &search_files {
+                                            if let Ok(src) = std::fs::read_to_string(file) {
+                                                let mut in_fn = false;
+                                                let mut depth = 0usize;
+                                                let mut buf = String::new();
+                                                for line in src.lines() {
+                                                    if !in_fn && (line.contains(&format!("fn {fn_name}")) || line.contains(&format!("def {fn_name}")) || line.contains(&format!("function {fn_name}"))) {
+                                                        in_fn = true;
+                                                    }
+                                                    if in_fn {
+                                                        buf.push_str(line);
+                                                        buf.push('\n');
+                                                        depth += line.chars().filter(|&c| c == '{').count();
+                                                        depth = depth.saturating_sub(line.chars().filter(|&c| c == '}').count());
+                                                        if depth == 0 && buf.len() > 10 { break; }
+                                                        if buf.len() > 2000 { break; }
+                                                    }
+                                                }
+                                                if !buf.is_empty() { found = buf; break; }
+                                            }
+                                        }
+                                        found
+                                    };
+                                    let fn_src = if !fn_def.is_empty() {
+                                        format!("\n\nFunction source:\n```\n{fn_def}\n```")
+                                    } else {
+                                        String::new()
+                                    };
+                                    let prompt = format!(
+                                        "Propose comprehensive test cases for the function `{fn_name}`. \
+                                         Cover: 1) typical inputs, 2) boundary values, 3) empty/null inputs, \
+                                         4) error conditions, 5) concurrent/performance edge cases if relevant. \
+                                         Return actual test code in the project's test framework.{fn_src}"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /open-issues [N] — fetch GitHub issues and ask AI to triage
+                                cmd_str if cmd_str == "/open-issues" || cmd_str.starts_with("/open-issues ") => {
+                                    let n_arg = cmd_str.trim_start_matches("/open-issues").trim();
+                                    let n: u32 = n_arg.parse().unwrap_or(20).min(50);
+                                    let issues = std::process::Command::new("gh")
+                                        .args(["issue", "list", "--limit", &n.to_string(),
+                                               "--json", "number,title,labels,assignees,createdAt",
+                                               "--template", r#"{{range .}}#{{.number}}: {{.title}} [{{range .labels}}{{.name}},{{end}}]{{"\n"}}{{end}}"#])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    if issues.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "/open-issues: no issues found. Ensure `gh` is installed and you're in a GitHub repo.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Here are the open GitHub issues. Please: \
+                                         1) group by theme (bug/feature/refactor/docs), \
+                                         2) identify quick wins (effort < 2h), \
+                                         3) flag blockers or dependencies between issues, \
+                                         4) suggest a prioritized order to tackle them.\n\n```\n{issues}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-debug — AI systematically analyzes the last command failure
+                                "/ai-debug" => {
+                                    // Find last SystemNote that looks like an error or tool result
+                                    let last_error = ui.chat_lines.iter().rev().find_map(|cl| match cl {
+                                        ChatLine::SystemNote(t) if t.contains("error") || t.contains("Error") || t.contains("failed") || t.contains("FAILED") => Some(t.clone()),
+                                        _ => None,
+                                    });
+                                    let tool_errors: Vec<String> = ui.tool_log.iter()
+                                        .rev()
+                                        .take(3)
+                                        .filter_map(|t| match &t.status {
+                                            aether_render::ToolStatus::Err(e) => Some(format!("{}: {}", t.name, e.chars().take(200).collect::<String>())),
+                                            _ => None,
+                                        })
+                                        .collect();
+                                    let error_context = if let Some(e) = &last_error {
+                                        format!("Last error note: {}", e.chars().take(500).collect::<String>())
+                                    } else if !tool_errors.is_empty() {
+                                        format!("Recent tool errors:\n{}", tool_errors.join("\n"))
+                                    } else {
+                                        "No recent errors found in this session.".to_string()
+                                    };
+                                    let prompt = format!(
+                                        "Please systematically debug the following error. Apply this process:\n\
+                                         1. IDENTIFY: What exactly failed? Be precise about the error message.\n\
+                                         2. ROOT CAUSE: What is the underlying cause? (not the symptom)\n\
+                                         3. VERIFY: What would confirm the root cause?\n\
+                                         4. FIX: Exact commands or code changes to resolve it.\n\
+                                         5. PREVENT: How to avoid this class of error in future.\n\n\
+                                         {error_context}"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -21649,6 +21882,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/explain-regex ", "/ai-regex ", "/gen-types ", "/tech-debt-report",
                             "/summarize-session", "/git-log-ai", "/git-log-ai ",
                             "/check-types", "/format-all", "/rewrite-prompt", "/coverage-ai",
+                            "/ai-compose ", "/git-log-file ", "/ai-propose-test ",
+                            "/open-issues", "/open-issues ", "/ai-debug",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
