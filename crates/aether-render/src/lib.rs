@@ -417,6 +417,12 @@ pub enum UiCommand {
     JumpBookmark(usize),
     /// Delete a bookmark by 0-based index.
     DeleteBookmark(usize),
+    /// Extract TODO/FIXME/HACK/NOTE comments from code blocks in all responses.
+    QueryFindTodos,
+    /// Export turn_cost_log + wall times as a CSV file.
+    ExportCsv(String),
+    /// Show cost/tokens for a specific turn by 0-based turn index.
+    QueryTurnCost(usize),
     /// Show cumulative cost growth turn by turn as a mini bar chart.
     QueryCostTimeline,
     /// Show average/min/max response times from turn_wall_ms.

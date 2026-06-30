@@ -6707,6 +6707,77 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::QueryFindTodos => {
+                    use aether_core::context::ConversationItem;
+                    let markers = ["TODO", "FIXME", "HACK", "NOTE", "XXX", "BUG"];
+                    let mut hits: Vec<(usize, &str, String)> = Vec::new();
+                    for (hist_idx, item) in session.history.iter().enumerate() {
+                        if let ConversationItem::Assistant { text: Some(t), .. } = item {
+                            for line in t.lines() {
+                                let upper = line.to_uppercase();
+                                for marker in &markers {
+                                    if upper.contains(marker) {
+                                        let preview: String = line.trim().chars().take(120).collect();
+                                        hits.push((hist_idx, marker, preview));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if hits.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No TODO/FIXME/HACK/NOTE items found in assistant responses.".to_string()));
+                    } else {
+                        let mut msg = format!("{} item(s) found:\n", hits.len());
+                        for (hist_idx, marker, line) in &hits {
+                            msg.push_str(&format!("  [hist#{hist_idx}] {marker}: {line}\n"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
+                UiCommand::ExportCsv(path) => {
+                    use std::io::Write;
+                    let result = (|| -> std::io::Result<usize> {
+                        let mut f = std::fs::File::create(&path)?;
+                        writeln!(f, "turn,tokens_in,tokens_out,cost_usd,wall_ms")?;
+                        let mut rows = 0usize;
+                        for (i, &(turn, tin, tout, cost)) in session.turn_cost_log.iter().enumerate() {
+                            let wall = session.turn_wall_ms.get(i).copied().unwrap_or(0);
+                            writeln!(f, "{turn},{tin},{tout},{cost:.8},{wall}")?;
+                            rows += 1;
+                        }
+                        Ok(rows)
+                    })();
+                    match result {
+                        Ok(n) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Exported {n} row(s) as CSV: {path}"
+                            )));
+                        }
+                        Err(e) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!("CSV export failed: {e}")));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnCost(turn_idx) => {
+                    let entry = session.turn_cost_log.iter().find(|&&(t, _, _, _)| t == turn_idx);
+                    match entry {
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "No cost entry for turn {turn_idx}. Recorded turns: {}.", session.turn_cost_log.len()
+                            )));
+                        }
+                        Some(&(_, tin, tout, cost)) => {
+                            let wall = session.turn_wall_ms.get(turn_idx.min(session.turn_wall_ms.len().saturating_sub(1))).copied().unwrap_or(0);
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Turn {turn_idx} cost:\n  Tokens in:  {tin}\n  Tokens out: {tout}\n  Cost:       ${cost:.6}\n  Wall time:  {wall}ms"
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryCostTimeline => {
                     if session.turn_cost_log.is_empty() {
                         let _ = etx_for_driver.send(UiEvent::SystemNote("No turns recorded yet.".to_string()));
@@ -28774,6 +28845,37 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /find-todos — extract TODO/FIXME/NOTE from responses
+                                "/find-todos" => {
+                                    if _ctx.send(UiCommand::QueryFindTodos).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /export-csv <path> — export turn log as CSV
+                                cmd_str if cmd_str.starts_with("/export-csv ") => {
+                                    let path = cmd_str.trim_start_matches("/export-csv ").trim().to_string();
+                                    if path.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /export-csv <path>".to_string()));
+                                    } else if _ctx.send(UiCommand::ExportCsv(path)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /turn-cost <n> — show cost info for a specific turn
+                                cmd_str if cmd_str.starts_with("/turn-cost ") => {
+                                    let arg = cmd_str.trim_start_matches("/turn-cost ").trim();
+                                    let n = arg.parse::<usize>().unwrap_or(0);
+                                    if _ctx.send(UiCommand::QueryTurnCost(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /cost-timeline — cumulative cost bar chart
                                 "/cost-timeline" => {
                                     if _ctx.send(UiCommand::QueryCostTimeline).is_err() { break 'outer; }
@@ -29966,6 +30068,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/cost-timeline",
                             "/avg-response-time",
                             "/save-response ",
+                            "/find-todos",
+                            "/export-csv ",
+                            "/turn-cost ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
