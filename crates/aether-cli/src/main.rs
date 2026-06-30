@@ -6778,6 +6778,62 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryNoteSearch(pat) => {
+                    if session.session_notes.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Session notepad is empty.".to_string()));
+                    } else {
+                        let lower_pat = pat.to_lowercase();
+                        let matches: Vec<String> = session.session_notes.iter().enumerate()
+                            .filter(|(_, (text, _))| text.to_lowercase().contains(&lower_pat))
+                            .map(|(i, (text, ts))| {
+                                let preview: String = text.chars().take(80).collect();
+                                format!("  #{i} [ts={ts}] {preview}")
+                            })
+                            .collect();
+                        if matches.is_empty() {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "No notes match '{pat}'. Total notes: {}.", session.session_notes.len()
+                            )));
+                        } else {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Note search '{}': {} match(es)\n{}", pat, matches.len(), matches.join("\n")
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::ExportSessionVars(path) => {
+                    let obj: serde_json::Map<String, serde_json::Value> = session.session_vars.iter()
+                        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                        .collect();
+                    let json = serde_json::to_string_pretty(&serde_json::Value::Object(obj))
+                        .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
+                    match std::fs::write(&path, &json) {
+                        Ok(()) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Session vars exported to '{}' ({} vars, {} bytes).", path, session.session_vars.len(), json.len()
+                            )));
+                        }
+                        Err(e) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Export failed: {e}")));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanWordCount => {
+                    let plan = &session.plan.text;
+                    if plan.trim().is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No active plan.".to_string()));
+                    } else {
+                        let lines = plan.lines().count();
+                        let words = plan.split_whitespace().count();
+                        let chars = plan.len();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Active plan: {lines} lines, {words} words, {chars} chars."
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryResponseLengthTrend => {
                     let lengths: Vec<(usize, usize)> = session.history.iter().enumerate()
                         .filter_map(|(i, item)| {
@@ -29851,6 +29907,40 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /note-search <pattern> — search session notes
+                                cmd_str if cmd_str.starts_with("/note-search ") => {
+                                    let pat = cmd_str.trim_start_matches("/note-search ").trim().to_string();
+                                    if pat.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /note-search <pattern>".to_string()));
+                                    } else if _ctx.send(UiCommand::QueryNoteSearch(pat)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-vars-export <path> — export session vars to JSON file
+                                cmd_str if cmd_str.starts_with("/session-vars-export ") => {
+                                    let path = cmd_str.trim_start_matches("/session-vars-export ").trim().to_string();
+                                    if path.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /session-vars-export <path>".to_string()));
+                                    } else if _ctx.send(UiCommand::ExportSessionVars(path)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /plan-word-count — count words and lines in active plan
+                                "/plan-word-count" => {
+                                    if _ctx.send(UiCommand::QueryPlanWordCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /response-length-trend — show response lengths per turn
                                 "/response-length-trend" => {
                                     if _ctx.send(UiCommand::QueryResponseLengthTrend).is_err() { break 'outer; }
@@ -30687,6 +30777,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-type-filter ",
                             "/cost-ceiling ", "/cost-ceiling off",
                             "/cost-ceiling-show",
+                            "/note-search ",
+                            "/session-vars-export ",
+                            "/plan-word-count",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -673,6 +673,12 @@ pub enum UiCommand {
     SetCostCeiling(f64),
     /// Show current cost ceiling and cumulative cost.
     QueryCostCeiling,
+    /// Search session notes for a case-insensitive pattern.
+    QueryNoteSearch(String),
+    /// Export all session variables to a JSON file at the given path.
+    ExportSessionVars(String),
+    /// Count words and lines in the current active plan text.
+    QueryPlanWordCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
