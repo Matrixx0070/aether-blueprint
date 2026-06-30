@@ -417,6 +417,12 @@ pub enum UiCommand {
     JumpBookmark(usize),
     /// Delete a bookmark by 0-based index.
     DeleteBookmark(usize),
+    /// Project future cost: given N more turns at current avg burn rate, show total projected cost.
+    QueryCostProjection(usize),
+    /// Show a compact one-line status: turn, cost, context-fill, tool errors.
+    QueryQuickStatus,
+    /// Show estimated size of history in bytes and items.
+    QueryHistorySize,
     /// Display a comprehensive active-modes summary for this session.
     QueryModeReport,
     /// Show the last user message from history.

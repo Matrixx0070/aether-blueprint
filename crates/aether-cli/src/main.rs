@@ -6707,6 +6707,63 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::QueryCostProjection(extra_turns) => {
+                    let turns_done = session.turn_cost_log.len();
+                    let total_cost: f64 = session.turn_cost_log.iter().map(|&(_, _, _, c)| c).sum();
+                    if turns_done == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No turns recorded yet. Cannot project cost.".to_string()));
+                    } else {
+                        let avg_cost = total_cost / turns_done as f64;
+                        let projected_additional = avg_cost * extra_turns as f64;
+                        let projected_total = total_cost + projected_additional;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Cost projection  ({extra_turns} more turns)\n  Turns done:          {turns_done}\n  Current cost:        ${total_cost:.6}\n  Avg cost/turn:       ${avg_cost:.6}\n  Projected additional: ${projected_additional:.6}\n  Projected total:     ${projected_total:.6}"
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryQuickStatus => {
+                    use aether_core::compaction::context_window_for_model;
+                    let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
+                    let window = context_window_for_model(&session.config.model);
+                    let fill_pct = if window > 0 { used * 100 / window } else { 0 };
+                    let total_cost: f64 = session.turn_cost_log.iter().map(|&(_, _, _, c)| c).sum();
+                    let total_err: usize = session.plan.tool_call_stats.values().map(|(_, err)| *err).sum();
+                    let turns = session.turn_index;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Status: turn {turns}  |  cost ${total_cost:.4}  |  ctx {fill_pct}%  |  tool errors {total_err}  |  model {}",
+                        session.config.model
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistorySize => {
+                    use aether_core::context::ConversationItem;
+                    let item_count = session.history.len();
+                    let mut total_bytes: usize = 0;
+                    let mut user_bytes: usize = 0;
+                    let mut asst_bytes: usize = 0;
+                    let mut tool_bytes: usize = 0;
+                    for item in &session.history {
+                        match item {
+                            ConversationItem::User(s) => { user_bytes += s.len(); total_bytes += s.len(); }
+                            ConversationItem::Assistant { text, tool_uses } => {
+                                let tb = text.as_deref().map(|t| t.len()).unwrap_or(0);
+                                let ub = tool_uses.iter().map(|u| u.name.len() + u.input.to_string().len()).sum::<usize>();
+                                asst_bytes += tb + ub;
+                                total_bytes += tb + ub;
+                            }
+                            ConversationItem::ToolResults(results) => {
+                                let rb: usize = results.iter().map(|r| r.content.len()).sum();
+                                tool_bytes += rb;
+                                total_bytes += rb;
+                            }
+                        }
+                    }
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History size  ({item_count} items, ~{total_bytes} bytes)\n  User messages:    ~{user_bytes} bytes\n  Assistant turns:  ~{asst_bytes} bytes\n  Tool results:     ~{tool_bytes} bytes"
+                    )));
+                    continue;
+                }
                 UiCommand::QueryModeReport => {
                     let think_str = if session.think_aloud { "ON".to_string() } else { "off".to_string() };
                     let capture_note = "use /capture-status";
@@ -28151,6 +28208,32 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /cost-project <n> — project cost for n more turns at current avg
+                                cmd_str if cmd_str.starts_with("/cost-project ") => {
+                                    let arg = cmd_str.trim_start_matches("/cost-project ").trim();
+                                    let n = arg.parse::<usize>().unwrap_or(10);
+                                    if _ctx.send(UiCommand::QueryCostProjection(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /quick-status — one-line compact status
+                                "/quick-status" => {
+                                    if _ctx.send(UiCommand::QueryQuickStatus).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-size — show estimated history size in bytes
+                                "/history-size" => {
+                                    if _ctx.send(UiCommand::QueryHistorySize).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /mode-report — show all active session modes
                                 "/mode-report" => {
                                     if _ctx.send(UiCommand::QueryModeReport).is_err() { break 'outer; }
@@ -29024,6 +29107,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/mode-report",
                             "/last-user",
                             "/model-history",
+                            "/cost-project ",
+                            "/quick-status",
+                            "/history-size",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
