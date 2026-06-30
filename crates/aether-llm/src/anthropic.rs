@@ -908,6 +908,8 @@ mod tests {
             max_tokens: 256,
             tools: vec![],
             stream: false,
+            thinking: None,
+            temperature: None,
         };
         let v = serde_json::to_value(&req).unwrap();
         assert_eq!(v["model"], "claude-opus-4-7");

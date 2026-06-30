@@ -171,6 +171,7 @@ pub async fn maybe_compact(session: &mut Session) -> Result<bool, AgentError> {
         tools: vec![],
         stream: false,
         thinking: None,
+        temperature: None,
     };
     let resp = session.llm.complete(req).await?;
     let summary: String = resp

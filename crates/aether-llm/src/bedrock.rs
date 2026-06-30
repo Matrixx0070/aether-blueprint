@@ -830,6 +830,8 @@ mod tests {
             max_tokens: 32,
             tools: vec![],
             stream: false,
+            thinking: None,
+            temperature: None,
         };
         let bytes = bedrock_body(&req).unwrap();
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();

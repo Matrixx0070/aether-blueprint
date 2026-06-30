@@ -44,6 +44,9 @@ pub struct SessionConfig {
     /// Tools are auto-disabled when thinking is active.
     #[serde(default)]
     pub thinking_budget: Option<u32>,
+    /// Sampling temperature injected into every request. None → API default (1.0).
+    #[serde(default)]
+    pub temperature: Option<f32>,
 }
 
 impl Default for SessionConfig {
@@ -53,6 +56,7 @@ impl Default for SessionConfig {
             permission_mode: PermissionMode::Default,
             max_tokens_per_turn: 8_192,
             thinking_budget: None,
+            temperature: None,
         }
     }
 }
@@ -256,6 +260,9 @@ async fn agent_turn_inner(
             req.max_tokens = budget + 16_384;
         }
     }
+
+    // Sampling temperature override (None → let the API use its default of 1.0).
+    req.temperature = session.config.temperature;
 
     // ── tool-sel (LLM call) ──────────────────────────────────────────
     let resp = match on_delta {

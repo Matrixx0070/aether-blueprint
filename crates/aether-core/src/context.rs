@@ -146,7 +146,8 @@ impl ContextAssembler {
             max_tokens: config.max_tokens_per_turn,
             tools,
             stream: false,
-            thinking: None, // injected by agent_turn_inner when thinking is enabled
+            thinking: None,    // injected by agent_turn_inner when thinking is enabled
+            temperature: None, // injected by agent_turn_inner from session config
         };
         (req, tele)
     }

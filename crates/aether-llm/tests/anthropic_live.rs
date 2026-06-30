@@ -52,6 +52,8 @@ async fn live_anthropic_roundtrip_text_only() {
         max_tokens: 16,
         tools: vec![],
         stream: false,
+        thinking: None,
+        temperature: None,
     };
 
     let resp = provider

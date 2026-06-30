@@ -45,6 +45,9 @@ pub struct MessagesRequest {
     /// Extended thinking (Opus 4+). When Some, tools must be empty.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ThinkingConfig>,
+    /// Sampling temperature (0.0–1.0). None → API default (1.0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

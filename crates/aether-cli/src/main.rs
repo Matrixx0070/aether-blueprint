@@ -1291,6 +1291,7 @@ async fn run_print_agent(
         permission_mode,
         max_tokens_per_turn: PRINT_MODE_MAX_TOKENS,
         thinking_budget: None,
+        temperature: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("self-check gate: {e}"))?;
@@ -1472,6 +1473,7 @@ async fn run_print(
         tools: vec![],
         stream: false,
         thinking: None,
+        temperature: None,
     };
     let resp = provider
         .complete(req)
@@ -1550,6 +1552,7 @@ async fn run_repl(
         permission_mode,
         max_tokens_per_turn: REPL_MAX_TOKENS,
         thinking_budget: None,
+        temperature: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("self-check gate: {e}"))?;
@@ -1666,6 +1669,8 @@ async fn run_repl(
         let _ = editor.load_history(p);
     }
     let mut ctrlc_armed = false; // first Ctrl-C clears input, second exits
+    // Session cost cap set via /budget. Checked after each outer turn.
+    let session_budget: std::cell::Cell<Option<f64>> = std::cell::Cell::new(None);
 
     loop {
         let user_msg = match pending_user.take() {
@@ -1731,7 +1736,7 @@ async fn run_repl(
         }
 
         let user_msg = if let Some(stripped) = user_msg.strip_prefix('/') {
-            match handle_slash(stripped, &mut session, &custom_commands) {
+            match handle_slash(stripped, &mut session, &custom_commands, &session_budget) {
                 SlashAction::Quit => break,
                 SlashAction::Continue => continue,
                 SlashAction::Compact => {
@@ -1740,6 +1745,44 @@ async fn run_repl(
                         Ok(false) => eprintln!("[compact] nothing to compact (below threshold or too few turns)"),
                         Err(e) => eprintln!("[compact] error: {e}"),
                     }
+                    continue;
+                }
+                SlashAction::Retry => {
+                    // /retry already popped the last assistant turn; jump
+                    // straight into the agent loop with no new user message.
+                    // The last ConversationItem is now a User message.
+                    let pre_usage_r = session.usage_total.clone();
+                    let turn_start_r = std::time::Instant::now();
+                    let mut next_input_r: Option<String> = None;
+                    loop {
+                        let result = {
+                            let renderer = std::sync::Arc::new(std::sync::Mutex::new(LineRenderer::new()));
+                            let renderer_for_sink = std::sync::Arc::clone(&renderer);
+                            let mut started = false;
+                            let sink: aether_llm::TextDeltaSink = Box::new(move |delta: &str| {
+                                if !started { print!("\naether › "); started = true; }
+                                let mut r = renderer_for_sink.lock().unwrap();
+                                let rendered = r.push_delta(delta);
+                                if !rendered.is_empty() { print!("{rendered}"); let _ = std::io::stdout().flush(); }
+                            });
+                            macro_rules! flush_r { () => {{ let t = renderer.lock().unwrap().flush(); if !t.is_empty() { print!("{t}"); std::io::stdout().flush().ok(); } }} }
+                            enum SR { Done(Result<TurnOutcome, aether_core::AgentError>), Int }
+                            let sel = tokio::select! {
+                                res = agent_turn_streamed(&mut session, next_input_r.take(), sink) => { flush_r!(); SR::Done(res) }
+                                _ = tokio::signal::ctrl_c() => { flush_r!(); SR::Int }
+                            };
+                            match sel { SR::Done(r) => r, SR::Int => { eprintln!("\n[interrupted — Ctrl-C]"); if matches!(session.history.last(), Some(ConversationItem::User(_))) { session.history.pop(); } break; } }
+                        };
+                        let outcome = match result { Ok(o) => o, Err(e) => { eprintln!("\n[error] {}", explain_agent_error(&e)); break; } };
+                        println!();
+                        match outcome {
+                            TurnOutcome::AwaitUser => break,
+                            TurnOutcome::ContinueImmediately => continue,
+                            TurnOutcome::Sleep { seconds } => { tokio::time::sleep(std::time::Duration::from_secs(seconds)).await; continue; }
+                            TurnOutcome::Exit => { record_turn_delta(&session, &session_id, &pre_usage_r); return Ok(()); }
+                        }
+                    }
+                    let _ = (pre_usage_r, turn_start_r); // consumed
                     continue;
                 }
                 SlashAction::SendAsUser(s) => s,
@@ -1976,6 +2019,18 @@ async fn run_repl(
             }
         }
         record_turn_delta(&session, &session_id, &pre_usage);
+
+        // Budget guard — warn at 80%, stop at 100%.
+        if let Some(cap) = session_budget.get() {
+            let spent = estimate_cost_usd(&session.config.model, &session.usage_total);
+            let pct = spent / cap * 100.0;
+            if spent >= cap {
+                eprintln!("\n[budget] session cap ${cap:.4} reached (spent ~${spent:.4}). Exiting.");
+                break;
+            } else if pct >= 80.0 {
+                eprintln!("[budget] warning: {pct:.0}% of ${cap:.4} used (~${spent:.4})");
+            }
+        }
     }
 
     if let Some(p) = history_path.as_ref() {
@@ -2053,12 +2108,15 @@ enum SlashAction {
     Compact,
     /// Send this string as the next user message (used by custom commands).
     SendAsUser(String),
+    /// Pop last assistant turn and re-run; the REPL loop re-enters agent_turn immediately.
+    Retry,
 }
 
 fn handle_slash(
     cmd: &str,
     session: &mut Session,
     custom: &std::collections::HashMap<String, String>,
+    session_budget: &std::cell::Cell<Option<f64>>,
 ) -> SlashAction {
     let mut parts = cmd.splitn(2, char::is_whitespace);
     let head = parts.next().unwrap_or("");
@@ -2073,6 +2131,9 @@ fn handle_slash(
             eprintln!("  /git <cmd>          run read-only git commands (status/log/…)");
             eprintln!("  /clear              wipe in-memory conversation");
             eprintln!("  /think [N]          toggle extended thinking (N=budget tokens, default 8000)");
+            eprintln!("  /temperature [N]    show or set sampling temperature (0.0–1.0; reset to clear)");
+            eprintln!("  /budget [N|off]     set session cost cap in USD; warn at 80%, stop at 100%");
+            eprintln!("  /retry              regenerate the last response with fresh sampling");
             eprintln!("  /compact            manually compact the context window now");
             eprintln!("  /model [NAME]       show or change the active model");
             eprintln!("  /tools              list registered tools");
@@ -2362,6 +2423,77 @@ fn handle_slash(
                 eprintln!("[think] note: tools are disabled while thinking is active");
             }
             SlashAction::Continue
+        }
+        // /temperature [N] — show or set the sampling temperature (0.0–1.0).
+        // 0.0 = deterministic / precise, 1.0 = default (creative).
+        "temperature" | "temp" => {
+            if args.is_empty() {
+                match session.config.temperature {
+                    None => eprintln!("[temperature] using API default (1.0)"),
+                    Some(t) => eprintln!("[temperature] current: {t:.2}"),
+                }
+            } else if args == "reset" || args == "off" {
+                session.config.temperature = None;
+                eprintln!("[temperature] reset to API default (1.0)");
+            } else {
+                match args.parse::<f32>() {
+                    Ok(t) if (0.0..=1.0).contains(&t) => {
+                        session.config.temperature = Some(t);
+                        eprintln!("[temperature] set to {t:.2}");
+                    }
+                    Ok(t) => eprintln!("[temperature] out of range ({t:.2}) — must be 0.0–1.0"),
+                    Err(_) => eprintln!("[temperature] usage: /temperature [0.0–1.0 | reset]"),
+                }
+            }
+            SlashAction::Continue
+        }
+        // /budget [N | off] — session cost cap in USD. After each turn the
+        // accumulated cost is checked; at ≥80% a warning is printed; at ≥100%
+        // the REPL prints an error and exits the inner loop gracefully.
+        "budget" => {
+            if args.is_empty() || args == "status" {
+                let spent = estimate_cost_usd(&session.config.model, &session.usage_total);
+                match session_budget.get() {
+                    None => eprintln!("[budget] no cap set (spent ~${spent:.4})"),
+                    Some(cap) => {
+                        let pct = spent / cap * 100.0;
+                        eprintln!("[budget] spent ~${spent:.4} / cap ${cap:.4} ({pct:.0}%)");
+                    }
+                }
+            } else if args == "off" || args == "clear" {
+                session_budget.set(None);
+                eprintln!("[budget] cap cleared");
+            } else {
+                match args.parse::<f64>() {
+                    Ok(cap) if cap > 0.0 => {
+                        session_budget.set(Some(cap));
+                        eprintln!("[budget] session cap set to ${cap:.4}");
+                    }
+                    Ok(_) => eprintln!("[budget] cap must be > 0"),
+                    Err(_) => eprintln!("[budget] usage: /budget [USD amount | off]"),
+                }
+            }
+            SlashAction::Continue
+        }
+        // /retry — pop the last assistant turn (and any tool results) from
+        // history, then re-run the last user message with fresh sampling.
+        "retry" => {
+            // Pop ToolResults if present.
+            if matches!(session.history.last(), Some(ConversationItem::ToolResults(_))) {
+                session.history.pop();
+            }
+            // Pop the assistant turn.
+            if matches!(session.history.last(), Some(ConversationItem::Assistant { .. })) {
+                session.history.pop();
+            }
+            // Verify we still have the user message to re-run.
+            if matches!(session.history.last(), Some(ConversationItem::User(_))) {
+                eprintln!("[retry] regenerating last response…");
+                SlashAction::Retry
+            } else {
+                eprintln!("[retry] nothing to retry");
+                SlashAction::Continue
+            }
         }
         "compact" => SlashAction::Compact,
         "sessions" => {
@@ -4190,6 +4322,7 @@ async fn complete_run_one_turn(
         permission_mode,
         max_tokens_per_turn: PRINT_MODE_MAX_TOKENS,
         thinking_budget: None,
+        temperature: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -4686,6 +4819,7 @@ async fn ws_run_one_turn_streamed(
         permission_mode,
         max_tokens_per_turn: PRINT_MODE_MAX_TOKENS,
         thinking_budget: None,
+        temperature: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -4821,6 +4955,7 @@ async fn serve_one_turn(
         permission_mode,
         max_tokens_per_turn: PRINT_MODE_MAX_TOKENS,
         thinking_budget: None,
+        temperature: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -4889,6 +5024,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
         permission_mode,
         max_tokens_per_turn: REPL_MAX_TOKENS,
         thinking_budget: None,
+        temperature: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("self-check gate: {e}"))?;
@@ -18184,6 +18320,7 @@ async fn review_security_file(
         permission_mode,
         max_tokens_per_turn: 8192,
         thinking_budget: None,
+        temperature: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     // Review mode produces a STRUCTURED report (lots of short keyword
@@ -19604,6 +19741,7 @@ async fn run_threat_model(
         permission_mode,
         max_tokens_per_turn: 8192,
         thinking_budget: None,
+        temperature: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     // Empty ruleset — same reasoning as run_review (structured analysis output).
@@ -19706,6 +19844,7 @@ async fn run_ctf(
         permission_mode,
         max_tokens_per_turn: 8192,
         thinking_budget: None,
+        temperature: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(Vec::new()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -20249,6 +20388,7 @@ async fn run_eval_case(
         permission_mode,
         max_tokens_per_turn: PRINT_MODE_MAX_TOKENS,
         thinking_budget: None,
+        temperature: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -20452,6 +20592,7 @@ async fn run_doctor(probe: bool, json_out: bool) -> Result<()> {
                     tools: vec![],
                     stream: false,
                     thinking: None,
+                    temperature: None,
                 };
                 match p.complete(req).await {
                     Ok(resp) => {
@@ -27405,6 +27546,7 @@ impl Tool for AgentTool {
             permission_mode: self.permission_mode,
             max_tokens_per_turn: SUB_AGENT_MAX_TOKENS,
             thinking_budget: None,
+            temperature: None,
         };
         let overlay = Fable5Overlay::new(OverlayConfig::default());
         let gate = Gate::new(default_rules())

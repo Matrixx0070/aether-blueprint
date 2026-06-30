@@ -252,6 +252,8 @@ mod tests {
             max_tokens: 16,
             tools: vec![],
             stream: false,
+            thinking: None,
+            temperature: None,
         }
     }
 

@@ -552,6 +552,8 @@ mod tests {
             max_tokens: 32,
             tools: vec![],
             stream: false,
+            thinking: None,
+            temperature: None,
         };
         let body = vertex_body(&req).unwrap();
         assert!(body.get("model").is_none());
