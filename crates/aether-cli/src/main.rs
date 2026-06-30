@@ -6320,6 +6320,26 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::SetDedupToolCalls(enabled) => {
+                    session.dedup_tool_calls = enabled;
+                    let note = if enabled {
+                        "Duplicate tool call detection: ON — warns when same tool+args called twice in a row.".to_string()
+                    } else {
+                        "Duplicate tool call detection: off.".to_string()
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::SetAutoThinkOnStuck(enabled) => {
+                    session.auto_think_on_stuck = enabled;
+                    let note = if enabled {
+                        "Auto-think on stuck: ON — extended thinking activates when consecutive tool errors hit threshold.".to_string()
+                    } else {
+                        "Auto-think on stuck: off.".to_string()
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::SetToolOutputMax(tool_name, limit) => {
                     let note = if limit == 0 {
                         session.tool_output_limits.remove(&tool_name);
@@ -24018,6 +24038,26 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /dedup-tools on|off — warn on consecutive duplicate tool calls
+                                cmd_str if cmd_str == "/dedup-tools" || cmd_str.starts_with("/dedup-tools ") => {
+                                    let arg = cmd_str.trim_start_matches("/dedup-tools").trim();
+                                    let enabled = arg != "off";
+                                    if _ctx.send(UiCommand::SetDedupToolCalls(enabled)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /auto-think-stuck on|off — enable thinking when agent is stuck
+                                cmd_str if cmd_str == "/auto-think-stuck" || cmd_str.starts_with("/auto-think-stuck ") => {
+                                    let arg = cmd_str.trim_start_matches("/auto-think-stuck").trim();
+                                    let enabled = arg != "off";
+                                    if _ctx.send(UiCommand::SetAutoThinkOnStuck(enabled)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /tool-output-max <tool> <N> — cap per-tool output (0=clear)
                                 cmd_str if cmd_str.starts_with("/tool-output-max ") => {
                                     let arg = cmd_str.trim_start_matches("/tool-output-max ").trim();
@@ -24704,6 +24744,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/progress-list",
                             "/tool-output-max ",
                             "/tool-output-limits",
+                            "/dedup-tools", "/dedup-tools on", "/dedup-tools off",
+                            "/auto-think-stuck", "/auto-think-stuck on", "/auto-think-stuck off",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

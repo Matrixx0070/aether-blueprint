@@ -265,6 +265,10 @@ pub enum UiCommand {
     SetToolOutputMax(String, usize),
     /// List all per-tool output limits.
     QueryToolOutputLimits,
+    /// Enable or disable consecutive duplicate tool call detection.
+    SetDedupToolCalls(bool),
+    /// Enable or disable auto-thinking when the agent is stuck.
+    SetAutoThinkOnStuck(bool),
     /// Add an item to the in-session progress tracker.
     AddProgressItem(String),
     /// Mark a progress item (by 0-based index) as done.

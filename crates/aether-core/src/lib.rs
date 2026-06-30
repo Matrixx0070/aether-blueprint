@@ -187,6 +187,18 @@ pub struct Session {
     /// configured cap it is truncated before being stored in history.
     /// Complements the global 50k cap in the executor.
     pub tool_output_limits: std::collections::HashMap<String, usize>,
+
+    /// When true, detect consecutive identical tool calls (same name+args) and
+    /// inject a deduplication warning so the agent tries different arguments.
+    pub dedup_tool_calls: bool,
+
+    /// Signature (name, args_json) of tool calls from the most recent tool
+    /// execution batch. Used by the dedup detector above.
+    pub last_tool_signatures: Vec<(String, String)>,
+
+    /// When true, automatically raise thinking budget to 8 192 tokens when
+    /// the agent is detected as stuck (consecutive tool errors ≥ threshold).
+    pub auto_think_on_stuck: bool,
 }
 
 impl Session {
@@ -235,6 +247,9 @@ impl Session {
             warmup_files: Vec::new(),
             progress_items: Vec::new(),
             tool_output_limits: std::collections::HashMap::new(),
+            dedup_tool_calls: false,
+            last_tool_signatures: Vec::new(),
+            auto_think_on_stuck: false,
         }
     }
 
@@ -650,6 +665,51 @@ async fn agent_turn_inner(
                  Do not repeat the blocked content. Refer to the active plan."
             ),
         ));
+    }
+
+    // ── dedup detector — warn when agent repeats identical tool+args ────
+    // Fires only when dedup_tool_calls is enabled. Injects a reminder so
+    // the model tries different arguments on the next turn instead of looping.
+    if session.dedup_tool_calls && !tool_uses.is_empty() {
+        let current_sigs: Vec<(String, String)> = tool_uses.iter()
+            .map(|tu| (tu.name.clone(), tu.input.to_string()))
+            .collect();
+        let dups: Vec<&str> = current_sigs.iter()
+            .filter(|sig| session.last_tool_signatures.contains(sig))
+            .map(|(name, _)| name.as_str())
+            .collect();
+        if !dups.is_empty() {
+            session.pending_reminders.push(Reminder::new(
+                ReminderKind::SystemWarning,
+                Source::Kernel,
+                format!(
+                    "[Duplicate tool call detected: {}] You called these tools with identical \
+                     arguments last turn. Use different parameters, a different tool, or \
+                     reconsider the approach.",
+                    dups.join(", ")
+                ),
+            ));
+        }
+        session.last_tool_signatures = current_sigs;
+    }
+
+    // ── auto-think-on-stuck — raise thinking budget when stuck ──────────
+    // When enabled and any tool has hit the consecutive-error threshold,
+    // temporarily enable extended thinking (8 192 tokens) to help the model
+    // reason its way out of the stuck state.
+    if session.auto_think_on_stuck && session.config.thinking_budget.is_none() {
+        let is_stuck = session.plan.tool_call_stats.values()
+            .any(|(_, err)| *err >= planner::TOOL_ERROR_THRESHOLD);
+        if is_stuck {
+            session.config.thinking_budget = Some(8_192);
+            session.pending_reminders.push(Reminder::new(
+                ReminderKind::SystemWarning,
+                Source::Kernel,
+                "[Auto-think activated] Extended thinking enabled due to repeated errors. \
+                 Reason carefully before your next tool call."
+                    .to_string(),
+            ));
+        }
     }
 
     // ── execute — skip tool dispatch when blocked (tool_uses is now
