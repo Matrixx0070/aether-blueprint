@@ -6564,6 +6564,48 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::SetTokenBudgetWarn(pct) => {
+                    session.token_budget_warn_pct = pct;
+                    session.token_budget_warn_fired = false; // reset so it can fire again
+                    let note = if pct <= 0.0 {
+                        "Token budget warn: off.".to_string()
+                    } else {
+                        format!("Token budget warn: fires when context is {:.0}%+ full.", pct * 100.0)
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::SetTokenBudgetHard(pct) => {
+                    session.token_budget_hard_pct = pct;
+                    let note = if pct <= 0.0 {
+                        "Token budget hard-stop: off.".to_string()
+                    } else {
+                        format!("Token budget hard-stop: agent halts when context is {:.0}%+ full.", pct * 100.0)
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryTokenBudgetStatus => {
+                    use aether_core::compaction::context_window_for_model;
+                    let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
+                    let window = context_window_for_model(&session.config.model);
+                    let fill_pct = if window > 0 { used as f64 / window as f64 * 100.0 } else { 0.0 };
+                    let warn_str = if session.token_budget_warn_pct <= 0.0 {
+                        "off".to_string()
+                    } else {
+                        format!("{:.0}%{}", session.token_budget_warn_pct * 100.0,
+                            if session.token_budget_warn_fired { " (already fired)" } else { "" })
+                    };
+                    let hard_str = if session.token_budget_hard_pct <= 0.0 {
+                        "off".to_string()
+                    } else {
+                        format!("{:.0}%", session.token_budget_hard_pct * 100.0)
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Token budget status:\n  Current fill: {fill_pct:.1}% ({used}/{window} tokens)\n  Warn threshold: {warn_str}\n  Hard-stop threshold: {hard_str}"
+                    )));
+                    continue;
+                }
                 UiCommand::InjectUser(text) => {
                     use aether_core::context::ConversationItem;
                     let preview: String = text.chars().take(80).collect();
@@ -7956,6 +7998,22 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                 break;
                             }
                         }
+                        // Token budget hard-stop: halt when context fill exceeds threshold.
+                        if session.token_budget_hard_pct > 0.0 {
+                            use aether_core::compaction::context_window_for_model;
+                            let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
+                            let window = context_window_for_model(&session.config.model);
+                            let fill = if window > 0 { used as f64 / window as f64 } else { 0.0 };
+                            if fill >= session.token_budget_hard_pct {
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                    "Token budget hard-stop: context is {:.1}%+ full ({used}/{window} tokens) ≥ \
+                                     limit {:.0}%. Stopping agent. Use /token-budget-hard off to remove.",
+                                    fill * 100.0, session.token_budget_hard_pct * 100.0
+                                )));
+                                auto_continue_count = 0;
+                                break;
+                            }
+                        }
                         // Auto-compact when stuck: fire compaction if any tool has hit the
                         // consecutive-error threshold, clearing context to break the loop.
                         if session.auto_compact_on_stuck {
@@ -8133,6 +8191,21 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     "[Auto-status] Turn {turn}  |  ${cost:.4}  |  {used}/{window} tokens ({ctx_pct}%)  |  Errors: {total_errs}{progress_line}",
                     turn = session.turn_index
                 )));
+            }
+            // Token budget warn: fire once when fill crosses the warn threshold.
+            if session.token_budget_warn_pct > 0.0 && !session.token_budget_warn_fired {
+                use aether_core::compaction::context_window_for_model;
+                let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
+                let window = context_window_for_model(&session.config.model);
+                let fill = if window > 0 { used as f64 / window as f64 } else { 0.0 };
+                if fill >= session.token_budget_warn_pct {
+                    session.token_budget_warn_fired = true;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Token budget warning: context is {:.1}%+ full ({used}/{window} tokens). \
+                         Threshold: {:.0}%. Consider /compact or shortening history.",
+                        fill * 100.0, session.token_budget_warn_pct * 100.0
+                    )));
+                }
             }
             // Dequeue next task before awaiting user — auto-inject if queued.
             if let Some(next) = session.task_queue.pop_front() {
@@ -26163,6 +26236,50 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /token-budget-warn [pct|off] — warn when context reaches pct% full
+                                cmd_str if cmd_str == "/token-budget-warn" || cmd_str.starts_with("/token-budget-warn ") => {
+                                    let arg = cmd_str.trim_start_matches("/token-budget-warn").trim();
+                                    let pct = if arg.is_empty() || arg == "off" {
+                                        0.0f64
+                                    } else {
+                                        arg.trim_end_matches('%').parse::<f64>().unwrap_or(0.0) / 100.0
+                                    };
+                                    if arg.is_empty() {
+                                        if _ctx.send(UiCommand::QueryTokenBudgetStatus).is_err() { break 'outer; }
+                                    } else {
+                                        if _ctx.send(UiCommand::SetTokenBudgetWarn(pct)).is_err() { break 'outer; }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /token-budget-hard [pct|off] — halt agent when context reaches pct% full
+                                cmd_str if cmd_str == "/token-budget-hard" || cmd_str.starts_with("/token-budget-hard ") => {
+                                    let arg = cmd_str.trim_start_matches("/token-budget-hard").trim();
+                                    let pct = if arg.is_empty() || arg == "off" {
+                                        0.0f64
+                                    } else {
+                                        arg.trim_end_matches('%').parse::<f64>().unwrap_or(0.0) / 100.0
+                                    };
+                                    if arg.is_empty() {
+                                        if _ctx.send(UiCommand::QueryTokenBudgetStatus).is_err() { break 'outer; }
+                                    } else {
+                                        if _ctx.send(UiCommand::SetTokenBudgetHard(pct)).is_err() { break 'outer; }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /token-budget-status — show fill and configured thresholds
+                                "/token-budget-status" => {
+                                    if _ctx.send(UiCommand::QueryTokenBudgetStatus).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /inject-user <text> — add a User message to history without triggering agent
                                 cmd_str if cmd_str.starts_with("/inject-user ") => {
                                     let text = cmd_str.trim_start_matches("/inject-user ").trim().to_string();
@@ -26778,6 +26895,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/inject-assistant ",
                             "/pop-history",
                             "/history-len",
+                            "/token-budget-warn", "/token-budget-warn ", "/token-budget-warn off",
+                            "/token-budget-hard", "/token-budget-hard ", "/token-budget-hard off",
+                            "/token-budget-status",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

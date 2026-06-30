@@ -308,6 +308,15 @@ pub struct Session {
     /// User-defined session variables (name → value). The TUI expands
     /// `$var_name` in user input before sending to the driver.
     pub session_vars: std::collections::HashMap<String, String>,
+
+    /// Context-fill fraction (0.0–1.0) at which a warning SystemNote fires.
+    /// 0.0 = off. Fires once per session (token_budget_warn_fired tracks this).
+    pub token_budget_warn_pct: f64,
+    /// Context-fill fraction (0.0–1.0) at which the agent hard-stops.
+    /// 0.0 = off. Checked every ContinueImmediately tick.
+    pub token_budget_hard_pct: f64,
+    /// True once the warn threshold has fired so the note only shows once.
+    pub token_budget_warn_fired: bool,
 }
 
 impl Session {
@@ -386,6 +395,9 @@ impl Session {
             agent_persona: None,
             scope_guard: None,
             session_vars: std::collections::HashMap::new(),
+            token_budget_warn_pct: 0.0,
+            token_budget_hard_pct: 0.0,
+            token_budget_warn_fired: false,
         }
     }
 

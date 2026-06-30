@@ -409,6 +409,12 @@ pub enum UiCommand {
     ReplayLast,
     /// List past user messages with their indices.
     QueryReplayList,
+    /// Set context-fill warn threshold (0.0=off, e.g. 0.70 for 70%).
+    SetTokenBudgetWarn(f64),
+    /// Set context-fill hard-stop threshold (0.0=off).
+    SetTokenBudgetHard(f64),
+    /// Show current token budget thresholds and fill level.
+    QueryTokenBudgetStatus,
     /// Inject a User message into history without triggering an agent turn.
     InjectUser(String),
     /// Inject an Assistant message into history (as if the agent said it).
