@@ -158,6 +158,14 @@ pub enum UiCommand {
     ClearHistory,
     /// Set tools_disabled_turns on SessionConfig. 0 = re-enable tools immediately.
     SetToolsDisabled(usize),
+    /// Query the active plan text; driver replies with UiEvent::SystemNote.
+    QueryPlan,
+    /// Query per-tool consecutive error counts; driver replies with UiEvent::SystemNote.
+    QueryStuck,
+    /// Reset all tool error counts in the plan to 0.
+    ResetToolErrors,
+    /// Set or clear the session goal (None = clear).
+    SetGoal(Option<String>),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

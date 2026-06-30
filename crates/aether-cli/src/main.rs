@@ -5684,6 +5684,63 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::QueryPlan => {
+                    let note = if session.plan.text.trim().is_empty() {
+                        "No active plan guidance (no verifier blocks, stuck tools, or session goal).".to_string()
+                    } else {
+                        format!("Active plan guidance:\n{}", session.plan.text)
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryStuck => {
+                    let mut stuck: Vec<(String, usize)> = session.plan.tool_error_counts
+                        .iter()
+                        .filter(|(_, &n)| n > 0)
+                        .map(|(k, &n)| (k.clone(), n))
+                        .collect();
+                    stuck.sort_by_key(|(k, _)| k.clone());
+                    let note = if stuck.is_empty() {
+                        "No tools currently stuck (all consecutive-error counts are 0).".to_string()
+                    } else {
+                        let lines: Vec<String> = stuck.iter()
+                            .map(|(name, n)| format!("  {name}: {n} consecutive error(s)"))
+                            .collect();
+                        format!("Stuck tools (consecutive errors):\n{}", lines.join("\n"))
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::ResetToolErrors => {
+                    let had: Vec<String> = session.plan.tool_error_counts.iter()
+                        .filter(|(_, &n)| n > 0)
+                        .map(|(k, _)| k.clone())
+                        .collect();
+                    session.plan.tool_error_counts.values_mut().for_each(|n| *n = 0);
+                    let note = if had.is_empty() {
+                        "No tool errors to reset.".to_string()
+                    } else {
+                        format!("Reset error counts for: {}", had.join(", "))
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::SetGoal(maybe_text) => {
+                    match maybe_text {
+                        None => {
+                            session.plan.clear_goal();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote("Session goal cleared.".into()));
+                        }
+                        Some(text) => {
+                            let t = text.clone();
+                            session.plan.set_goal(text);
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                format!("Session goal set: {t}\nThis goal appears in the active plan on every turn (survives compaction).")
+                            ));
+                        }
+                    }
+                    continue;
+                }
             };
             let outs = run_hooks(
                 &hooks.user_prompt_submit,
@@ -22558,6 +22615,46 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /plan-status — show current plan guidance (what the AI sees)
+                                "/plan-status" => {
+                                    if _ctx.send(UiCommand::QueryPlan).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /stuck — show tools with consecutive errors
+                                "/stuck" => {
+                                    if _ctx.send(UiCommand::QueryStuck).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /reset-errors — clear all tool error counts
+                                "/reset-errors" => {
+                                    if _ctx.send(UiCommand::ResetToolErrors).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /goal [text] — set or show session goal (survives compaction)
+                                cmd_str if cmd_str.starts_with("/goal ") || cmd_str == "/goal" => {
+                                    let arg = cmd_str.trim_start_matches("/goal").trim();
+                                    let cmd = if arg.is_empty() {
+                                        UiCommand::QueryPlan
+                                    } else if arg == "off" {
+                                        UiCommand::SetGoal(None)
+                                    } else {
+                                        UiCommand::SetGoal(Some(arg.to_string()))
+                                    };
+                                    if _ctx.send(cmd).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -22958,6 +23055,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/ai-optimize", "/ai-optimize ", "/ai-api-design ",
                             "/ai-error-types", "/ai-refactor-file", "/ai-refactor-file ",
                             "/ai-critique",
+                            "/plan-status", "/stuck", "/reset-errors",
+                            "/goal", "/goal ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

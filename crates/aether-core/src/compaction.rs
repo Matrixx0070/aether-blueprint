@@ -133,7 +133,20 @@ async fn compact_inner(session: &mut Session, force: bool) -> Result<bool, Agent
     if std::env::var("AETHER_NO_COMPACT").ok().as_deref() == Some("1") {
         return Ok(false);
     }
-    if !force && !over_threshold(&session.usage_total, &session.config.model, COMPACTION_THRESHOLD_PCT) {
+    // Adaptive threshold: lower from 80% to 70% when the agent has consecutive
+    // tool errors. A stuck agent needs clean context headroom for recovery more
+    // than a healthy session does.
+    let has_stuck_tools = session
+        .plan
+        .tool_error_counts
+        .values()
+        .any(|&n| n >= crate::planner::TOOL_ERROR_THRESHOLD);
+    let threshold = if has_stuck_tools {
+        COMPACTION_THRESHOLD_PCT - 0.10
+    } else {
+        COMPACTION_THRESHOLD_PCT
+    };
+    if !force && !over_threshold(&session.usage_total, &session.config.model, threshold) {
         return Ok(false);
     }
     // Need at least 4 items to be worth compacting (keep at least 2 in tail).

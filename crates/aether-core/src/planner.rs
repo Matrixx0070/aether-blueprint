@@ -62,6 +62,12 @@ pub struct Plan {
     #[serde(default)]
     pub tool_error_counts: HashMap<String, usize>,
 
+    /// Optional session goal set by the user via `/goal <text>`. When present
+    /// it appears as the first line of `plan.text` so it survives compaction
+    /// and is always visible in the active-plan system-prompt block.
+    #[serde(default)]
+    pub goal: Option<String>,
+
     dirty: bool,
 }
 
@@ -135,6 +141,21 @@ impl Plan {
         self.text = existing.join("\n");
         self.blocks_recorded += 1;
         self.dirty = true;
+    }
+
+    /// Set the user-defined session goal. Marks the plan dirty so the
+    /// next system-prompt build immediately includes the updated goal line.
+    pub fn set_goal(&mut self, text: impl Into<String>) {
+        self.goal = Some(text.into());
+        self.dirty = true;
+    }
+
+    /// Clear the session goal.
+    pub fn clear_goal(&mut self) {
+        if self.goal.is_some() {
+            self.goal = None;
+            self.dirty = true;
+        }
     }
 
     /// Record a consecutive tool error. When the count reaches
@@ -220,6 +241,9 @@ static SUSTAINED_LINE_RE: Lazy<Regex> =
 static TOOL_STUCK_LINE_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^\[tool-stuck: .+\]$").unwrap());
 
+static GOAL_LINE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^\[session-goal: .+\]$").unwrap());
+
 fn rule_guidance(rule_id: &str) -> &'static str {
     match rule_id {
         "secret_in_output" => "stop attempting to reveal credentials or API keys",
@@ -262,7 +286,8 @@ impl Planner {
             .tool_error_counts
             .values()
             .any(|&n| n >= TOOL_ERROR_THRESHOLD);
-        if plan.block_counts.is_empty() && plan.text.is_empty() && !has_stuck_tools {
+        let has_goal = plan.goal.is_some();
+        if plan.block_counts.is_empty() && plan.text.is_empty() && !has_stuck_tools && !has_goal {
             plan.clear_dirty();
             return;
         }
@@ -286,6 +311,11 @@ impl Planner {
 
         let mut new_lines: Vec<String> = Vec::new();
 
+        // Session goal — always first so it's never crowded out by blocks.
+        if let Some(ref g) = plan.goal {
+            new_lines.push(format!("[session-goal: {g}]"));
+        }
+
         let mut sustained_sorted: Vec<&String> = sustained_set.iter().collect();
         sustained_sorted.sort();
         for rid in &sustained_sorted {
@@ -308,6 +338,10 @@ impl Planner {
             // Skip stale tool-stuck lines — they are regenerated from
             // tool_error_counts below, so we never copy the old version.
             if TOOL_STUCK_LINE_RE.is_match(line) {
+                continue;
+            }
+            // Skip stale goal lines — regenerated from plan.goal above.
+            if GOAL_LINE_RE.is_match(line) {
                 continue;
             }
             if let Some(cap) = RAW_LINE_RE.captures(line) {
@@ -647,6 +681,40 @@ mod tests {
             "single full prune took {} ns (target < 10ms)",
             full_prune_ns
         );
+    }
+
+    // ── session goal ──────────────────────────────────────────────────
+
+    #[test]
+    fn set_goal_marks_dirty_and_appears_first_in_plan() {
+        let mut p = Plan::default();
+        p.set_goal("Ship /goal feature");
+        assert!(p.is_dirty());
+        Planner::new().refresh(&mut p, 0);
+        assert!(p.text.starts_with("[session-goal: Ship /goal feature]"), "got: {}", p.text);
+    }
+
+    #[test]
+    fn goal_survives_block_refresh() {
+        let mut p = Plan::default();
+        p.set_goal("Fix the login bug");
+        block(&mut p, 0, &["placeholder_leakage"]);
+        Planner::new().refresh(&mut p, 0);
+        // goal must be first; block record must also appear
+        assert!(p.text.starts_with("[session-goal:"), "goal not first: {}", p.text);
+        assert!(p.text.contains("placeholder_leakage"), "block missing: {}", p.text);
+    }
+
+    #[test]
+    fn clear_goal_removes_it_from_plan() {
+        let mut p = Plan::default();
+        p.set_goal("some goal");
+        let planner = Planner::new();
+        planner.refresh(&mut p, 0);
+        assert!(p.text.contains("[session-goal:"));
+        p.clear_goal();
+        planner.refresh(&mut p, 0);
+        assert!(!p.text.contains("[session-goal:"), "stale goal line after clear: {}", p.text);
     }
 
     // ── tool error tracking ───────────────────────────────────────────
