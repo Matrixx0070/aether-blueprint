@@ -993,6 +993,12 @@ pub enum UiCommand {
     QueryRemindersShow,
     /// Show D1 (reminder tamper-test overlay) active status.
     QueryD1Status,
+    /// Show D6 (long-conversation overlay) active status from last assembly.
+    QueryD6Status,
+    /// Show per-session tool call budget.
+    QueryToolCallBudgetShow,
+    /// Show whether long-conversation digest was injected last assembly.
+    QueryLongConvStatus,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

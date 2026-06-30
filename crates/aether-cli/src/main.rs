@@ -7700,6 +7700,56 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryD6Status => {
+                    match &session.last_assembly_telemetry {
+                        Some(t) => {
+                            let state = if t.long_conv_injected {
+                                "ACTIVE — long-conversation digest was injected last turn"
+                            } else {
+                                "INACTIVE — not triggered last turn"
+                            };
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "D6 (long-conversation overlay): {state}."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "D6 status: unknown (no turns completed yet).".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolCallBudgetShow => {
+                    if session.tool_call_budget == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Tool call budget: unlimited (no cap set). Use /tool-budget <n> to limit.".to_string()
+                        ));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Tool call budget: {} calls cap for this session.", session.tool_call_budget
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryLongConvStatus => {
+                    match &session.last_assembly_telemetry {
+                        Some(t) => {
+                            let msg = if t.long_conv_injected {
+                                "Long-conv digest: INJECTED last turn — context is long, mission re-anchor active."
+                            } else {
+                                "Long-conv digest: not injected last turn — context still within normal range."
+                            };
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(msg.to_string()));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Long-conv digest: no data yet (no turns completed).".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryAssemblyTeleShow => {
                     match &session.last_assembly_telemetry {
                         Some(t) => {
@@ -33905,6 +33955,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /d6-status — show D6 long-conv overlay status
+                                "/d6-status" => {
+                                    if _ctx.send(UiCommand::QueryD6Status).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tool-call-budget-show — show tool call budget
+                                "/tool-call-budget-show" => {
+                                    if _ctx.send(UiCommand::QueryToolCallBudgetShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /long-conv-status — show if long-conv digest was injected
+                                "/long-conv-status" => {
+                                    if _ctx.send(UiCommand::QueryLongConvStatus).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -34708,6 +34776,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/assembly-tele-show",
                             "/reminders-show",
                             "/d1-status",
+                            "/d6-status",
+                            "/tool-call-budget-show",
+                            "/long-conv-status",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
