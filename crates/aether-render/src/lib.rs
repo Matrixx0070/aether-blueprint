@@ -232,6 +232,12 @@ pub enum UiCommand {
     AttachFile(String),
     /// Run a shell command and inject its output as user context.
     ShellInject(String),
+    /// Pin a history item (by 0-based index) so its content persists across compaction.
+    PinHistoryItem(usize),
+    /// Remove a previously pinned history item by index.
+    UnpinHistoryItem(usize),
+    /// List all currently pinned history items.
+    QueryPins,
     /// Remove the last assistant turn (and any trailing tool results), re-extract the last
     /// user message, and re-run the agent — effectively retrying the previous prompt.
     RetryLast,

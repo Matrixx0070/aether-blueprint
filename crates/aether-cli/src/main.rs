@@ -6320,6 +6320,55 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::PinHistoryItem(idx) => {
+                    use aether_core::context::ConversationItem;
+                    let text = session.history.get(idx).and_then(|item| match item {
+                        ConversationItem::User(t) => Some(t.clone()),
+                        ConversationItem::Assistant { text: Some(t), .. } => Some(t.clone()),
+                        _ => None,
+                    });
+                    let note = match text {
+                        None => format!("No text at history[{idx}] — pin skipped."),
+                        Some(t) => {
+                            let pin_body = format!("[PINNED:{idx}] {}", t.chars().take(400).collect::<String>());
+                            let already = session.persistent_reminders.iter().any(|r| r.starts_with(&format!("[PINNED:{idx}]")));
+                            if already {
+                                format!("history[{idx}] is already pinned.")
+                            } else {
+                                session.persistent_reminders.push(pin_body);
+                                format!("Pinned history[{idx}] — content will survive compaction.")
+                            }
+                        }
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::UnpinHistoryItem(idx) => {
+                    let prefix = format!("[PINNED:{idx}]");
+                    let before = session.persistent_reminders.len();
+                    session.persistent_reminders.retain(|r| !r.starts_with(&prefix));
+                    let after = session.persistent_reminders.len();
+                    let note = if before != after {
+                        format!("Unpinned history[{idx}].")
+                    } else {
+                        format!("history[{idx}] was not pinned.")
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryPins => {
+                    let pins: Vec<_> = session.persistent_reminders.iter()
+                        .filter(|r| r.starts_with("[PINNED:"))
+                        .cloned()
+                        .collect();
+                    let note = if pins.is_empty() {
+                        "No pinned items. Use /pin <n> to pin a history item.".to_string()
+                    } else {
+                        format!("=== {} pinned item(s) ===\n{}", pins.len(), pins.join("\n\n"))
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::RetryLast => {
                     use aether_core::context::ConversationItem;
                     // Pop trailing tool results.
@@ -23712,6 +23761,40 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /pin <n> — pin history[n] content to survive compaction
+                                cmd_str if cmd_str.starts_with("/pin ") => {
+                                    let arg = cmd_str.trim_start_matches("/pin ").trim();
+                                    if let Ok(n) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::PinHistoryItem(n)).is_err() { break 'outer; }
+                                    } else {
+                                        if _ctx.send(UiCommand::QueryPins).is_err() { break 'outer; }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /unpin <n> — remove pin from history[n]
+                                cmd_str if cmd_str.starts_with("/unpin ") => {
+                                    let arg = cmd_str.trim_start_matches("/unpin ").trim();
+                                    if let Ok(n) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::UnpinHistoryItem(n)).is_err() { break 'outer; }
+                                    } else {
+                                        let _ = _ctx.send(UiCommand::QueryPins);
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /pins — list all pinned history items
+                                "/pins" => {
+                                    if _ctx.send(UiCommand::QueryPins).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /retry — re-run agent with the last user prompt
                                 "/retry" => {
                                     if _ctx.send(UiCommand::RetryLast).is_err() { break 'outer; }
@@ -24206,6 +24289,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/retry",
                             "/export ",
                             "/rewrite ",
+                            "/pin ",
+                            "/unpin ",
+                            "/pins",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
