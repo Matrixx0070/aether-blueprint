@@ -9561,6 +9561,176 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // ── BATCH 90: KNOWLEDGE + GIT AI WORKFLOWS ───────────────────────
+                                "/snippet-list" | "/snippets" => {
+                                    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+                                    let snip_dir = std::path::Path::new(&home).join(".aether").join("snippets");
+                                    match std::fs::read_dir(&snip_dir) {
+                                        Ok(entries) => {
+                                            let mut snippets: Vec<(String, u64)> = entries
+                                                .filter_map(|e| e.ok())
+                                                .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
+                                                .filter_map(|e| {
+                                                    let name = e.file_name().to_string_lossy().trim_end_matches(".md").to_string();
+                                                    let size = e.metadata().map(|m| m.len()).unwrap_or(0);
+                                                    Some((name, size))
+                                                })
+                                                .collect();
+                                            snippets.sort_by(|a, b| a.0.cmp(&b.0));
+                                            if snippets.is_empty() {
+                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                    format!("No snippets yet. Use /snippet to save code.\n  Dir: {}", snip_dir.display())
+                                                ));
+                                            } else {
+                                                let mut msg = format!("Snippets  ({} saved)\n\n", snippets.len());
+                                                for (name, size) in &snippets {
+                                                    msg.push_str(&format!("  {name:<35}  {}b\n", size));
+                                                }
+                                                msg.push_str(&format!("\n  Dir: {}\n  /read ~/.aether/snippets/<name>.md to view", snip_dir.display()));
+                                                ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                            }
+                                        }
+                                        Err(_) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote("No snippets directory yet. Use /snippet to create one.".to_string()));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/ai-commit" || cmd.starts_with("/ai-commit ") => {
+                                    // AI generates a commit message from staged diff
+                                    let scope_hint = cmd.trim_start_matches("/ai-commit").trim();
+                                    let diff_out = std::process::Command::new("git")
+                                        .args(["diff", "--staged"])
+                                        .current_dir(std::env::current_dir().unwrap_or_default())
+                                        .output();
+                                    let diff_text = match diff_out {
+                                        Ok(o) if !String::from_utf8_lossy(&o.stdout).trim().is_empty() => {
+                                            String::from_utf8_lossy(&o.stdout).to_string()
+                                        }
+                                        Ok(_) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                "No staged changes. Run 'git add <files>' first.".to_string()
+                                            ));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("git error: {e}")));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                    };
+                                    let lines: Vec<&str> = diff_text.lines().collect();
+                                    let diff_preview = lines.iter().take(300).cloned().collect::<Vec<_>>().join("\n");
+                                    let scope_str = if scope_hint.is_empty() { String::new() } else { format!("Hint/scope: {scope_hint}\n") };
+                                    let prompt = format!(
+                                        "{scope_str}Generate a concise, conventional commit message for this staged diff:\n\n```diff\n{diff_preview}\n```{}\n\n\
+                                         Rules:\n\
+                                         - Format: <type>(<scope>): <summary> where type = feat|fix|refactor|docs|test|chore|perf|style|ci\n\
+                                         - First line ≤ 72 characters, present tense ('add' not 'added')\n\
+                                         - Optional body: 2-3 bullet points explaining WHY (not what — git diff shows what)\n\
+                                         - NO generic filler ('Updated files', 'Made changes', etc.)\n\
+                                         - Output ONLY the commit message, nothing else",
+                                        if lines.len() > 300 { format!("\n… ({} more lines)", lines.len() - 300) } else { String::new() }
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/ai-commit  ({} lines of diff)", lines.len()), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/explain-commit ") || cmd == "/explain-commit" => {
+                                    // Explain a specific commit in plain English
+                                    let commit_ref = cmd.trim_start_matches("/explain-commit").trim();
+                                    let ref_str = if commit_ref.is_empty() { "HEAD" } else { commit_ref };
+                                    let diff_out = std::process::Command::new("git")
+                                        .args(["show", "--stat", ref_str])
+                                        .current_dir(std::env::current_dir().unwrap_or_default())
+                                        .output();
+                                    let full_out = std::process::Command::new("git")
+                                        .args(["show", ref_str])
+                                        .current_dir(std::env::current_dir().unwrap_or_default())
+                                        .output();
+                                    match (diff_out, full_out) {
+                                        (Ok(stat_o), Ok(full_o)) if stat_o.status.success() => {
+                                            let stat = String::from_utf8_lossy(&stat_o.stdout);
+                                            let full = String::from_utf8_lossy(&full_o.stdout);
+                                            let full_lines: Vec<&str> = full.lines().collect();
+                                            let diff_content = full_lines.iter().take(400).cloned().collect::<Vec<_>>().join("\n");
+                                            let prompt = format!(
+                                                "Explain this git commit in plain English:\n\n{stat}\n\n```diff\n{diff_content}\n```\n\n\
+                                                 Answer these questions:\n\
+                                                 1. What change was made? (1 sentence)\n\
+                                                 2. Why was it likely made? (reason/motivation)\n\
+                                                 3. What could break? (risk assessment)\n\
+                                                 4. Who was the likely audience for this change? (self/team/users)"
+                                            );
+                                            let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                            ui.chat_lines.push(ChatLine::User(format!("/explain-commit {ref_str}"), ts));
+                                            ui.msg_times_secs.push(ts);
+                                            ui.status_running = true;
+                                            ui.waiting_since = Some(std::time::Instant::now());
+                                            ui.follow_tail = true;
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                        }
+                                        _ => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot show commit: {ref_str}\n  Try: /explain-commit HEAD~1  or  /explain-commit <sha>")));
+                                            ui.follow_tail = true;
+                                        }
+                                    }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/code-smell ") || cmd == "/code-smell" => {
+                                    // AI detects anti-patterns / code smells in a file
+                                    let file_arg = cmd.trim_start_matches("/code-smell").trim();
+                                    let content = if file_arg.is_empty() {
+                                        ui.chat_lines.iter().rev().find_map(|cl| {
+                                            if let ChatLine::Assistant(m, _, _) = cl { Some(m.clone()) } else { None }
+                                        }).unwrap_or_default()
+                                    } else {
+                                        let fpath = if file_arg.starts_with('/') { std::path::PathBuf::from(file_arg) }
+                                                   else { std::env::current_dir().unwrap_or_default().join(file_arg) };
+                                        match std::fs::read_to_string(&fpath) {
+                                            Ok(c) => c,
+                                            Err(e) => {
+                                                ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {file_arg}: {e}")));
+                                                ui.follow_tail = true;
+                                                continue;
+                                            }
+                                        }
+                                    };
+                                    if content.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("No content. Specify a file or send code first.".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let source_label = if file_arg.is_empty() { "last AI response" } else { file_arg };
+                                    let ext = if file_arg.is_empty() { "" } else { std::path::Path::new(file_arg).extension().and_then(|e| e.to_str()).unwrap_or("") };
+                                    let lang_hint = match ext { "rs" => "Rust", "py" => "Python", "js"|"mjs" => "JavaScript", "ts" => "TypeScript", "go" => "Go", "java" => "Java", _ => "any language" };
+                                    let prompt = format!(
+                                        "Detect code smells and anti-patterns in this {lang_hint} code:\n\n{source_label}\n```\n{}\n```\n\n\
+                                         Identify each smell with:\n\
+                                         - **Smell name** (e.g. 'Long Method', 'God Class', 'Primitive Obsession')\n\
+                                         - **Location**: line reference\n\
+                                         - **Why it matters**: what problems it causes\n\
+                                         - **Refactoring**: concrete rename/extract/move action\n\n\
+                                         Prioritize by impact: CRITICAL → HIGH → MEDIUM → LOW\n\
+                                         Limit to 10 most impactful findings.",
+                                        &content[..content.len().min(3000)]
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/code-smell {source_label}"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -10199,7 +10369,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/bench", "/bench ", "/blame ", "/changelog", "/changelog ", "/code-review ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/debug-ai ", "/deps-graph", "/deps-graph ", "/doc-gen ", "/explain-error", "/explain-error ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/grep-code ", "/heatmap", "/heatmap ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/pr-review", "/pr-review ", "/profile ", "/recent", "/recent ", "/refactor ", "/rename ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/status", "/test", "/test ", "/todo-ai ", "/translate-code ", "/undo-last", "/undo-exchange", "/vulnscan", "/vulnscan ", "/watch ",
+                            "/ai-commit", "/ai-commit ", "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/bench", "/bench ", "/blame ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/debug-ai ", "/deps-graph", "/deps-graph ", "/doc-gen ", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/grep-code ", "/heatmap", "/heatmap ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/pr-review", "/pr-review ", "/profile ", "/recent", "/recent ", "/refactor ", "/rename ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/status", "/test", "/test ", "/todo-ai ", "/translate-code ", "/undo-last", "/undo-exchange", "/vulnscan", "/vulnscan ", "/watch ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
