@@ -5290,7 +5290,13 @@ AI review suite\n\
   /git-log-file <path>    commit history for a specific file (git log --follow)\n\
   /ai-pr [base]           AI writes PR description from diff vs base (default main)\n\
   /changelog-ai [range]   AI groups commits into Features/Fixes/Security changelog\n\
-  /ai-code-review <file>  senior-level code review: critical/style/tests/positives"),
+  /ai-code-review <file>  senior-level code review: critical/style/tests/positives\n\
+AI workflow\n\
+  /ai-test-gen <file>     AI generates unit tests (framework auto-detected by ext)\n\
+  /ai-refactor <f> [inst] AI refactors code preserving behavior (default: clean up)\n\
+  /ai-doc-gen <file>      AI adds docstrings/comments in language-appropriate style\n\
+  /ai-improve-commit      AI rewrites last/staged commit message to best practices\n\
+  /ai-translate <f> <lng> AI translates source file to another programming language"),
                                         ("keys", &["keys", "keyboard", "shortcuts", "bindings"], "\
 Input shortcuts\n\
   ↑ ↓  / Ctrl+R           history recall / reverse-i-search\n\
@@ -5412,6 +5418,7 @@ Input shortcuts\n\
     ◈ /pwd /git-show /ai-bugs /codebase-summary /run-test        B111 tools\n\
     ◈ /git-conflicts /net-stat /ai-optimize /perf-diff /bundle-size  B112\n\
     ◈ /ai-security /git-log-file /ai-pr /changelog-ai /ai-code-review  B113\n\
+    ◈ /ai-test-gen /ai-refactor /ai-doc-gen /ai-improve-commit /ai-translate  B114\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -14274,6 +14281,181 @@ CTF Toolkit — Aether AI-assisted\n\
                                     }
                                     continue;
                                 }
+                                // /ai-test-gen <file> — AI generates unit tests for a source file
+                                cmd if cmd.starts_with("/ai-test-gen ") || cmd == "/ai-test-gen" => {
+                                    let file_arg = cmd.trim_start_matches("/ai-test-gen").trim();
+                                    if file_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /ai-test-gen <file>\n  AI generates unit tests for the file.".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    match std::fs::read_to_string(file_arg) {
+                                        Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("ai-test-gen: cannot read '{}': {}", file_arg, e))); ui.follow_tail = true; continue; }
+                                        Ok(content) => {
+                                            let snippet: String = content.lines().take(200).collect::<Vec<_>>().join("\n");
+                                            let ext = std::path::Path::new(file_arg).extension().and_then(|e| e.to_str()).unwrap_or("");
+                                            let framework = match ext {
+                                                "rs"  => "Rust (use #[cfg(test)] mod tests with #[test] + assert_eq!/assert!/should_panic)",
+                                                "py"  => "pytest (use pytest fixtures, parametrize, assert statements)",
+                                                "js" | "ts" | "jsx" | "tsx" => "Jest/Vitest (describe/it/expect blocks with mock factories)",
+                                                "go"  => "Go testing package (func TestXxx(t *testing.T), table-driven tests)",
+                                                "rb"  => "RSpec (describe/it/expect(x).to eq blocks)",
+                                                _     => "appropriate testing framework for this language",
+                                            };
+                                            let prompt = format!(
+                                                "Generate comprehensive unit tests for this {} file using {}.\n\nRequirements:\n- Cover all public functions/methods\n- Include happy path, edge cases, and error cases\n- Use descriptive test names that explain what is being tested\n- Mock external dependencies\n- Aim for >80% branch coverage\n- Include setup/teardown as needed\n\nOutput ONLY the test code, ready to run.\n\nFile: {}\n```{}\n{}\n```",
+                                                ext, framework, file_arg, ext, snippet
+                                            );
+                                            let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                            ui.chat_lines.push(ChatLine::User(prompt.clone(), ts));
+                                            ui.follow_tail = true;
+                                            ui.status_running = true;
+                                            ui.waiting_since = Some(std::time::Instant::now());
+                                            ui.msg_times_secs.push(ts);
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                        }
+                                    }
+                                    continue;
+                                }
+                                // /ai-refactor <file> [instruction] — AI refactors code
+                                cmd if cmd.starts_with("/ai-refactor ") || cmd == "/ai-refactor" => {
+                                    let arg = cmd.trim_start_matches("/ai-refactor").trim();
+                                    if arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /ai-refactor <file> [instruction]\n  Example: /ai-refactor main.rs extract helper functions".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let (file_arg, instruction) = if let Some(sp) = arg.find(' ') {
+                                        (&arg[..sp], arg[sp + 1..].trim())
+                                    } else { (arg, "") };
+                                    match std::fs::read_to_string(file_arg) {
+                                        Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("ai-refactor: cannot read '{}': {}", file_arg, e))); ui.follow_tail = true; continue; }
+                                        Ok(content) => {
+                                            let snippet: String = content.lines().take(250).collect::<Vec<_>>().join("\n");
+                                            let ext = std::path::Path::new(file_arg).extension().and_then(|e| e.to_str()).unwrap_or("");
+                                            let instr = if instruction.is_empty() {
+                                                "Improve readability, reduce duplication, improve naming, extract helper functions, simplify complex logic".to_string()
+                                            } else { instruction.to_string() };
+                                            let prompt = format!(
+                                                "Refactor this {} code. Instruction: {}\n\nRules:\n1. Preserve all existing functionality and behavior\n2. Keep the same public API\n3. Show the full refactored file, not just snippets\n4. Add a brief comment at the top explaining what was changed\n5. Do not change tests\n\nFile: {}\n```{}\n{}\n```",
+                                                ext, instr, file_arg, ext, snippet
+                                            );
+                                            let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                            ui.chat_lines.push(ChatLine::User(prompt.clone(), ts));
+                                            ui.follow_tail = true;
+                                            ui.status_running = true;
+                                            ui.waiting_since = Some(std::time::Instant::now());
+                                            ui.msg_times_secs.push(ts);
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                        }
+                                    }
+                                    continue;
+                                }
+                                // /ai-doc-gen <file> — AI generates documentation/docstrings
+                                cmd if cmd.starts_with("/ai-doc-gen ") || cmd == "/ai-doc-gen" => {
+                                    let file_arg = cmd.trim_start_matches("/ai-doc-gen").trim();
+                                    if file_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /ai-doc-gen <file>\n  AI adds inline documentation to the file.".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    match std::fs::read_to_string(file_arg) {
+                                        Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("ai-doc-gen: cannot read '{}': {}", file_arg, e))); ui.follow_tail = true; continue; }
+                                        Ok(content) => {
+                                            let snippet: String = content.lines().take(200).collect::<Vec<_>>().join("\n");
+                                            let ext = std::path::Path::new(file_arg).extension().and_then(|e| e.to_str()).unwrap_or("");
+                                            let doc_style = match ext {
+                                                "rs"  => "Rust doc comments (///) with # Examples, # Errors, # Panics sections",
+                                                "py"  => "Google-style docstrings (Args/Returns/Raises/Example sections)",
+                                                "js" | "ts" => "JSDoc (@param, @returns, @throws, @example)",
+                                                "go"  => "Go doc comments (func Name does... format)",
+                                                "rb"  => "YARD documentation (@param, @return, @raise)",
+                                                "java" | "kt" => "Javadoc (@param, @return, @throws)",
+                                                _ => "appropriate doc comment style for this language",
+                                            };
+                                            let prompt = format!(
+                                                "Add documentation to this {} code using {}.\n\nRules:\n- Document ALL public functions, structs, types, and constants\n- Include parameter types, return values, and error conditions\n- Add usage examples for complex functions\n- Output the complete file with documentation added\n- Do NOT change any implementation code\n\nFile: {}\n```{}\n{}\n```",
+                                                ext, doc_style, file_arg, ext, snippet
+                                            );
+                                            let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                            ui.chat_lines.push(ChatLine::User(prompt.clone(), ts));
+                                            ui.follow_tail = true;
+                                            ui.status_running = true;
+                                            ui.waiting_since = Some(std::time::Instant::now());
+                                            ui.msg_times_secs.push(ts);
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                        }
+                                    }
+                                    continue;
+                                }
+                                // /ai-improve-commit — AI improves the pending/last commit message
+                                cmd if cmd == "/ai-improve-commit" || cmd.starts_with("/ai-improve-commit ") => {
+                                    // Get staged files for context
+                                    let staged = std::process::Command::new("git")
+                                        .args(["diff", "--cached", "--stat"])
+                                        .output()
+                                        .ok()
+                                        .filter(|o| o.status.success())
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                                        .unwrap_or_default();
+                                    let last_msg = std::process::Command::new("git")
+                                        .args(["log", "-1", "--format=%B"])
+                                        .output()
+                                        .ok()
+                                        .filter(|o| o.status.success())
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                                        .unwrap_or_default();
+                                    let context = if !staged.is_empty() {
+                                        format!("Staged changes:\n{}", staged)
+                                    } else if !last_msg.is_empty() {
+                                        format!("Last commit message:\n{}", last_msg)
+                                    } else {
+                                        "(no staged changes or commits found)".to_string()
+                                    };
+                                    let prompt = format!(
+                                        "Improve this git commit message to follow best practices:\n1. First line: imperative verb, ≤50 chars, no period\n2. Blank line separator\n3. Body: explain WHY not what, wrap at 72 chars\n4. Use conventional commit prefix if applicable (feat/fix/docs/refactor/perf/test/chore)\n\nContext:\n{}\n\nOutput ONLY the improved commit message, no explanation.",
+                                        context
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts));
+                                    ui.follow_tail = true;
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.msg_times_secs.push(ts);
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                // /ai-translate <file> <target-lang> — AI translates code to another language
+                                cmd if cmd.starts_with("/ai-translate ") || cmd == "/ai-translate" => {
+                                    let arg = cmd.trim_start_matches("/ai-translate").trim();
+                                    if arg.is_empty() || !arg.contains(' ') {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /ai-translate <file> <language>\n  Example: /ai-translate script.py typescript\n  Translates code to the target language.".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let sp = arg.rfind(' ').unwrap();
+                                    let file_arg = arg[..sp].trim();
+                                    let target_lang = arg[sp + 1..].trim();
+                                    match std::fs::read_to_string(file_arg) {
+                                        Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("ai-translate: cannot read '{}': {}", file_arg, e))); ui.follow_tail = true; continue; }
+                                        Ok(content) => {
+                                            let snippet: String = content.lines().take(200).collect::<Vec<_>>().join("\n");
+                                            let src_ext = std::path::Path::new(file_arg).extension().and_then(|e| e.to_str()).unwrap_or("unknown");
+                                            let prompt = format!(
+                                                "Translate this {} code to {}.\n\nRules:\n1. Preserve all functionality exactly\n2. Use idiomatic {} patterns (not a literal translation)\n3. Use the target language's standard library equivalents\n4. Add brief comments where the translation requires non-obvious choices\n5. Output ONLY the translated code, ready to run\n\nSource file: {}\n```{}\n{}\n```",
+                                                src_ext, target_lang, target_lang, file_arg, src_ext, snippet
+                                            );
+                                            let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                            ui.chat_lines.push(ChatLine::User(prompt.clone(), ts));
+                                            ui.follow_tail = true;
+                                            ui.status_running = true;
+                                            ui.waiting_since = Some(std::time::Instant::now());
+                                            ui.msg_times_secs.push(ts);
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                        }
+                                    }
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -14912,7 +15094,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/cve ", "/dotenv", "/dotenv ", "/calc ", "/chars", "/chars ", "/ai-arch", "/ai-arch ", "/ai-explain ", "/cheat ", "/color ", "/duck ", "/env-diff ", "/env-vars", "/env-vars ", "/flashcard ", "/format-sql ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/gh-search ", "/http-codes", "/http-codes ", "/impl ", "/json-schema ", "/man-ai ", "/mkscript ", "/open ", "/path", "/ai-bugs ", "/ai-code-review ", "/ai-optimize ", "/ai-pr", "/ai-pr ", "/ai-security ", "/bundle-size", "/bundle-size ", "/changelog-ai", "/changelog-ai ", "/codebase-summary", "/git-cherry", "/git-cherry ", "/git-conflicts", "/git-log-file ", "/git-remote", "/git-remote ", "/git-show ", "/net-stat", "/perf-diff ", "/pwd", "/regex-test ", "/run-test ", "/ssh-key", "/ssh-key ", "/tail ", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/semver ", "/session-summary", "/spell ", "/teach ", "/time", "/time ", "/which-all ", "/wiki ", "/workflow", "/workflow ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
+                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/cve ", "/dotenv", "/dotenv ", "/calc ", "/chars", "/chars ", "/ai-arch", "/ai-arch ", "/ai-explain ", "/cheat ", "/color ", "/duck ", "/env-diff ", "/env-vars", "/env-vars ", "/flashcard ", "/format-sql ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/gh-search ", "/http-codes", "/http-codes ", "/impl ", "/json-schema ", "/man-ai ", "/mkscript ", "/open ", "/path", "/ai-bugs ", "/ai-code-review ", "/ai-doc-gen ", "/ai-improve-commit", "/ai-optimize ", "/ai-pr", "/ai-pr ", "/ai-refactor ", "/ai-security ", "/ai-test-gen ", "/ai-translate ", "/bundle-size", "/bundle-size ", "/changelog-ai", "/changelog-ai ", "/codebase-summary", "/git-cherry", "/git-cherry ", "/git-conflicts", "/git-log-file ", "/git-remote", "/git-remote ", "/git-show ", "/net-stat", "/perf-diff ", "/pwd", "/regex-test ", "/run-test ", "/ssh-key", "/ssh-key ", "/tail ", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/semver ", "/session-summary", "/spell ", "/teach ", "/time", "/time ", "/which-all ", "/wiki ", "/workflow", "/workflow ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
