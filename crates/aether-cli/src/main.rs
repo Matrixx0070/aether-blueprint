@@ -5190,6 +5190,23 @@ Tools & notes\n\
   /bookmark <name>        mark scroll position  (/bm)\n\
   /bookmarks [N]          list or jump-to bookmark N\n\
   /go <name>              jump to named bookmark"),
+                                        ("power", &["power", "dev", "code-tools", "scan", "security", "sec"], "\
+Power & security tools\n\
+  /scan [file]            SAST: pattern-based vuln scan (10 categories)\n\
+  /secrets [file|dir]     credential scan: 14 regex patterns, CRITICAL/HIGH/MEDIUM\n\
+  /deps [tool]            dep vulnerability audit (cargo/npm/pip/osv)\n\
+  /sbom                   software bill of materials from lock files\n\
+  /owasp [A01..A10]       OWASP Top 10 checklist + AI deep-dive\n\
+  /blame <file> [L1:L2]   git blame with author + date attribution\n\
+  /grep-code <pattern>    regex search across all source files in cwd\n\
+  /flow <file>            static call-flow outline (functions + callees)\n\
+  /profile <cmd>          time command + CPU/memory stats\n\
+  /ctf-tools              CTF toolkit guide (recon/web/pwn/crypto/forensics/rev)\n\
+  /run <file>             execute code file (py/js/sh/rb/lua/r/ts…)\n\
+  /shell <cmd>            run shell command, paste output\n\
+  /tree [dir] [depth]     directory tree (hidden + target excluded)\n\
+  /template <name>        expand workflow template (23 types)\n\
+  /diff git               show git diff as code block"),
                                         ("keys", &["keys", "keyboard", "shortcuts", "bindings"], "\
 Input shortcuts\n\
   ↑ ↓  / Ctrl+R           history recall / reverse-i-search\n\
@@ -5225,7 +5242,7 @@ Input shortcuts\n\
                                             all.push_str(text);
                                             all.push_str("\n\n");
                                         }
-                                        all.push_str("  /help <topic>  for focused help: chat view compose files code info tools keys");
+                                        all.push_str("  /help <topic>  for focused help: chat view compose files code info tools power keys");
                                         all
                                     } else {
                                         let found = sections.iter().find(|(_, aliases, _)| {
@@ -5234,7 +5251,7 @@ Input shortcuts\n\
                                         if let Some((_, _, text)) = found {
                                             format!("── help: {topic} ──\n\n{text}")
                                         } else {
-                                            format!("Unknown topic: '{topic}'\nTopics: chat  view  compose  files  code  info  tools  keys")
+                                            format!("Unknown topic: '{topic}'\nTopics: chat  view  compose  files  code  info  tools  power  keys")
                                         }
                                     };
                                     ui.chat_lines.push(ChatLine::SystemNote(body));
@@ -6978,6 +6995,348 @@ Input shortcuts\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // ── BATCH 79: CODE INTELLIGENCE + CTF TOOLS ──────────────────────
+                                cmd if cmd.starts_with("/blame ") || cmd == "/blame" => {
+                                    let arg = cmd.trim_start_matches("/blame").trim();
+                                    if arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /blame <file> [L1:L2]  — git blame with author attribution\n  e.g. /blame src/main.rs 10:30".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let mut parts = arg.splitn(2, char::is_whitespace);
+                                    let file_part = parts.next().unwrap_or("");
+                                    let range_part = parts.next().unwrap_or("").trim();
+                                    let fpath = if file_part.starts_with('/') {
+                                        std::path::PathBuf::from(file_part)
+                                    } else {
+                                        std::env::current_dir().unwrap_or_default().join(file_part)
+                                    };
+                                    let mut git_args: Vec<String> = vec!["blame".into(), "--date=short".into()];
+                                    if !range_part.is_empty() {
+                                        let normalized = range_part.replace(':', ",");
+                                        git_args.push(format!("-L{}", normalized));
+                                    }
+                                    git_args.push("--".into());
+                                    git_args.push(fpath.to_string_lossy().to_string());
+                                    match std::process::Command::new("git")
+                                        .args(&git_args)
+                                        .current_dir(std::env::current_dir().unwrap_or_default())
+                                        .output()
+                                    {
+                                        Ok(out) => {
+                                            let stdout = String::from_utf8_lossy(&out.stdout);
+                                            let stderr = String::from_utf8_lossy(&out.stderr);
+                                            if !out.status.success() || stdout.trim().is_empty() {
+                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                    format!("git blame failed: {}", stderr.trim())
+                                                ));
+                                            } else {
+                                                let lines: Vec<&str> = stdout.trim_end().lines().collect();
+                                                let shown = lines.len().min(80);
+                                                let mut msg = format!("git blame {}{}  ({} lines)\n```\n",
+                                                    file_part,
+                                                    if range_part.is_empty() { String::new() } else { format!(" L{range_part}") },
+                                                    lines.len()
+                                                );
+                                                msg.push_str(&lines[..shown].join("\n"));
+                                                if lines.len() > shown {
+                                                    msg.push_str(&format!("\n… ({} more lines)", lines.len() - shown));
+                                                }
+                                                msg.push_str("\n```");
+                                                ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                            }
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("git not found: {e}")));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/grep-code ") || cmd == "/grep-code" => {
+                                    use walkdir::WalkDir;
+                                    use regex::Regex;
+                                    let pattern_raw = cmd.trim_start_matches("/grep-code").trim();
+                                    if pattern_raw.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /grep-code <pattern>  — regex search across all source files\n  e.g. /grep-code fn parse_\n       /grep-code TODO.*security".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let rx = match Regex::new(pattern_raw) {
+                                        Ok(r) => r,
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("Invalid regex: {e}")));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                    };
+                                    let cwd = std::env::current_dir().unwrap_or_default();
+                                    let skip_dirs = ["target", "node_modules", ".git", "dist", "build", "__pycache__"];
+                                    let code_exts = ["rs","py","js","ts","tsx","jsx","go","java","c","cpp","h","rb","sh","bash","php","lua","sql","toml","json","yaml","yml","md","html","css","xml"];
+                                    let mut matches: Vec<(String, usize, String)> = Vec::new(); // (file, line, content)
+                                    let mut files_checked = 0usize;
+                                    'walk: for entry in WalkDir::new(&cwd).into_iter()
+                                        .filter_entry(|e| {
+                                            let name = e.file_name().to_string_lossy();
+                                            !name.starts_with('.') && !skip_dirs.contains(&name.as_ref())
+                                        })
+                                        .filter_map(|e| e.ok())
+                                        .filter(|e| e.file_type().is_file())
+                                    {
+                                        let ext = entry.path().extension().and_then(|x| x.to_str()).unwrap_or("");
+                                        if !code_exts.contains(&ext) { continue; }
+                                        files_checked += 1;
+                                        let Ok(content) = std::fs::read_to_string(entry.path()) else { continue };
+                                        let rel = entry.path().strip_prefix(&cwd).unwrap_or(entry.path());
+                                        for (lnum, line) in content.lines().enumerate() {
+                                            if rx.is_match(line) {
+                                                matches.push((rel.to_string_lossy().to_string(), lnum + 1, line.trim().to_string()));
+                                                if matches.len() >= 100 { break 'walk; }
+                                            }
+                                        }
+                                    }
+                                    if matches.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("grep-code `{pattern_raw}`  — no matches in {files_checked} files")
+                                        ));
+                                    } else {
+                                        let total = matches.len();
+                                        let shown = total.min(50);
+                                        let mut msg = format!("grep-code `{pattern_raw}`  — {total} match{} in {files_checked} files{}\n```\n",
+                                            if total == 1 { "" } else { "es" },
+                                            if total >= 100 { " (capped at 100)" } else { "" }
+                                        );
+                                        let mut cur_file = String::new();
+                                        for (file, line, content) in &matches[..shown] {
+                                            if file != &cur_file {
+                                                if !cur_file.is_empty() { msg.push('\n'); }
+                                                msg.push_str(&format!("── {file}\n"));
+                                                cur_file = file.clone();
+                                            }
+                                            msg.push_str(&format!("  {line:<5} {content}\n"));
+                                        }
+                                        if total > shown {
+                                            msg.push_str(&format!("\n… ({} more matches)", total - shown));
+                                        }
+                                        msg.push_str("\n```");
+                                        ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/ctf-tools" | "/ctf" => {
+                                    let toolkit = "\
+CTF Toolkit — Aether AI-assisted\n\
+\n\
+  RECON / ENUM\n\
+    nmap -sV -sC -p- <target>     full port+service scan\n\
+    gobuster dir -u <url> -w ...  web directory fuzzing\n\
+    ffuf -w wordlist -u URL/FUZZ  web fuzzer (faster)\n\
+    whatweb / wappalyzer           tech fingerprint\n\
+    theHarvester -d domain -b all  OSINT harvest\n\
+\n\
+  WEB EXPLOITATION\n\
+    sqlmap -u URL --dbs            auto SQL injection\n\
+    nikto -h URL                   web vuln scanner\n\
+    burpsuite / OWASP ZAP          intercepting proxy\n\
+    jwt_tool <token>               JWT analysis+attacks\n\
+    ./XSStrike --url URL           XSS automation\n\
+\n\
+  BINARY / PWN\n\
+    gdb-peda / pwndbg / gef        exploit debuggers\n\
+    pwntools (python)              binary exploit framework\n\
+    checksec ./binary              binary protections\n\
+    ROPgadget --binary ./bin       ROP chain building\n\
+    angr (python)                  symbolic execution\n\
+\n\
+  CRYPTO\n\
+    openssl / python cryptography  standard library\n\
+    rsactftool                     RSA parameter attacks\n\
+    quipqiup.com                   substitution solver\n\
+    dcode.fr                       cipher identifier\n\
+    hashcat / john                 password cracking\n\
+\n\
+  FORENSICS\n\
+    strings / binwalk / foremost   extract embedded files\n\
+    volatility3                    memory forensics\n\
+    wireshark / tshark             pcap analysis\n\
+    steghide / zsteg / stegsolve   steganography tools\n\
+    exiftool                       metadata extraction\n\
+\n\
+  REVERSING\n\
+    ghidra / ida free / binja      disassembly + decompile\n\
+    radare2 / rizin                CLI reversing\n\
+    ltrace / strace                library/syscall trace\n\
+    objdump -d / nm                symbol analysis\n\
+    dnspy (C# .NET)                managed code reversing\n\
+\n\
+  AI WORKFLOW\n\
+    /template ctf       — Aether CTF solve workflow\n\
+    /template reversing — binary reversing prompts\n\
+    /template crypto    — cryptanalysis deep-dive\n\
+    /scan <file>        — quick SAST findings\n\
+    /secrets <file>     — embedded credential scan";
+                                    ui.chat_lines.push(ChatLine::SystemNote(toolkit.to_string()));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/flow ") || cmd == "/flow" => {
+                                    let file_arg = cmd.trim_start_matches("/flow").trim();
+                                    if file_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /flow <file>  — static call-flow outline (functions + what they call)\n  e.g. /flow src/main.rs\n       /flow app.py".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let fpath = if file_arg.starts_with('/') {
+                                        std::path::PathBuf::from(file_arg)
+                                    } else {
+                                        std::env::current_dir().unwrap_or_default().join(file_arg)
+                                    };
+                                    let content = match std::fs::read_to_string(&fpath) {
+                                        Ok(c) => c,
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {file_arg}: {e}")));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                    };
+                                    use regex::Regex;
+                                    let ext = fpath.extension().and_then(|e| e.to_str()).unwrap_or("");
+                                    // Language-aware function definition patterns
+                                    let fn_def_rx = match ext {
+                                        "rs" => Regex::new(r"(?m)^\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*[(<]").ok(),
+                                        "py" => Regex::new(r"(?m)^\s*(?:async\s+)?def\s+(\w+)\s*\(").ok(),
+                                        "js"|"ts"|"jsx"|"tsx"|"mjs" => Regex::new(r"(?m)(?:function\s+(\w+)|const\s+(\w+)\s*=\s*(?:async\s+)?\(|(\w+)\s*:\s*(?:async\s+)?function)").ok(),
+                                        "go" => Regex::new(r"(?m)^func\s+(?:\([^)]+\)\s+)?(\w+)\s*\(").ok(),
+                                        "java"|"kt" => Regex::new(r"(?m)(?:public|private|protected|static|\s)+[\w<>\[\]]+\s+(\w+)\s*\(").ok(),
+                                        "c"|"cpp"|"cc"|"h" => Regex::new(r"(?m)^[\w\s\*]+\s+(\w+)\s*\([^;]").ok(),
+                                        "rb" => Regex::new(r"(?m)^\s*def\s+(\w+)").ok(),
+                                        _ => None,
+                                    };
+                                    // Generic call pattern (fn_name followed by '(')
+                                    let call_rx = Regex::new(r"\b(\w{3,})\s*\(").unwrap();
+                                    let keywords: std::collections::HashSet<&str> = ["if","for","while","match","return","let","const","var","fn","def","function","class","struct","enum","impl","pub","use","import","print","println","format","vec","vec!","assert","panic","todo","unreachable","Some","None","Ok","Err","true","false"].into_iter().collect();
+                                    let lines: Vec<&str> = content.lines().collect();
+                                    let total_lines = lines.len();
+                                    let mut msg = format!("flow  {file_arg}  ({total_lines} lines)\n");
+                                    let mut fn_count = 0usize;
+                                    if let Some(def_rx) = fn_def_rx {
+                                        // Collect all function start positions
+                                        let mut fn_starts: Vec<(usize, String)> = Vec::new();
+                                        for (i, line) in lines.iter().enumerate() {
+                                            if let Some(cap) = def_rx.captures(line) {
+                                                let name = (1..cap.len()).find_map(|j| cap.get(j)).map(|m| m.as_str().to_string()).unwrap_or_default();
+                                                if !name.is_empty() {
+                                                    fn_starts.push((i, name));
+                                                }
+                                            }
+                                        }
+                                        fn_count = fn_starts.len();
+                                        // For each function, scan next 60 lines for calls
+                                        for (fi, (start, fn_name)) in fn_starts.iter().enumerate() {
+                                            let end = fn_starts.get(fi + 1).map(|(e, _)| *e).unwrap_or(total_lines).min(start + 60);
+                                            let body = lines[*start..end].join("\n");
+                                            let mut calls: Vec<String> = Vec::new();
+                                            let mut seen = std::collections::HashSet::new();
+                                            for cap in call_rx.captures_iter(&body) {
+                                                let callee = cap[1].to_string();
+                                                if !keywords.contains(callee.as_str()) && callee != *fn_name && seen.insert(callee.clone()) {
+                                                    calls.push(callee);
+                                                    if calls.len() >= 8 { break; }
+                                                }
+                                            }
+                                            if calls.is_empty() {
+                                                msg.push_str(&format!("  ├─ {}()\n", fn_name));
+                                            } else {
+                                                msg.push_str(&format!("  ├─ {}()  →  {}\n", fn_name, calls.join(", ")));
+                                            }
+                                            if fn_count > 30 && fi >= 29 {
+                                                msg.push_str(&format!("  └─ … ({} more functions)\n", fn_count - 30));
+                                                break;
+                                            }
+                                        }
+                                    } else {
+                                        msg.push_str("  (language not recognised — try .rs .py .js .ts .go .java .c .rb)\n");
+                                    }
+                                    msg.push_str(&format!("\n  {} function{} detected  •  /grep-code <fn_name> to find callers",
+                                        fn_count, if fn_count == 1 { "" } else { "s" }));
+                                    ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/profile ") || cmd == "/profile" => {
+                                    let shell_cmd = cmd.trim_start_matches("/profile").trim();
+                                    if shell_cmd.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /profile <command>  — time a command + show CPU/memory stats\n  e.g. /profile cargo build\n       /profile python3 script.py".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    // Use /usr/bin/time -v for detailed stats if available, else shell built-in time
+                                    let has_gnu_time = std::path::Path::new("/usr/bin/time").exists();
+                                    let start_wall = std::time::Instant::now();
+                                    let result = if has_gnu_time {
+                                        std::process::Command::new("/usr/bin/time")
+                                            .args(["-v", "sh", "-c", shell_cmd])
+                                            .output()
+                                    } else {
+                                        std::process::Command::new("sh")
+                                            .args(["-c", &format!("{{ time sh -c '{}'; }} 2>&1", shell_cmd.replace('\'', "'\"'\"'"))])
+                                            .output()
+                                    };
+                                    let elapsed = start_wall.elapsed();
+                                    match result {
+                                        Ok(out) => {
+                                            let stdout = String::from_utf8_lossy(&out.stdout);
+                                            let stderr = String::from_utf8_lossy(&out.stderr);
+                                            let exit = out.status.code().unwrap_or(-1);
+                                            let status_badge = if out.status.success() { "✓" } else { "✗" };
+                                            let mut msg = format!("profile: {shell_cmd}  [{status_badge} exit {exit}]\n  wall time: {:.3}s\n", elapsed.as_secs_f64());
+                                            // Extract key stats from GNU time -v stderr
+                                            if has_gnu_time && !stderr.trim().is_empty() {
+                                                for line in stderr.lines() {
+                                                    let trimmed = line.trim();
+                                                    if trimmed.contains("Maximum resident") ||
+                                                       trimmed.contains("Elapsed (wall clock)") ||
+                                                       trimmed.contains("User time") ||
+                                                       trimmed.contains("System time") ||
+                                                       trimmed.contains("Percent of CPU") ||
+                                                       trimmed.contains("Major (requiring") ||
+                                                       trimmed.contains("Minor (reclaiming") {
+                                                        msg.push_str(&format!("  {trimmed}\n"));
+                                                    }
+                                                }
+                                            }
+                                            // Show up to 30 lines of program output
+                                            let prog_out = if !stdout.trim().is_empty() { stdout.trim_end().to_string() }
+                                                           else if !has_gnu_time { stderr.lines().filter(|l| !l.starts_with('\t') && !l.contains("Elapsed") && !l.contains("Maximum") && !l.contains("User time")).collect::<Vec<_>>().join("\n") }
+                                                           else { String::new() };
+                                            if !prog_out.trim().is_empty() {
+                                                let p_lines: Vec<&str> = prog_out.trim_end().lines().collect();
+                                                let shown = p_lines.len().min(30);
+                                                msg.push_str("\n```\n");
+                                                msg.push_str(&p_lines[..shown].join("\n"));
+                                                if p_lines.len() > shown {
+                                                    msg.push_str(&format!("\n… ({} more lines)", p_lines.len() - shown));
+                                                }
+                                                msg.push_str("\n```");
+                                            }
+                                            ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("profile failed: {e}")));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 "/summary" | "/sum" => {
                                     // Ask AI to summarize the conversation so far
@@ -7804,6 +8163,7 @@ Input shortcuts\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
+                            "/blame ", "/ctf", "/ctf-tools", "/flow ", "/grep-code ", "/profile ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
