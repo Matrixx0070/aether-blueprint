@@ -192,6 +192,16 @@ pub enum UiCommand {
     LoadSession(String),
     /// Show detailed token cost breakdown for this session.
     QueryCostEstimate,
+    /// Add a standing instruction reminder (re-injected every turn).
+    AddPersistentReminder(String),
+    /// Clear all standing instructions.
+    ClearPersistentReminders,
+    /// List all standing instructions.
+    QueryPersistentReminders,
+    /// Pop the last user+assistant turn pair from history (undo).
+    UndoLastTurn,
+    /// Search conversation history for messages containing the given substring.
+    FindInHistory(String),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

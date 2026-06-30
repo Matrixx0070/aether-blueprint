@@ -137,6 +137,12 @@ pub struct Session {
     /// Maximum autonomous turns before the agent pauses and awaits user input.
     /// 0 = unlimited (default). Set via `/max-turns N` at runtime.
     pub max_turns: usize,
+
+    /// Standing instructions that re-inject themselves as reminders at the
+    /// start of every turn. Set via `/remind <text>`, cleared via `/remind clear`.
+    /// Injected after the stuck-tool check and before assembly so they always
+    /// appear in the system prompt alongside other kernel reminders.
+    pub persistent_reminders: Vec<String>,
 }
 
 impl Session {
@@ -174,6 +180,7 @@ impl Session {
             started_at,
             compaction_happened: false,
             max_turns: 0,
+            persistent_reminders: Vec::new(),
         }
     }
 
@@ -323,6 +330,17 @@ async fn agent_turn_inner(
     }
 
     let ctx = session.activation_context();
+
+    // Re-inject persistent (standing) reminders set by the user via
+    // `/remind`. These fire every turn and survive compaction — they're
+    // an always-on addition to the system prompt outside the context window.
+    for body in &session.persistent_reminders {
+        session.pending_reminders.push(Reminder::new(
+            ReminderKind::SystemWarning,
+            Source::Kernel,
+            format!("[Standing instruction] {body}"),
+        ));
+    }
 
     // ── perceive (assemble) — D1 + D6 fire here ──────────────────────
     // Deduplicate pending_reminders by body text before draining so

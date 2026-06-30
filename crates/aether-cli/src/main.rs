@@ -6012,6 +6012,87 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::AddPersistentReminder(text) => {
+                    session.persistent_reminders.push(text.clone());
+                    let n = session.persistent_reminders.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(
+                        format!("Standing instruction added ({n} total): {text}")));
+                    continue;
+                }
+                UiCommand::ClearPersistentReminders => {
+                    let n = session.persistent_reminders.len();
+                    session.persistent_reminders.clear();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(
+                        format!("Cleared {n} standing instruction(s).")));
+                    continue;
+                }
+                UiCommand::QueryPersistentReminders => {
+                    if session.persistent_reminders.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "No standing instructions set. Use /remind <text> to add one.".to_string()));
+                    } else {
+                        let mut lines = format!("=== Standing instructions ({}) ===\n",
+                            session.persistent_reminders.len());
+                        for (i, r) in session.persistent_reminders.iter().enumerate() {
+                            lines.push_str(&format!("  [{i}] {r}\n"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(lines));
+                    }
+                    continue;
+                }
+                UiCommand::UndoLastTurn => {
+                    use aether_core::context::ConversationItem;
+                    let before = session.history.len();
+                    // Pop ToolResults if present.
+                    if matches!(session.history.last(), Some(ConversationItem::ToolResults(_))) {
+                        session.history.pop();
+                    }
+                    // Pop the assistant turn.
+                    if matches!(session.history.last(), Some(ConversationItem::Assistant { .. })) {
+                        session.history.pop();
+                    }
+                    // Pop the user turn.
+                    if matches!(session.history.last(), Some(ConversationItem::User(_))) {
+                        session.history.pop();
+                    }
+                    let after = session.history.len();
+                    let dropped = before - after;
+                    let note = if dropped > 0 {
+                        format!("Undone: removed {dropped} history item(s). History now has {} items.", after)
+                    } else {
+                        "Nothing to undo.".to_string()
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::FindInHistory(query) => {
+                    use aether_core::context::ConversationItem;
+                    let q = query.to_ascii_lowercase();
+                    let mut results = Vec::new();
+                    for (i, item) in session.history.iter().enumerate() {
+                        let text = match item {
+                            ConversationItem::User(t) => Some(("USER", t.as_str())),
+                            ConversationItem::Assistant { text, .. } => {
+                                text.as_deref().map(|t| ("ASST", t))
+                            }
+                            ConversationItem::ToolResults(_) => None,
+                        };
+                        if let Some((role, t)) = text {
+                            if t.to_ascii_lowercase().contains(&q) {
+                                let preview: String = t.chars().take(120).collect();
+                                results.push(format!("[{i}] {role}: {preview}"));
+                            }
+                        }
+                    }
+                    let note = if results.is_empty() {
+                        format!("No history matches for \"{query}\".")
+                    } else {
+                        format!("=== {} match(es) for \"{query}\" ===\n{}",
+                            results.len(), results.join("\n"))
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::QuerySessionStats => {
                     use aether_core::compaction::context_window_for_model;
                     let now = std::time::SystemTime::now()
@@ -23073,6 +23154,39 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /remind [text|clear|list] — manage standing instructions
+                                cmd_str if cmd_str.starts_with("/remind ") || cmd_str == "/remind" => {
+                                    let arg = cmd_str.trim_start_matches("/remind").trim();
+                                    let cmd = if arg.is_empty() || arg == "list" {
+                                        UiCommand::QueryPersistentReminders
+                                    } else if arg == "clear" {
+                                        UiCommand::ClearPersistentReminders
+                                    } else {
+                                        UiCommand::AddPersistentReminder(arg.to_string())
+                                    };
+                                    if _ctx.send(cmd).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /undo — pop last user+assistant+toolresults from history
+                                "/undo" => {
+                                    if _ctx.send(UiCommand::UndoLastTurn).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /find [text] — search conversation history
+                                cmd_str if cmd_str.starts_with("/find ") => {
+                                    let query = cmd_str.trim_start_matches("/find").trim().to_string();
+                                    if _ctx.send(UiCommand::FindInHistory(query)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /load-session [path] — restore history from JSON file
                                 cmd_str if cmd_str.starts_with("/load-session ") => {
                                     let path = cmd_str.trim_start_matches("/load-session").trim().to_string();
@@ -23550,6 +23664,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/save-session", "/save-session ",
                             "/load-session ",
                             "/cost-estimate",
+                            "/remind", "/remind ",
+                            "/undo",
+                            "/find ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
