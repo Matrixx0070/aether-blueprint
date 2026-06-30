@@ -1731,6 +1731,14 @@ async fn run_repl(
             match handle_slash(stripped, &mut session, &custom_commands) {
                 SlashAction::Quit => break,
                 SlashAction::Continue => continue,
+                SlashAction::Compact => {
+                    match aether_core::compaction::maybe_compact(&mut session).await {
+                        Ok(true) => eprintln!("[compact] context compacted; history shortened"),
+                        Ok(false) => eprintln!("[compact] nothing to compact (below threshold or too few turns)"),
+                        Err(e) => eprintln!("[compact] error: {e}"),
+                    }
+                    continue;
+                }
                 SlashAction::SendAsUser(s) => s,
             }
         } else {
@@ -1791,9 +1799,25 @@ async fn run_repl(
             println!();
 
             // Persist + display whatever was just appended (last 1-2 items).
-            if let Some(item) = session.history.last() {
-                match item {
-                    ConversationItem::Assistant { text, tool_uses } => {
+            //
+            // Two cases:
+            //   A) ContinueImmediately (tools ran): history tail is
+            //        [... Assistant{tool_uses}, ToolResults]
+            //      Display tool invocations AND result previews; persist both.
+            //   B) AwaitUser (no tools, or final reply): history tail is
+            //        [... Assistant{text, tool_uses:[]}]
+            //      Persist text only (tool_uses empty on EndTurn stop reason).
+            {
+                let hlen = session.history.len();
+                let last_is_results = matches!(
+                    session.history.last(),
+                    Some(ConversationItem::ToolResults(_))
+                );
+                if last_is_results {
+                    // Persist the assistant text + display/persist each tool invocation.
+                    if let Some(ConversationItem::Assistant { text, tool_uses }) =
+                        hlen.checked_sub(2).and_then(|i| session.history.get(i))
+                    {
                         if let Some(t) = text {
                             append_session_line(&session_path, &SessionLine::assistant(t)).ok();
                         }
@@ -1803,18 +1827,42 @@ async fn run_repl(
                             append_session_line(&session_path, &SessionLine::tool_use(tu)).ok();
                         }
                     }
-                    ConversationItem::ToolResults(results) => {
+                    // Display result preview + persist.
+                    if let Some(ConversationItem::ToolResults(results)) = session.history.last() {
                         for r in results {
+                            let sym = if r.is_error { "✗" } else { "✓" };
+                            // Show first 2 non-empty lines, ≤160 chars total.
+                            let brief: String = {
+                                let mut out = String::new();
+                                for line in r.content.lines()
+                                    .map(|l| l.trim())
+                                    .filter(|l| !l.is_empty())
+                                    .take(2)
+                                {
+                                    if !out.is_empty() { out.push_str("  "); }
+                                    let remaining = 160usize.saturating_sub(out.len());
+                                    if remaining == 0 { break; }
+                                    out.push_str(&line.chars().take(remaining).collect::<String>());
+                                }
+                                out
+                            };
+                            if !brief.is_empty() {
+                                eprintln!("     {} {}", sym, brief);
+                            }
                             append_session_line(&session_path, &SessionLine::tool_result(r)).ok();
                         }
                     }
-                    _ => {}
-                }
-            }
-            // Tool results land as a second history item when present.
-            if let Some(ConversationItem::ToolResults(results)) = session.history.last() {
-                for r in results {
-                    append_session_line(&session_path, &SessionLine::tool_result(r)).ok();
+                } else if let Some(ConversationItem::Assistant { text, tool_uses }) =
+                    session.history.last()
+                {
+                    if let Some(t) = text {
+                        append_session_line(&session_path, &SessionLine::assistant(t)).ok();
+                    }
+                    for tu in tool_uses {
+                        let pretty = format_tool_use(tu);
+                        eprintln!("  [tool] {pretty}");
+                        append_session_line(&session_path, &SessionLine::tool_use(tu)).ok();
+                    }
                 }
             }
 
@@ -1832,6 +1880,31 @@ async fn run_repl(
                     }
                     return Ok(());
                 }
+            }
+        }
+        // Show per-turn token delta so the user sees cost without /usage.
+        {
+            let cur = &session.usage_total;
+            let di = cur.input_tokens.saturating_sub(pre_usage.input_tokens);
+            let do_ = cur.output_tokens.saturating_sub(pre_usage.output_tokens);
+            if di + do_ > 0 {
+                let delta_cost = aether_llm::Usage {
+                    input_tokens: di,
+                    output_tokens: do_,
+                    cache_creation_input_tokens: cur.cache_creation_input_tokens
+                        .saturating_sub(pre_usage.cache_creation_input_tokens),
+                    cache_read_input_tokens: cur.cache_read_input_tokens
+                        .saturating_sub(pre_usage.cache_read_input_tokens),
+                };
+                let dc = delta_cost.cache_creation_input_tokens;
+                let dr = delta_cost.cache_read_input_tokens;
+                let cost = estimate_cost_usd(&session.config.model, &delta_cost);
+                let cache_part = if dc + dr > 0 {
+                    format!(" cache_write={dc} cache_read={dr}")
+                } else {
+                    String::new()
+                };
+                eprintln!("  [tokens in={di} out={do_}{cache_part} cost~${cost:.4}]");
             }
         }
         record_turn_delta(&session, &session_id, &pre_usage);
@@ -1872,9 +1945,28 @@ fn record_turn_delta(
     record_turn_usage(Some(session_id), &session.config.model, &delta, cost);
 }
 
+fn git_branch() -> Option<String> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .ok()?;
+    if out.status.success() {
+        let b = std::str::from_utf8(&out.stdout).ok()?.trim().to_string();
+        if !b.is_empty() && b != "HEAD" { Some(b) } else { None }
+    } else {
+        None
+    }
+}
+
 fn print_banner(session_id: &str, model: &str, resume: &ResumeMode) {
     eprintln!("aether — agentic CLI");
     eprintln!("  model:   {model}");
+    if let Ok(cwd) = std::env::current_dir() {
+        let branch_suffix = git_branch()
+            .map(|b| format!("  ({})", b))
+            .unwrap_or_default();
+        eprintln!("  cwd:     {}{branch_suffix}", cwd.display());
+    }
     eprintln!(
         "  session: {session_id}{}",
         match resume {
@@ -1883,12 +1975,14 @@ fn print_banner(session_id: &str, model: &str, resume: &ResumeMode) {
             ResumeMode::ById(_) => " (resumed)",
         }
     );
-    eprintln!("  type /help for commands, Ctrl-D to exit");
+    eprintln!("  type /help for commands, /sessions to browse history, Ctrl-D to exit");
 }
 
 enum SlashAction {
     Continue,
     Quit,
+    /// Trigger an immediate context compaction (async — handled by REPL loop).
+    Compact,
     /// Send this string as the next user message (used by custom commands).
     SendAsUser(String),
 }
@@ -1906,10 +2000,13 @@ fn handle_slash(
             eprintln!("\nslash commands:");
             eprintln!("  /help               show this help");
             eprintln!("  /clear              wipe in-memory conversation");
+            eprintln!("  /compact            manually compact the context window now");
             eprintln!("  /model [NAME]       show or change the active model");
             eprintln!("  /tools              list registered tools");
             eprintln!("  /memory             list ~/.aether/memory/ entries");
             eprintln!("  /usage              show token totals for this session");
+            eprintln!("  /uptime             system uptime, load, and memory");
+            eprintln!("  /sessions [N]       list N most-recent sessions (default 20)");
             eprintln!("  /fleet [cancel ID]  list sub-agents (or signal cancel)");
             eprintln!("  /commands           list custom commands from ~/.aether/commands/");
             eprintln!("  /quit | /exit       quit");
@@ -2028,6 +2125,42 @@ fn handle_slash(
             SlashAction::Continue
         }
         "quit" | "exit" | "q" => SlashAction::Quit,
+        "compact" => SlashAction::Compact,
+        "sessions" => {
+            let limit: usize = args.parse().unwrap_or(20);
+            // Inline the listing so output goes to stderr (REPL convention).
+            let dir = sessions_dir();
+            match std::fs::read_dir(&dir) {
+                Err(_) => eprintln!("[no sessions found at {}]", dir.display()),
+                Ok(entries) => {
+                    let mut rows: Vec<(String, std::time::SystemTime, std::path::PathBuf)> = entries
+                        .flatten()
+                        .filter_map(|e| {
+                            let p = e.path();
+                            let stem = p.file_stem()?.to_str()?.to_string();
+                            if p.extension()?.to_str() != Some("jsonl") { return None; }
+                            let mtime = p.metadata().ok()?.modified().ok()?;
+                            Some((stem, mtime, p))
+                        })
+                        .collect();
+                    rows.sort_by(|a, b| b.1.cmp(&a.1));
+                    if rows.is_empty() {
+                        eprintln!("[no sessions in {}]", dir.display());
+                    } else {
+                        let latest = read_latest_session_id().ok();
+                        eprintln!("sessions (newest first) — use --session-id <id> or --continue to resume:");
+                        for (id, mtime, path) in rows.into_iter().take(limit) {
+                            let preview = first_user_message(&path).unwrap_or_else(|| "(empty)".into());
+                            let ts = mtime.duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs()).unwrap_or(0);
+                            let marker = if Some(id.as_str()) == latest.as_deref() { "*" } else { " " };
+                            eprintln!("  {marker} {}  [{}]  {}", id, unix_ts_to_compact(ts), preview);
+                        }
+                    }
+                }
+            }
+            SlashAction::Continue
+        }
         "uptime" => {
             let uptime_str = std::fs::read_to_string("/proc/uptime").ok()
                 .and_then(|s| s.split_whitespace().next().and_then(|n| n.parse::<f64>().ok()))
