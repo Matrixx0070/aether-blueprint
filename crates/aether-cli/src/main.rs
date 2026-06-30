@@ -6707,6 +6707,81 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::SetAutoBookmarkEvery(n) => {
+                    session.auto_bookmark_every = n;
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Auto-bookmark: off.".to_string()));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Auto-bookmark: every {n} turn(s). Next fires at turn {} (if n divides evenly).",
+                            n - (session.turn_index % n)
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::ClearAutoBookmarkEvery => {
+                    session.auto_bookmark_every = 0;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote("Auto-bookmark cleared.".to_string()));
+                    continue;
+                }
+                UiCommand::QueryAutoBookmarkEvery => {
+                    let note = if session.auto_bookmark_every == 0 {
+                        "Auto-bookmark: off. Use /auto-bookmark-every <n> to set.".to_string()
+                    } else {
+                        format!("Auto-bookmark: every {} turn(s). Current turn: {}.", session.auto_bookmark_every, session.turn_index)
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::ClearAllBookmarks => {
+                    let n = session.bookmarks.len();
+                    session.bookmarks.clear();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "All bookmarks cleared ({n} removed)."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryFindCodeBlocks(lang_filter) => {
+                    use aether_core::context::ConversationItem;
+                    let filter = lang_filter.to_lowercase();
+                    let mut found: Vec<(usize, String, String)> = Vec::new();
+                    for (hist_idx, item) in session.history.iter().enumerate() {
+                        if let ConversationItem::Assistant { text: Some(t), .. } = item {
+                            let mut in_block = false;
+                            let mut lang = String::new();
+                            let mut buf = String::new();
+                            for line in t.lines() {
+                                if !in_block && line.starts_with("```") {
+                                    in_block = true;
+                                    lang = line.trim_start_matches('`').trim().to_lowercase();
+                                    buf.clear();
+                                } else if in_block && line.starts_with("```") {
+                                    in_block = false;
+                                    if filter.is_empty() || lang.contains(&filter) {
+                                        found.push((hist_idx, lang.clone(), buf.trim_end().to_string()));
+                                    }
+                                } else if in_block {
+                                    buf.push_str(line);
+                                    buf.push('\n');
+                                }
+                            }
+                        }
+                    }
+                    if found.is_empty() {
+                        let filter_note = if filter.is_empty() { String::new() } else { format!(" (lang filter: {filter})") };
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!("No code blocks found{filter_note}.")));
+                    } else {
+                        let mut msg = format!("{} code block(s) found:\n", found.len());
+                        for (i, (hist_idx, lang, code)) in found.iter().enumerate() {
+                            let preview: String = code.lines().take(3).collect::<Vec<_>>().join("\n");
+                            let lang_str = if lang.is_empty() { "plain" } else { lang.as_str() };
+                            msg.push_str(&format!("  #{i} [hist#{hist_idx}] ({lang_str}): {preview}{}\n",
+                                if code.lines().count() > 3 { " …" } else { "" }));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
                 UiCommand::QueryContextHeadroom => {
                     use aether_core::compaction::context_window_for_model;
                     let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
@@ -9931,6 +10006,16 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         fill * 100.0, session.token_budget_warn_pct * 100.0
                     )));
                 }
+            }
+            // Auto-bookmark: add a bookmark every N turns when configured.
+            if session.auto_bookmark_every > 0 && session.turn_index > 0 && session.turn_index % session.auto_bookmark_every == 0 {
+                let turn = session.turn_index;
+                let hist_len = session.history.len();
+                let label = format!("auto-turn-{turn}");
+                session.bookmarks.push((turn, hist_len, label.clone()));
+                let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                    "Auto-bookmark: turn {turn} — \"{label}\" added (every {} turns).", session.auto_bookmark_every
+                )));
             }
             // Smart-pause: if a pattern is set and matches the latest response, pause now.
             if let Some(ref pattern) = session.smart_pause_pattern.clone() {
@@ -28562,6 +28647,48 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /auto-bookmark-every <n> | off — auto-bookmark every n turns
+                                cmd_str if cmd_str == "/auto-bookmark-every off" || cmd_str.starts_with("/auto-bookmark-every ") => {
+                                    if cmd_str == "/auto-bookmark-every off" {
+                                        if _ctx.send(UiCommand::ClearAutoBookmarkEvery).is_err() { break 'outer; }
+                                    } else {
+                                        let arg = cmd_str.trim_start_matches("/auto-bookmark-every ").trim();
+                                        if let Ok(n) = arg.parse::<usize>() {
+                                            if _ctx.send(UiCommand::SetAutoBookmarkEvery(n)).is_err() { break 'outer; }
+                                        } else {
+                                            ui.chat_lines.push(ChatLine::SystemNote("Usage: /auto-bookmark-every <n>  or  /auto-bookmark-every off".to_string()));
+                                        }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /auto-bookmark-show — show current auto-bookmark setting
+                                "/auto-bookmark-show" => {
+                                    if _ctx.send(UiCommand::QueryAutoBookmarkEvery).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /clear-bookmarks — clear all session bookmarks
+                                "/clear-bookmarks" => {
+                                    if _ctx.send(UiCommand::ClearAllBookmarks).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /find-code-blocks [lang] — find all code blocks across history
+                                cmd_str if cmd_str == "/find-code-blocks" || cmd_str.starts_with("/find-code-blocks ") => {
+                                    let lang = cmd_str.trim_start_matches("/find-code-blocks").trim().to_string();
+                                    if _ctx.send(UiCommand::QueryFindCodeBlocks(lang)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /context-headroom — show tokens remaining before compaction
                                 "/context-headroom" => {
                                     if _ctx.send(UiCommand::QueryContextHeadroom).is_err() { break 'outer; }
@@ -29647,6 +29774,10 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/context-headroom",
                             "/find-long-responses ",
                             "/turn-summary ",
+                            "/auto-bookmark-every ", "/auto-bookmark-every off",
+                            "/auto-bookmark-show",
+                            "/clear-bookmarks",
+                            "/find-code-blocks", "/find-code-blocks ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

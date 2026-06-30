@@ -417,6 +417,16 @@ pub enum UiCommand {
     JumpBookmark(usize),
     /// Delete a bookmark by 0-based index.
     DeleteBookmark(usize),
+    /// Set auto-bookmark interval: add a bookmark every N turns automatically.
+    SetAutoBookmarkEvery(usize),
+    /// Clear the auto-bookmark interval (disable auto-bookmarks).
+    ClearAutoBookmarkEvery,
+    /// Show current auto-bookmark setting.
+    QueryAutoBookmarkEvery,
+    /// Clear all session bookmarks.
+    ClearAllBookmarks,
+    /// Find and list all code blocks across all assistant responses, optionally filtered by language.
+    QueryFindCodeBlocks(String),
     /// Show remaining tokens before context compaction threshold is hit.
     QueryContextHeadroom,
     /// List all assistant responses longer than N characters with their history indices.

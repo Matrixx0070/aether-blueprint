@@ -387,6 +387,9 @@ pub struct Session {
     /// Minimum milliseconds to enforce between auto-continue ticks.
     /// Useful to avoid rate-limit hammering in long autonomous runs. 0 = off.
     pub auto_continue_cooldown_ms: u64,
+
+    /// When > 0, automatically add a bookmark every N turns.
+    pub auto_bookmark_every: usize,
 }
 
 impl Session {
@@ -487,6 +490,7 @@ impl Session {
             turn_models: Vec::new(),
             smart_pause_pattern: None,
             auto_continue_cooldown_ms: 0,
+            auto_bookmark_every: 0,
         }
     }
 
