@@ -5741,6 +5741,24 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryContextInfo => {
+                    use aether_core::compaction::context_window_for_model;
+                    let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
+                    let window = context_window_for_model(&session.config.model);
+                    let pct = if window > 0 { (used as f64 / window as f64 * 100.0) as u64 } else { 0 };
+                    let compact_pct = if session.plan.tool_error_counts.values().any(|&n| n >= 3) { 70u64 } else { 80u64 };
+                    let note = format!(
+                        "Context usage: {used} / {window} tokens ({pct}%)\n\
+                         Model: {model}\n\
+                         Compaction fires at: {compact_pct}% ({threshold} tokens)\n\
+                         Remaining before compaction: {remaining} tokens",
+                        model = session.config.model,
+                        threshold = window * compact_pct / 100,
+                        remaining = (window * compact_pct / 100).saturating_sub(used),
+                    );
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
             };
             let outs = run_hooks(
                 &hooks.user_prompt_submit,
@@ -22639,6 +22657,14 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /context-info — show token usage, context %, compaction proximity
+                                "/context-info" => {
+                                    if _ctx.send(UiCommand::QueryContextInfo).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /goal [text] — set or show session goal (survives compaction)
                                 cmd_str if cmd_str.starts_with("/goal ") || cmd_str == "/goal" => {
                                     let arg = cmd_str.trim_start_matches("/goal").trim();
@@ -23056,7 +23082,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/ai-error-types", "/ai-refactor-file", "/ai-refactor-file ",
                             "/ai-critique",
                             "/plan-status", "/stuck", "/reset-errors",
-                            "/goal", "/goal ",
+                            "/goal", "/goal ", "/context-info",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

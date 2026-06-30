@@ -166,6 +166,8 @@ pub enum UiCommand {
     ResetToolErrors,
     /// Set or clear the session goal (None = clear).
     SetGoal(Option<String>),
+    /// Query context window usage; driver replies with UiEvent::SystemNote.
+    QueryContextInfo,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

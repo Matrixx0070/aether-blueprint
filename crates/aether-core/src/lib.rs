@@ -140,9 +140,19 @@ impl Session {
     }
 
     pub fn activation_context(&self) -> ActivationContext {
+        // Compute the current context fill ratio from cumulative token usage.
+        // This was previously hardcoded to 0.0, so overlays with ctx_size_ratio
+        // predicates never activated — now they see the real fill level.
+        let used = self.usage_total.input_tokens + self.usage_total.output_tokens;
+        let window = compaction::context_window_for_model(&self.config.model);
+        let ctx_size_ratio = if window > 0 {
+            ((used as f64 / window as f64).min(1.0)) as f32
+        } else {
+            0.0f32
+        };
         ActivationContext {
             turn_index: self.turn_index,
-            ctx_size_ratio: 0.0,
+            ctx_size_ratio,
             plan_active: self.plan.is_active(),
             task_expected_hours: 0.0,
             verifier_flagged: self
@@ -228,6 +238,35 @@ async fn agent_turn_inner(
     // turns. In monotonic mode (window=None) this is a cheap no-op when
     // the plan is empty and idempotent when it isn't.
     session.planner.refresh(&mut session.plan, session.turn_index);
+
+    // Auto-inject targeted recovery reminder when tools are stuck. This
+    // produces a system-prompt-level signal ("you are stuck on tool X")
+    // in addition to the plan-text signal — two injection points means
+    // the guidance shows up even when the plan text is truncated.
+    {
+        let mut stuck_names: Vec<String> = session
+            .plan
+            .tool_error_counts
+            .iter()
+            .filter(|(_, &n)| n >= planner::TOOL_ERROR_THRESHOLD)
+            .map(|(name, _)| name.clone())
+            .collect();
+        stuck_names.sort();
+        if !stuck_names.is_empty() {
+            let names = stuck_names.join(", ");
+            session.pending_reminders.push(Reminder::new(
+                ReminderKind::SystemWarning,
+                Source::Kernel,
+                format!(
+                    "You are currently stuck: tool(s) [{names}] have failed 3+ times consecutively. \
+                     Do NOT repeat the same call. Instead: (1) re-read the FULL error output from \
+                     the last failure; (2) try a more targeted variant (smaller scope, different \
+                     arguments, or a different tool entirely); (3) if blocked by permissions, \
+                     report it rather than retrying."
+                ),
+            ));
+        }
+    }
 
     let ctx = session.activation_context();
 
