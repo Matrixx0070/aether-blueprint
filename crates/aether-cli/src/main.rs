@@ -20132,6 +20132,249 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /ai-arch-diagram — AI generates a Mermaid architecture diagram of the codebase
+                                "/ai-arch-diagram" => {
+                                    let files = std::process::Command::new("sh")
+                                        .arg("-c")
+                                        .arg(r#"git ls-files 2>/dev/null || find . -not -path "./.git/*" -type f | head -80"#)
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    let truncated: String = files.chars().take(4000).collect();
+                                    let crates_info = std::process::Command::new("sh")
+                                        .arg("-c")
+                                        .arg(r#"find . -name "Cargo.toml" -not -path "./.git/*" | head -20 | xargs grep -l '\[package\]' 2>/dev/null | head -10"#)
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    let prompt = format!(
+                                        "Based on the following project file tree, generate a Mermaid architecture diagram \
+                                         showing the main components, their relationships, and data flow. \
+                                         Return only the mermaid diagram in a ```mermaid fenced block, then a one-paragraph description.\n\n\
+                                         ## Packages/modules\n```\n{crates_info}\n```\n## File tree\n```\n{truncated}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /todos-ai — find all TODO/FIXME and ask AI to prioritize
+                                "/todos-ai" => {
+                                    let out = std::process::Command::new("grep")
+                                        .args(["-rn", "--include=*.rs", "--include=*.ts", "--include=*.py",
+                                               "--include=*.go", "--include=*.js",
+                                               "-E", "TODO|FIXME|HACK|XXX|BUG|TEMP|WORKAROUND", "."])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    if out.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("/todos-ai: no TODO/FIXME/HACK items found.".into()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let truncated: String = out.chars().take(6000).collect();
+                                    let prompt = format!(
+                                        "Here are all the TODO/FIXME/HACK items in this codebase. \
+                                         Please: 1) group them by theme, 2) prioritize from most to least critical, \
+                                         3) suggest a fix approach for each, and 4) identify any that are security or correctness risks.\n\n```\n{truncated}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /trace-call <fn> — grep all callers and send to AI for call-graph explanation
+                                cmd_str if cmd_str.starts_with("/trace-call ") || cmd_str == "/trace-call" => {
+                                    let fn_name = cmd_str.trim_start_matches("/trace-call").trim();
+                                    if fn_name.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /trace-call <function_name>  — finds all callers and asks AI to explain the call graph.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let callers = std::process::Command::new("grep")
+                                        .args(["-rn", "--include=*.rs", "--include=*.ts", "--include=*.py",
+                                               "--include=*.go", "--include=*.js",
+                                               "-E", &format!(r"\b{fn_name}\s*\("), "."])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    if callers.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("/trace-call: no callers of `{fn_name}` found.")));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let truncated: String = callers.chars().take(5000).collect();
+                                    let prompt = format!(
+                                        "Here are all the call sites of `{fn_name}` in this codebase. \
+                                         Please: 1) describe the call graph, 2) identify the primary entry points, \
+                                         3) note any unusual or risky call patterns, and 4) suggest if the function \
+                                         should be split or have its signature changed.\n\n```\n{truncated}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /time-budget [hours] — AI estimates task difficulty and timeline
+                                cmd_str if cmd_str == "/time-budget" || cmd_str.starts_with("/time-budget ") => {
+                                    let hours_arg = cmd_str.trim_start_matches("/time-budget").trim();
+                                    let budget_line = if hours_arg.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!("\n\nAvailable time budget: {hours_arg} hours.")
+                                    };
+                                    let goal_info = match &ui.session_goal {
+                                        Some(g) => format!("Current session goal: {g}"),
+                                        None => "No session goal set (use /goal to set one).".to_string(),
+                                    };
+                                    let ctx_info = if ui.context_files.is_empty() {
+                                        "No context files (use /add to add files).".to_string()
+                                    } else {
+                                        format!("Context files: {}", ui.context_files.join(", "))
+                                    };
+                                    let prompt = format!(
+                                        "Based on the current session context, estimate:\n\
+                                         1. Task difficulty (1–5 scale with reasoning)\n\
+                                         2. Time breakdown by subtask\n\
+                                         3. Biggest risks that could blow the estimate\n\
+                                         4. What to tackle first for maximum progress{budget_line}\n\n\
+                                         {goal_info}\n{ctx_info}"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /env-doctor — check required tools and env vars, report gaps
+                                "/env-doctor" => {
+                                    let tools_to_check = [
+                                        ("git", "version control"), ("cargo", "Rust build"),
+                                        ("npm", "Node.js packages"), ("python3", "Python runtime"),
+                                        ("docker", "containers"), ("kubectl", "Kubernetes"),
+                                        ("jq", "JSON processing"), ("curl", "HTTP requests"),
+                                        ("gh", "GitHub CLI"), ("rg", "ripgrep search"),
+                                        ("make", "Makefiles"), ("terraform", "infrastructure"),
+                                    ];
+                                    let mut present: Vec<String> = Vec::new();
+                                    let mut missing: Vec<String> = Vec::new();
+                                    for (tool, desc) in &tools_to_check {
+                                        let found = std::process::Command::new("which")
+                                            .arg(tool)
+                                            .output()
+                                            .map(|o| o.status.success())
+                                            .unwrap_or(false);
+                                        if found { present.push(format!("  ✓ {tool} ({desc})")) }
+                                        else { missing.push(format!("  ✗ {tool} ({desc})")) }
+                                    }
+                                    let key_vars = ["PATH", "HOME", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
+                                                    "GITHUB_TOKEN", "CARGO_HOME", "RUSTUP_HOME", "GOPATH"];
+                                    let mut vars_set: Vec<String> = Vec::new();
+                                    let mut vars_missing: Vec<String> = Vec::new();
+                                    for var in &key_vars {
+                                        if std::env::var(var).is_ok() {
+                                            vars_set.push(format!("  ✓ {var}"));
+                                        } else {
+                                            vars_missing.push(format!("  ✗ {var}"));
+                                        }
+                                    }
+                                    let report = format!(
+                                        "─── Aether Environment Doctor ───\n\
+                                         Tools present ({}):\n{}\n\
+                                         Tools missing ({}):\n{}\n\
+                                         Env vars set ({}):\n{}\n\
+                                         Env vars missing ({}):\n{}",
+                                        present.len(), if present.is_empty() { "  (none)".into() } else { present.join("\n") },
+                                        missing.len(), if missing.is_empty() { "  (none — all good!)".into() } else { missing.join("\n") },
+                                        vars_set.len(), if vars_set.is_empty() { "  (none)".into() } else { vars_set.join("\n") },
+                                        vars_missing.len(), if vars_missing.is_empty() { "  (none — all good!)".into() } else { vars_missing.join("\n") },
+                                    );
+                                    ui.chat_lines.push(ChatLine::SystemNote(report));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /git-blame-ai <file:line> — get git blame info and ask AI to explain why
+                                cmd_str if cmd_str.starts_with("/git-blame-ai ") || cmd_str == "/git-blame-ai" => {
+                                    let loc = cmd_str.trim_start_matches("/git-blame-ai").trim();
+                                    if loc.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /git-blame-ai <file>:<line>  e.g. /git-blame-ai src/main.rs:42".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let (file, line_str) = if let Some(colon) = loc.rfind(':') {
+                                        (&loc[..colon], &loc[colon+1..])
+                                    } else {
+                                        (loc, "1")
+                                    };
+                                    let line_num: u32 = line_str.parse().unwrap_or(1);
+                                    let start = line_num.saturating_sub(5).max(1);
+                                    let end = line_num + 5;
+                                    let blame_out = std::process::Command::new("git")
+                                        .args(["blame", "-L", &format!("{start},{end}"), "--", file])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    let log_out = std::process::Command::new("git")
+                                        .args(["log", "--oneline", "-5", "--", file])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    if blame_out.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("/git-blame-ai: no blame output for {file}:{line_str}")));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Here is `git blame` output for `{file}` around line {line_num}. \
+                                         Please explain: 1) what this code does, 2) why it was introduced (based on commit messages), \
+                                         3) whether it looks like a workaround or intentional design.\n\n\
+                                         ## Blame (lines {start}–{end})\n```\n{blame_out}\n```\n\
+                                         ## Recent commits\n```\n{log_out}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -20506,6 +20749,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/test-gen ", "/hotkey-ref",
                             "/ai-review", "/ai-review ", "/summarize-file", "/summarize-file ",
                             "/deps-audit", "/ai-fix-error ", "/complexity-check",
+                            "/ai-arch-diagram", "/todos-ai", "/trace-call ",
+                            "/time-budget", "/time-budget ", "/env-doctor", "/git-blame-ai ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
