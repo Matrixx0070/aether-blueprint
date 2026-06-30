@@ -22376,6 +22376,188 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /ai-optimize <file> — AI suggests performance improvements for a file
+                                cmd_str if cmd_str.starts_with("/ai-optimize ") || cmd_str == "/ai-optimize" => {
+                                    let file_arg = cmd_str.trim_start_matches("/ai-optimize").trim();
+                                    let file_path_arg = if file_arg.is_empty() {
+                                        ui.context_files.first().cloned().unwrap_or_default()
+                                    } else {
+                                        file_arg.to_string()
+                                    };
+                                    if file_path_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /ai-optimize [file]  — AI suggests performance improvements.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    match std::fs::read_to_string(&file_path_arg) {
+                                        Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("/ai-optimize: {e}"))); }
+                                        Ok(src) => {
+                                            let preview: String = src.chars().take(8000).collect();
+                                            let prompt = format!(
+                                                "Analyze `{file_path_arg}` for performance improvements. Focus on:\n\
+                                                 1. Algorithmic complexity (O(n²) → O(n log n) opportunities)\n\
+                                                 2. Memory allocations that could be avoided or batched\n\
+                                                 3. Unnecessary clones, copies, or conversions\n\
+                                                 4. Missed opportunities for parallelism\n\
+                                                 5. I/O or system call hot paths\n\
+                                                 Rate each: HIGH/MEDIUM/LOW impact. Show before/after code.\n\n```\n{preview}\n```"
+                                            );
+                                            let ts2 = std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs();
+                                            ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                        }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-api-design <description> — AI designs an API for a feature
+                                cmd_str if cmd_str.starts_with("/ai-api-design ") || cmd_str == "/ai-api-design" => {
+                                    let desc = cmd_str.trim_start_matches("/ai-api-design").trim();
+                                    if desc.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /ai-api-design <feature description>\n  AI designs a clean API: types, functions, error handling.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let lang = if ui.context_files.iter().any(|f| f.ends_with(".rs")) { "Rust" }
+                                        else if ui.context_files.iter().any(|f| f.ends_with(".ts")) { "TypeScript" }
+                                        else { "Rust" };
+                                    let prompt = format!(
+                                        "Design a clean {lang} API for: **{desc}**\n\
+                                         Include:\n\
+                                         1. Public types (structs/enums/interfaces) with doc comments\n\
+                                         2. Function signatures with error types\n\
+                                         3. Builder pattern or fluent API if appropriate\n\
+                                         4. Example usage showing the happy path\n\
+                                         5. Rationale for key design decisions\n\n\
+                                         Prioritize: ergonomics, type safety, forward compatibility."
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-error-types — AI designs error types for the current codebase
+                                "/ai-error-types" => {
+                                    let errs = std::process::Command::new("grep")
+                                        .args(["-rn", "--include=*.rs", "--include=*.ts", "--include=*.py",
+                                               "-E", r"(Error|Result|Err|panic|unwrap|expect)", "."])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    let truncated: String = errs.chars().take(4000).collect();
+                                    let ctx_hint = if !ui.context_files.is_empty() {
+                                        format!("\nContext: {}", ui.context_files.join(", "))
+                                    } else { String::new() };
+                                    let prompt = format!(
+                                        "Based on the error handling patterns in this codebase, suggest a comprehensive \
+                                         error type hierarchy. Include:\n\
+                                         1. A top-level error enum with all variants\n\
+                                         2. thiserror derive attributes\n\
+                                         3. From implementations for common conversions\n\
+                                         4. Which errors should be public vs private\n\
+                                         5. Any unwrap() calls that should be replaced{ctx_hint}\n\n\
+                                         ```\n{truncated}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-refactor-file <file> — comprehensive refactoring of an entire file
+                                cmd_str if cmd_str.starts_with("/ai-refactor-file ") || cmd_str == "/ai-refactor-file" => {
+                                    let file_arg = cmd_str.trim_start_matches("/ai-refactor-file").trim();
+                                    let file_path_arg = if file_arg.is_empty() {
+                                        ui.context_files.first().cloned().unwrap_or_default()
+                                    } else {
+                                        file_arg.to_string()
+                                    };
+                                    if file_path_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /ai-refactor-file [file]  — AI provides comprehensive refactoring of a file.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    match std::fs::read_to_string(&file_path_arg) {
+                                        Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("/ai-refactor-file: {e}"))); }
+                                        Ok(src) => {
+                                            let preview: String = src.chars().take(6000).collect();
+                                            let prompt = format!(
+                                                "Perform a comprehensive refactoring of `{file_path_arg}`. For each change:\n\
+                                                 1. Show before → after code\n\
+                                                 2. Explain why the change improves the code\n\
+                                                 3. Confirm that behaviour is preserved\n\n\
+                                                 Priorities: readability, correctness, DRY, separation of concerns.\n\
+                                                 Do NOT change public API signatures unless clearly broken.\n\n```\n{preview}\n```"
+                                            );
+                                            let ts2 = std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs();
+                                            ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                        }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-critique — AI critiques the last AI response for accuracy
+                                "/ai-critique" => {
+                                    let last_ai = ui.chat_lines.iter().rev().find_map(|cl| match cl {
+                                        ChatLine::Assistant(t, _, _) => Some(t.chars().take(600).collect::<String>()),
+                                        _ => None,
+                                    });
+                                    match last_ai {
+                                        None => {
+                                            ui.chat_lines.push(ChatLine::SystemNote("No AI response to critique.".into()));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                        Some(prev) => {
+                                            let prompt = format!(
+                                                "Please critique your own previous response for: \
+                                                 1) Technical accuracy — any errors or imprecisions? \
+                                                 2) Completeness — what important aspects were missed? \
+                                                 3) Confidence calibration — were you overconfident about uncertain things? \
+                                                 4) Better approaches — what would you do differently now?\n\nPrevious response:\n{prev}"
+                                            );
+                                            let ts2 = std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs();
+                                            ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                        }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -22773,6 +22955,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/function-list", "/function-list ", "/ai-dep ",
                             "/ai-learn ", "/codebase-stats", "/ai-pair", "/rubber-duck",
                             "/git-log-since ", "/design-pattern ",
+                            "/ai-optimize", "/ai-optimize ", "/ai-api-design ",
+                            "/ai-error-types", "/ai-refactor-file", "/ai-refactor-file ",
+                            "/ai-critique",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
