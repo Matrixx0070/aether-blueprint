@@ -5666,6 +5666,24 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::ClearHistory => {
+                    let n = session.history.len();
+                    session.history.clear();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(
+                        format!("History cleared ({n} items removed). AI starts fresh on next turn.")
+                    ));
+                    continue;
+                }
+                UiCommand::SetToolsDisabled(n) => {
+                    session.config.tools_disabled_turns = n;
+                    let note = if n == 0 {
+                        "Tools re-enabled.".to_string()
+                    } else {
+                        format!("Tools disabled for next {n} turn(s).")
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
             };
             let outs = run_hooks(
                 &hooks.user_prompt_submit,
@@ -18736,6 +18754,52 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /goal [text|show|clear] — set a persistent session goal
+                                cmd_str if cmd_str == "/goal" || cmd_str.starts_with("/goal ") => {
+                                    let arg = cmd_str.trim_start_matches("/goal").trim();
+                                    match arg {
+                                        "" | "show" => {
+                                            let info = match &ui.session_goal {
+                                                Some(g) => format!("Session goal: {g}\n  /goal clear to remove  ·  /goal <text> to replace"),
+                                                None => "No session goal set.\n  Usage: /goal <text>  e.g. /goal implement the auth module with JWT support".to_string(),
+                                            };
+                                            ui.chat_lines.push(ChatLine::SystemNote(info));
+                                        }
+                                        "clear" | "off" | "none" | "reset" => {
+                                            ui.session_goal = None;
+                                            ui.chat_lines.push(ChatLine::SystemNote("Session goal cleared.".into()));
+                                        }
+                                        text => {
+                                            ui.session_goal = Some(text.to_string());
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("Session goal set: {text}\n  Will be prepended to every AI request for this session.")
+                                            ));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-clear — clear AI conversation memory without clearing display
+                                "/history-clear" | "/clear-memory" => {
+                                    if _ctx.send(UiCommand::ClearHistory).is_err() { break 'outer; }
+                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                        "Requesting history clear… AI will start fresh on next turn.".into()
+                                    ));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /notool [N] — disable tool use for N turns (default 1); /notool 0 = re-enable
+                                cmd_str if cmd_str == "/notool" || cmd_str.starts_with("/notool ") => {
+                                    let n_str = cmd_str.trim_start_matches("/notool").trim();
+                                    let n: usize = n_str.parse().unwrap_or(if n_str.is_empty() { 1 } else { 0 });
+                                    if n_str.parse::<usize>().is_err() && !n_str.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /notool [N]  — disable tools for N turns (default 1)\n  /notool 0 to re-enable immediately.".into()));
+                                    } else if _ctx.send(UiCommand::SetToolsDisabled(n)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /tool-schema <name> — show full JSON input schema for a tool
                                 cmd_str if cmd_str.starts_with("/tool-schema ") || cmd_str == "/tool-schema" => {
                                     let name = cmd_str.trim_start_matches("/tool-schema").trim().to_string();
@@ -19462,6 +19526,12 @@ CTF Toolkit — Aether AI-assisted\n\
                             } else {
                                 msg
                             };
+                            // Prepend session_goal silently (shown in chat as context, not as user turn)
+                            let msg = if let Some(ref goal) = ui.session_goal {
+                                format!("[GOAL]: {goal}\n\n{msg}")
+                            } else {
+                                msg
+                            };
                             // Prepend prompt_prefix silently to the API message (not shown in chat)
                             let api_msg = match &ui.prompt_prefix {
                                 Some(pfx) => format!("{pfx}\n\n{msg}"),
@@ -19553,6 +19623,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/persona ", "/persona off", "/persona show",
                             "/run-last", "/run-last ", "/prompt-history", "/prompt-history ",
                             "/tool-schema ",
+                            "/goal", "/goal ", "/goal show", "/goal clear",
+                            "/history-clear", "/clear-memory", "/notool", "/notool ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

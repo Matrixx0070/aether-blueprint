@@ -153,6 +153,11 @@ pub enum UiCommand {
     /// Set/clear the user-defined system prompt suffix (`/persona`).
     /// None clears the suffix; Some(text) replaces it.
     SetPersona(Option<String>),
+    /// Clear the session's conversation history (AI memory) without touching
+    /// the TUI chat display. The AI starts fresh; the user sees all prior output.
+    ClearHistory,
+    /// Set tools_disabled_turns on SessionConfig. 0 = re-enable tools immediately.
+    SetToolsDisabled(usize),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
@@ -339,6 +344,9 @@ pub struct UiState {
     /// Env vars set in this session via /setenv (key, value pairs).
     /// Mirrored here for display by /env-list; authoritative copy is process env.
     pub session_env_vars: Vec<(String, String)>,
+    /// Persistent session goal set by /goal. When Some, prepended to every
+    /// AI request as `[GOAL]: {text}` so the AI always knows the objective.
+    pub session_goal: Option<String>,
 }
 
 impl UiState {
@@ -483,6 +491,7 @@ impl UiState {
             cost_limit_usd: None,
             auto_diff_enabled: false,
             session_env_vars: Vec::new(),
+            session_goal: None,
         }
     }
 
