@@ -825,6 +825,12 @@ pub enum UiCommand {
     QueryErrorPlaybookCount,
     /// List session notes briefly (index + first 60 chars).
     QuerySessionNotesList,
+    /// Find history items containing a specific tool name in tool_uses.
+    QueryHistoryFindTool(String),
+    /// Count auto-tag rules.
+    QueryAutoTagCount,
+    /// Show cost ceiling status: current spend vs ceiling.
+    QueryCostCeilingStatus,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

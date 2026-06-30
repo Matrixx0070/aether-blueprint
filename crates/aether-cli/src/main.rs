@@ -7313,6 +7313,59 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryHistoryFindTool(name) => {
+                    let name_lower = name.to_lowercase();
+                    let mut found: Vec<String> = Vec::new();
+                    for (idx, item) in session.history.iter().enumerate() {
+                        if let ConversationItem::Assistant { tool_uses, .. } = item {
+                            for tu in tool_uses {
+                                if tu.name.to_lowercase().contains(&name_lower) {
+                                    found.push(format!("  [hist:{idx}] {}", tu.name));
+                                }
+                            }
+                        }
+                    }
+                    if found.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "No tool calls matching {:?} found in history.", name
+                        )));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Tool calls matching {:?} ({}):\n{}", name, found.len(), found.join("\n")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryAutoTagCount => {
+                    let count = session.auto_tag_rules.len();
+                    if count == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No auto-tag rules. Use /auto-tag <pattern> <label>.".to_string()));
+                    } else {
+                        let rules: Vec<String> = session.auto_tag_rules.iter().enumerate().map(|(i, (pat, lbl))| {
+                            format!("  [{i}] {pat:?} → {lbl:?}")
+                        }).collect();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Auto-tag rules ({count}):\n{}", rules.join("\n")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryCostCeilingStatus => {
+                    let total_cost: f64 = session.turn_cost_log.iter().map(|&(_, _, _, c)| c).sum();
+                    if session.cost_ceiling_usd <= 0.0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Cost ceiling: OFF. Current spend: ${total_cost:.4}. Set with /cost-ceiling <N>."
+                        )));
+                    } else {
+                        let pct = (total_cost / session.cost_ceiling_usd * 100.0).min(100.0);
+                        let remaining = (session.cost_ceiling_usd - total_cost).max(0.0);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Cost ceiling: ${:.4}\n  Spent:     ${total_cost:.4} ({pct:.1}%)\n  Remaining: ${remaining:.4}",
+                            session.cost_ceiling_usd
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -32175,6 +32228,35 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /history-find-tool <name> — find turns using a specific tool
+                                cmd_str if cmd_str.starts_with("/history-find-tool ") => {
+                                    let name = cmd_str.trim_start_matches("/history-find-tool ").trim().to_string();
+                                    if name.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /history-find-tool <tool-name>".to_string()));
+                                    } else if _ctx.send(UiCommand::QueryHistoryFindTool(name)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /auto-tag-count — count auto-tag rules
+                                "/auto-tag-count" => {
+                                    if _ctx.send(UiCommand::QueryAutoTagCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /cost-ceiling-status — cost ceiling status with current spend
+                                "/cost-ceiling-status" => {
+                                    if _ctx.send(UiCommand::QueryCostCeilingStatus).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -32894,6 +32976,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-truncate-head ",
                             "/error-playbook-count",
                             "/session-notes-list",
+                            "/history-find-tool ",
+                            "/auto-tag-count",
+                            "/cost-ceiling-status",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
