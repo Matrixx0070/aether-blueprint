@@ -761,6 +761,10 @@ pub enum UiCommand {
     SetToolTimeout(u64),
     /// Show the current tool timeout setting.
     QueryToolTimeout,
+    /// Remove consecutive duplicate User messages from conversation history.
+    HistoryDedup,
+    /// Show top N most expensive turns by token cost.
+    QueryTopCostTurns(usize),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

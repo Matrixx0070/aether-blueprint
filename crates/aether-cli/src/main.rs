@@ -6833,6 +6833,49 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::HistoryDedup => {
+                    let before = session.history.len();
+                    let mut deduped: Vec<ConversationItem> = Vec::new();
+                    let mut last_user: Option<String> = None;
+                    for item in std::mem::take(&mut session.history) {
+                        match &item {
+                            ConversationItem::User(text) => {
+                                if last_user.as_deref() == Some(text.as_str()) {
+                                    // skip consecutive duplicate
+                                } else {
+                                    last_user = Some(text.clone());
+                                    deduped.push(item);
+                                }
+                            }
+                            ConversationItem::Assistant { .. } | ConversationItem::ToolResults(_) => {
+                                last_user = None;
+                                deduped.push(item);
+                            }
+                        }
+                    }
+                    let removed = before - deduped.len();
+                    session.history = deduped;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History dedup: removed {removed} consecutive duplicate User message(s). History: {} items.", session.history.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTopCostTurns(n) => {
+                    let mut costs: Vec<(usize, u64, u64, f64)> = session.turn_cost_log.clone();
+                    costs.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
+                    costs.truncate(n);
+                    if costs.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No turn cost data yet.".to_string()));
+                    } else {
+                        let lines: Vec<String> = costs.iter().map(|&(turn, inp, out, cost)| {
+                            format!("  Turn {turn}: ${cost:.6} ({inp} in, {out} out tokens)")
+                        }).collect();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Top {} most expensive turns:\n{}", costs.len(), lines.join("\n")
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -31407,6 +31450,32 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /history-dedup — remove consecutive duplicate User messages from history
+                                "/history-dedup" => {
+                                    if _ctx.send(UiCommand::HistoryDedup).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-health — composite session health report
+                                "/session-health" => {
+                                    if _ctx.send(UiCommand::QuerySessionHealth).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /top-cost-turns [n] — show N most expensive turns by cost (default 5)
+                                cmd_str if cmd_str.starts_with("/top-cost-turns") => {
+                                    let n: usize = cmd_str.trim_start_matches("/top-cost-turns").trim()
+                                        .parse().unwrap_or(5);
+                                    if _ctx.send(UiCommand::QueryTopCostTurns(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -32093,6 +32162,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/cost-since-reset",
                             "/set-tool-timeout ", "/set-tool-timeout off",
                             "/tool-timeout-show",
+                            "/history-dedup",
+                            "/session-health",
+                            "/top-cost-turns", "/top-cost-turns ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
