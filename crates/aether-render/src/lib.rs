@@ -743,6 +743,14 @@ pub enum UiCommand {
     SetHistorySizeWarn(usize),
     /// Show the current history size warning threshold.
     QueryHistorySizeWarn,
+    /// Append a max word count constraint to the system suffix.
+    SetMaxResponseLength(usize),
+    /// Export conversation history as JSONL (one object per line).
+    ExportHistoryJsonl(String),
+    /// Set a high-level session intent string (shown in reports).
+    SetSessionIntent(String),
+    /// Show the current session intent.
+    QuerySessionIntent,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

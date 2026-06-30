@@ -401,6 +401,9 @@ pub struct Session {
 
     /// Soft warning threshold for history size in bytes (0 = off).
     pub history_size_warn_bytes: usize,
+
+    /// High-level session intent set by the user — surfaced in reports.
+    pub session_intent: Option<String>,
 }
 
 impl Session {
@@ -505,6 +508,7 @@ impl Session {
             cost_ceiling_usd: 0.0,
             focus_mode: None,
             history_size_warn_bytes: 0,
+            session_intent: None,
         }
     }
 

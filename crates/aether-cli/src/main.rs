@@ -6778,6 +6778,57 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::SetMaxResponseLength(n) => {
+                    let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
+                    let existing = session.config.system_suffix.get_or_insert_with(String::new);
+                    if !existing.contains(&directive) {
+                        if !existing.is_empty() { existing.push('\n'); }
+                        existing.push_str(&directive);
+                    }
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Max response length set to {n} words (added to system suffix)."
+                    )));
+                    continue;
+                }
+                UiCommand::ExportHistoryJsonl(path) => {
+                    let mut lines: Vec<String> = Vec::new();
+                    for item in &session.history {
+                        match serde_json::to_string(item) {
+                            Ok(s) => lines.push(s),
+                            Err(e) => { lines.push(format!("{{\"error\":\"{e}\"}}"));}
+                        }
+                    }
+                    let content = lines.join("\n");
+                    match std::fs::write(&path, &content) {
+                        Ok(()) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "History exported as JSONL to '{}' ({} lines, {} bytes).", path, lines.len(), content.len()
+                            )));
+                        }
+                        Err(e) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Export failed: {e}")));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::SetSessionIntent(text) => {
+                    if text.is_empty() {
+                        session.session_intent = None;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Session intent cleared.".to_string()));
+                    } else {
+                        session.session_intent = Some(text.clone());
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Session intent set: \"{text}\"")));
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionIntent => {
+                    let note = match &session.session_intent {
+                        None => "Session intent: not set.".to_string(),
+                        Some(t) => format!("Session intent: \"{t}\""),
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::QuerySnapshotList => {
                     if session.saved_snapshots.is_empty() {
                         let _ = etx_for_driver.send(UiEvent::SystemNote("No snapshots saved. Use /snapshot-save <name>.".to_string()));
@@ -30608,6 +30659,53 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /set-max-response-length <n> — append max word count to system suffix
+                                cmd_str if cmd_str.starts_with("/set-max-response-length ") => {
+                                    let arg = cmd_str.trim_start_matches("/set-max-response-length ").trim();
+                                    if let Ok(n) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::SetMaxResponseLength(n)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /set-max-response-length <words>".to_string()));
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-export-jsonl <path> — export history as JSONL
+                                cmd_str if cmd_str.starts_with("/history-export-jsonl ") => {
+                                    let path = cmd_str.trim_start_matches("/history-export-jsonl ").trim().to_string();
+                                    if path.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /history-export-jsonl <path>".to_string()));
+                                    } else if _ctx.send(UiCommand::ExportHistoryJsonl(path)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-intent <text> | off — set session intent
+                                cmd_str if cmd_str == "/session-intent off" || cmd_str.starts_with("/session-intent ") => {
+                                    if cmd_str == "/session-intent off" {
+                                        if _ctx.send(UiCommand::SetSessionIntent(String::new())).is_err() { break 'outer; }
+                                    } else {
+                                        let text = cmd_str.trim_start_matches("/session-intent ").trim().to_string();
+                                        if _ctx.send(UiCommand::SetSessionIntent(text)).is_err() { break 'outer; }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-intent-show — show current session intent
+                                "/session-intent-show" => {
+                                    if _ctx.send(UiCommand::QuerySessionIntent).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /session-checkpoint-list — list saved snapshots with size
                                 "/session-checkpoint-list" => {
                                     if _ctx.send(UiCommand::QuerySnapshotList).is_err() { break 'outer; }
@@ -31870,6 +31968,10 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/response-grade ",
                             "/history-size-warn ", "/history-size-warn off",
                             "/history-size-warn-show",
+                            "/set-max-response-length ",
+                            "/history-export-jsonl ",
+                            "/session-intent ", "/session-intent off",
+                            "/session-intent-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
