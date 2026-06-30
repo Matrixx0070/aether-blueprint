@@ -5359,6 +5359,7 @@ Input shortcuts\n\
     ◈ /dashboard /secret-gen /cron-explain /k8s                 ops + milestone B100\n\
     ◈ /ai-improve /ai-simplify /ai-secure /ai-review-diff /ai-perf  AI analysis suite\n\
     ◈ /flashcard /quiz /teach /man-ai /compare                  learning + productivity\n\
+    ◈ /scaffold /impl /gen-readme /gen-api-docs /pseudocode     code generation\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -12152,6 +12153,198 @@ CTF Toolkit — Aether AI-assisted\n\
                                     if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
                                     continue;
                                 }
+                                // ── Batch 103: Code scaffolding + generation ──────────────────────
+                                cmd if cmd.starts_with("/scaffold ") || cmd == "/scaffold" => {
+                                    // /scaffold <type> [lang/framework]  — generate boilerplate code
+                                    let args = cmd.trim_start_matches("/scaffold").trim();
+                                    if args.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /scaffold <type> [lang]\n\
+                                            Types: api-endpoint, react-component, rust-module, cli-tool,\n\
+                                                   rest-api, graphql-schema, dockerfile, github-action,\n\
+                                                   auth-middleware, db-model, test-suite, websocket-server\n\
+                                            Example: /scaffold react-component TypeScript".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Generate production-ready boilerplate code for: {args}\n\n\
+                                        Requirements:\n\
+                                        - Complete, working code (not pseudocode or TODO stubs)\n\
+                                        - Proper error handling\n\
+                                        - Type annotations/signatures\n\
+                                        - Common patterns and best practices for this type\n\
+                                        - Brief comment on what to customize\n\n\
+                                        Output the code in a properly labeled code block, then a short\n\
+                                        'What to customize' section with 3-5 bullet points."
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/scaffold  {args}"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/impl ") || cmd == "/impl" => {
+                                    // /impl <signature or description>  — AI implements a function
+                                    let sig = cmd.trim_start_matches("/impl").trim();
+                                    if sig.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /impl <function signature or description>\n\
+                                            Example: /impl fn calculate_similarity(a: &str, b: &str) -> f64\n\
+                                                     /impl a Python function that parses TOML into a dict".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Implement this function completely:\n\n{sig}\n\n\
+                                        Requirements:\n\
+                                        - Correct, production-quality implementation\n\
+                                        - Handle all edge cases (empty input, null, overflow, etc.)\n\
+                                        - Include doc comment explaining the algorithm briefly\n\
+                                        - If multiple approaches exist, use the most idiomatic one\n\n\
+                                        Provide ONLY the implementation in a code block, then one paragraph\n\
+                                        explaining the algorithm and complexity."
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    let short_sig: String = sig.chars().take(60).collect();
+                                    ui.chat_lines.push(ChatLine::User(format!("/impl  {short_sig}{}",
+                                        if sig.len() > 60 { "…" } else { "" }), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd == "/gen-readme" || cmd.starts_with("/gen-readme ") => {
+                                    // /gen-readme [dir]  — AI generates README.md from project structure
+                                    let dir_arg = cmd.trim_start_matches("/gen-readme").trim();
+                                    let target = if dir_arg.is_empty() { "." } else { dir_arg };
+                                    // gather project info
+                                    let file_tree = std::process::Command::new("find")
+                                        .args([target, "-type", "f",
+                                               "-not", "-path", "*/target/*",
+                                               "-not", "-path", "*/.git/*",
+                                               "-not", "-path", "*/node_modules/*",
+                                               "-not", "-name", "*.lock"])
+                                        .output()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).lines()
+                                            .take(50).collect::<Vec<_>>().join("\n"))
+                                        .unwrap_or_default();
+                                    let existing_readme = std::fs::read_to_string(format!("{target}/README.md"))
+                                        .unwrap_or_default();
+                                    let readme_hint = if existing_readme.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!("\n\nExisting README (to improve, not replace verbatim):\n{}", existing_readme.chars().take(1500).collect::<String>())
+                                    };
+                                    // check for common config files
+                                    let cargo = std::fs::read_to_string(format!("{target}/Cargo.toml")).ok();
+                                    let package_json = std::fs::read_to_string(format!("{target}/package.json")).ok();
+                                    let pyproject = std::fs::read_to_string(format!("{target}/pyproject.toml")).ok();
+                                    let mut manifest_info = String::new();
+                                    if let Some(c) = &cargo {
+                                        manifest_info.push_str(&format!("Cargo.toml:\n```toml\n{}\n```\n", c.chars().take(500).collect::<String>()));
+                                    }
+                                    if let Some(p) = &package_json {
+                                        manifest_info.push_str(&format!("package.json:\n```json\n{}\n```\n", p.chars().take(500).collect::<String>()));
+                                    }
+                                    if let Some(p) = &pyproject {
+                                        manifest_info.push_str(&format!("pyproject.toml:\n```toml\n{}\n```\n", p.chars().take(500).collect::<String>()));
+                                    }
+                                    let prompt = format!(
+                                        "Generate a professional README.md for this project.\n\n\
+                                        Include these sections (skip irrelevant ones):\n\
+                                        # Project Name\n\
+                                        > One-sentence tagline\n\
+                                        ## Features\n\
+                                        ## Installation\n\
+                                        ## Quick Start\n\
+                                        ## Usage\n\
+                                        ## Configuration\n\
+                                        ## Contributing\n\
+                                        ## License\n\n\
+                                        Use real information from the files below. Add badges where appropriate.\n\n\
+                                        File tree:\n{file_tree}\n\n{manifest_info}{readme_hint}"
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/gen-readme  {target}"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd == "/gen-api-docs" || cmd.starts_with("/gen-api-docs ") => {
+                                    // /gen-api-docs <file>  — AI generates API documentation from code
+                                    let file_arg = cmd.trim_start_matches("/gen-api-docs").trim();
+                                    if file_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /gen-api-docs <file>".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    match std::fs::read_to_string(file_arg) {
+                                        Ok(source) => {
+                                            let ext = std::path::Path::new(file_arg)
+                                                .extension().and_then(|e| e.to_str()).unwrap_or("code");
+                                            let preview: String = source.chars().take(8000).collect();
+                                            let prompt = format!(
+                                                "Generate comprehensive API documentation for this code.\n\
+                                                For each public function, method, or endpoint:\n\
+                                                - **Name** and **signature**\n\
+                                                - **Description** — what it does in plain English\n\
+                                                - **Parameters** — name, type, required/optional, description\n\
+                                                - **Returns** — type and description\n\
+                                                - **Errors** — what can fail and when\n\
+                                                - **Example** — minimal calling code\n\n\
+                                                Format as Markdown suitable for a docs site.\n\n\
+                                                File: {file_arg}\n```{ext}\n{preview}\n```"
+                                            );
+                                            let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                            ui.chat_lines.push(ChatLine::User(format!("/gen-api-docs  {file_arg}"), ts));
+                                            ui.msg_times_secs.push(ts);
+                                            ui.status_running = true;
+                                            ui.waiting_since = Some(std::time::Instant::now());
+                                            ui.follow_tail = true;
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                        }
+                                        Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {file_arg}: {e}"))); }
+                                    }
+                                    continue;
+                                }
+                                cmd if cmd == "/pseudocode" || cmd.starts_with("/pseudocode ") => {
+                                    // /pseudocode <description>  — AI writes clear pseudocode algorithm
+                                    let desc = cmd.trim_start_matches("/pseudocode").trim();
+                                    if desc.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /pseudocode <algorithm description>\n  Example: /pseudocode binary search in a sorted array".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Write clear pseudocode for: {desc}\n\n\
+                                        Format:\n\
+                                        1. **Problem statement** — one sentence clarifying what we're solving\n\
+                                        2. **Pseudocode** — in a code block, using clear English keywords\n\
+                                        3. **Complexity** — Time: O(...), Space: O(...) with brief justification\n\
+                                        4. **Key insight** — the core idea that makes this algorithm work\n\
+                                        5. **Concrete example** — trace through a small input step by step\n\n\
+                                        Make the pseudocode readable enough to implement in any language."
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/pseudocode  {desc}"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -12790,7 +12983,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/flashcard ", "/man-ai ", "/quiz ", "/teach ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
+                            "/ai-commit", "/ai-commit ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/flashcard ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/impl ", "/man-ai ", "/pseudocode ", "/quiz ", "/scaffold ", "/teach ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
