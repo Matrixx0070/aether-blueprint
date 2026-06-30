@@ -1487,13 +1487,15 @@ pub fn draw_frame(
             } else {
                 String::new()
             };
-            // Hints cycle every 8 s (4 groups: input / search / nav / commands)
-            let hints_group = (elapsed / 8) % 4;
+            // Hints cycle every 8 s (6 groups: input / search / nav / commands / power-tools / ai-workflows)
+            let hints_group = (elapsed / 8) % 6;
             let static_hints = match hints_group {
                 0 => "↵ send  ⇧↵ newline  ↑↓ history  ←→ move  ^A/E line  ^W del-word  ^L clear  /help",
                 1 => "^R reverse-i-search  ^Y yank last  ^K kill-end  ^U kill-start  ⇥ tab-complete  ^` code fence",
                 2 => "Pg↑↓ scroll  End jump to tail  ^H top  F2 panel  F3 timestamps  F6 focus  F7 theme  ^G find  ^N new",
-                _ => "/retry  /copy  /note  /compact  /export  /search  /cost  /model  /sessions  /undo  /pin",
+                3 => "/retry  /copy  /note  /compact  /export  /search  /cost  /model  /sessions  /undo  /pin",
+                4 => "/scan  /secrets  /deps  /vulnscan  /owasp  /ctf-tools  /sbom  /blame  /grep-code  /heatmap",
+                _ => "/ask-code  /gen-tests  /code-review  /pr-review  /refactor  /optimize  /arch-review  /ai-commit",
             };
             let mut hints_spans = vec![
                 Span::styled(
@@ -1891,18 +1893,31 @@ fn render_message(
                         "html" | "css" | "xml"      => Color::Rgb(249, 115, 22),  // orange-500
                         _                           => C_DIM,
                     };
-                    vec![
+                    // Show run hint for executable languages
+                    let run_hint = match code_lang.as_str() {
+                        "rust"|"rs" => "  /run",
+                        "python"|"py" => "  /run",
+                        "javascript"|"js" => "  /run",
+                        "bash"|"sh"|"shell" => "  /run",
+                        "diff"|"patch" => "  /patch",
+                        _ => "",
+                    };
+                    let mut spans = vec![
                         Span::styled("  ─── ".to_string(), Style::default().fg(C_DIM).bg(C_CODE_BG)),
                         Span::styled(code_lang.to_uppercase(), Style::default().fg(lang_color).bg(C_CODE_BG).add_modifier(Modifier::BOLD)),
-                        Span::styled(" ─────────────────────────".to_string(), Style::default().fg(C_DIM).bg(C_CODE_BG)),
-                    ]
+                        Span::styled(" ──────────────────────────".to_string(), Style::default().fg(C_DIM).bg(C_CODE_BG)),
+                    ];
+                    if !run_hint.is_empty() {
+                        spans.push(Span::styled(run_hint.to_string(), Style::default().fg(C_DIM).bg(C_CODE_BG)));
+                    }
+                    spans
                 } else if in_code_block {
                     // Opening fence no language
                     vec![Span::styled("  ──────────────────────────────────".to_string(), Style::default().fg(C_DIM).bg(C_CODE_BG))]
                 } else {
-                    // Closing fence: show line count
+                    // Closing fence: show line count + copy shortcut
                     let lines_label = if code_line_num > 0 {
-                        format!("  ─── {} line{} ─────────────────────", code_line_num, if code_line_num == 1 { "" } else { "s" })
+                        format!("  ─── {} line{}  /copy code ────────────", code_line_num, if code_line_num == 1 { "" } else { "s" })
                     } else {
                         "  ──────────────────────────────────".to_string()
                     };
