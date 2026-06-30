@@ -5217,7 +5217,13 @@ Crypto & encoding\n\
   /base64 [e|d] <text>    base64 encode (default) or decode\n\
   /hash [algo] <text|@f>  sha256 (default) / sha512 / sha1 / md5; @file syntax\n\
   /url [e|d] <text>       URL percent-encode (default) or percent-decode\n\
-  /uuid [n]               generate n UUID v4 values from /dev/urandom (max 20)"),
+  /uuid [n]               generate n UUID v4 values from /dev/urandom (max 20)\n\
+System monitoring\n\
+  /sys                    OS, kernel, CPU model+cores, load averages, user/shell\n\
+  /mem                    /proc/meminfo breakdown + top memory processes\n\
+  /disk [dir]             df -h + du --max-depth=2 size breakdown\n\
+  /port [n]               listening sockets filtered by port (ss/lsof/netstat)\n\
+  /proc [filter]          running processes sorted by CPU; optional name filter"),
                                         ("keys", &["keys", "keyboard", "shortcuts", "bindings"], "\
 Input shortcuts\n\
   ↑ ↓  / Ctrl+R           history recall / reverse-i-search\n\
@@ -5319,6 +5325,7 @@ Input shortcuts\n\
     ◈ /watch /profile /patch /rename /count-tokens             precision tools\n\
     ◈ /git-log /diff /complexity /env-check /docker           devops + intelligence\n\
     ◈ /jwt-decode /base64 /hash /url /uuid                   crypto + encoding utils\n\
+    ◈ /sys /mem /disk /port /proc                            system monitoring\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -10308,6 +10315,205 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // ── Batch 94: System monitoring tools ────────────────────────────
+                                cmd if cmd == "/port" || cmd.starts_with("/port ") => {
+                                    // /port [n]  — what's listening on port n, or all open ports
+                                    let port_arg = cmd.trim_start_matches("/port").trim();
+                                    let mut body = String::new();
+                                    // try ss first, fall back to lsof, fall back to netstat
+                                    let (found, out) = if let Ok(o) = std::process::Command::new("ss")
+                                        .args(["-tlnp"])
+                                        .output()
+                                    {
+                                        (true, String::from_utf8_lossy(&o.stdout).to_string())
+                                    } else if let Ok(o) = std::process::Command::new("lsof")
+                                        .args(["-i", "-n", "-P"])
+                                        .output()
+                                    {
+                                        (true, String::from_utf8_lossy(&o.stdout).to_string())
+                                    } else if let Ok(o) = std::process::Command::new("netstat")
+                                        .args(["-tlnp"])
+                                        .output()
+                                    {
+                                        (true, String::from_utf8_lossy(&o.stdout).to_string())
+                                    } else {
+                                        (false, String::new())
+                                    };
+                                    if !found {
+                                        body.push_str("  (ss / lsof / netstat not found — cannot check ports)\n");
+                                    } else {
+                                        let filter = port_arg.trim();
+                                        let lines: Vec<&str> = out.lines()
+                                            .filter(|l| filter.is_empty() || l.contains(filter))
+                                            .collect();
+                                        if lines.is_empty() {
+                                            body.push_str(&format!("  (no matches for port {filter})\n"));
+                                        } else {
+                                            body.push_str(&format!("Port scan{}:\n", if filter.is_empty() { String::new() } else { format!("  filter={filter}") }));
+                                            body.push_str("─────────────────────────────────────────────────\n");
+                                            for l in lines.iter().take(50) {
+                                                body.push_str("  ");
+                                                body.push_str(l);
+                                                body.push('\n');
+                                            }
+                                        }
+                                    }
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/disk" || cmd.starts_with("/disk ") => {
+                                    // /disk [dir]  — df + top du directories
+                                    let dir_arg = cmd.trim_start_matches("/disk").trim();
+                                    let target = if dir_arg.is_empty() { "." } else { dir_arg };
+                                    let mut body = String::new();
+                                    // df -h
+                                    if let Ok(o) = std::process::Command::new("df").args(["-h", target]).output() {
+                                        let df_out = String::from_utf8_lossy(&o.stdout);
+                                        body.push_str("Disk space (df -h):\n");
+                                        for l in df_out.lines() {
+                                            body.push_str("  "); body.push_str(l); body.push('\n');
+                                        }
+                                        body.push('\n');
+                                    }
+                                    // top 15 dirs by size
+                                    if let Ok(o) = std::process::Command::new("du")
+                                        .args(["-sh", "--max-depth=2", target])
+                                        .output()
+                                    {
+                                        let mut entries: Vec<(String, String)> = String::from_utf8_lossy(&o.stdout)
+                                            .lines()
+                                            .filter_map(|l| {
+                                                let mut it = l.splitn(2, '\t');
+                                                let size = it.next()?.trim().to_string();
+                                                let path = it.next()?.trim().to_string();
+                                                Some((size, path))
+                                            })
+                                            .collect();
+                                        // sort by path for stable output
+                                        entries.sort_by(|a, b| a.1.cmp(&b.1));
+                                        body.push_str("Directory sizes (du -sh --max-depth=2):\n");
+                                        body.push_str("─────────────────────────────────────────\n");
+                                        for (sz, path) in entries.iter().take(20) {
+                                            body.push_str(&format!("  {:>8}  {path}\n", sz));
+                                        }
+                                    }
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/mem" => {
+                                    // /mem  — memory usage snapshot
+                                    let mut body = "Memory usage\n─────────────────────────────────────────\n".to_string();
+                                    // /proc/meminfo on Linux
+                                    if let Ok(meminfo) = std::fs::read_to_string("/proc/meminfo") {
+                                        let fields = ["MemTotal", "MemFree", "MemAvailable", "Buffers", "Cached", "SwapTotal", "SwapFree", "SwapCached"];
+                                        for f in &fields {
+                                            if let Some(line) = meminfo.lines().find(|l| l.starts_with(f)) {
+                                                body.push_str(&format!("  {line}\n"));
+                                            }
+                                        }
+                                    } else {
+                                        // macOS fallback
+                                        if let Ok(o) = std::process::Command::new("vm_stat").output() {
+                                            let txt = String::from_utf8_lossy(&o.stdout);
+                                            for l in txt.lines().take(15) {
+                                                body.push_str("  "); body.push_str(l); body.push('\n');
+                                            }
+                                        } else {
+                                            body.push_str("  (/proc/meminfo and vm_stat not found)\n");
+                                        }
+                                    }
+                                    // also show per-process top memory consumers
+                                    if let Ok(o) = std::process::Command::new("ps")
+                                        .args(["aux", "--sort=-%mem"])
+                                        .output()
+                                    {
+                                        body.push_str("\nTop memory processes (ps aux --sort=-%mem):\n");
+                                        body.push_str("─────────────────────────────────────────────────\n");
+                                        for l in String::from_utf8_lossy(&o.stdout).lines().take(11) {
+                                            body.push_str("  "); body.push_str(l); body.push('\n');
+                                        }
+                                    }
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/sys" => {
+                                    // /sys  — system overview: OS, kernel, CPU, uptime, hostname
+                                    let mut body = "System overview\n─────────────────────────────────────────\n".to_string();
+                                    // uname
+                                    if let Ok(o) = std::process::Command::new("uname").args(["-a"]).output() {
+                                        let u = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                                        body.push_str(&format!("  Kernel:   {u}\n"));
+                                    }
+                                    // hostname
+                                    if let Ok(o) = std::process::Command::new("hostname").output() {
+                                        let h = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                                        body.push_str(&format!("  Hostname: {h}\n"));
+                                    }
+                                    // uptime
+                                    if let Ok(o) = std::process::Command::new("uptime").output() {
+                                        let u = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                                        body.push_str(&format!("  Uptime:   {u}\n"));
+                                    }
+                                    // CPU info
+                                    if let Ok(cpuinfo) = std::fs::read_to_string("/proc/cpuinfo") {
+                                        let cores = cpuinfo.lines().filter(|l| l.starts_with("processor")).count();
+                                        let model = cpuinfo.lines()
+                                            .find(|l| l.starts_with("model name"))
+                                            .and_then(|l| l.split(':').nth(1))
+                                            .map(|s| s.trim().to_string())
+                                            .unwrap_or_else(|| "(unknown)".to_string());
+                                        body.push_str(&format!("  CPU:      {cores}× {model}\n"));
+                                    } else if let Ok(o) = std::process::Command::new("sysctl")
+                                        .args(["-n", "hw.logicalcpu", "machdep.cpu.brand_string"])
+                                        .output()
+                                    {
+                                        let txt = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                                        body.push_str(&format!("  CPU:      {txt}\n"));
+                                    }
+                                    // load avg
+                                    if let Ok(loadavg) = std::fs::read_to_string("/proc/loadavg") {
+                                        let la = loadavg.split_whitespace().take(3).collect::<Vec<_>>().join("  ");
+                                        body.push_str(&format!("  Load:     {la}  (1m  5m  15m)\n"));
+                                    }
+                                    // env
+                                    body.push_str(&format!("  Shell:    {}\n", std::env::var("SHELL").unwrap_or_else(|_| "(unknown)".into())));
+                                    body.push_str(&format!("  User:     {}\n", std::env::var("USER").or_else(|_| std::env::var("LOGNAME")).unwrap_or_else(|_| "(unknown)".into())));
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/proc" || cmd.starts_with("/proc ") => {
+                                    // /proc [filter]  — top processes by CPU usage
+                                    let filter = cmd.trim_start_matches("/proc").trim().to_lowercase();
+                                    let mut body = String::new();
+                                    if let Ok(o) = std::process::Command::new("ps")
+                                        .args(["aux", "--sort=-%cpu"])
+                                        .output()
+                                    {
+                                        body.push_str(&format!(
+                                            "Processes{}:\n─────────────────────────────────────────────────\n",
+                                            if filter.is_empty() { String::new() } else { format!("  filter={filter}") }
+                                        ));
+                                        let all_txt = String::from_utf8_lossy(&o.stdout).to_string();
+                                        let out_lines: Vec<&str> = all_txt.lines()
+                                            .enumerate()
+                                            .filter(|(i, l)| *i == 0 || filter.is_empty() || l.to_lowercase().contains(&filter))
+                                            .map(|(_, l)| l)
+                                            .take(31)
+                                            .collect();
+                                        for l in &out_lines {
+                                            body.push_str("  "); body.push_str(l); body.push('\n');
+                                        }
+                                    } else {
+                                        body.push_str("  (ps not available)\n");
+                                    }
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -10946,7 +11152,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-log", "/git-log ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/jwt-decode ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/pr-review", "/pr-review ", "/profile ", "/recent", "/recent ", "/refactor ", "/rename ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/status", "/test", "/test ", "/todo-ai ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ",
+                            "/ai-commit", "/ai-commit ", "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-log", "/git-log ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/jwt-decode ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/recent", "/recent ", "/refactor ", "/rename ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
