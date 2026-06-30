@@ -7834,6 +7834,239 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // ── BATCH 81: LINTING, METRICS, AI WORKFLOWS ─────────────────────
+                                cmd if cmd == "/lint" || cmd.starts_with("/lint ") => {
+                                    let file_arg = cmd.trim_start_matches("/lint").trim();
+                                    let cwd = std::env::current_dir().unwrap_or_default();
+                                    // Detect project type + pick linter
+                                    let (lint_cmd, lint_label) = if !file_arg.is_empty() {
+                                        let ext = std::path::Path::new(file_arg).extension().and_then(|e| e.to_str()).unwrap_or("");
+                                        match ext {
+                                            "rs"  => (format!("cargo clippy -- -D warnings 2>&1"), "cargo clippy"),
+                                            "py"  => {
+                                                let has_ruff = std::process::Command::new("which").arg("ruff").output().map(|o| o.status.success()).unwrap_or(false);
+                                                let has_flake = std::process::Command::new("which").arg("flake8").output().map(|o| o.status.success()).unwrap_or(false);
+                                                if has_ruff { (format!("ruff check {file_arg} 2>&1"), "ruff") }
+                                                else if has_flake { (format!("flake8 {file_arg} 2>&1"), "flake8") }
+                                                else { (format!("python3 -m py_compile {file_arg} 2>&1 && echo OK"), "py_compile") }
+                                            }
+                                            "js"|"ts"|"jsx"|"tsx"|"mjs" => {
+                                                let has_eslint = cwd.join("node_modules").join(".bin").join("eslint").exists()
+                                                    || std::process::Command::new("which").arg("eslint").output().map(|o| o.status.success()).unwrap_or(false);
+                                                if has_eslint { (format!("eslint {file_arg} 2>&1"), "eslint") }
+                                                else { (format!("npx eslint {file_arg} 2>&1"), "npx eslint") }
+                                            }
+                                            "go"  => (format!("go vet {file_arg} 2>&1"), "go vet"),
+                                            "sh"|"bash" => (format!("shellcheck {file_arg} 2>&1"), "shellcheck"),
+                                            _     => (format!("echo 'No linter for .{ext} — try /shell <linter> {file_arg}'"), ""),
+                                        }
+                                    } else if cwd.join("Cargo.toml").exists() {
+                                        ("cargo clippy -- -D warnings 2>&1".to_string(), "cargo clippy")
+                                    } else if cwd.join("package.json").exists() {
+                                        ("npx eslint . 2>&1".to_string(), "eslint")
+                                    } else if cwd.join("go.mod").exists() {
+                                        ("go vet ./... 2>&1".to_string(), "go vet")
+                                    } else if cwd.join("pyproject.toml").exists() || cwd.join("setup.py").exists() {
+                                        let has_ruff = std::process::Command::new("which").arg("ruff").output().map(|o| o.status.success()).unwrap_or(false);
+                                        if has_ruff { ("ruff check . 2>&1".to_string(), "ruff") } else { ("flake8 . 2>&1".to_string(), "flake8") }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "No project type detected.\n  Usage: /lint <file.rs|py|js|go|sh>  or run from a project directory".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(format!("Running {lint_label}…")));
+                                    let start = std::time::Instant::now();
+                                    match std::process::Command::new("sh")
+                                        .args(["-c", &lint_cmd])
+                                        .current_dir(&cwd)
+                                        .output()
+                                    {
+                                        Ok(out) => {
+                                            let elapsed = start.elapsed();
+                                            let stdout = String::from_utf8_lossy(&out.stdout);
+                                            let badge = if out.status.success() { "✓" } else { "✗" };
+                                            let lines: Vec<&str> = stdout.trim_end().lines().collect();
+                                            let err_count = lines.iter().filter(|l| l.contains("error") || l.contains("E:") || l.contains("[E")).count();
+                                            let warn_count = lines.iter().filter(|l| l.contains("warning") || l.contains("W:") || l.contains("[W")).count();
+                                            let shown = lines.len().min(60);
+                                            let mut msg = format!("{badge} {lint_label}  {:.1}s  —  {} error{}, {} warning{}\n```\n",
+                                                elapsed.as_secs_f64(),
+                                                err_count, if err_count == 1 { "" } else { "s" },
+                                                warn_count, if warn_count == 1 { "" } else { "s" });
+                                            if lines.is_empty() {
+                                                msg.push_str("(no output — clean)");
+                                            } else {
+                                                msg.push_str(&lines[..shown].join("\n"));
+                                                if lines.len() > shown {
+                                                    msg.push_str(&format!("\n… ({} more lines)", lines.len() - shown));
+                                                }
+                                            }
+                                            msg.push_str("\n```");
+                                            if !out.status.success() {
+                                                msg.push_str("\n  Ask: explain these lint errors and how to fix them");
+                                            }
+                                            ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("{lint_label} not found: {e}")));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/todo-ai ") || cmd == "/todo-ai" => {
+                                    // AI generates a task checklist from a natural-language description
+                                    let desc = cmd.trim_start_matches("/todo-ai").trim();
+                                    if desc.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /todo-ai <task description>\n  AI decomposes your goal into subtasks and adds them to your todo list\n  e.g. /todo-ai implement user authentication with JWT".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Decompose this task into 5-10 concrete, actionable subtasks:\n\n\"{desc}\"\n\n\
+                                         Rules:\n\
+                                         - Each task must be a short, single action (< 10 words)\n\
+                                         - Order from first to last (dependencies first)\n\
+                                         - Format: numbered list only, no bullets, no extra text\n\
+                                         - Start each line with a number: 1. 2. etc.\n\
+                                         - Be specific, not vague"
+                                    );
+                                    let ts = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/todo-ai {desc}"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd == "/metrics" || cmd.starts_with("/metrics ") => {
+                                    use walkdir::WalkDir;
+                                    let dir_arg = cmd.trim_start_matches("/metrics").trim();
+                                    let start_dir = if dir_arg.is_empty() {
+                                        std::env::current_dir().unwrap_or_default()
+                                    } else if dir_arg.starts_with('/') {
+                                        std::path::PathBuf::from(dir_arg)
+                                    } else {
+                                        std::env::current_dir().unwrap_or_default().join(dir_arg)
+                                    };
+                                    let skip_dirs = ["target", "node_modules", ".git", "dist", "build", "__pycache__", ".next"];
+                                    // Count LoC per language
+                                    let mut lang_stats: std::collections::HashMap<String, (usize, usize)> = std::collections::HashMap::new(); // lang -> (files, lines)
+                                    let mut total_files = 0usize;
+                                    let mut total_lines = 0usize;
+                                    let mut largest_file = ("".to_string(), 0usize);
+                                    for entry in WalkDir::new(&start_dir).into_iter()
+                                        .filter_entry(|e| {
+                                            let name = e.file_name().to_string_lossy();
+                                            !name.starts_with('.') && !skip_dirs.contains(&name.as_ref())
+                                        })
+                                        .filter_map(|e| e.ok())
+                                        .filter(|e| e.file_type().is_file())
+                                    {
+                                        let ext = entry.path().extension().and_then(|e| e.to_str()).unwrap_or("").to_string();
+                                        let lang = match ext.as_str() {
+                                            "rs" => "Rust", "py" => "Python", "js"|"mjs"|"cjs" => "JavaScript",
+                                            "ts"|"tsx"|"jsx" => "TypeScript", "go" => "Go", "java" => "Java",
+                                            "c"|"h" => "C", "cpp"|"cc"|"cxx"|"hh" => "C++", "rb" => "Ruby",
+                                            "sh"|"bash" => "Shell", "toml" => "TOML", "json" => "JSON",
+                                            "yaml"|"yml" => "YAML", "md" => "Markdown", "sql" => "SQL",
+                                            "html"|"htm" => "HTML", "css" => "CSS", "xml" => "XML",
+                                            "lua" => "Lua", "php" => "PHP", "kt" => "Kotlin", "swift" => "Swift",
+                                            _ => continue,
+                                        };
+                                        let Ok(content) = std::fs::read_to_string(entry.path()) else { continue };
+                                        let lines = content.lines().count();
+                                        let non_blank = content.lines().filter(|l| !l.trim().is_empty()).count();
+                                        let entry_stats = lang_stats.entry(lang.to_string()).or_insert((0, 0));
+                                        entry_stats.0 += 1;
+                                        entry_stats.1 += non_blank;
+                                        total_files += 1;
+                                        total_lines += non_blank;
+                                        if lines > largest_file.1 {
+                                            let rel = entry.path().strip_prefix(&start_dir).unwrap_or(entry.path());
+                                            largest_file = (rel.to_string_lossy().to_string(), lines);
+                                        }
+                                    }
+                                    if total_files == 0 {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("No source files found in {}", start_dir.display())
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let mut sorted: Vec<_> = lang_stats.iter().collect();
+                                    sorted.sort_by(|a, b| b.1.1.cmp(&a.1.1));
+                                    let mut msg = format!("Code metrics  {}\n\n  {:<16} {:>6}  {:>8}\n  {}\n",
+                                        start_dir.display(), "Language", "Files", "LoC (non-blank)", "─".repeat(34));
+                                    for (lang, (files, lines)) in &sorted {
+                                        let pct = if total_lines > 0 { lines * 100 / total_lines } else { 0 };
+                                        let bar = "█".repeat(pct / 5);
+                                        msg.push_str(&format!("  {:<16} {:>6}  {:>8}  {}  {}%\n", lang, files, lines, bar, pct));
+                                    }
+                                    msg.push_str(&format!("  {}\n  {:<16} {:>6}  {:>8}\n", "─".repeat(34), "Total", total_files, total_lines));
+                                    if !largest_file.0.is_empty() {
+                                        msg.push_str(&format!("\n  Largest file: {}  ({} lines)", largest_file.0, largest_file.1));
+                                    }
+                                    ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/changelog") || cmd == "/changelog" => {
+                                    // Generate a changelog from recent git history via AI
+                                    let arg = cmd.trim_start_matches("/changelog").trim();
+                                    let n = arg.parse::<usize>().unwrap_or(20);
+                                    let log_out = std::process::Command::new("git")
+                                        .args(["log", "--oneline", "--no-merges", &format!("-{}", n)])
+                                        .current_dir(std::env::current_dir().unwrap_or_default())
+                                        .output();
+                                    let log_text = match log_out {
+                                        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+                                        Ok(o) => { String::from_utf8_lossy(&o.stderr).to_string() }
+                                        Err(e) => { format!("git error: {e}") }
+                                    };
+                                    if log_text.trim().is_empty() || log_text.contains("error") || log_text.contains("fatal") {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("No git history found:\n{}\n\n  Run from a git repository.", log_text.trim())
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let commit_count = log_text.trim().lines().count();
+                                    let prompt = format!(
+                                        "Generate a concise CHANGELOG entry from these {} git commits:\n\n```\n{}\n```\n\n\
+                                         Format it as:\n\
+                                         ## [Unreleased]\n\
+                                         ### Added\n- ...\n\
+                                         ### Changed\n- ...\n\
+                                         ### Fixed\n- ...\n\n\
+                                         Rules:\n\
+                                         - Group commits by type\n\
+                                         - Skip trivial commits (typo fixes, formatting)\n\
+                                         - Write user-facing language, not technical jargon\n\
+                                         - Keep it under 30 bullet points total",
+                                        commit_count, log_text.trim()
+                                    );
+                                    let ts = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(
+                                        format!("/changelog  (last {commit_count} commits)"), ts
+                                    ));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
                                     let replacement_raw = cmd.trim_start_matches("/retry").trim();
@@ -8471,7 +8704,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ask-code ", "/bench", "/bench ", "/blame ", "/count-tokens", "/count-tokens ", "/ctf", "/ctf-tools", "/flow ", "/grep-code ", "/patch", "/patch ", "/profile ", "/watch ",
+                            "/ask-code ", "/bench", "/bench ", "/blame ", "/changelog", "/changelog ", "/count-tokens", "/count-tokens ", "/ctf", "/ctf-tools", "/flow ", "/grep-code ", "/lint", "/lint ", "/metrics", "/metrics ", "/patch", "/patch ", "/profile ", "/todo-ai ", "/watch ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
