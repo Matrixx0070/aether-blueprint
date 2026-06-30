@@ -42,6 +42,25 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// Head+tail truncation — keep the first `head` bytes and last `tail` bytes
+/// with an omission marker in the middle. Crucial for build output where
+/// errors appear at the END of very long compiler/test runs.
+fn truncate_smart(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        return s.to_string();
+    }
+    // Keep 2/3 head, 1/3 tail so the beginning (compilation header) and
+    // the end (error messages) are both visible.
+    let head = (max * 2 / 3).min(s.len());
+    let tail = (max / 3).min(s.len().saturating_sub(head));
+    let omitted = s.len() - head - tail;
+    let head_part = &s[..head];
+    let tail_part = &s[s.len() - tail..];
+    format!(
+        "{head_part}\n\n[…{omitted} bytes omitted…]\n\n{tail_part}"
+    )
+}
+
 const MAX_TOOL_OUTPUT: usize = 200_000;
 const DEFAULT_BASH_TIMEOUT_MS: u64 = 120_000;
 const MAX_BASH_TIMEOUT_MS: u64 = 600_000;
@@ -170,7 +189,9 @@ impl Tool for BashTool {
                 if combined.is_empty() {
                     combined = format!("(no output)\n");
                 }
-                combined = truncate(&combined, MAX_TOOL_OUTPUT);
+                // Use head+tail truncation so build errors at the END of
+                // long compiler output remain visible (not truncated away).
+                combined = truncate_smart(&combined, MAX_TOOL_OUTPUT);
                 if code != 0 {
                     Ok(format!("{combined}\n[exit code: {code}]"))
                 } else {

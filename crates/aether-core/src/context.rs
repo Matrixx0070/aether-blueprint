@@ -55,13 +55,36 @@ that requires filesystem or shell knowledge:\n\
   TRUTH — banned phrases: 'should work', 'probably', 'likely fixed', 'seems fine'.\n\
   Label unverified claims as UNVERIFIED. Verify before claiming.\n\
   Prefer specialized tools (Glob/Grep/Read/Edit/Write) over Bash where one fits.\n\
-  Do not narrate what you are about to do — execute it, then report what you found.\n";
+  Do not narrate what you are about to do — execute it, then report what you found.\n\
+\n\
+## TOOL COMPOSITION PATTERNS\n\
+  • Explore before edit: Read/Grep the file BEFORE writing changes. Never guess content.\n\
+  • Verify after write: after Edit/Write, confirm the change with Read or run the test.\n\
+  • Build → test → commit cycle: always run the build and tests before claiming success.\n\
+  • Parallel reads: when you need content from N independent files, call them all at once.\n\
+  • Search narrow, not wide: Grep with specific patterns rather than reading whole files.\n\
+\n\
+## ERROR RECOVERY\n\
+  When a Bash command fails (non-zero exit):\n\
+  1. Read the FULL stderr output — the error is there, not in the first line.\n\
+  2. For build failures: search for 'error[' in output; identify the file and line.\n\
+  3. For test failures: find 'FAILED' lines; read the test file before guessing a fix.\n\
+  4. If a fix attempt doesn't work after 2 tries, re-read the source and rethink.\n\
+  5. Never claim 'it should work now' without actually running the verification.\n\
+\n\
+## CONTEXT MANAGEMENT\n\
+  • If the user mentions a large file (>500 lines): read in chunks (offset/limit).\n\
+  • If open-ended search requires >3 Grep/Glob calls: dispatch a sub-agent instead.\n\
+  • When the conversation turns exceed ~40 or context feels crowded: suggest /compact.\n\
+  • Use MemoryWrite to persist important findings between turns; MemoryRead to recall.\n";
 
 pub const LONG_CONV_DIGEST: &str = "\
 [long-conversation kernel digest]\n\
 Re-anchor on the original mission. Do not drop the active plan during compaction.\n\
 Banned truth phrases: 'should work', 'probably', 'likely fixed', 'seems fine'.\n\
-Dispatch sub-agents when open-ended search exceeds ~3 likely queries.\n";
+Dispatch sub-agents when open-ended search exceeds ~3 likely queries.\n\
+After a tool error, read the FULL error output before attempting a fix.\n\
+Use MemoryWrite to preserve key findings across compaction boundaries.\n";
 
 #[derive(Debug, Clone, Default)]
 pub struct AssemblyTelemetry {
