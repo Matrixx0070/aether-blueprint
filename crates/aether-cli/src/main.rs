@@ -5278,7 +5278,13 @@ Code tools\n\
   /git-show [sha]         commit metadata + diff stats (default HEAD)\n\
   /ai-bugs <file>         AI bug hunt: logic/security/memory/concurrency/API misuse\n\
   /codebase-summary       AI summarizes full project: stack, structure, entry points\n\
-  /run-test <pattern>     run matching tests (auto-detects cargo/pytest/npm/go)"),
+  /run-test <pattern>     run matching tests (auto-detects cargo/pytest/npm/go)\n\
+Performance & ops\n\
+  /git-conflicts          list files with active merge conflict markers + block count\n\
+  /net-stat               network interfaces + listening sockets (ss/netstat/ip)\n\
+  /ai-optimize <file>     AI spots algorithmic/memory/I/O/concurrency hotspots\n\
+  /perf-diff <c1> | <c2>  benchmark two shell commands, show ms + ratio winner\n\
+  /bundle-size [dir]      du -sh on node_modules/target/.venv/build/dist/etc"),
                                         ("keys", &["keys", "keyboard", "shortcuts", "bindings"], "\
 Input shortcuts\n\
   ↑ ↓  / Ctrl+R           history recall / reverse-i-search\n\
@@ -5398,6 +5404,7 @@ Input shortcuts\n\
     ◈ /regex-test /format-sql /env-diff /ssh-key /ai-arch        B109 tools\n\
     ◈ /git-cherry /git-remote /tail /cheat /ai-explain           B110 tools\n\
     ◈ /pwd /git-show /ai-bugs /codebase-summary /run-test        B111 tools\n\
+    ◈ /git-conflicts /net-stat /ai-optimize /perf-diff /bundle-size  B112\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -13947,6 +13954,171 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /git-conflicts — list files with active merge conflicts
+                                cmd if cmd == "/git-conflicts" || cmd.starts_with("/git-conflicts ") => {
+                                    let out = std::process::Command::new("git")
+                                        .args(["diff", "--name-only", "--diff-filter=U"])
+                                        .output();
+                                    let body = match out {
+                                        Ok(o) if o.status.success() => {
+                                            let raw = String::from_utf8_lossy(&o.stdout).to_string();
+                                            let files: Vec<&str> = raw.lines().filter(|l| !l.trim().is_empty()).collect();
+                                            if files.is_empty() {
+                                                "git-conflicts: no conflict markers found ✓".to_string()
+                                            } else {
+                                                let mut body = format!("git-conflicts: {} conflicting file(s)\n", files.len());
+                                                for f in &files {
+                                                    // Count conflict markers
+                                                    let count = std::fs::read_to_string(f)
+                                                        .map(|c| c.lines().filter(|l| l.starts_with("<<<<<<<")).count())
+                                                        .unwrap_or(0);
+                                                    body.push_str(&format!("  ✕ {} ({} block(s))\n", f, count));
+                                                }
+                                                body
+                                            }
+                                        }
+                                        Ok(o) => format!("git-conflicts: {}", String::from_utf8_lossy(&o.stderr).trim()),
+                                        Err(_) => "git not found".to_string(),
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /net-stat — network statistics (connections, interfaces, ports)
+                                cmd if cmd == "/net-stat" || cmd.starts_with("/net-stat ") => {
+                                    let mut body = "network statistics\n".to_string();
+                                    // Interface stats
+                                    if let Ok(o) = std::process::Command::new("ip").args(["addr", "show"]).output() {
+                                        if o.status.success() {
+                                            let raw = String::from_utf8_lossy(&o.stdout).to_string();
+                                            let lines: Vec<&str> = raw.lines()
+                                                .filter(|l| l.contains("inet") || l.contains("link/") || l.contains(": "))
+                                                .take(20).collect();
+                                            body.push_str("interfaces:\n");
+                                            for l in &lines { body.push_str(&format!("  {}\n", l.trim())); }
+                                        }
+                                    } else if let Ok(o) = std::process::Command::new("ifconfig").output() {
+                                        if o.status.success() {
+                                            let raw = String::from_utf8_lossy(&o.stdout).to_string();
+                                            let lines: Vec<&str> = raw.lines().filter(|l| l.contains("inet") || !l.starts_with(' ')).take(20).collect();
+                                            body.push_str("interfaces:\n");
+                                            for l in &lines { body.push_str(&format!("  {}\n", l.trim())); }
+                                        }
+                                    }
+                                    // Active connections summary
+                                    let ss = std::process::Command::new("ss").args(["-tuln"]).output();
+                                    let netstat = std::process::Command::new("netstat").args(["-tuln"]).output();
+                                    if let Ok(o) = ss.or(netstat) {
+                                        if o.status.success() {
+                                            let raw = String::from_utf8_lossy(&o.stdout).to_string();
+                                            let lines: Vec<&str> = raw.lines().take(25).collect();
+                                            body.push_str("\nlistening sockets:\n");
+                                            for l in &lines { if !l.trim().is_empty() { body.push_str(&format!("  {}\n", l.trim())); } }
+                                        }
+                                    }
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-optimize <file> — AI performance optimization suggestions
+                                cmd if cmd.starts_with("/ai-optimize ") || cmd == "/ai-optimize" => {
+                                    let file_arg = cmd.trim_start_matches("/ai-optimize").trim();
+                                    if file_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /ai-optimize <file>\n  AI analyzes code for performance improvements.".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    match std::fs::read_to_string(file_arg) {
+                                        Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("ai-optimize: cannot read '{}': {}", file_arg, e))); }
+                                        Ok(content) => {
+                                            let snippet: String = content.lines().take(250).collect::<Vec<_>>().join("\n");
+                                            let ext = std::path::Path::new(file_arg).extension().and_then(|e| e.to_str()).unwrap_or("");
+                                            let prompt = format!(
+                                                "You are a performance optimization expert. Analyze this {} code for:\n1. Algorithmic inefficiencies (O(n²) loops, redundant work)\n2. Memory allocation hotspots (unnecessary clones, large copies)\n3. I/O patterns (batching opportunities, unnecessary syscalls)\n4. Concurrency opportunities (parallelizable sections)\n5. Cache efficiency (data locality issues)\n\nFor each finding: line number range, current complexity, suggested fix with code snippet.\n\nFile: {}\n```{}\n{}\n```",
+                                                ext, file_arg, ext, snippet
+                                            );
+                                            let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                            ui.chat_lines.push(ChatLine::User(prompt.clone(), ts));
+                                            ui.follow_tail = true;
+                                            ui.status_running = true;
+                                            ui.waiting_since = Some(std::time::Instant::now());
+                                            ui.msg_times_secs.push(ts);
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                        }
+                                    }
+                                    continue;
+                                }
+                                // /perf-diff <cmd1> | <cmd2> — compare timing of two commands
+                                cmd if cmd.starts_with("/perf-diff ") || cmd == "/perf-diff" => {
+                                    let arg = cmd.trim_start_matches("/perf-diff").trim();
+                                    if arg.is_empty() || !arg.contains('|') {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /perf-diff <cmd1> | <cmd2>\n  Example: /perf-diff ls -la | find . -maxdepth 1".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let idx = arg.find('|').unwrap();
+                                    let cmd1 = arg[..idx].trim();
+                                    let cmd2 = arg[idx + 1..].trim();
+                                    fn time_cmd(cmd_str: &str) -> (f64, bool) {
+                                        let start = std::time::Instant::now();
+                                        let parts: Vec<&str> = cmd_str.split_whitespace().collect();
+                                        let (prog, args) = parts.split_first().unwrap_or((&"", &[]));
+                                        let ok = std::process::Command::new(prog)
+                                            .args(args)
+                                            .stdout(std::process::Stdio::null())
+                                            .stderr(std::process::Stdio::null())
+                                            .status()
+                                            .map(|s| s.success())
+                                            .unwrap_or(false);
+                                        (start.elapsed().as_secs_f64() * 1000.0, ok)
+                                    }
+                                    let (t1, ok1) = time_cmd(cmd1);
+                                    let (t2, ok2) = time_cmd(cmd2);
+                                    let winner = if t1 < t2 { "cmd1 is faster" } else if t2 < t1 { "cmd2 is faster" } else { "tie" };
+                                    let ratio = if t2 > 0.0 { t1 / t2 } else { f64::INFINITY };
+                                    let body = format!(
+                                        "perf-diff:\n  cmd1: {} — {:.2}ms {}\n  cmd2: {} — {:.2}ms {}\n  ─────\n  {} ({:.2}x ratio)",
+                                        cmd1, t1, if ok1 { "✓" } else { "✕" },
+                                        cmd2, t2, if ok2 { "✓" } else { "✕" },
+                                        winner, ratio
+                                    );
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /bundle-size [dir] — show large directories / dependency footprints
+                                cmd if cmd == "/bundle-size" || cmd.starts_with("/bundle-size ") => {
+                                    let dir = cmd.trim_start_matches("/bundle-size").trim();
+                                    let target = if dir.is_empty() { "." } else { dir };
+                                    let mut body = format!("bundle-size: {}\n", target);
+                                    // du on common large dirs
+                                    let candidates = ["node_modules", "target", ".venv", "venv", "__pycache__", ".gradle", "build", "dist", ".next", ".nuxt"];
+                                    for d in &candidates {
+                                        let path = format!("{}/{}", target, d);
+                                        if std::path::Path::new(&path).exists() {
+                                            let size = std::process::Command::new("du")
+                                                .args(["-sh", &path])
+                                                .output()
+                                                .ok()
+                                                .filter(|o| o.status.success())
+                                                .map(|o| String::from_utf8_lossy(&o.stdout).trim().split('\t').next().unwrap_or("?").to_string())
+                                                .unwrap_or_else(|| "?".to_string());
+                                            body.push_str(&format!("  {:<14} {}\n", d, size));
+                                        }
+                                    }
+                                    // Total
+                                    let total = std::process::Command::new("du")
+                                        .args(["-sh", target])
+                                        .output()
+                                        .ok()
+                                        .filter(|o| o.status.success())
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).trim().split('\t').next().unwrap_or("?").to_string())
+                                        .unwrap_or_else(|| "?".to_string());
+                                    body.push_str(&format!("\n  total          {}", total));
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -14585,7 +14757,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/cve ", "/dotenv", "/dotenv ", "/calc ", "/chars", "/chars ", "/ai-arch", "/ai-arch ", "/ai-explain ", "/cheat ", "/color ", "/duck ", "/env-diff ", "/env-vars", "/env-vars ", "/flashcard ", "/format-sql ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/gh-search ", "/http-codes", "/http-codes ", "/impl ", "/json-schema ", "/man-ai ", "/mkscript ", "/open ", "/path", "/ai-bugs ", "/codebase-summary", "/git-cherry", "/git-cherry ", "/git-remote", "/git-remote ", "/git-show ", "/pwd", "/regex-test ", "/run-test ", "/ssh-key", "/ssh-key ", "/tail ", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/semver ", "/session-summary", "/spell ", "/teach ", "/time", "/time ", "/which-all ", "/wiki ", "/workflow", "/workflow ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
+                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/cve ", "/dotenv", "/dotenv ", "/calc ", "/chars", "/chars ", "/ai-arch", "/ai-arch ", "/ai-explain ", "/cheat ", "/color ", "/duck ", "/env-diff ", "/env-vars", "/env-vars ", "/flashcard ", "/format-sql ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/gh-search ", "/http-codes", "/http-codes ", "/impl ", "/json-schema ", "/man-ai ", "/mkscript ", "/open ", "/path", "/ai-bugs ", "/ai-optimize ", "/bundle-size", "/bundle-size ", "/codebase-summary", "/git-cherry", "/git-cherry ", "/git-conflicts", "/git-remote", "/git-remote ", "/git-show ", "/net-stat", "/perf-diff ", "/pwd", "/regex-test ", "/run-test ", "/ssh-key", "/ssh-key ", "/tail ", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/semver ", "/session-summary", "/spell ", "/teach ", "/time", "/time ", "/which-all ", "/wiki ", "/workflow", "/workflow ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
