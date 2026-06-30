@@ -6707,6 +6707,81 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::QueryResponseQuality => {
+                    use aether_core::context::ConversationItem;
+                    let last_text = session.history.iter().rev().find_map(|item| {
+                        if let ConversationItem::Assistant { text: Some(t), .. } = item { Some(t.clone()) } else { None }
+                    });
+                    match last_text {
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote("No assistant response in history.".to_string()));
+                        }
+                        Some(text) => {
+                            let char_count = text.len();
+                            let word_count = text.split_whitespace().count();
+                            let code_blocks = text.matches("```").count() / 2;
+                            let url_count = text.split_whitespace().filter(|w| w.starts_with("http://") || w.starts_with("https://")).count();
+                            let hedging_words = ["i think", "i believe", "might", "could", "possibly", "perhaps", "maybe", "probably", "seems", "appears"];
+                            let lower = text.to_lowercase();
+                            let hedges: usize = hedging_words.iter().filter(|&&w| lower.contains(w)).count();
+                            // Score: length (0-30), code blocks (0-20), low hedging (0-30), structure (0-20)
+                            let len_score = (char_count.min(3000) as f64 / 3000.0 * 30.0).round() as u32;
+                            let code_score = (code_blocks.min(3) as f64 / 3.0 * 20.0).round() as u32;
+                            let hedge_score = ((10usize.saturating_sub(hedges * 2)) as f64 / 10.0 * 30.0).round() as u32;
+                            let has_headers = text.contains("\n# ") || text.contains("\n## ");
+                            let has_bullets = text.contains("\n- ") || text.contains("\n* ");
+                            let struct_score = if has_headers && has_bullets { 20u32 } else if has_headers || has_bullets { 12 } else { 5 };
+                            let total = len_score + code_score + hedge_score + struct_score;
+                            let grade = if total >= 80 { "A" } else if total >= 65 { "B" } else if total >= 50 { "C" } else { "D" };
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Response quality: {total}/100  (grade: {grade})\n  Length:     {char_count} chars / {word_count} words  → {len_score}/30\n  Code blocks:{code_blocks}  → {code_score}/20\n  Confidence: {hedges} hedge word(s)  → {hedge_score}/30\n  Structure:  headers={has_headers} bullets={has_bullets}  → {struct_score}/20\n  URLs found: {url_count}"
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryDiffHistory(a, b) => {
+                    use aether_core::context::ConversationItem;
+                    let get_text = |idx: usize| -> Option<String> {
+                        session.history.get(idx).and_then(|item| {
+                            if let ConversationItem::Assistant { text: Some(t), .. } = item { Some(t.clone()) }
+                            else if let ConversationItem::User(t) = item { Some(t.clone()) }
+                            else { None }
+                        })
+                    };
+                    match (get_text(a), get_text(b)) {
+                        (Some(text_a), Some(text_b)) => {
+                            let lines_a: Vec<&str> = text_a.lines().collect();
+                            let lines_b: Vec<&str> = text_b.lines().collect();
+                            let mut msg = format!("Diff: history[{a}] vs history[{b}]\n");
+                            let set_a: std::collections::HashSet<&str> = lines_a.iter().cloned().collect();
+                            let set_b: std::collections::HashSet<&str> = lines_b.iter().cloned().collect();
+                            let mut shown = 0usize;
+                            for line in lines_b.iter() {
+                                if !set_a.contains(*line) {
+                                    msg.push_str(&format!("+ {}\n", line.chars().take(120).collect::<String>()));
+                                    shown += 1;
+                                    if shown >= 40 { msg.push_str("… (truncated)\n"); break; }
+                                }
+                            }
+                            for line in lines_a.iter() {
+                                if !set_b.contains(*line) {
+                                    msg.push_str(&format!("- {}\n", line.chars().take(120).collect::<String>()));
+                                    shown += 1;
+                                    if shown >= 60 { msg.push_str("… (truncated)\n"); break; }
+                                }
+                            }
+                            if shown == 0 { msg.push_str("(no differences found)\n"); }
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                        }
+                        _ => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Cannot diff: history[{a}] or history[{b}] not found or has no text. History has {} items.", session.history.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::SetCooldown(ms) => {
                     session.auto_continue_cooldown_ms = ms;
                     if ms == 0 {
@@ -28413,6 +28488,46 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /response-quality — quality score for last assistant response
+                                "/response-quality" => {
+                                    if _ctx.send(UiCommand::QueryResponseQuality).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /diff-history <a> <b> — line diff between two history items
+                                cmd_str if cmd_str.starts_with("/diff-history ") => {
+                                    let rest = cmd_str.trim_start_matches("/diff-history ").trim();
+                                    let mut parts = rest.split_whitespace();
+                                    let a = parts.next().and_then(|s| s.parse::<usize>().ok());
+                                    let b = parts.next().and_then(|s| s.parse::<usize>().ok());
+                                    match (a, b) {
+                                        (Some(ai), Some(bi)) => {
+                                            if _ctx.send(UiCommand::QueryDiffHistory(ai, bi)).is_err() { break 'outer; }
+                                        }
+                                        _ => {
+                                            ui.chat_lines.push(ChatLine::SystemNote("Usage: /diff-history <a> <b>  (0-based history indices)".to_string()));
+                                        }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /pin-response <hist_idx> — pin a history item's text as pinned note
+                                cmd_str if cmd_str.starts_with("/pin-response ") => {
+                                    let arg = cmd_str.trim_start_matches("/pin-response ").trim();
+                                    if let Ok(idx) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::PinHistoryItem(idx)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /pin-response <hist_index>".to_string()));
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /cooldown <ms> | off — set/clear auto-continue tick delay
                                 cmd_str if cmd_str == "/cooldown off" || cmd_str.starts_with("/cooldown ") => {
                                     if cmd_str == "/cooldown off" {
@@ -29424,6 +29539,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/cooldown ", "/cooldown off",
                             "/cooldown-show",
                             "/token-velocity",
+                            "/response-quality",
+                            "/diff-history ",
+                            "/pin-response ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -417,6 +417,10 @@ pub enum UiCommand {
     JumpBookmark(usize),
     /// Delete a bookmark by 0-based index.
     DeleteBookmark(usize),
+    /// Compute and show a quality score for the last assistant response.
+    QueryResponseQuality,
+    /// Show a line-diff between two history items by 0-based history index.
+    QueryDiffHistory(usize, usize),
     /// Set minimum milliseconds between auto-continue ticks (0 = off).
     SetCooldown(u64),
     /// Clear the auto-continue cooldown.
