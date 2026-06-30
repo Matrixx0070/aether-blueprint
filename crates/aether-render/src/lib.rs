@@ -409,6 +409,12 @@ pub enum UiCommand {
     ReplayLast,
     /// List past user messages with their indices.
     QueryReplayList,
+    /// Search the user input history for a substring (case-insensitive).
+    SearchInputHistory(String),
+    /// Show the last N user inputs from the input history buffer.
+    QueryInputHistory(usize),
+    /// Clear the user input history buffer.
+    ClearInputHistory,
     /// Add a note to the in-session notepad (text).
     AddNote(String),
     /// Remove a note by 0-based index.

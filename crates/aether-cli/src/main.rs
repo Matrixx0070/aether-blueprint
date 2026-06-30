@@ -6564,6 +6564,10 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                // Input history commands are handled entirely in the TUI layer.
+                UiCommand::SearchInputHistory(_) | UiCommand::QueryInputHistory(_) | UiCommand::ClearInputHistory => {
+                    continue;
+                }
                 UiCommand::AddNote(text) => {
                     let ts = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
@@ -26599,6 +26603,75 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /hist-search <query> — search input history (TUI-only)
+                                cmd_str if cmd_str.starts_with("/hist-search ") => {
+                                    let q = cmd_str.trim_start_matches("/hist-search ").trim().to_ascii_lowercase();
+                                    let matches: Vec<(usize, &String)> = ui.input_history.iter()
+                                        .enumerate()
+                                        .filter(|(_, s)| s.to_ascii_lowercase().contains(&q))
+                                        .collect();
+                                    if matches.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!(
+                                            "History search: no matches for \"{q}\" ({} entries).",
+                                            ui.input_history.len()
+                                        )));
+                                    } else {
+                                        let lines: Vec<String> = matches.iter()
+                                            .map(|(i, s)| {
+                                                let preview: String = s.chars().take(80).collect();
+                                                format!("  [{i}] {preview}{}", if s.len() > 80 { "…" } else { "" })
+                                            })
+                                            .collect();
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!(
+                                            "History search \"{q}\": {} match(es)\n{}",
+                                            lines.len(), lines.join("\n")
+                                        )));
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /hist-show [n] — show last N input history entries (default 20)
+                                cmd_str if cmd_str == "/hist-show" || cmd_str.starts_with("/hist-show ") => {
+                                    let arg = cmd_str.trim_start_matches("/hist-show").trim();
+                                    let n: usize = arg.parse().unwrap_or(20);
+                                    if ui.input_history.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Input history: empty.".to_string()
+                                        ));
+                                    } else {
+                                        let start = ui.input_history.len().saturating_sub(n);
+                                        let lines: Vec<String> = ui.input_history[start..].iter()
+                                            .enumerate()
+                                            .map(|(i, s)| {
+                                                let preview: String = s.chars().take(80).collect();
+                                                format!("  [{:>3}] {preview}{}", start + i, if s.len() > 80 { "…" } else { "" })
+                                            })
+                                            .collect();
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!(
+                                            "Input history (last {}, {} total):\n{}",
+                                            lines.len(), ui.input_history.len(), lines.join("\n")
+                                        )));
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /hist-clear — clear the input history buffer
+                                "/hist-clear" => {
+                                    let count = ui.input_history.len();
+                                    ui.input_history.clear();
+                                    ui.history_idx = None;
+                                    ui.chat_lines.push(ChatLine::SystemNote(format!(
+                                        "Input history cleared ({count} entries removed)."
+                                    )));
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /note-add <text> — add a note to the session notepad
                                 cmd_str if cmd_str.starts_with("/note-add ") => {
                                     let text = cmd_str.trim_start_matches("/note-add ").trim().to_string();
@@ -27457,6 +27530,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/note-add ",
                             "/notes",
                             "/note-del ",
+                            "/hist-search ",
+                            "/hist-show", "/hist-show ",
+                            "/hist-clear",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
