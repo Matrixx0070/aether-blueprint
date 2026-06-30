@@ -819,6 +819,12 @@ pub enum UiCommand {
     HistoryDropLast,
     /// Show cumulative cost and total tokens together.
     QueryCostTotalTokens,
+    /// Remove the first N items from conversation history.
+    HistoryTruncateHead(usize),
+    /// Count error playbook entries.
+    QueryErrorPlaybookCount,
+    /// List session notes briefly (index + first 60 chars).
+    QuerySessionNotesList,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

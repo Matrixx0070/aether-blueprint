@@ -7270,6 +7270,49 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::HistoryTruncateHead(n) => {
+                    let before = session.history.len();
+                    if n == 0 || before == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Nothing to remove (history len={before})."
+                        )));
+                    } else {
+                        let drop = n.min(before);
+                        session.history = session.history.split_off(drop);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Removed first {drop} history item(s). History now has {} items.", session.history.len()
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryErrorPlaybookCount => {
+                    let count = session.error_playbook.len();
+                    if count == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No error playbook entries. Use /playbook-add <pattern> <hint>.".to_string()));
+                    } else {
+                        let entries: Vec<String> = session.error_playbook.iter().enumerate().map(|(i, (pat, _))| {
+                            format!("  [{i}] {:?}", pat)
+                        }).collect();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Error playbook ({count} entries):\n{}", entries.join("\n")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionNotesList => {
+                    if session.session_notes.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No session notes. Use /note-add <text>.".to_string()));
+                    } else {
+                        let lines: Vec<String> = session.session_notes.iter().enumerate().map(|(i, (text, ts))| {
+                            let preview = if text.len() > 60 { format!("{}...", &text[..60]) } else { text.clone() };
+                            format!("  [{i}] (ts:{ts}) {preview}")
+                        }).collect();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session notes ({}):\n{}", session.session_notes.len(), lines.join("\n")
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -32106,6 +32149,32 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /history-truncate-head <n> — remove first N items from history
+                                cmd_str if cmd_str.starts_with("/history-truncate-head ") => {
+                                    let n: usize = cmd_str.trim_start_matches("/history-truncate-head ").trim()
+                                        .parse().unwrap_or(1);
+                                    if _ctx.send(UiCommand::HistoryTruncateHead(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /error-playbook-count — count error playbook entries
+                                "/error-playbook-count" => {
+                                    if _ctx.send(UiCommand::QueryErrorPlaybookCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-notes-list — list session notes briefly
+                                "/session-notes-list" => {
+                                    if _ctx.send(UiCommand::QuerySessionNotesList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -32822,6 +32891,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/progress-count",
                             "/history-drop-last",
                             "/cost-total-tokens",
+                            "/history-truncate-head ",
+                            "/error-playbook-count",
+                            "/session-notes-list",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
