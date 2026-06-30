@@ -6778,6 +6778,85 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QuerySessionScore => {
+                    let turns = session.turn_cost_log.len();
+                    // Score components (0-100 each), weighted average
+                    let efficiency_score = {
+                        // tokens per dollar vs theoretical max (haiku baseline ~5M tok/$)
+                        let total_cost: f64 = session.turn_cost_log.iter().map(|&(_, _, _, c)| c).sum();
+                        let total_tok: u64 = session.turn_cost_log.iter().map(|&(_, i, o, _)| i as u64 + o as u64).sum();
+                        if total_cost > 0.0 { ((total_tok as f64 / total_cost / 5_000_000.0) * 100.0).min(100.0) } else { 50.0 }
+                    };
+                    let tool_success_score = {
+                        let total: usize = session.plan.tool_call_stats.values().map(|(ok, err)| ok + err).sum();
+                        let errors: usize = session.plan.tool_call_stats.values().map(|(_, err)| *err).sum();
+                        if total > 0 { (1.0 - errors as f64 / total as f64) * 100.0 } else { 100.0 }
+                    };
+                    let turn_score = (turns as f64 / 50.0 * 100.0).min(100.0); // 50 turns = max
+                    let score = (efficiency_score * 0.3 + tool_success_score * 0.4 + turn_score * 0.3) as u32;
+                    let grade = match score {
+                        90..=100 => "A+", 80..=89 => "A", 70..=79 => "B", 60..=69 => "C", _ => "D"
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session score: {score}/100 ({grade})\n  Efficiency:    {:.0}/100 (30%)\n  Tool success:  {:.0}/100 (40%)\n  Activity:      {:.0}/100 (30%)",
+                        efficiency_score, tool_success_score, turn_score
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryContextWindowEstimate => {
+                    let model_window = aether_core::compaction::context_window_for_model(&session.config.model);
+                    let budget_pct = session.compaction_threshold_pct;
+                    let usable = if budget_pct > 0.0 { (model_window as f64 * budget_pct) as u64 } else { (model_window as f64 * 0.8) as u64 };
+                    let mut cumulative_chars = 0usize;
+                    let mut fits = 0usize;
+                    for item in session.history.iter().rev() {
+                        let chars = match item {
+                            ConversationItem::User(t) => t.len(),
+                            ConversationItem::Assistant { text, tool_uses } => {
+                                text.as_deref().map(|t| t.len()).unwrap_or(0)
+                                + tool_uses.iter().map(|tu| tu.input.to_string().len()).sum::<usize>()
+                            }
+                            ConversationItem::ToolResults(r) => r.iter().map(|rr| rr.content.len()).sum(),
+                        };
+                        cumulative_chars += chars;
+                        let est_tokens = cumulative_chars / 4;
+                        if est_tokens <= usable as usize { fits += 1; } else { break; }
+                    }
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Context window estimate:\n  Model window:  {} tokens\n  Usable budget: {} tokens ({:.0}%)\n  History items: {}\n  Items that fit: {} (from tail)\n  Items at risk:  {}",
+                        model_window, usable, if budget_pct > 0.0 { budget_pct * 100.0 } else { 80.0 },
+                        session.history.len(), fits, session.history.len().saturating_sub(fits)
+                    )));
+                    continue;
+                }
+                UiCommand::QueryToolCallTrace(n) => {
+                    let last_asst = session.history.iter().rev().find_map(|item| {
+                        if let ConversationItem::Assistant { tool_uses, .. } = item { Some(tool_uses) } else { None }
+                    });
+                    match last_asst {
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote("No assistant turn with tool calls in history.".to_string()));
+                        }
+                        Some(tool_uses) => {
+                            if n >= tool_uses.len() {
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                    "Tool call #{n} not found. Last turn had {} tool call(s).", tool_uses.len()
+                                )));
+                            } else {
+                                let tu = &tool_uses[n];
+                                let input_str = serde_json::to_string_pretty(&tu.input).unwrap_or_else(|_| tu.input.to_string());
+                                let output = session.tool_output_history.get(&tu.name)
+                                    .map(|(_, curr)| curr.chars().take(500).collect::<String>())
+                                    .unwrap_or_else(|| "(output not in history)".to_string());
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                    "Tool call #{n}: {} (id: {})\n--- INPUT ---\n{}\n--- OUTPUT (last) ---\n{}",
+                                    tu.name, tu.id, input_str, output
+                                )));
+                            }
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryPendingReminders => {
                     if session.pending_reminders.is_empty() {
                         let _ = etx_for_driver.send(UiEvent::SystemNote("No pending reminders queued for next turn.".to_string()));
@@ -30430,6 +30509,32 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /session-score — composite quality score 0-100
+                                "/session-score" => {
+                                    if _ctx.send(UiCommand::QuerySessionScore).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-context-window-estimate — estimate how many history items fit
+                                "/history-context-window-estimate" => {
+                                    if _ctx.send(UiCommand::QueryHistoryContextWindowEstimate).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tool-call-trace <n> — show full IO of nth tool in last turn
+                                cmd_str if cmd_str.starts_with("/tool-call-trace ") => {
+                                    let arg = cmd_str.trim_start_matches("/tool-call-trace ").trim();
+                                    let n = arg.parse::<usize>().unwrap_or(0);
+                                    if _ctx.send(UiCommand::QueryToolCallTrace(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /pending-reminders-show — show reminders queued for next turn
                                 "/pending-reminders-show" => {
                                     if _ctx.send(UiCommand::QueryPendingReminders).is_err() { break 'outer; }
@@ -31616,6 +31721,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/pending-reminders-show",
                             "/history-merge-user ",
                             "/deny-list-show",
+                            "/session-score",
+                            "/history-context-window-estimate",
+                            "/tool-call-trace ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

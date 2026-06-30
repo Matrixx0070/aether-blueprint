@@ -729,6 +729,12 @@ pub enum UiCommand {
     HistoryMergeUser(usize, usize),
     /// Show count and summary of tools currently in the deny list.
     QueryDenyList,
+    /// Compute and show a composite session quality score (0-100).
+    QuerySessionScore,
+    /// Estimate how many history items fit within the model's context window.
+    QueryHistoryContextWindowEstimate,
+    /// Show full input + output of the Nth tool call in the last assistant turn.
+    QueryToolCallTrace(usize),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
