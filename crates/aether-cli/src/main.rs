@@ -7337,6 +7337,314 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // ── BATCH 80: AI-POWERED CODE WORKFLOWS ──────────────────────────
+                                cmd if cmd.starts_with("/ask-code ") || cmd == "/ask-code" => {
+                                    // /ask-code <file> [question]
+                                    // Injects file content into AI context and sends question
+                                    let rest = cmd.trim_start_matches("/ask-code").trim();
+                                    if rest.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /ask-code <file> [question]\n  Injects file into AI context for targeted Q&A\n  e.g. /ask-code src/main.rs explain the error handling strategy\n       /ask-code app.py  (sends file, then asks interactively)".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    // Split: first token is file, rest is question
+                                    let mut rest_parts = rest.splitn(2, char::is_whitespace);
+                                    let file_part = rest_parts.next().unwrap_or("");
+                                    let question = rest_parts.next().unwrap_or("").trim();
+                                    let fpath = if file_part.starts_with('/') {
+                                        std::path::PathBuf::from(file_part)
+                                    } else {
+                                        std::env::current_dir().unwrap_or_default().join(file_part)
+                                    };
+                                    let content = match std::fs::read_to_string(&fpath) {
+                                        Ok(c) => c,
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {file_part}: {e}")));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                    };
+                                    let lines = content.lines().count();
+                                    let ext = fpath.extension().and_then(|e| e.to_str()).unwrap_or("");
+                                    let lang = match ext {
+                                        "rs" => "rust", "py" => "python", "js"|"mjs" => "javascript",
+                                        "ts"|"tsx" => "typescript", "go" => "go", "java" => "java",
+                                        "c"|"h" => "c", "cpp"|"cc" => "cpp", "rb" => "ruby",
+                                        "sh"|"bash" => "bash", other => other,
+                                    };
+                                    let q = if question.is_empty() {
+                                        format!("Please analyse this file and provide:\n1. What it does (one sentence)\n2. Key functions/structures\n3. Any notable patterns or concerns")
+                                    } else {
+                                        question.to_string()
+                                    };
+                                    let prompt = format!(
+                                        "File: {file_part}  ({lines} lines)\n```{lang}\n{}\n```\n\n{q}",
+                                        if lines <= 400 { content.clone() } else {
+                                            let head: String = content.lines().take(200).collect::<Vec<_>>().join("\n");
+                                            let tail: String = content.lines().rev().take(80).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
+                                            format!("{head}\n\n[... {skip} lines omitted ...]\n\n{tail}", skip = lines - 280)
+                                        }
+                                    );
+                                    let ts = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default().as_secs();
+                                    let q_suffix = if question.is_empty() { String::new() } else { format!("  (\"{}\")", question) };
+                                    let display = format!("/ask-code {file_part}{q_suffix}");
+                                    ui.chat_lines.push(ChatLine::User(display, ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/patch ") || cmd == "/patch" => {
+                                    // /patch <file>  — extract last ```diff block from AI response and apply it
+                                    let file_arg = cmd.trim_start_matches("/patch").trim();
+                                    // Find the last diff code block in AI responses
+                                    let last_diff = ui.chat_lines.iter().rev().find_map(|cl| {
+                                        if let ChatLine::Assistant(body, _, _) = cl {
+                                            // Find ```diff...``` blocks
+                                            let mut start = None;
+                                            let mut found = None;
+                                            for (i, line) in body.lines().enumerate() {
+                                                let trimmed = line.trim();
+                                                if start.is_none() && (trimmed == "```diff" || trimmed == "```patch") {
+                                                    start = Some(i + 1);
+                                                } else if start.is_some() && trimmed == "```" {
+                                                    let lines: Vec<&str> = body.lines().collect();
+                                                    let s = start.unwrap();
+                                                    found = Some(lines[s..i].join("\n"));
+                                                    start = None; // continue to find last one
+                                                }
+                                            }
+                                            found
+                                        } else { None }
+                                    });
+                                    let Some(diff_content) = last_diff else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "No diff block found in recent AI responses.\n  Ask Aether to produce a diff, then run /patch <file>".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    };
+                                    if file_arg.is_empty() {
+                                        // Show the diff and hint
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("Last diff block found:\n```diff\n{diff_content}\n```\n\nRun /patch <file> to apply to a specific file.")
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    // Write diff to temp file and apply with patch command
+                                    let tmp = std::env::temp_dir().join("aether-patch.diff");
+                                    if let Err(e) = std::fs::write(&tmp, &diff_content) {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot write tmp diff: {e}")));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let target = if file_arg.starts_with('/') {
+                                        std::path::PathBuf::from(file_arg)
+                                    } else {
+                                        std::env::current_dir().unwrap_or_default().join(file_arg)
+                                    };
+                                    match std::process::Command::new("patch")
+                                        .args(["-u", &target.to_string_lossy(), tmp.to_str().unwrap_or(""), "--backup"])
+                                        .output()
+                                    {
+                                        Ok(out) => {
+                                            let stdout = String::from_utf8_lossy(&out.stdout);
+                                            let stderr = String::from_utf8_lossy(&out.stderr);
+                                            if out.status.success() {
+                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                    format!("✓ Patch applied to {file_arg}\n  Backup: {file_arg}.orig\n{}", stdout.trim())
+                                                ));
+                                            } else {
+                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                    format!("✗ Patch failed on {file_arg}\n{}\n{}", stdout.trim(), stderr.trim())
+                                                ));
+                                            }
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("patch command not found: {e}\n  Install: apt-get install patch")
+                                            ));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/watch ") || cmd == "/watch" => {
+                                    let watch_cmd = cmd.trim_start_matches("/watch").trim();
+                                    if watch_cmd.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /watch <command>  — re-run command whenever a source file changes\n  e.g. /watch cargo test\n       /watch python3 test.py\n  Requires: entr (apt install entr) or inotifywait (inotify-tools)".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    // Detect available watcher
+                                    let has_entr = std::process::Command::new("which").arg("entr").output()
+                                        .map(|o| o.status.success()).unwrap_or(false);
+                                    let has_inotify = std::process::Command::new("which").arg("inotifywait").output()
+                                        .map(|o| o.status.success()).unwrap_or(false);
+                                    if !has_entr && !has_inotify {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("Watch mode requires 'entr' or 'inotifywait'.\n  Install: apt-get install entr\n       or: apt-get install inotify-tools\n\nAlternatively, run in another terminal:\n  find . -name '*.rs' | entr -r {watch_cmd}")
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    // Show command to run in a separate terminal
+                                    let watch_hint = if has_entr {
+                                        format!("find . \\( -name '*.rs' -o -name '*.py' -o -name '*.js' -o -name '*.ts' \\) | entr -rc {watch_cmd}")
+                                    } else {
+                                        format!("while inotifywait -r -e modify,create,delete --include='\\.(rs|py|js|ts)$' .; do {watch_cmd}; done")
+                                    };
+                                    // Run one immediate execution, then advise watch
+                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                        format!("Running once now…\n\nFor continuous watch, run in a terminal:\n  {watch_hint}")
+                                    ));
+                                    match std::process::Command::new("sh")
+                                        .args(["-c", watch_cmd])
+                                        .current_dir(std::env::current_dir().unwrap_or_default())
+                                        .output()
+                                    {
+                                        Ok(out) => {
+                                            let stdout = String::from_utf8_lossy(&out.stdout);
+                                            let stderr = String::from_utf8_lossy(&out.stderr);
+                                            let exit = out.status.code().unwrap_or(-1);
+                                            let badge = if out.status.success() { "✓" } else { "✗" };
+                                            let combined = format!("{}\n{}", stdout.trim_end(), stderr.trim_end()).trim().to_string();
+                                            let lines: Vec<&str> = combined.lines().collect();
+                                            let shown = lines.len().min(50);
+                                            let mut msg = format!("{badge} exit {exit}\n```\n");
+                                            msg.push_str(&lines[..shown].join("\n"));
+                                            if lines.len() > shown {
+                                                msg.push_str(&format!("\n… ({} more lines)", lines.len() - shown));
+                                            }
+                                            msg.push_str("\n```");
+                                            ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("Command failed: {e}")));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/bench" || cmd.starts_with("/bench ") => {
+                                    let bench_arg = cmd.trim_start_matches("/bench").trim();
+                                    let cwd = std::env::current_dir().unwrap_or_default();
+                                    // Detect project type and appropriate bench command
+                                    let (bench_cmd, bench_label) = if cwd.join("Cargo.toml").exists() {
+                                        let args = if bench_arg.is_empty() {
+                                            "cargo bench 2>&1".to_string()
+                                        } else {
+                                            format!("cargo bench {} 2>&1", bench_arg)
+                                        };
+                                        (args, "cargo bench")
+                                    } else if cwd.join("package.json").exists() {
+                                        let pkg = std::fs::read_to_string(cwd.join("package.json")).unwrap_or_default();
+                                        if pkg.contains(r#""bench""#) {
+                                            ("npm run bench 2>&1".to_string(), "npm run bench")
+                                        } else if pkg.contains("vitest") {
+                                            ("npx vitest bench 2>&1".to_string(), "vitest bench")
+                                        } else {
+                                            ("npx jest --testPathPattern=bench 2>&1".to_string(), "jest bench")
+                                        }
+                                    } else if cwd.join("go.mod").exists() {
+                                        let pattern = if bench_arg.is_empty() { ".".to_string() } else { bench_arg.to_string() };
+                                        (format!("go test -bench={pattern} -benchmem ./... 2>&1"), "go test -bench")
+                                    } else if cwd.join("pyproject.toml").exists() || cwd.join("setup.py").exists() {
+                                        (format!("python3 -m pytest --benchmark-only {} 2>&1", bench_arg), "pytest benchmark")
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "No benchmark project found.\n  Supported: Cargo.toml (Rust), package.json (JS), go.mod, pyproject.toml\n  Or: /shell <your-bench-cmd>".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(format!("Running {bench_label}…")));
+                                    let start = std::time::Instant::now();
+                                    match std::process::Command::new("sh")
+                                        .args(["-c", &bench_cmd])
+                                        .current_dir(&cwd)
+                                        .output()
+                                    {
+                                        Ok(out) => {
+                                            let elapsed = start.elapsed();
+                                            let stdout = String::from_utf8_lossy(&out.stdout);
+                                            let exit = out.status.code().unwrap_or(-1);
+                                            let badge = if out.status.success() { "✓" } else { "✗" };
+                                            let lines: Vec<&str> = stdout.trim_end().lines().collect();
+                                            let shown = lines.len().min(80);
+                                            let mut msg = format!("{badge} {bench_label}  [{exit}]  {:.1}s total\n```\n", elapsed.as_secs_f64());
+                                            msg.push_str(&lines[..shown].join("\n"));
+                                            if lines.len() > shown {
+                                                msg.push_str(&format!("\n… ({} more lines)", lines.len() - shown));
+                                            }
+                                            msg.push_str("\n```\n  /ask-code Cargo.toml explain these benchmark results");
+                                            ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("{bench_label} error: {e}")));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/count-tokens" || cmd.starts_with("/count-tokens ") => {
+                                    // Estimate token cost of injecting one or more files
+                                    let file_arg = cmd.trim_start_matches("/count-tokens").trim();
+                                    let files: Vec<std::path::PathBuf> = if file_arg.is_empty() {
+                                        // Estimate all chat context
+                                        let total_chars: usize = ui.chat_lines.iter().map(|cl| match cl {
+                                            ChatLine::User(m, _) | ChatLine::Assistant(m, _, _) | ChatLine::AssistantPartial(m) | ChatLine::SystemNote(m) => m.len(),
+                                            ChatLine::SplashRow { info, .. } => info.len(),
+                                        }).sum();
+                                        let est_tokens = total_chars / 4;
+                                        let cost_est = est_tokens as f64 / 1_000_000.0 * 3.0; // Sonnet input price
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!(
+                                            "Context estimate\n  chars:  {total_chars}\n  tokens: ~{est_tokens}  ({:.1}k)\n  cost:   ~${cost_est:.4}  (Sonnet input)\n  Note: actual token count may differ ±15% from char/4 estimate",
+                                            est_tokens as f64 / 1000.0
+                                        )));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    } else {
+                                        file_arg.split_whitespace()
+                                            .map(|f| if f.starts_with('/') { std::path::PathBuf::from(f) } else { std::env::current_dir().unwrap_or_default().join(f) })
+                                            .collect()
+                                    };
+                                    let mut total_chars = 0usize;
+                                    let mut report = String::from("Token estimates (chars÷4 method):\n");
+                                    for fpath in &files {
+                                        match std::fs::read_to_string(fpath) {
+                                            Ok(content) => {
+                                                let chars = content.len();
+                                                let tokens = chars / 4;
+                                                let name = fpath.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+                                                report.push_str(&format!("  {name:<30} {tokens:>6} tokens  (~{chars} chars)\n"));
+                                                total_chars += chars;
+                                            }
+                                            Err(e) => {
+                                                report.push_str(&format!("  {} — error: {e}\n", fpath.display()));
+                                            }
+                                        }
+                                    }
+                                    if files.len() > 1 {
+                                        let total_tokens = total_chars / 4;
+                                        let cost_opus   = total_tokens as f64 / 1_000_000.0 * 15.0;
+                                        let cost_sonnet = total_tokens as f64 / 1_000_000.0 * 3.0;
+                                        let cost_haiku  = total_tokens as f64 / 1_000_000.0 * 0.25;
+                                        report.push_str(&format!("  ─────────────────────────────────────────────\n  Total                          {total_tokens:>6} tokens\n  Opus cost:   ~${cost_opus:.4}  Sonnet: ~${cost_sonnet:.4}  Haiku: ~${cost_haiku:.5}"));
+                                    }
+                                    ui.chat_lines.push(ChatLine::SystemNote(report));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 "/summary" | "/sum" => {
                                     // Ask AI to summarize the conversation so far
@@ -8163,7 +8471,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/blame ", "/ctf", "/ctf-tools", "/flow ", "/grep-code ", "/profile ",
+                            "/ask-code ", "/bench", "/bench ", "/blame ", "/count-tokens", "/count-tokens ", "/ctf", "/ctf-tools", "/flow ", "/grep-code ", "/patch", "/patch ", "/profile ", "/watch ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
