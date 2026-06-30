@@ -7103,6 +7103,48 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryAliasCount => {
+                    let count = session.aliases.len();
+                    if count == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No aliases defined. Use /alias <name> <expansion> to create one.".to_string()));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Aliases defined: {count}"
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistorySizeMb => {
+                    let bytes: usize = session.history.iter().map(|item| match item {
+                        ConversationItem::User(t) => t.len(),
+                        ConversationItem::Assistant { text, tool_uses } => {
+                            text.as_deref().map(|t| t.len()).unwrap_or(0)
+                                + tool_uses.iter().map(|u| u.name.len() + u.input.to_string().len()).sum::<usize>()
+                        }
+                        ConversationItem::ToolResults(r) => r.iter().map(|rr| rr.content.len()).sum::<usize>(),
+                    }).sum();
+                    let kb = bytes as f64 / 1024.0;
+                    let mb = kb / 1024.0;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History size: {bytes}B ({kb:.1}KB / {mb:.3}MB) across {} items.", session.history.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QueryCostPerNote => {
+                    let total_cost: f64 = session.turn_cost_log.iter().map(|&(_, _, _, c)| c).sum();
+                    let note_count = session.session_notes.len();
+                    if note_count == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "No session notes yet. Total cost so far: ${total_cost:.4}"
+                        )));
+                    } else {
+                        let cost_per = total_cost / note_count as f64;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Cost per note: ${cost_per:.6} ({note_count} notes, ${total_cost:.4} total)"
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -31835,6 +31877,30 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /alias-count — count defined aliases
+                                "/alias-count" => {
+                                    if _ctx.send(UiCommand::QueryAliasCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-size-mb — show history size in MB
+                                "/history-size-mb" => {
+                                    if _ctx.send(UiCommand::QueryHistorySizeMb).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /cost-per-note — cost per session note (efficiency metric)
+                                "/cost-per-note" => {
+                                    if _ctx.send(UiCommand::QueryCostPerNote).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -32539,6 +32605,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-assistant-count",
                             "/snapshot-count",
                             "/turn-model-show ",
+                            "/alias-count",
+                            "/history-size-mb",
+                            "/cost-per-note",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

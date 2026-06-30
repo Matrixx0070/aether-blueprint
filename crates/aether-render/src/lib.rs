@@ -795,6 +795,12 @@ pub enum UiCommand {
     QuerySnapshotCount,
     /// Show which model was used for a specific turn index.
     QueryTurnModelShow(usize),
+    /// Count defined aliases.
+    QueryAliasCount,
+    /// Show history size in megabytes.
+    QueryHistorySizeMb,
+    /// Show cost per session note as a rough efficiency metric.
+    QueryCostPerNote,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
