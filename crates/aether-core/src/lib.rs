@@ -207,6 +207,10 @@ pub struct Session {
     /// When true, automatically trigger context compaction when the agent
     /// is stuck (any tool at TOOL_ERROR_THRESHOLD consecutive errors).
     pub auto_compact_on_stuck: bool,
+
+    /// When > 0, the agent pauses after this many total tool errors accumulate
+    /// across the session. Prevents wasting tokens/money on a broken run. 0 = off.
+    pub fail_fast_errors: usize,
 }
 
 impl Session {
@@ -260,6 +264,7 @@ impl Session {
             auto_think_on_stuck: false,
             saved_snapshots: std::collections::HashMap::new(),
             auto_compact_on_stuck: false,
+            fail_fast_errors: 0,
         }
     }
 

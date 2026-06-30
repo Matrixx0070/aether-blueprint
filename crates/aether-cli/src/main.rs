@@ -6320,6 +6320,35 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::SetFailFast(n) => {
+                    session.fail_fast_errors = n;
+                    let note = if n == 0 {
+                        "Fail-fast: off.".to_string()
+                    } else {
+                        format!("Fail-fast: agent pauses after {n} cumulative tool error(s).")
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryElapsed => {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let elapsed = now.saturating_sub(session.started_at);
+                    let h = elapsed / 3600;
+                    let m = (elapsed % 3600) / 60;
+                    let s = elapsed % 60;
+                    let note = if h > 0 {
+                        format!("Session elapsed: {h}h {m}m {s}s ({elapsed}s total)  |  turns: {}", session.turn_index)
+                    } else if m > 0 {
+                        format!("Session elapsed: {m}m {s}s ({elapsed}s total)  |  turns: {}", session.turn_index)
+                    } else {
+                        format!("Session elapsed: {s}s  |  turns: {}", session.turn_index)
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::SetAutoCompactOnStuck(enabled) => {
                     session.auto_compact_on_stuck = enabled;
                     let note = if enabled {
@@ -6934,6 +6963,21 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                         )));
                                     }
                                 }
+                            }
+                        }
+                        // Fail-fast: pause when total tool errors hit the configured cap.
+                        if session.fail_fast_errors > 0 {
+                            let total_errs: usize = session.plan.tool_call_stats.values()
+                                .map(|(_, err)| err)
+                                .sum();
+                            if total_errs >= session.fail_fast_errors {
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                    "Fail-fast: {total_errs} total tool errors ≥ limit of {}. \
+                                     Pausing. Fix the issue or use /fail-fast off to disable.",
+                                    session.fail_fast_errors
+                                )));
+                                auto_continue_count = 0;
+                                break;
                             }
                         }
                         // Tool-call checkpoint: pause after every N cumulative tool calls.
@@ -24136,6 +24180,51 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /mode <quick|balanced|deep> — model+thinking preset
+                                cmd_str if cmd_str == "/mode" || cmd_str.starts_with("/mode ") => {
+                                    let preset = cmd_str.trim_start_matches("/mode").trim();
+                                    let (model, thinking, max_tok) = match preset {
+                                        "quick"    => ("claude-haiku-4-5-20251001", None::<u32>, 4096u32),
+                                        "balanced" => ("claude-sonnet-4-6", None, 8192),
+                                        "deep"     => ("claude-opus-4-7", Some(8192u32), 16384),
+                                        _ => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                "Usage: /mode <quick|balanced|deep>\n  quick    = haiku, no thinking, 4k tokens\n  balanced = sonnet, no thinking, 8k tokens\n  deep     = opus, 8k thinking budget, 16k tokens".to_string()
+                                            ));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                    };
+                                    let ok1 = _ctx.send(UiCommand::SetModel(model.to_string())).is_ok();
+                                    let ok2 = _ctx.send(UiCommand::SetThinking(thinking)).is_ok();
+                                    let ok3 = _ctx.send(UiCommand::SetMaxTokens(max_tok)).is_ok();
+                                    if !ok1 || !ok2 || !ok3 { break 'outer; }
+                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                        format!("Mode → {preset}: model={model}, thinking={}, max_tokens={max_tok}", thinking.map_or("off".to_string(), |t| format!("{t}tk")))
+                                    ));
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /fail-fast <N>|off — stop after N total tool errors
+                                cmd_str if cmd_str == "/fail-fast" || cmd_str.starts_with("/fail-fast ") => {
+                                    let arg = cmd_str.trim_start_matches("/fail-fast").trim();
+                                    let n = if arg.is_empty() || arg == "off" { 0 } else { arg.parse::<usize>().unwrap_or(0) };
+                                    if _ctx.send(UiCommand::SetFailFast(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /elapsed — show session wall time
+                                "/elapsed" => {
+                                    if _ctx.send(UiCommand::QueryElapsed).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /auto-compact-stuck on|off — compact when stuck on tool errors
                                 cmd_str if cmd_str == "/auto-compact-stuck" || cmd_str.starts_with("/auto-compact-stuck ") => {
                                     let arg = cmd_str.trim_start_matches("/auto-compact-stuck").trim();
@@ -24902,6 +24991,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/snap-clear",
                             "/auto-compact-stuck", "/auto-compact-stuck on", "/auto-compact-stuck off",
                             "/smart-trim",
+                            "/mode quick", "/mode balanced", "/mode deep",
+                            "/fail-fast ", "/fail-fast off",
+                            "/elapsed",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

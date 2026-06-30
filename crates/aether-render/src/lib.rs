@@ -273,6 +273,10 @@ pub enum UiCommand {
     SetAutoCompactOnStuck(bool),
     /// Remove ToolResults items from history (keeps User+Assistant turns).
     SmartTrimHistory,
+    /// Set the total tool-error fail-fast threshold (0 = off).
+    SetFailFast(usize),
+    /// Query session elapsed wall time.
+    QueryElapsed,
     /// Save current history+plan under a named in-memory snapshot.
     SaveSnapshot(String),
     /// Restore history+plan from a named in-memory snapshot.
