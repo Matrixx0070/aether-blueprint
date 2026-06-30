@@ -7700,6 +7700,52 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryBookmarkList => {
+                    if session.bookmarks.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Bookmarks: none set. Use /bookmark <label> to create one.".to_string()
+                        ));
+                    } else {
+                        let mut lines = vec![format!("Bookmarks ({}):", session.bookmarks.len())];
+                        for (turn_idx, hist_len, label) in &session.bookmarks {
+                            lines.push(format!("  turn {turn_idx} (hist {hist_len}) — {label:?}"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(lines.join("\n")));
+                    }
+                    continue;
+                }
+                UiCommand::QueryAliasList => {
+                    if session.aliases.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Aliases: none defined. Use /alias <name> <expansion> to add one.".to_string()
+                        ));
+                    } else {
+                        let mut pairs: Vec<String> = session.aliases
+                            .iter()
+                            .map(|(k, v)| format!("  /{k} → {v:?}"))
+                            .collect();
+                        pairs.sort();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Aliases ({} defined):\n{}", session.aliases.len(), pairs.join("\n")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnWallAvg => {
+                    if session.turn_wall_ms.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn wall times: no turns completed yet.".to_string()
+                        ));
+                    } else {
+                        let avg = session.turn_wall_ms.iter().sum::<u64>() / session.turn_wall_ms.len() as u64;
+                        let max = session.turn_wall_ms.iter().copied().max().unwrap_or(0);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn wall times: {} turns, avg {}ms, max {}ms.",
+                            session.turn_wall_ms.len(), avg, max
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionTagsList => {
                     if session.session_tags.is_empty() {
                         let _ = etx_for_driver.send(UiEvent::SystemNote(
@@ -32921,6 +32967,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /bookmark-list — list all bookmarks with labels
+                                "/bookmark-list" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /alias-list — list all session aliases
+                                "/alias-list" => {
+                                    if _ctx.send(UiCommand::QueryAliasList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /turn-wall-avg — show average wall-clock time per turn
+                                "/turn-wall-avg" => {
+                                    if _ctx.send(UiCommand::QueryTurnWallAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -33676,6 +33740,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-tags-list",
                             "/error-playbook-list",
                             "/task-list",
+                            "/bookmark-list",
+                            "/alias-list",
+                            "/turn-wall-avg",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

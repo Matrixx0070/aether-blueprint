@@ -897,6 +897,12 @@ pub enum UiCommand {
     QueryErrorPlaybookList,
     /// List all queued tasks.
     QueryTaskList,
+    /// List all bookmarks with labels.
+    QueryBookmarkList,
+    /// List all session aliases.
+    QueryAliasList,
+    /// Show average wall-clock time per turn.
+    QueryTurnWallAvg,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
