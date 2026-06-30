@@ -5254,7 +5254,13 @@ Utilities\n\
   /calc <expr>            math via bc: sqrt(), e^x, ^, /, arbitrary precision\n\
   /chars [file]           char/word/line/byte count; no arg = last AI response\n\
   /open <path|url>        open in system default app (xdg-open / open / start)\n\
-  /spell [text]           spell-check via aspell/hunspell; no arg = last message"),
+  /spell [text]           spell-check via aspell/hunspell; no arg = last message\n\
+Dev tools\n\
+  /time [zone...]         local time + world clock; zone = America/New_York etc.\n\
+  /color <hex|r,g,b>      inspect color: hex/RGB/HSL conversion + ANSI preview\n\
+  /json-schema <json>     infer JSON Schema draft-07 from a sample JSON value\n\
+  /http-codes [filter]    HTTP status code reference; filter by code or keyword\n\
+  /mkscript <name> [lang] scaffold a new bash/python/node/ruby script with boilerplate"),
                                         ("keys", &["keys", "keyboard", "shortcuts", "bindings"], "\
 Input shortcuts\n\
   ↑ ↓  / Ctrl+R           history recall / reverse-i-search\n\
@@ -5370,6 +5376,7 @@ Input shortcuts\n\
     ◈ /env-vars /dotenv /config-lint /path /which-all             env + config mgmt\n\
     ◈ /duck /wiki /cve /gh-search                                web search + research\n\
     ◈ /semver /calc /chars /open /spell                          utilities B107\n\
+    ◈ /time /color /json-schema /http-codes /mkscript            dev tools B108\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -13173,6 +13180,243 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /time [zone...] — world clock (local + named timezones)
+                                cmd if cmd == "/time" || cmd.starts_with("/time ") => {
+                                    let zones_raw = cmd.trim_start_matches("/time").trim();
+                                    let mut body = String::new();
+                                    // Always show local time first
+                                    let local = std::process::Command::new("date").arg("+%Y-%m-%d %H:%M:%S %Z (%z)").output();
+                                    match local {
+                                        Ok(o) => body.push_str(&format!("local     {}", String::from_utf8_lossy(&o.stdout).trim())),
+                                        Err(_) => body.push_str("local     (date command not found)"),
+                                    }
+                                    // Then show each requested zone
+                                    if !zones_raw.is_empty() {
+                                        for zone in zones_raw.split_whitespace() {
+                                            let out = std::process::Command::new("date")
+                                                .arg("+%Y-%m-%d %H:%M:%S %Z")
+                                                .env("TZ", zone)
+                                                .output();
+                                            match out {
+                                                Ok(o) if o.status.success() => {
+                                                    let tz_time = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                                                    body.push_str(&format!("\n{:<9} {}", zone, tz_time));
+                                                }
+                                                _ => body.push_str(&format!("\n{:<9} (invalid timezone)", zone)),
+                                            }
+                                        }
+                                    } else {
+                                        // Default: show a useful set of global zones
+                                        for (label, tz) in &[
+                                            ("UTC",      "UTC"),
+                                            ("New York", "America/New_York"),
+                                            ("London",   "Europe/London"),
+                                            ("Paris",    "Europe/Paris"),
+                                            ("Tokyo",    "Asia/Tokyo"),
+                                            ("Sydney",   "Australia/Sydney"),
+                                        ] {
+                                            let out = std::process::Command::new("date")
+                                                .arg("+%Y-%m-%d %H:%M:%S %Z")
+                                                .env("TZ", tz)
+                                                .output();
+                                            if let Ok(o) = out {
+                                                let t = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                                                body.push_str(&format!("\n{:<9} {}", label, t));
+                                            }
+                                        }
+                                    }
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /color <hex|r,g,b> — color inspector with ANSI preview
+                                cmd if cmd.starts_with("/color ") || cmd == "/color" => {
+                                    let arg = cmd.trim_start_matches("/color").trim();
+                                    if arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage:\n  /color #RRGGBB\n  /color RRGGBB\n  /color R,G,B  (0-255 each)".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    fn parse_hex_color(s: &str) -> Option<(u8, u8, u8)> {
+                                        let s = s.trim_start_matches('#');
+                                        if s.len() == 6 {
+                                            let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+                                            let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+                                            let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+                                            Some((r, g, b))
+                                        } else if s.len() == 3 {
+                                            let r = u8::from_str_radix(&s[0..1].repeat(2), 16).ok()?;
+                                            let g = u8::from_str_radix(&s[1..2].repeat(2), 16).ok()?;
+                                            let b = u8::from_str_radix(&s[2..3].repeat(2), 16).ok()?;
+                                            Some((r, g, b))
+                                        } else { None }
+                                    }
+                                    fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+                                        let r = r as f32 / 255.0;
+                                        let g = g as f32 / 255.0;
+                                        let b = b as f32 / 255.0;
+                                        let max = r.max(g).max(b);
+                                        let min = r.min(g).min(b);
+                                        let l = (max + min) / 2.0;
+                                        if (max - min).abs() < 1e-6 { return (0.0, 0.0, l * 100.0); }
+                                        let d = max - min;
+                                        let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+                                        let h = if (max - r).abs() < 1e-6 {
+                                            (g - b) / d + if g < b { 6.0 } else { 0.0 }
+                                        } else if (max - g).abs() < 1e-6 {
+                                            (b - r) / d + 2.0
+                                        } else {
+                                            (r - g) / d + 4.0
+                                        };
+                                        (h * 60.0, s * 100.0, l * 100.0)
+                                    }
+                                    let parsed = if arg.contains(',') {
+                                        let parts: Vec<u8> = arg.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                                        if parts.len() >= 3 { Some((parts[0], parts[1], parts[2])) } else { None }
+                                    } else {
+                                        parse_hex_color(arg)
+                                    };
+                                    let body = match parsed {
+                                        Some((r, g, b)) => {
+                                            let (h, s, l) = rgb_to_hsl(r, g, b);
+                                            // ANSI TrueColor background block (2 rows of spaces)
+                                            let ansi_block = format!("\x1b[48;2;{r};{g};{b}m        \x1b[0m");
+                                            let brightness = (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32) as u32;
+                                            let on_dark = brightness < 128;
+                                            format!(
+                                                "color: #{r:02X}{g:02X}{b:02X}\n  {ansi_block}  {}\n  RGB   rgb({r}, {g}, {b})\n  Hex   #{r:02X}{g:02X}{b:02X}\n  HSL   hsl({:.0}°, {:.0}%, {:.0}%)\n  luma  {} ({})",
+                                                if on_dark { "light text on this color" } else { "dark text on this color" },
+                                                h, s, l,
+                                                brightness,
+                                                if on_dark { "dark" } else { "light" }
+                                            )
+                                        }
+                                        None => format!("color: could not parse '{}'\n  Try: /color #3B82F6  or  /color 59,130,246", arg),
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /json-schema <json> — infer JSON Schema (draft-07) from sample JSON
+                                cmd if cmd.starts_with("/json-schema ") || cmd == "/json-schema" => {
+                                    let arg = cmd.trim_start_matches("/json-schema").trim();
+                                    if arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /json-schema <json>\n  Example: /json-schema {\"name\":\"Alice\",\"age\":30,\"tags\":[\"admin\"]}".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    fn infer_schema(v: &serde_json::Value) -> serde_json::Value {
+                                        match v {
+                                            serde_json::Value::Object(map) => {
+                                                let mut props = serde_json::Map::new();
+                                                let mut required = Vec::new();
+                                                for (k, val) in map {
+                                                    props.insert(k.clone(), infer_schema(val));
+                                                    required.push(serde_json::Value::String(k.clone()));
+                                                }
+                                                serde_json::json!({ "$schema": "http://json-schema.org/draft-07/schema#", "type": "object", "properties": props, "required": required })
+                                            }
+                                            serde_json::Value::Array(arr) => {
+                                                let items = arr.first().map(infer_schema).unwrap_or(serde_json::json!({}));
+                                                serde_json::json!({ "type": "array", "items": items })
+                                            }
+                                            serde_json::Value::String(_) => serde_json::json!({ "type": "string" }),
+                                            serde_json::Value::Number(n) => {
+                                                if n.is_f64() { serde_json::json!({ "type": "number" }) } else { serde_json::json!({ "type": "integer" }) }
+                                            }
+                                            serde_json::Value::Bool(_) => serde_json::json!({ "type": "boolean" }),
+                                            serde_json::Value::Null  => serde_json::json!({ "type": "null" }),
+                                        }
+                                    }
+                                    let body = match serde_json::from_str::<serde_json::Value>(arg) {
+                                        Ok(v) => {
+                                            let schema = infer_schema(&v);
+                                            match serde_json::to_string_pretty(&schema) {
+                                                Ok(s) => format!("json-schema (inferred):\n{}", s),
+                                                Err(e) => format!("json-schema: serialization error: {}", e),
+                                            }
+                                        }
+                                        Err(e) => format!("json-schema: invalid JSON — {}", e),
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /http-codes [filter] — HTTP status code reference
+                                cmd if cmd == "/http-codes" || cmd.starts_with("/http-codes ") => {
+                                    let filter = cmd.trim_start_matches("/http-codes").trim().to_lowercase();
+                                    let codes: &[(&str, &str, &str)] = &[
+                                        ("1xx","100","Continue"),("1xx","101","Switching Protocols"),("1xx","102","Processing"),("1xx","103","Early Hints"),
+                                        ("2xx","200","OK"),("2xx","201","Created"),("2xx","202","Accepted"),("2xx","204","No Content"),("2xx","206","Partial Content"),("2xx","207","Multi-Status"),("2xx","208","Already Reported"),
+                                        ("3xx","301","Moved Permanently"),("3xx","302","Found"),("3xx","303","See Other"),("3xx","304","Not Modified"),("3xx","307","Temporary Redirect"),("3xx","308","Permanent Redirect"),
+                                        ("4xx","400","Bad Request"),("4xx","401","Unauthorized"),("4xx","403","Forbidden"),("4xx","404","Not Found"),("4xx","405","Method Not Allowed"),("4xx","408","Request Timeout"),("4xx","409","Conflict"),("4xx","410","Gone"),("4xx","413","Payload Too Large"),("4xx","415","Unsupported Media Type"),("4xx","422","Unprocessable Entity"),("4xx","429","Too Many Requests"),
+                                        ("5xx","500","Internal Server Error"),("5xx","501","Not Implemented"),("5xx","502","Bad Gateway"),("5xx","503","Service Unavailable"),("5xx","504","Gateway Timeout"),("5xx","508","Loop Detected"),
+                                    ];
+                                    let mut body = "HTTP Status Codes\n".to_string();
+                                    let mut last_group = "";
+                                    for (group, code, name) in codes {
+                                        if !filter.is_empty() && !code.contains(&*filter) && !name.to_lowercase().contains(&*filter) && !group.contains(&*filter) {
+                                            continue;
+                                        }
+                                        if *group != last_group {
+                                            body.push_str(&format!("\n  {}xx\n", &group[..1]));
+                                            last_group = group;
+                                        }
+                                        body.push_str(&format!("    {}  {}\n", code, name));
+                                    }
+                                    if body == "HTTP Status Codes\n" {
+                                        body.push_str(&format!("\n  (no codes match '{}')", filter));
+                                    }
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /mkscript <name> [lang] — scaffold a new script with shebang + template
+                                cmd if cmd.starts_with("/mkscript ") || cmd == "/mkscript" => {
+                                    let args_raw = cmd.trim_start_matches("/mkscript").trim();
+                                    if args_raw.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /mkscript <name> [bash|python|node|ruby|perl]\n  Creates a new script file with boilerplate.".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let parts: Vec<&str> = args_raw.splitn(2, ' ').collect();
+                                    let name = parts[0];
+                                    let lang_hint = parts.get(1).copied().unwrap_or("");
+                                    // Detect language from extension or hint
+                                    let (lang, ext, shebang, template) = if name.ends_with(".py") || lang_hint == "python" || lang_hint == "py" {
+                                        ("Python", ".py", "#!/usr/bin/env python3",
+                                         "\"\"\"Script description.\"\"\"\nimport sys\nimport os\n\ndef main():\n    pass\n\nif __name__ == \"__main__\":\n    main()\n")
+                                    } else if name.ends_with(".js") || lang_hint == "node" || lang_hint == "js" {
+                                        ("Node.js", ".js", "#!/usr/bin/env node",
+                                         "'use strict';\n\nconst [, , ...args] = process.argv;\n\nasync function main(args) {\n    // TODO\n}\n\nmain(args).catch((e) => { console.error(e); process.exit(1); });\n")
+                                    } else if name.ends_with(".rb") || lang_hint == "ruby" || lang_hint == "rb" {
+                                        ("Ruby", ".rb", "#!/usr/bin/env ruby",
+                                         "# frozen_string_literal: true\n\nrequire 'optparse'\n\ndef main\n  # TODO\nend\n\nmain\n")
+                                    } else {
+                                        // Default: bash
+                                        ("Bash", ".sh", "#!/usr/bin/env bash",
+                                         "set -euo pipefail\n\nmain() {\n    local -r script_dir=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\"\n    # TODO\n}\n\nmain \"$@\"\n")
+                                    };
+                                    let filename = if name.contains('.') { name.to_string() } else { format!("{}{}", name, ext) };
+                                    let content = format!("{}\n# -*- coding: utf-8 -*-\n\n{}", shebang, template);
+                                    match std::fs::write(&filename, &content) {
+                                        Ok(_) => {
+                                            let _ = std::process::Command::new("chmod").args(["+x", &filename]).status();
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("mkscript: created {} ({}, {} bytes, +x)", filename, lang, content.len())
+                                            ));
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("mkscript: cannot write '{}': {}", filename, e)));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -13811,7 +14055,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/cve ", "/dotenv", "/dotenv ", "/calc ", "/chars", "/chars ", "/duck ", "/env-vars", "/env-vars ", "/flashcard ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/gh-search ", "/impl ", "/man-ai ", "/open ", "/path", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/semver ", "/session-summary", "/spell ", "/teach ", "/which-all ", "/wiki ", "/workflow", "/workflow ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
+                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/cve ", "/dotenv", "/dotenv ", "/calc ", "/chars", "/chars ", "/color ", "/duck ", "/env-vars", "/env-vars ", "/flashcard ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/gh-search ", "/http-codes", "/http-codes ", "/impl ", "/json-schema ", "/man-ai ", "/mkscript ", "/open ", "/path", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/semver ", "/session-summary", "/spell ", "/teach ", "/time", "/time ", "/which-all ", "/wiki ", "/workflow", "/workflow ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
