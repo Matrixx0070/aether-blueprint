@@ -6495,6 +6495,75 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::ReplayTurn(idx) => {
+                    use aether_core::context::ConversationItem;
+                    let user_turns: Vec<String> = session.history.iter()
+                        .filter_map(|item| {
+                            if let ConversationItem::User(t) = item { Some(t.clone()) } else { None }
+                        })
+                        .collect();
+                    if user_turns.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Replay: no user turns in history yet.".to_string()
+                        ));
+                        continue;
+                    }
+                    if idx >= user_turns.len() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Replay: index {idx} out of range (0..{}).", user_turns.len().saturating_sub(1)
+                        )));
+                        continue;
+                    }
+                    let msg = user_turns[idx].clone();
+                    let preview: String = msg.chars().take(80).collect();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "[Replay turn {idx}] \"{preview}{}\"",
+                        if msg.len() > 80 { "…" } else { "" }
+                    )));
+                    msg
+                }
+                UiCommand::ReplayLast => {
+                    use aether_core::context::ConversationItem;
+                    let last = session.history.iter().rev()
+                        .find_map(|item| if let ConversationItem::User(t) = item { Some(t.clone()) } else { None });
+                    match last {
+                        Some(msg) => {
+                            let preview: String = msg.chars().take(80).collect();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "[Replay last] \"{preview}{}\"",
+                                if msg.len() > 80 { "…" } else { "" }
+                            )));
+                            msg
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Replay: no user turns in history yet.".to_string()
+                            ));
+                            continue;
+                        }
+                    }
+                }
+                UiCommand::QueryReplayList => {
+                    use aether_core::context::ConversationItem;
+                    let user_turns: Vec<String> = session.history.iter()
+                        .filter_map(|item| {
+                            if let ConversationItem::User(t) = item { Some(t.clone()) } else { None }
+                        })
+                        .collect();
+                    let note = if user_turns.is_empty() {
+                        "Replay list: empty (no user turns yet).".to_string()
+                    } else {
+                        let lines: Vec<String> = user_turns.iter().enumerate()
+                            .map(|(i, t)| {
+                                let preview: String = t.chars().take(72).collect();
+                                format!("  [{i}] {preview}{}", if t.len() > 72 { "…" } else { "" })
+                            })
+                            .collect();
+                        format!("=== Replay list ({} turns) ===\n{}", lines.len(), lines.join("\n"))
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::SetScopeGuard(scope_opt) => {
                     let note = match &scope_opt {
                         Some(s) => format!(
@@ -26039,6 +26108,37 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /replay-turn <n> — re-send the Nth past user message
+                                cmd_str if cmd_str.starts_with("/replay-turn ") => {
+                                    let arg = cmd_str.trim_start_matches("/replay-turn ").trim();
+                                    if let Ok(n) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::ReplayTurn(n)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /replay-turn <index>  (use /replay-list to see indices)".to_string()
+                                        ));
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /replay-last — re-send the most recent user message
+                                "/replay-last" => {
+                                    if _ctx.send(UiCommand::ReplayLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /replay-list — show all past user messages with indices
+                                "/replay-list" => {
+                                    if _ctx.send(UiCommand::QueryReplayList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /capture-start [path] — begin capturing turns to a file
                                 cmd_str if cmd_str == "/capture-start" || cmd_str.starts_with("/capture-start ") => {
                                     let arg = cmd_str.trim_start_matches("/capture-start").trim();
@@ -26582,6 +26682,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/capture-start", "/capture-start ",
                             "/capture-stop",
                             "/capture-status",
+                            "/replay-turn ",
+                            "/replay-last",
+                            "/replay-list",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

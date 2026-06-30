@@ -403,6 +403,12 @@ pub enum UiCommand {
     StopCapture,
     /// Show current capture state: active path and bytes written.
     QueryCapture,
+    /// Re-send the Nth past user message (0-based index) as a new turn.
+    ReplayTurn(usize),
+    /// Re-send the most recent user message as a new turn.
+    ReplayLast,
+    /// List past user messages with their indices.
+    QueryReplayList,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
