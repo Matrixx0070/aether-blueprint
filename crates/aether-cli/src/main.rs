@@ -20820,6 +20820,222 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /think-plan <task> — AI produces a structured numbered plan, stored as session goal
+                                cmd_str if cmd_str.starts_with("/think-plan ") || cmd_str == "/think-plan" => {
+                                    let task = cmd_str.trim_start_matches("/think-plan").trim();
+                                    if task.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /think-plan <task description>\n  AI breaks the task into numbered steps and stores it as the session plan.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let ctx_info = if !ui.context_files.is_empty() {
+                                        format!("\nContext files: {}", ui.context_files.join(", "))
+                                    } else { String::new() };
+                                    let prompt = format!(
+                                        "Create a detailed numbered implementation plan for: **{task}**\n\
+                                         Format:\n\
+                                         ## Plan: {task}\n\
+                                         1. [step] — [why it's needed]\n\
+                                         2. ...\n\
+                                         ## Done criteria\n\
+                                         - [verifiable condition]\n\
+                                         ## Risks\n\
+                                         - [what could go wrong]{ctx_info}\n\n\
+                                         Be specific: name files, functions, and commands where known. \
+                                         After I see the plan I will set it as my session goal."
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /next-step — AI suggests the next concrete action to take
+                                "/next-step" => {
+                                    let goal_info = match &ui.session_goal {
+                                        Some(g) => format!("Session goal: {g}"),
+                                        None => "No session goal set.".to_string(),
+                                    };
+                                    let last_ai_preview = ui.chat_lines.iter().rev()
+                                        .find_map(|cl| match cl {
+                                            ChatLine::Assistant(t, _, _) => Some(t.chars().take(200).collect::<String>()),
+                                            _ => None,
+                                        })
+                                        .unwrap_or_else(|| "(no previous AI response)".to_string());
+                                    let last_tools: Vec<String> = ui.tool_log.iter()
+                                        .rev()
+                                        .take(5)
+                                        .map(|t| format!("{} → {:?}", t.name, t.status))
+                                        .collect();
+                                    let prompt = format!(
+                                        "Based on the current session state, what is the single most important NEXT concrete action? \
+                                         Be specific: name the exact command, file edit, or question to answer. \
+                                         Then explain why it's the highest-priority step.\n\n\
+                                         {goal_info}\n\
+                                         Recent AI summary: {last_ai_preview}…\n\
+                                         Recent tools: {}", last_tools.join(", ")
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /explain-regex <pattern> — AI explains what a regex does with examples
+                                cmd_str if cmd_str.starts_with("/explain-regex ") || cmd_str == "/explain-regex" => {
+                                    let pattern = cmd_str.trim_start_matches("/explain-regex").trim();
+                                    if pattern.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /explain-regex <pattern>  e.g. /explain-regex ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Explain the regular expression: `{pattern}`\n\
+                                         Include: 1) plain English description of what it matches, \
+                                         2) breakdown of each component, \
+                                         3) 3 examples that MATCH, \
+                                         4) 3 examples that do NOT match, \
+                                         5) any edge cases or common mistakes."
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-regex <description> — AI generates a regex from a natural language description
+                                cmd_str if cmd_str.starts_with("/ai-regex ") || cmd_str == "/ai-regex" => {
+                                    let desc = cmd_str.trim_start_matches("/ai-regex").trim();
+                                    if desc.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /ai-regex <description>  e.g. /ai-regex valid email address\n  AI generates a regex with test cases.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Generate a regular expression that matches: **{desc}**\n\
+                                         Return:\n\
+                                         1. The regex pattern in a code block\n\
+                                         2. An explanation of each component\n\
+                                         3. 5 test cases that should match\n\
+                                         4. 3 edge cases that should NOT match\n\
+                                         5. The regex in common language flavors if they differ (PCRE, JavaScript, Python re)"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /gen-types <file> — AI generates type definitions from a JSON/data file
+                                cmd_str if cmd_str.starts_with("/gen-types ") || cmd_str == "/gen-types" => {
+                                    let file_arg = cmd_str.trim_start_matches("/gen-types").trim();
+                                    let file_path_arg = if file_arg.is_empty() {
+                                        ui.context_files.first().cloned().unwrap_or_default()
+                                    } else {
+                                        file_arg.to_string()
+                                    };
+                                    if file_path_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /gen-types <file.json|.yaml|.toml>  — AI generates typed definitions from the data structure.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    match std::fs::read_to_string(&file_path_arg) {
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("/gen-types: cannot read {file_path_arg}: {e}")));
+                                        }
+                                        Ok(content) => {
+                                            let preview: String = content.chars().take(4000).collect();
+                                            let lang_target = if ui.context_files.iter().any(|f| f.ends_with(".rs")) { "Rust" }
+                                                else if ui.context_files.iter().any(|f| f.ends_with(".ts")) { "TypeScript" }
+                                                else { "Rust and TypeScript" };
+                                            let prompt = format!(
+                                                "Generate {lang_target} type definitions for the data structure in `{file_path_arg}`. \
+                                                 Include: 1) all nested types, 2) optional field annotations, \
+                                                 3) serde/Zod attributes where appropriate, \
+                                                 4) a one-line comment explaining each field.\n\n```\n{preview}\n```"
+                                            );
+                                            let ts2 = std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs();
+                                            ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                        }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tech-debt-report — comprehensive tech debt scan and AI prioritization
+                                "/tech-debt-report" => {
+                                    let patterns_out = std::process::Command::new("sh")
+                                        .arg("-c")
+                                        .arg(r#"grep -rn --include="*.rs" --include="*.ts" --include="*.py" --include="*.go" -E "(TODO|FIXME|HACK|XXX|TEMP|deprecated|DEPRECATED|workaround|WORKAROUND|#noqa|@ts-ignore|#type: ignore|unsafe|unwrap\(\)|expect\()" . 2>/dev/null | head -80"#)
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    let large_files = std::process::Command::new("sh")
+                                        .arg("-c")
+                                        .arg(r#"find . -not -path "./.git/*" \( -name "*.rs" -o -name "*.ts" -o -name "*.py" \) -exec wc -l {} \; 2>/dev/null | awk '$1 > 500' | sort -rn | head -10"#)
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    if patterns_out.trim().is_empty() && large_files.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("/tech-debt-report: no tech debt indicators found. Codebase is in good shape!".into()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Generate a tech debt report for this codebase. \
+                                         Prioritize: CRITICAL (security/correctness risk) / HIGH (blocks features) / MEDIUM (code quality) / LOW (nice to have). \
+                                         For each item: file:line, issue, estimated fix effort.\n\n\
+                                         ## Code smell indicators\n```\n{}\n```\n\
+                                         ## Large files (>500 lines)\n```\n{}\n```",
+                                        patterns_out.chars().take(4000).collect::<String>(),
+                                        large_files
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -21201,6 +21417,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/branch-summary", "/stash-note", "/stash-note ",
                             "/doc-check", "/ai-ci", "/extract-api", "/extract-api ",
                             "/ai-migration ",
+                            "/think-plan ", "/next-step",
+                            "/explain-regex ", "/ai-regex ", "/gen-types ", "/tech-debt-report",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
