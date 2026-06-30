@@ -417,6 +417,12 @@ pub enum UiCommand {
     JumpBookmark(usize),
     /// Delete a bookmark by 0-based index.
     DeleteBookmark(usize),
+    /// Extract and display all fenced code blocks from the last assistant response.
+    QueryShowCode,
+    /// Extract and display all URLs from the last assistant response.
+    QueryShowUrls,
+    /// Show cost and token totals accumulated since (and including) turn N.
+    QueryCostSince(usize),
     /// Show min/avg/max length stats for all assistant responses in history.
     QueryResponseStats,
     /// Show count of each ConversationItem type in history (User/Assistant/ToolResult).

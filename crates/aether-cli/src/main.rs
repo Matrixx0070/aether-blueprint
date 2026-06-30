@@ -6707,6 +6707,100 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::QueryShowCode => {
+                    use aether_core::context::ConversationItem;
+                    let last_text = session.history.iter().rev().find_map(|item| {
+                        if let ConversationItem::Assistant { text: Some(t), .. } = item { Some(t.as_str()) } else { None }
+                    });
+                    match last_text {
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote("No assistant response in history.".to_string()));
+                        }
+                        Some(text) => {
+                            let mut blocks: Vec<(String, String)> = Vec::new();
+                            let mut in_block = false;
+                            let mut lang = String::new();
+                            let mut buf = String::new();
+                            for line in text.lines() {
+                                if !in_block && line.starts_with("```") {
+                                    in_block = true;
+                                    lang = line.trim_start_matches('`').trim().to_string();
+                                    buf.clear();
+                                } else if in_block && line.starts_with("```") {
+                                    in_block = false;
+                                    blocks.push((lang.clone(), buf.trim_end().to_string()));
+                                } else if in_block {
+                                    buf.push_str(line);
+                                    buf.push('\n');
+                                }
+                            }
+                            if blocks.is_empty() {
+                                let _ = etx_for_driver.send(UiEvent::SystemNote("No fenced code blocks found in last response.".to_string()));
+                            } else {
+                                let mut msg = format!("{} code block(s) found:\n", blocks.len());
+                                for (i, (l, code)) in blocks.iter().enumerate() {
+                                    let lang_str = if l.is_empty() { "plain".to_string() } else { l.clone() };
+                                    msg.push_str(&format!("\n── Block {} ({}) ──\n{}\n", i + 1, lang_str, code));
+                                }
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                            }
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryShowUrls => {
+                    use aether_core::context::ConversationItem;
+                    let last_text = session.history.iter().rev().find_map(|item| {
+                        if let ConversationItem::Assistant { text: Some(t), .. } = item { Some(t.clone()) } else { None }
+                    });
+                    match last_text {
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote("No assistant response in history.".to_string()));
+                        }
+                        Some(text) => {
+                            let mut urls: Vec<String> = Vec::new();
+                            for word in text.split_whitespace() {
+                                let w = word.trim_matches(|c: char| "\"'()[]<>,".contains(c));
+                                if w.starts_with("http://") || w.starts_with("https://") || w.starts_with("ftp://") {
+                                    if !urls.contains(&w.to_string()) {
+                                        urls.push(w.to_string());
+                                    }
+                                }
+                            }
+                            if urls.is_empty() {
+                                let _ = etx_for_driver.send(UiEvent::SystemNote("No URLs found in last response.".to_string()));
+                            } else {
+                                let mut msg = format!("{} URL(s) found:\n", urls.len());
+                                for url in &urls {
+                                    msg.push_str(&format!("  {url}\n"));
+                                }
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                            }
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryCostSince(since_turn) => {
+                    let matching: Vec<&(usize, u64, u64, f64)> = session.turn_cost_log.iter()
+                        .filter(|&&(t, _, _, _)| t >= since_turn)
+                        .collect();
+                    if matching.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "No turns recorded at or after turn {since_turn}. Current turn: {}.", session.turn_index
+                        )));
+                    } else {
+                        let turns = matching.len();
+                        let total_in: u64 = matching.iter().map(|&&(_, i, _, _)| i).sum();
+                        let total_out: u64 = matching.iter().map(|&&(_, _, o, _)| o).sum();
+                        let total_cost: f64 = matching.iter().map(|&&(_, _, _, c)| c).sum();
+                        let first = matching.first().map(|&&(t, _, _, _)| t).unwrap_or(0);
+                        let last = matching.last().map(|&&(t, _, _, _)| t).unwrap_or(0);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Cost since turn {since_turn}  (turns {first}–{last}, {turns} turns)\n  Tokens in:   {total_in}\n  Tokens out:  {total_out}\n  Total cost:  ${total_cost:.6}"
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryResponseStats => {
                     use aether_core::context::ConversationItem;
                     let lengths: Vec<usize> = session.history.iter().filter_map(|item| {
@@ -27748,6 +27842,32 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /show-code — extract all fenced code blocks from last response
+                                "/show-code" => {
+                                    if _ctx.send(UiCommand::QueryShowCode).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /show-urls — extract all URLs from last response
+                                "/show-urls" => {
+                                    if _ctx.send(UiCommand::QueryShowUrls).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /cost-since <n> — cost/tokens accumulated since turn n
+                                cmd_str if cmd_str.starts_with("/cost-since ") => {
+                                    let arg = cmd_str.trim_start_matches("/cost-since ").trim();
+                                    let n = arg.parse::<usize>().unwrap_or(0);
+                                    if _ctx.send(UiCommand::QueryCostSince(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /response-stats — min/avg/max char/word length of assistant responses
                                 "/response-stats" => {
                                     if _ctx.send(UiCommand::QueryResponseStats).is_err() { break 'outer; }
@@ -28395,6 +28515,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/response-stats",
                             "/history-stats",
                             "/longest-response",
+                            "/show-code",
+                            "/show-urls",
+                            "/cost-since ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
