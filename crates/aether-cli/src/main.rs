@@ -6778,6 +6778,83 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryCompactHistoryStats => {
+                    let mut user_count = 0usize;
+                    let mut user_chars = 0usize;
+                    let mut asst_count = 0usize;
+                    let mut asst_chars = 0usize;
+                    let mut tool_count = 0usize;
+                    let mut tool_chars = 0usize;
+                    for item in &session.history {
+                        match item {
+                            ConversationItem::User(t) => { user_count += 1; user_chars += t.len(); }
+                            ConversationItem::Assistant { text, tool_uses } => {
+                                asst_count += 1;
+                                asst_chars += text.as_deref().map(|t| t.len()).unwrap_or(0);
+                                asst_chars += tool_uses.iter().map(|tu| tu.input.to_string().len()).sum::<usize>();
+                            }
+                            ConversationItem::ToolResults(r) => {
+                                tool_count += 1;
+                                tool_chars += r.iter().map(|rr| rr.content.len()).sum::<usize>();
+                            }
+                        }
+                    }
+                    let est_tokens = |chars: usize| chars / 4;
+                    let total_chars = user_chars + asst_chars + tool_chars;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History stats (rough 4-char/token estimate):\n  User:    {:>4} items  {:>7}B  ~{} tok\n  Asst:    {:>4} items  {:>7}B  ~{} tok\n  ToolRes: {:>4} items  {:>7}B  ~{} tok\n  Total:   {:>4} items  {:>7}B  ~{} tok",
+                        user_count, user_chars, est_tokens(user_chars),
+                        asst_count, asst_chars, est_tokens(asst_chars),
+                        tool_count, tool_chars, est_tokens(tool_chars),
+                        user_count + asst_count + tool_count, total_chars, est_tokens(total_chars)
+                    )));
+                    continue;
+                }
+                UiCommand::ExportBookmarks(path) => {
+                    let arr: Vec<serde_json::Value> = session.bookmarks.iter().enumerate().map(|(i, (turn, hist_len, label))| {
+                        serde_json::json!({ "index": i, "turn": turn, "history_len": hist_len, "label": label })
+                    }).collect();
+                    let json = serde_json::to_string_pretty(&arr).unwrap_or_else(|e| format!("[{{\"error\":\"{}\"}}]", e));
+                    match std::fs::write(&path, &json) {
+                        Ok(()) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Bookmarks exported to '{}' ({} bookmarks, {} bytes).", path, session.bookmarks.len(), json.len()
+                            )));
+                        }
+                        Err(e) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Export failed: {e}")));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryResponseWordFreq(top_n) => {
+                    let mut freq: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+                    let stop_words = ["the","a","an","in","is","it","of","to","and","or","for","with","that","this","on","at","by","be","as","are","was","from","have","has","not","but","if","can","will","you","we","i","do","so","all","more","one","its","into","use","when","than","no","also","about","what","how","which","other","they","their","there","been","he","she","his","her","our","your","my","me","him","them","us","up","out","any","would","could","should","may","then","these","those","each","after","before","over","under","some","only","such","same","like","just","new","set","get","add","run","now","first","last","next","part","well","long","here","way","each","most","while","being","make","made"];
+                    let stop_set: std::collections::HashSet<&str> = stop_words.iter().copied().collect();
+                    for item in &session.history {
+                        if let ConversationItem::Assistant { text: Some(t), .. } = item {
+                            for word in t.split(|c: char| !c.is_alphabetic()) {
+                                let w = word.to_lowercase();
+                                if w.len() >= 3 && !stop_set.contains(w.as_str()) {
+                                    *freq.entry(w).or_insert(0) += 1;
+                                }
+                            }
+                        }
+                    }
+                    if freq.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No assistant responses in history.".to_string()));
+                    } else {
+                        let mut sorted: Vec<(String, usize)> = freq.into_iter().collect();
+                        sorted.sort_by(|a, b| b.1.cmp(&a.1));
+                        let take = top_n.min(sorted.len());
+                        let mut msg = format!("Top {} words in assistant responses:\n", take);
+                        for (i, (word, count)) in sorted.iter().take(take).enumerate() {
+                            msg.push_str(&format!("  {:>3}. {:>6}×  {word}\n", i + 1, count));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
                 UiCommand::QueryNoteSearch(pat) => {
                     if session.session_notes.is_empty() {
                         let _ = etx_for_driver.send(UiEvent::SystemNote("Session notepad is empty.".to_string()));
@@ -29907,6 +29984,37 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /compact-history-stats — per-type token estimate
+                                "/compact-history-stats" => {
+                                    if _ctx.send(UiCommand::QueryCompactHistoryStats).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /bookmark-export <path> — export bookmarks to JSON
+                                cmd_str if cmd_str.starts_with("/bookmark-export ") => {
+                                    let path = cmd_str.trim_start_matches("/bookmark-export ").trim().to_string();
+                                    if path.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /bookmark-export <path>".to_string()));
+                                    } else if _ctx.send(UiCommand::ExportBookmarks(path)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /response-word-freq [n] — top N words in assistant responses
+                                cmd_str if cmd_str == "/response-word-freq" || cmd_str.starts_with("/response-word-freq ") => {
+                                    let arg = cmd_str.trim_start_matches("/response-word-freq").trim();
+                                    let n = arg.parse::<usize>().unwrap_or(20);
+                                    if _ctx.send(UiCommand::QueryResponseWordFreq(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /note-search <pattern> — search session notes
                                 cmd_str if cmd_str.starts_with("/note-search ") => {
                                     let pat = cmd_str.trim_start_matches("/note-search ").trim().to_string();
@@ -30780,6 +30888,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/note-search ",
                             "/session-vars-export ",
                             "/plan-word-count",
+                            "/compact-history-stats",
+                            "/bookmark-export ",
+                            "/response-word-freq", "/response-word-freq ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

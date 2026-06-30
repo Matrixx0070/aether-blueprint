@@ -679,6 +679,12 @@ pub enum UiCommand {
     ExportSessionVars(String),
     /// Count words and lines in the current active plan text.
     QueryPlanWordCount,
+    /// Show per-history-item type breakdown with rough token estimates.
+    QueryCompactHistoryStats,
+    /// Export all session bookmarks to a JSON file.
+    ExportBookmarks(String),
+    /// Show top N most frequent words across all assistant responses.
+    QueryResponseWordFreq(usize),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
