@@ -7366,6 +7366,44 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryHistorySummaryStats => {
+                    let user_count = session.history.iter().filter(|i| matches!(i, ConversationItem::User(_))).count();
+                    let asst_count = session.history.iter().filter(|i| matches!(i, ConversationItem::Assistant { .. })).count();
+                    let tool_count = session.history.iter().filter(|i| matches!(i, ConversationItem::ToolResults(_))).count();
+                    let total_tool_uses: usize = session.history.iter().map(|i| {
+                        if let ConversationItem::Assistant { tool_uses, .. } = i { tool_uses.len() } else { 0 }
+                    }).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History breakdown ({} items):\n  User messages:    {user_count}\n  Assistant turns:  {asst_count}\n  Tool result sets: {tool_count}\n  Total tool calls: {total_tool_uses}",
+                        session.history.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTaskCount => {
+                    let count = session.task_queue.len();
+                    if count == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Task queue empty. Use /task-add <task> to queue work.".to_string()));
+                    } else {
+                        let next = session.task_queue.front().map(|s| s.as_str()).unwrap_or("");
+                        let preview = if next.len() > 60 { format!("{}...", &next[..60]) } else { next.to_string() };
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Task queue: {count} pending. Next: {preview}"
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryBookmarkCount => {
+                    let count = session.bookmarks.len();
+                    if count == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No bookmarks. Use /bookmark-add [label].".to_string()));
+                    } else {
+                        let labels: Vec<&str> = session.bookmarks.iter().map(|(_, _, lbl)| lbl.as_str()).collect();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Bookmarks ({count}): {}", labels.join(", ")
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -32257,6 +32295,30 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /history-summary-stats — breakdown of history items by type
+                                "/history-summary-stats" => {
+                                    if _ctx.send(UiCommand::QueryHistorySummaryStats).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /task-count — task queue depth
+                                "/task-count" => {
+                                    if _ctx.send(UiCommand::QueryTaskCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /bookmark-count — count bookmarks
+                                "/bookmark-count" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -32979,6 +33041,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-find-tool ",
                             "/auto-tag-count",
                             "/cost-ceiling-status",
+                            "/history-summary-stats",
+                            "/task-count",
+                            "/bookmark-count",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

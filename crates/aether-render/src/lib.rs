@@ -831,6 +831,12 @@ pub enum UiCommand {
     QueryAutoTagCount,
     /// Show cost ceiling status: current spend vs ceiling.
     QueryCostCeilingStatus,
+    /// Show breakdown of history items by type (User/Assistant/ToolResults).
+    QueryHistorySummaryStats,
+    /// Show current task queue depth and next task.
+    QueryTaskCount,
+    /// Count conversation bookmarks.
+    QueryBookmarkCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
