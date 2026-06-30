@@ -6406,6 +6406,72 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 UiCommand::SetAlias(_, _) | UiCommand::RemoveAlias(_) | UiCommand::QueryAliases => {
                     continue;
                 }
+                UiCommand::ExportTurns(path, fmt) => {
+                    use aether_core::context::ConversationItem;
+                    let log = &session.turn_cost_log;
+                    let result = if fmt == "json" {
+                        // Build a JSON array of turn objects.
+                        let mut items: Vec<String> = Vec::new();
+                        for (turn, d_in, d_out, cost) in log {
+                            items.push(format!(
+                                "  {{\"turn\":{turn},\"in_tokens\":{d_in},\"out_tokens\":{d_out},\"cost_usd\":{cost:.6}}}"
+                            ));
+                        }
+                        let history_lines: Vec<String> = session.history.iter().enumerate().map(|(i, item)| {
+                            let (role, text) = match item {
+                                ConversationItem::User(t) => ("user", t.chars().take(200).collect::<String>()),
+                                ConversationItem::Assistant { text, tool_uses } => ("assistant", format!("{} tool(s), text={}", tool_uses.len(), text.is_some())),
+                                ConversationItem::ToolResults(r) => ("tool_results", format!("{} result(s)", r.len())),
+                            };
+                            format!("  {{\"idx\":{i},\"role\":\"{role}\",\"preview\":{:?}}}", text)
+                        }).collect();
+                        format!(
+                            "{{\n  \"session_turns\":{},\n  \"total_cost_usd\":{:.6},\n  \"turn_log\":[\n{}\n  ],\n  \"history\":[\n{}\n  ]\n}}",
+                            session.turn_index,
+                            log.iter().map(|(_, _, _, c)| c).sum::<f64>(),
+                            items.join(",\n"),
+                            history_lines.join(",\n")
+                        )
+                    } else {
+                        // Markdown format.
+                        let total: f64 = log.iter().map(|(_, _, _, c)| c).sum();
+                        let mut md = format!(
+                            "# Aether Session Export\n\n**Turns:** {}  |  **Total cost:** ${total:.4}\n\n## Per-Turn Cost\n\n| Turn | In tokens | Out tokens | Cost |\n|------|-----------|------------|------|\n",
+                            session.turn_index
+                        );
+                        for (turn, d_in, d_out, cost) in log {
+                            md.push_str(&format!("| {turn} | {d_in} | {d_out} | ${cost:.5} |\n"));
+                        }
+                        md.push_str("\n## Conversation History\n\n");
+                        for item in &session.history {
+                            match item {
+                                ConversationItem::User(t) => {
+                                    let preview: String = t.chars().take(500).collect();
+                                    md.push_str(&format!("**User:** {preview}\n\n"));
+                                }
+                                ConversationItem::Assistant { text, tool_uses } => {
+                                    if let Some(t) = text {
+                                        let preview: String = t.chars().take(500).collect();
+                                        md.push_str(&format!("**Assistant:** {preview}\n\n"));
+                                    }
+                                    if !tool_uses.is_empty() {
+                                        md.push_str(&format!("**Tool calls:** {}\n\n", tool_uses.iter().map(|tu| tu.name.as_str()).collect::<Vec<_>>().join(", ")));
+                                    }
+                                }
+                                ConversationItem::ToolResults(r) => {
+                                    md.push_str(&format!("**Tool results:** ({} result(s))\n\n", r.len()));
+                                }
+                            }
+                        }
+                        md
+                    };
+                    let note = match std::fs::write(&path, &result) {
+                        Ok(_) => format!("Exported {} ({} bytes) → {path}", fmt, result.len()),
+                        Err(e) => format!("Export failed: {e}"),
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::SetResponseFormat(fmt_opt) => {
                     let note = match &fmt_opt {
                         Some(fmt) => format!(
@@ -25140,6 +25206,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /export-turns [path] — export full session turn log (json or md)
+                                cmd_str if cmd_str == "/export-turns" || cmd_str.starts_with("/export-turns ") => {
+                                    let arg = cmd_str.trim_start_matches("/export-turns").trim();
+                                    let (path, fmt) = if arg.is_empty() {
+                                        ("aether-session.md".to_string(), "md".to_string())
+                                    } else if arg.ends_with(".json") {
+                                        (arg.to_string(), "json".to_string())
+                                    } else if arg.ends_with(".md") {
+                                        (arg.to_string(), "md".to_string())
+                                    } else {
+                                        (format!("{arg}.md"), "md".to_string())
+                                    };
+                                    if _ctx.send(UiCommand::ExportTurns(path, fmt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /format [json|markdown|plain|custom|off] — set response format
                                 cmd_str if cmd_str == "/format" || cmd_str.starts_with("/format ") => {
                                     let arg = cmd_str.trim_start_matches("/format").trim();
@@ -25875,6 +25959,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/env-show",
                             "/format", "/format json", "/format markdown", "/format plain", "/format off",
                             "/format-show",
+                            "/export-turns", "/export-turns ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -287,6 +287,8 @@ pub enum UiCommand {
     RemovePlaybookEntry(usize),
     /// List all error playbook entries.
     QueryPlaybook,
+    /// Export the full session turn log to a file (path, format: "json"|"md").
+    ExportTurns(String, String),
     /// Set the preferred response format ("json", "markdown", "plain", or custom).
     SetResponseFormat(Option<String>),
     /// Show the current response format constraint.
