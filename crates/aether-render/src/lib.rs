@@ -176,6 +176,12 @@ pub enum UiCommand {
     SetMaxToolsPerTurn(usize),
     /// Full diagnostic dump of session state.
     QueryDebugSession,
+    /// Set autonomous turn budget (0 = unlimited).
+    SetMaxTurns(usize),
+    /// Show last N history items as a SystemNote (0 = all).
+    QueryHistory(usize),
+    /// List all registered tools with their descriptions (alias for QueryTools with empty filter).
+    QueryToolsList,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

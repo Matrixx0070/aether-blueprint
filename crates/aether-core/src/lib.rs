@@ -133,6 +133,10 @@ pub struct Session {
     /// The TUI driver reads this after each agent turn and resets it to false,
     /// then shows a SystemNote so the user knows compaction happened.
     pub compaction_happened: bool,
+
+    /// Maximum autonomous turns before the agent pauses and awaits user input.
+    /// 0 = unlimited (default). Set via `/max-turns N` at runtime.
+    pub max_turns: usize,
 }
 
 impl Session {
@@ -169,6 +173,7 @@ impl Session {
             llm_ms_last: 0,
             started_at,
             compaction_happened: false,
+            max_turns: 0,
         }
     }
 
@@ -254,6 +259,22 @@ async fn agent_turn_inner(
         session.history.push(ConversationItem::User(s));
     }
 
+    // ── turn budget ──────────────────────────────────────────────────
+    // When max_turns > 0, stop the agent loop before calling the LLM so
+    // the user can review progress and decide whether to continue.
+    if session.max_turns > 0 && session.turn_index >= session.max_turns {
+        session.pending_reminders.push(Reminder::new(
+            ReminderKind::SystemWarning,
+            Source::Kernel,
+            format!(
+                "Turn budget reached ({}/{} turns). Awaiting user instruction. \
+                 Use /max-turns to raise the limit or just send a new message.",
+                session.turn_index, session.max_turns
+            ),
+        ));
+        return Ok(TurnOutcome::AwaitUser);
+    }
+
     // ── compact — run BEFORE assembly so the next LLM call sees the
     // shortened history. Fires only when cumulative usage > 80% of the
     // model's context window AND history has at least 4 items.
@@ -304,6 +325,13 @@ async fn agent_turn_inner(
     let ctx = session.activation_context();
 
     // ── perceive (assemble) — D1 + D6 fire here ──────────────────────
+    // Deduplicate pending_reminders by body text before draining so
+    // identical warnings (e.g. stuck-tool repeated injection) don't
+    // pile up into the system prompt across back-to-back agent turns.
+    {
+        let mut seen = std::collections::HashSet::new();
+        session.pending_reminders.retain(|r| seen.insert(r.body.clone()));
+    }
     let candidate_reminders = std::mem::take(&mut session.pending_reminders);
     let tool_defs: Vec<ToolDef> = session
         .tools

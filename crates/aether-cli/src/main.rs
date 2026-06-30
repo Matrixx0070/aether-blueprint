@@ -5828,6 +5828,64 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::SetMaxTurns(n) => {
+                    session.max_turns = n;
+                    let note = if n == 0 {
+                        "Turn budget: unlimited.".to_string()
+                    } else {
+                        format!("Turn budget: agent will pause after {n} autonomous turn(s).")
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryHistory(n) => {
+                    use aether_core::context::ConversationItem;
+                    let items = &session.history;
+                    let start = if n == 0 || n >= items.len() { 0 } else { items.len() - n };
+                    let slice = &items[start..];
+                    if slice.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("History is empty.".to_string()));
+                    } else {
+                        let mut lines = format!("=== Last {} history item(s) ===\n", slice.len());
+                        for (i, item) in slice.iter().enumerate() {
+                            let abs = start + i;
+                            match item {
+                                ConversationItem::User(t) => {
+                                    lines.push_str(&format!("[{abs}] USER: {}\n",
+                                        t.chars().take(120).collect::<String>()));
+                                }
+                                ConversationItem::Assistant { text, tool_uses } => {
+                                    let txt = text.as_deref().unwrap_or("(no text)");
+                                    lines.push_str(&format!("[{abs}] ASST: {} | tools: {}\n",
+                                        txt.chars().take(80).collect::<String>(),
+                                        tool_uses.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(",")));
+                                }
+                                ConversationItem::ToolResults(results) => {
+                                    lines.push_str(&format!("[{abs}] TOOL RESULTS: {} result(s)\n",
+                                        results.len()));
+                                }
+                            }
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(lines));
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolsList => {
+                    let names = session.tools.names();
+                    if names.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No tools registered.".to_string()));
+                    } else {
+                        let mut lines = format!("=== Registered tools ({}) ===\n", names.len());
+                        for name in &names {
+                            if let Some(t) = session.tools.get(name) {
+                                lines.push_str(&format!("  {} — {}\n", name,
+                                    t.description().chars().take(100).collect::<String>()));
+                            }
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(lines));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionStats => {
                     use aether_core::compaction::context_window_for_model;
                     let now = std::time::SystemTime::now()
@@ -22808,6 +22866,34 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /max-turns [N] — set autonomous turn budget (0=unlimited)
+                                cmd_str if cmd_str.starts_with("/max-turns ") || cmd_str == "/max-turns" => {
+                                    let arg = cmd_str.trim_start_matches("/max-turns").trim();
+                                    let n = if arg.is_empty() || arg == "off" { 0usize } else { arg.parse().unwrap_or(0) };
+                                    if _ctx.send(UiCommand::SetMaxTurns(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history [N] — show last N conversation history items
+                                cmd_str if cmd_str.starts_with("/history ") || cmd_str == "/history" => {
+                                    let arg = cmd_str.trim_start_matches("/history").trim();
+                                    let n = if arg.is_empty() { 10usize } else { arg.parse().unwrap_or(10) };
+                                    if _ctx.send(UiCommand::QueryHistory(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tools-list — show all registered tools with descriptions
+                                "/tools-list" => {
+                                    if _ctx.send(UiCommand::QueryToolsList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /auto-fix — AI diagnoses the last tool error and proposes a concrete fix
                                 "/auto-fix" => {
                                     let last_error_info = ui.chat_lines.iter().rev().find_map(|cl| {
@@ -23260,6 +23346,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/goal", "/goal ", "/context-info", "/session-stats",
                             "/last-error", "/auto-fix",
                             "/debug-session", "/set-max-tools", "/set-max-tools ",
+                            "/max-turns", "/max-turns ",
+                            "/history", "/history ",
+                            "/tools-list",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
