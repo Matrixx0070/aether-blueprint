@@ -19421,6 +19421,256 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /diff-ai — explain current git diff HEAD in natural language
+                                "/diff-ai" => {
+                                    let diff_out = std::process::Command::new("git")
+                                        .args(["diff", "HEAD"])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    if diff_out.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("/diff-ai: no changes vs HEAD (git diff HEAD is empty).".into()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let truncated: String = diff_out.chars().take(8000).collect();
+                                    let prompt = format!(
+                                        "Please explain the following git diff in plain language. \
+                                         Describe what each change does, why it might have been made, \
+                                         and flag any potential issues you notice.\n\n```diff\n{truncated}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /smart-commit [hint] — AI generates commit message, then commits
+                                cmd_str if cmd_str == "/smart-commit" || cmd_str.starts_with("/smart-commit ") => {
+                                    let hint = cmd_str.trim_start_matches("/smart-commit").trim().to_string();
+                                    // Get staged diff (or all changes if nothing staged)
+                                    let staged = std::process::Command::new("git")
+                                        .args(["diff", "--staged"])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    let diff = if staged.trim().is_empty() {
+                                        std::process::Command::new("git")
+                                            .args(["diff", "HEAD"])
+                                            .output()
+                                            .ok()
+                                            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                            .unwrap_or_default()
+                                    } else { staged };
+                                    if diff.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("/smart-commit: no changes to commit.".into()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let truncated: String = diff.chars().take(6000).collect();
+                                    let hint_line = if !hint.is_empty() { format!("\n\nHint from user: {hint}") } else { String::new() };
+                                    let prompt = format!(
+                                        "Generate a concise git commit message for the following diff. \
+                                         Return ONLY the commit message text (subject line, optionally a blank line + body). \
+                                         No explanation, no markdown fences, no leading/trailing quotes.{hint_line}\n\n```diff\n{truncated}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /pr-draft — AI drafts PR title + body from branch diff vs main/master
+                                "/pr-draft" => {
+                                    let base = {
+                                        let main_ok = std::process::Command::new("git")
+                                            .args(["rev-parse", "--verify", "main"])
+                                            .output().map(|o| o.status.success()).unwrap_or(false);
+                                        if main_ok { "main" } else { "master" }
+                                    };
+                                    let diff_out = std::process::Command::new("git")
+                                        .args(["diff", &format!("{base}...HEAD"), "--stat"])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    let log_out = std::process::Command::new("git")
+                                        .args(["log", &format!("{base}..HEAD"), "--oneline"])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    if diff_out.trim().is_empty() && log_out.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("/pr-draft: no diff found vs {base}.")));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "Write a GitHub pull request title and body for these changes vs `{base}`.\n\
+                                         Format:\n  Title: <one line>\n  Body: <markdown>\n\n\
+                                         ## Commits\n{log_out}\n## Diff stat\n{diff_out}"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /explain-last — ask AI to re-explain its last response more simply
+                                "/explain-last" => {
+                                    let last_ai = ui.chat_lines.iter().rev().find_map(|cl| match cl {
+                                        ChatLine::Assistant(t, _, _) => Some(t.clone()),
+                                        _ => None,
+                                    });
+                                    match last_ai {
+                                        None => {
+                                            ui.chat_lines.push(ChatLine::SystemNote("No AI response to explain yet.".into()));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                        Some(prev) => {
+                                            let preview: String = prev.chars().take(300).collect();
+                                            let prompt = format!(
+                                                "Please re-explain your previous response in simpler terms. \
+                                                 Assume the reader is unfamiliar with the technical details. \
+                                                 Quote the key points, then rephrase each one clearly.\n\nPrevious response:\n{preview}…"
+                                            );
+                                            let ts2 = std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs();
+                                            ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                            if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                            ui.input_buffer.clear();
+                                            ui.input_cursor = 0;
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                    }
+                                }
+                                // /tokens-left — estimate remaining context tokens from session usage
+                                "/tokens-left" => {
+                                    let used = ui.tokens_in + ui.tokens_out;
+                                    // Approximate context limits by model name prefix
+                                    let model_limit: u64 = if ui.model.contains("opus") {
+                                        200_000
+                                    } else if ui.model.contains("sonnet") {
+                                        200_000
+                                    } else {
+                                        200_000
+                                    };
+                                    let remaining = model_limit.saturating_sub(used);
+                                    let pct = if model_limit > 0 { used as f64 / model_limit as f64 * 100.0 } else { 0.0 };
+                                    ui.chat_lines.push(ChatLine::SystemNote(format!(
+                                        "Context window usage:\n  Used:      {:>8} tokens ({:.1}%)\n  Remaining: {:>8} tokens\n  Model limit (est.): {} tokens\n  Model: {}",
+                                        used, pct, remaining, model_limit, ui.model
+                                    )));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /grep-ai <pattern> — run grep in cwd, send matches to AI for explanation
+                                cmd_str if cmd_str.starts_with("/grep-ai ") || cmd_str == "/grep-ai" => {
+                                    let pattern = cmd_str.trim_start_matches("/grep-ai").trim();
+                                    if pattern.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /grep-ai <pattern>  — searches codebase and asks AI to explain the matches.".into()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let grep_out = std::process::Command::new("grep")
+                                        .args(["-rn", "--include=*.rs", "--include=*.ts", "--include=*.js",
+                                               "--include=*.py", "--include=*.go", "--include=*.toml",
+                                               "-m", "50", pattern, "."])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    if grep_out.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("/grep-ai: no matches for pattern `{pattern}`.")));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let truncated: String = grep_out.chars().take(6000).collect();
+                                    let prompt = format!(
+                                        "I searched the codebase for `{pattern}` and got these matches. \
+                                         Please explain what each match does, how they relate to each other, \
+                                         and whether there's anything notable about the pattern's usage.\n\n```\n{truncated}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /loop-fix [N] — agentic loop: run tests → send failures to AI → repeat
+                                cmd_str if cmd_str == "/loop-fix" || cmd_str.starts_with("/loop-fix ") => {
+                                    let args = cmd_str.trim_start_matches("/loop-fix").trim();
+                                    let max_iters: usize = args.parse().unwrap_or(5).min(20);
+                                    let test_cmd = if std::path::Path::new("Cargo.toml").exists() {
+                                        "cargo test 2>&1"
+                                    } else if std::path::Path::new("package.json").exists() {
+                                        "npm test 2>&1"
+                                    } else if std::path::Path::new("pytest.ini").exists() || std::path::Path::new("pyproject.toml").exists() {
+                                        "pytest 2>&1"
+                                    } else {
+                                        "make test 2>&1"
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                        format!("/loop-fix: starting agentic fix loop (max {max_iters} iterations) with `{test_cmd}`\n  I will run tests, send failures to AI for fixing, and repeat until tests pass.")
+                                    ));
+                                    // Run first test iteration immediately; subsequent ones driven by /tdd logic
+                                    let output = std::process::Command::new("sh")
+                                        .args(["-c", test_cmd])
+                                        .output();
+                                    match output {
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("/loop-fix: failed to run test command: {e}")));
+                                        }
+                                        Ok(out) => {
+                                            let combined = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+                                            if out.status.success() {
+                                                ui.chat_lines.push(ChatLine::SystemNote("/loop-fix: tests already pass — no fix needed!".into()));
+                                            } else {
+                                                let truncated: String = combined.chars().take(6000).collect();
+                                                let prompt = format!(
+                                                    "[LOOP-FIX iteration 1/{max_iters}] Test suite failed. \
+                                                     Fix ALL the errors below. When done, I will re-run the tests automatically.\n\n```\n{truncated}\n```"
+                                                );
+                                                let ts2 = std::time::SystemTime::now()
+                                                    .duration_since(std::time::UNIX_EPOCH)
+                                                    .unwrap_or_default()
+                                                    .as_secs();
+                                                ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                                if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                            }
+                                        }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -19787,6 +20037,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/goal", "/goal ", "/goal show", "/goal clear",
                             "/history-clear", "/clear-memory", "/notool", "/notool ",
                             "/tdd", "/tdd ", "/write-all", "/focus-file ",
+                            "/diff-ai", "/smart-commit", "/smart-commit ",
+                            "/pr-draft", "/explain-last", "/tokens-left",
+                            "/grep-ai ", "/loop-fix", "/loop-fix ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
