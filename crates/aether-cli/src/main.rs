@@ -7700,6 +7700,55 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryAssemblyTeleShow => {
+                    match &session.last_assembly_telemetry {
+                        Some(t) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Last assembly telemetry:\n  D1 active: {}\n  Reminders admitted: {}, dropped: {}\n  Long-conv injected: {}\n  Plan included: {}",
+                                t.d1_active, t.reminders_admitted, t.reminders_dropped,
+                                t.long_conv_injected, t.plan_included
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "No assembly telemetry yet (no turns completed).".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryRemindersShow => {
+                    match &session.last_assembly_telemetry {
+                        Some(t) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Reminders (last assembly): {} admitted, {} dropped. Pending queue: {}.",
+                                t.reminders_admitted, t.reminders_dropped, session.pending_reminders.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Reminders: no assembly yet. Pending queue: {}.", session.pending_reminders.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryD1Status => {
+                    match &session.last_assembly_telemetry {
+                        Some(t) => {
+                            let state = if t.d1_active { "ACTIVE — reminders pass through tamper-test pipeline" } else { "INACTIVE — reminders admitted verbatim" };
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "D1 (reminder tamper-test overlay): {state}."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "D1 status: unknown (no turns completed yet).".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryPlanWindowShow => {
                     match session.plan.window {
                         Some(w) => {
@@ -33838,6 +33887,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /assembly-tele-show — show last context-assembly telemetry
+                                "/assembly-tele-show" => {
+                                    if _ctx.send(UiCommand::QueryAssemblyTeleShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /reminders-show — show reminder counts from last assembly
+                                "/reminders-show" => {
+                                    if _ctx.send(UiCommand::QueryRemindersShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /d1-status — show D1 overlay active status
+                                "/d1-status" => {
+                                    if _ctx.send(UiCommand::QueryD1Status).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -34638,6 +34705,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-window-show",
                             "/plan-blocks-recorded",
                             "/verifier-last-show",
+                            "/assembly-tele-show",
+                            "/reminders-show",
+                            "/d1-status",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -987,6 +987,12 @@ pub enum UiCommand {
     QueryPlanBlocksRecorded,
     /// Show the last verification result (blocked / passed / findings).
     QueryVerifierLastShow,
+    /// Show last context-assembly telemetry.
+    QueryAssemblyTeleShow,
+    /// Show admitted and dropped reminder counts from last assembly.
+    QueryRemindersShow,
+    /// Show D1 (reminder tamper-test overlay) active status.
+    QueryD1Status,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
