@@ -409,6 +409,10 @@ pub enum UiCommand {
     ReplayLast,
     /// List past user messages with their indices.
     QueryReplayList,
+    /// Set a total tool-call budget for the session (0 = unlimited).
+    SetToolBudget(usize),
+    /// Show current tool-call budget and usage.
+    QueryToolBudget,
     /// Search the user input history for a substring (case-insensitive).
     SearchInputHistory(String),
     /// Show the last N user inputs from the input history buffer.

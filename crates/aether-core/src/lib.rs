@@ -328,6 +328,11 @@ pub struct Session {
     /// Not injected into the agent; purely a user reference.
     pub session_notes: Vec<(String, u64)>,
 
+    /// Maximum total tool calls allowed this session.
+    /// When > 0 and cumulative calls reach this value, the agent pauses.
+    /// 0 = unlimited.
+    pub tool_call_budget: usize,
+
     /// Context-fill fraction (0.0–1.0) at which a warning SystemNote fires.
     /// 0.0 = off. Fires once per session (token_budget_warn_fired tracks this).
     pub token_budget_warn_pct: f64,
@@ -419,6 +424,7 @@ impl Session {
             pause_after_turns: 0,
             pause_now: false,
             session_notes: Vec::new(),
+            tool_call_budget: 0,
             token_budget_warn_pct: 0.0,
             token_budget_hard_pct: 0.0,
             token_budget_warn_fired: false,

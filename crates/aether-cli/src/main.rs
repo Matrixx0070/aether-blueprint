@@ -6564,6 +6564,33 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::SetToolBudget(n) => {
+                    session.tool_call_budget = n;
+                    let note = if n == 0 {
+                        "Tool-call budget: unlimited.".to_string()
+                    } else {
+                        let used: usize = session.plan.tool_call_stats.values().map(|(ok, err)| ok + err).sum();
+                        format!(
+                            "Tool-call budget: {n} total tool calls max.  Used so far: {used}."
+                        )
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryToolBudget => {
+                    let used: usize = session.plan.tool_call_stats.values().map(|(ok, err)| ok + err).sum();
+                    let note = if session.tool_call_budget == 0 {
+                        format!("Tool-call budget: unlimited. Used so far: {used}.\n  Use /tool-budget <n> to set a cap.")
+                    } else {
+                        let remaining = session.tool_call_budget.saturating_sub(used);
+                        format!(
+                            "Tool-call budget: {used}/{} used ({remaining} remaining).",
+                            session.tool_call_budget
+                        )
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 // Input history commands are handled entirely in the TUI layer.
                 UiCommand::SearchInputHistory(_) | UiCommand::QueryInputHistory(_) | UiCommand::ClearInputHistory => {
                     continue;
@@ -8359,6 +8386,21 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                 let _ = etx_for_driver.send(UiEvent::SystemNote(
                                     "Pause-after: scheduled pause reached. Send any message to resume.".to_string()
                                 ));
+                                auto_continue_count = 0;
+                                break;
+                            }
+                        }
+                        // Tool-call budget: stop if cumulative tool calls reach the cap.
+                        if session.tool_call_budget > 0 {
+                            let total_calls: usize = session.plan.tool_call_stats.values()
+                                .map(|(ok, err)| ok + err)
+                                .sum();
+                            if total_calls >= session.tool_call_budget {
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                    "Tool-call budget reached: {total_calls}/{} total calls. \
+                                     Stopping agent. Use /tool-budget 0 to remove the cap.",
+                                    session.tool_call_budget
+                                )));
                                 auto_continue_count = 0;
                                 break;
                             }
@@ -26603,6 +26645,30 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /tool-budget [n|off] — cap total tool calls per session
+                                cmd_str if cmd_str == "/tool-budget" || cmd_str.starts_with("/tool-budget ") => {
+                                    let arg = cmd_str.trim_start_matches("/tool-budget").trim();
+                                    if arg.is_empty() {
+                                        if _ctx.send(UiCommand::QueryToolBudget).is_err() { break 'outer; }
+                                    } else {
+                                        let n = if arg == "off" || arg == "0" { 0usize } else {
+                                            arg.parse::<usize>().unwrap_or(0)
+                                        };
+                                        if _ctx.send(UiCommand::SetToolBudget(n)).is_err() { break 'outer; }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tool-budget-show — show tool-call budget and usage
+                                "/tool-budget-show" => {
+                                    if _ctx.send(UiCommand::QueryToolBudget).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /hist-search <query> — search input history (TUI-only)
                                 cmd_str if cmd_str.starts_with("/hist-search ") => {
                                     let q = cmd_str.trim_start_matches("/hist-search ").trim().to_ascii_lowercase();
@@ -27533,6 +27599,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/hist-search ",
                             "/hist-show", "/hist-show ",
                             "/hist-clear",
+                            "/tool-budget", "/tool-budget ", "/tool-budget off",
+                            "/tool-budget-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
