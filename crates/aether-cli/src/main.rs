@@ -5539,6 +5539,43 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote("Plan cleared.".into()));
                     continue;
                 }
+                UiCommand::QueryTools(filter) => {
+                    let fl = filter.to_ascii_lowercase();
+                    let list: Vec<(String, String)> = session.tools.names().iter()
+                        .filter_map(|n| session.tools.get(n).map(|t| (t.name().to_string(), t.description().to_string())))
+                        .filter(|(name, desc)| {
+                            fl.is_empty()
+                                || name.to_ascii_lowercase().contains(&fl)
+                                || desc.to_ascii_lowercase().contains(&fl)
+                        })
+                        .collect();
+                    let _ = etx_for_driver.send(UiEvent::ToolList(list));
+                    continue;
+                }
+                UiCommand::SetThinking(budget) => {
+                    session.config.thinking_budget = budget;
+                    let note = match budget {
+                        None => "Extended thinking: off".to_string(),
+                        Some(n) => format!("Extended thinking: on ({n} token budget)"),
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::SetEnvVar(k, v) => {
+                    // SAFETY: single-threaded agent driver; no concurrent env readers.
+                    std::env::set_var(&k, &v);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(
+                        format!("env: {k}={v}")
+                    ));
+                    continue;
+                }
+                UiCommand::UnsetEnvVar(k) => {
+                    std::env::remove_var(&k);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(
+                        format!("env: unset {k}")
+                    ));
+                    continue;
+                }
             };
             let outs = run_hooks(
                 &hooks.user_prompt_submit,
@@ -18167,6 +18204,109 @@ CTF Toolkit — Aether AI-assisted\n\
                                     }
                                     msg.push_str("Switch with: /config model <id>  or  /config model opus|sonnet|haiku");
                                     ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tools [filter] — list registered tools (driver round-trip)
+                                cmd_str if cmd_str == "/tools" || cmd_str.starts_with("/tools ") => {
+                                    let filter = if cmd_str.len() > 7 {
+                                        cmd_str[7..].trim().to_string()
+                                    } else {
+                                        String::new()
+                                    };
+                                    if _ctx.send(UiCommand::QueryTools(filter)).is_err() { break 'outer; }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /think off|fast|deep — named thinking presets
+                                "/think off" | "/think 0" => {
+                                    if _ctx.send(UiCommand::SetThinking(None)).is_err() { break 'outer; }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/think fast" | "/think low" => {
+                                    if _ctx.send(UiCommand::SetThinking(Some(2_000))).is_err() { break 'outer; }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/think deep" | "/think high" | "/think on" => {
+                                    if _ctx.send(UiCommand::SetThinking(Some(16_000))).is_err() { break 'outer; }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/think" => {
+                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                        "Usage: /think <off|fast|deep>\n  off  — disable extended thinking\n  fast — 2 000-token budget (quick)\n  deep — 16 000-token budget (thorough, Opus 4+ only)".into()
+                                    ));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /setenv VAR=val — inject env var into session (Bash tool inherits it)
+                                cmd_str if cmd_str.starts_with("/setenv ") => {
+                                    let kv = cmd_str[8..].trim();
+                                    if let Some(eq) = kv.find('=') {
+                                        let k = kv[..eq].trim().to_string();
+                                        let v = kv[eq + 1..].to_string();
+                                        if k.is_empty() {
+                                            ui.chat_lines.push(ChatLine::SystemNote("Usage: /setenv VAR=value".into()));
+                                        } else if _ctx.send(UiCommand::SetEnvVar(k, v)).is_err() {
+                                            break 'outer;
+                                        }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /setenv VAR=value  (value can be empty: /setenv FOO=)".into()));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /unsetenv VAR — remove env var from session
+                                cmd_str if cmd_str.starts_with("/unsetenv ") => {
+                                    let k = cmd_str[10..].trim().to_string();
+                                    if k.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /unsetenv VAR".into()));
+                                    } else if _ctx.send(UiCommand::UnsetEnvVar(k)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-info — compact diagnostics snapshot
+                                "/session-info" | "/si" => {
+                                    let exchange_count = ui.chat_lines.iter()
+                                        .filter(|l| matches!(l, ChatLine::User(..)))
+                                        .count();
+                                    let tool_calls: usize = ui.tool_log.len();
+                                    let tool_errors: usize = ui.tool_log.iter()
+                                        .filter(|e| matches!(e.status, aether_render::ToolStatus::Err(_)))
+                                        .count();
+                                    let elapsed_secs = ui.session_start.elapsed().as_secs();
+                                    let elapsed_str = if elapsed_secs >= 3600 {
+                                        format!("{}h {:02}m", elapsed_secs / 3600, (elapsed_secs % 3600) / 60)
+                                    } else {
+                                        format!("{}m {:02}s", elapsed_secs / 60, elapsed_secs % 60)
+                                    };
+                                    let mut msg = format!(
+                                        "Session info\n─────────────────────────────────────────────\n\
+                                         model        : {}\n\
+                                         uptime       : {}\n\
+                                         exchanges    : {}\n\
+                                         tool calls   : {} ({} errors)\n\
+                                         chat lines   : {}\n\
+                                         tokens in    : {}\n\
+                                         tokens out   : {}\n\
+                                         cost (est)   : ${:.4}\n",
+                                        ui.model,
+                                        elapsed_str,
+                                        exchange_count,
+                                        tool_calls, tool_errors,
+                                        ui.chat_lines.len(),
+                                        ui.tokens_in,
+                                        ui.tokens_out,
+                                        ui.cost_usd,
+                                    );
+                                    if let Some(cwd) = std::env::current_dir().ok() {
+                                        msg.push_str(&format!("cwd          : {}\n", cwd.display()));
+                                    }
+                                    ui.chat_lines.push(ChatLine::SystemNote(msg.trim_end().to_string()));
                                     ui.follow_tail = true;
                                     continue;
                                 }

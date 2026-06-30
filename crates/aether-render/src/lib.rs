@@ -113,6 +113,8 @@ pub enum UiEvent {
     AwaitUser,
     /// Informational note sent from the agent driver to the UI (no error state).
     SystemNote(String),
+    /// Response to QueryTools: list of (name, description) pairs.
+    ToolList(Vec<(String, String)>),
 }
 
 /// Commands sent from the UI back to the session driver.
@@ -125,6 +127,14 @@ pub enum UiCommand {
     SetPlan(String),
     /// Clear the agent session's active plan.
     ClearPlan,
+    /// Request the driver to respond with the registered tool list (filtered by substring).
+    QueryTools(String),
+    /// Set session thinking budget. None = off, Some(n) = n tokens.
+    SetThinking(Option<u32>),
+    /// Inject an environment variable into the driver's process env (inherited by Bash tool).
+    SetEnvVar(String, String),
+    /// Remove an environment variable from the driver's process env.
+    UnsetEnvVar(String),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
@@ -565,6 +575,18 @@ impl UiState {
             }
             UiEvent::SystemNote(note) => {
                 self.chat_lines.push(ChatLine::SystemNote(note));
+            }
+            UiEvent::ToolList(tools) => {
+                if tools.is_empty() {
+                    self.chat_lines.push(ChatLine::SystemNote("No matching tools.".into()));
+                } else {
+                    let mut msg = format!("Registered tools ({}):\n", tools.len());
+                    msg.push_str("─────────────────────────────────────────────\n");
+                    for (name, desc) in &tools {
+                        msg.push_str(&format!("  {name}\n    {desc}\n"));
+                    }
+                    self.chat_lines.push(ChatLine::SystemNote(msg));
+                }
             }
         }
     }
