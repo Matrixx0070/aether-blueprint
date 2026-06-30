@@ -32,7 +32,7 @@ pub enum PermissionOutcome {
 pub fn is_mutating(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "Write" | "Edit" | "NotebookEdit" | "Bash" | "WebFetch" | "WebSearch"
+        "Write" | "Edit" | "NotebookEdit" | "Bash" | "WebFetch" | "WebSearch" | "MemoryWrite"
     )
 }
 

@@ -777,6 +777,235 @@ fn html_to_text(html: &str) -> String {
     s.trim().to_string()
 }
 
+// ── WebSearch ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct WebSearchInput {
+    query: String,
+    #[serde(default = "default_max_results")]
+    max_results: usize,
+}
+
+fn default_max_results() -> usize { 8 }
+
+pub struct WebSearchTool;
+
+#[async_trait]
+impl Tool for WebSearchTool {
+    fn name(&self) -> &str { "WebSearch" }
+    fn description(&self) -> &str {
+        "Search the web using DuckDuckGo and return top results with titles, URLs, and snippets. \
+         Use this for current events, documentation, or any information that may not be in \
+         training data. Returns up to 8 results by default."
+    }
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "query":       { "type": "string", "description": "Search query" },
+                "max_results": { "type": "integer", "description": "Max results to return (1–20, default 8)" }
+            },
+            "required": ["query"]
+        })
+    }
+    async fn run(&self, input: Value) -> Result<String, ToolError> {
+        use once_cell::sync::Lazy;
+        use regex::Regex;
+
+        let inp: WebSearchInput = parse_input(input)?;
+        let max = inp.max_results.clamp(1, 20);
+
+        // URL-encode query.
+        let encoded: String = inp.query.chars().map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' { c.to_string() }
+            else { format!("%{:02X}", c as u32) }
+        }).collect();
+
+        let url = format!("https://html.duckduckgo.com/html/?q={encoded}");
+        let client = reqwest::Client::builder()
+            .user_agent("Mozilla/5.0 (compatible; AetherBot/1.0)")
+            .timeout(Duration::from_secs(15))
+            .build()
+            .map_err(|e| ToolError::Io(format!("client: {e}")))?;
+        let html = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| ToolError::Io(format!("search fetch: {e}")))?
+            .text()
+            .await
+            .map_err(|e| ToolError::Io(format!("search body: {e}")))?;
+
+        // Extract result blocks: title, URL, snippet.
+        static RESULT_BLOCK: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(r#"(?si)class="result__title">.*?<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>.*?class="result__snippet"[^>]*>(.*?)</(?:div|span)"#).unwrap()
+        });
+        static STRIP_TAGS: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[^>]+>").unwrap());
+
+        let mut results = Vec::new();
+        for cap in RESULT_BLOCK.captures_iter(&html).take(max) {
+            let raw_url = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+            let title = STRIP_TAGS.replace_all(cap.get(2).map(|m| m.as_str()).unwrap_or(""), "");
+            let snippet = STRIP_TAGS.replace_all(cap.get(3).map(|m| m.as_str()).unwrap_or(""), "");
+
+            // DuckDuckGo redirect URLs: extract the real URL from uddg= param.
+            let real_url = if raw_url.contains("uddg=") {
+                raw_url.split("uddg=").nth(1)
+                    .map(|s| s.split('&').next().unwrap_or(s))
+                    .map(|s| percent_decode(s))
+                    .unwrap_or_else(|| raw_url.to_string())
+            } else {
+                raw_url.to_string()
+            };
+
+            let title = title.trim().replace("&amp;", "&").replace("&#x27;", "'");
+            let snippet = snippet.trim().replace("&amp;", "&").replace("&#x27;", "'");
+            if !title.is_empty() && !real_url.is_empty() {
+                results.push(format!("**{title}**\n{real_url}\n{snippet}"));
+            }
+        }
+
+        if results.is_empty() {
+            Ok(format!("No results found for: {}", inp.query))
+        } else {
+            let header = format!("Search results for: {}\n\n", inp.query);
+            Ok(truncate(&format!("{}{}", header, results.join("\n\n---\n\n")), MAX_TOOL_OUTPUT))
+        }
+    }
+}
+
+fn percent_decode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(hex) = std::str::from_utf8(&bytes[i+1..i+3]) {
+                if let Ok(b) = u8::from_str_radix(hex, 16) {
+                    out.push(b as char);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+// ── MemoryRead ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct MemoryReadInput {
+    name: String,
+}
+
+pub struct MemoryReadTool;
+
+#[async_trait]
+impl Tool for MemoryReadTool {
+    fn name(&self) -> &str { "MemoryRead" }
+    fn description(&self) -> &str {
+        "Read a named memory entry from ~/.aether/memory/<name>.md. \
+         Returns the file contents or an error if the entry doesn't exist. \
+         Use MemoryWrite to create or update entries."
+    }
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string", "description": "Memory entry name (filename without .md)" }
+            },
+            "required": ["name"]
+        })
+    }
+    async fn run(&self, input: Value) -> Result<String, ToolError> {
+        let inp: MemoryReadInput = parse_input(input)?;
+        let safe_name: String = inp.name.chars()
+            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        if safe_name.is_empty() {
+            return Err(ToolError::Schema("name must contain alphanumeric chars".into()));
+        }
+        let mem_dir = memory_dir();
+        let path = mem_dir.join(format!("{safe_name}.md"));
+        match std::fs::read_to_string(&path) {
+            Ok(content) => Ok(truncate(&content, MAX_TOOL_OUTPUT)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Err(ToolError::Io(format!("memory entry '{safe_name}' not found at {}", path.display())))
+            }
+            Err(e) => Err(ToolError::Io(format!("read: {e}"))),
+        }
+    }
+}
+
+fn memory_dir() -> std::path::PathBuf {
+    std::env::var_os("HOME")
+        .map(|h| std::path::PathBuf::from(h).join(".aether/memory"))
+        .unwrap_or_else(|| std::path::PathBuf::from(".aether/memory"))
+}
+
+// ── MemoryWrite ────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct MemoryWriteInput {
+    name: String,
+    content: String,
+    #[serde(default)]
+    append: bool,
+}
+
+pub struct MemoryWriteTool;
+
+#[async_trait]
+impl Tool for MemoryWriteTool {
+    fn name(&self) -> &str { "MemoryWrite" }
+    fn description(&self) -> &str {
+        "Write or append to a named memory entry in ~/.aether/memory/<name>.md. \
+         Use this to persist findings, decisions, or notes between turns and sessions. \
+         Set append=true to add to an existing entry instead of replacing it."
+    }
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "name":    { "type": "string", "description": "Memory entry name (filename without .md)" },
+                "content": { "type": "string", "description": "Content to write" },
+                "append":  { "type": "boolean", "description": "If true, append instead of overwrite (default false)" }
+            },
+            "required": ["name", "content"]
+        })
+    }
+    async fn run(&self, input: Value) -> Result<String, ToolError> {
+        let inp: MemoryWriteInput = parse_input(input)?;
+        let safe_name: String = inp.name.chars()
+            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        if safe_name.is_empty() {
+            return Err(ToolError::Schema("name must contain alphanumeric chars".into()));
+        }
+        let mem_dir = memory_dir();
+        std::fs::create_dir_all(&mem_dir)
+            .map_err(|e| ToolError::Io(format!("create memory dir: {e}")))?;
+        let path = mem_dir.join(format!("{safe_name}.md"));
+        if inp.append {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new()
+                .create(true).append(true)
+                .open(&path)
+                .map_err(|e| ToolError::Io(format!("open: {e}")))?;
+            file.write_all(inp.content.as_bytes())
+                .map_err(|e| ToolError::Io(format!("write: {e}")))?;
+            Ok(format!("Appended {} bytes to memory entry '{safe_name}'", inp.content.len()))
+        } else {
+            std::fs::write(&path, &inp.content)
+                .map_err(|e| ToolError::Io(format!("write: {e}")))?;
+            Ok(format!("Wrote {} bytes to memory entry '{safe_name}' ({})", inp.content.len(), path.display()))
+        }
+    }
+}
+
 // ── NotebookEdit ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -1514,6 +1743,9 @@ pub fn register_builtins(registry: &mut crate::ToolRegistry) {
     registry.register(Box::new(GlobTool));
     registry.register(Box::new(LsTool));
     registry.register(Box::new(WebFetchTool));
+    registry.register(Box::new(WebSearchTool));
+    registry.register(Box::new(MemoryReadTool));
+    registry.register(Box::new(MemoryWriteTool));
     registry.register(Box::new(NotebookEditTool));
     registry.register(Box::new(TodoWriteTool::new()));
     // Security scanners — safe by default (read-only on local filesystem),
@@ -1612,7 +1844,8 @@ mod tests {
         let mut r = ToolRegistry::new();
         register_builtins(&mut r);
         let names = r.names();
-        for expected in ["Bash", "Read", "Write", "Edit", "Grep", "Glob", "LS", "WebFetch", "NotebookEdit", "TodoWrite"] {
+        for expected in ["Bash", "Read", "Write", "Edit", "Grep", "Glob", "LS", "WebFetch",
+                         "WebSearch", "MemoryRead", "MemoryWrite", "NotebookEdit", "TodoWrite"] {
             assert!(names.contains(&expected.to_string()), "missing: {expected}");
         }
     }
