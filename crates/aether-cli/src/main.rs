@@ -18373,6 +18373,102 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /add <path> — add a file/glob to the persistent context list
+                                cmd_str if cmd_str.starts_with("/add ") => {
+                                    let path_arg = cmd_str[5..].trim().to_string();
+                                    if path_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /add <file-path>\n  Adds a file to persistent context — its contents are prepended to every AI request.\n  /context-list to see active files  ·  /context-rm <idx> to remove".into()
+                                        ));
+                                    } else {
+                                        let full_path = if path_arg.starts_with('/') {
+                                            path_arg.clone()
+                                        } else {
+                                            std::env::current_dir()
+                                                .map(|d| d.join(&path_arg).to_string_lossy().to_string())
+                                                .unwrap_or(path_arg.clone())
+                                        };
+                                        if std::path::Path::new(&full_path).exists() {
+                                            if !ui.context_files.contains(&full_path) {
+                                                ui.context_files.push(full_path.clone());
+                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                    format!("Added to context: {full_path}\n  ({} file{} in context — injected into every AI request)",
+                                                        ui.context_files.len(),
+                                                        if ui.context_files.len() == 1 { "" } else { "s" }
+                                                    )
+                                                ));
+                                            } else {
+                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                    format!("Already in context: {full_path}")
+                                                ));
+                                            }
+                                        } else {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("File not found: {full_path}")
+                                            ));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /context-list — show all persistent context files
+                                "/context-list" | "/ctx-list" | "/added" => {
+                                    let note = if ui.context_files.is_empty() {
+                                        "No files in persistent context.\n  /add <path> to add a file — its contents are injected into every AI request.".to_string()
+                                    } else {
+                                        let mut msg = format!("Persistent context ({} file{}):\n", ui.context_files.len(), if ui.context_files.len() == 1 { "" } else { "s" });
+                                        for (i, p) in ui.context_files.iter().enumerate() {
+                                            let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+                                            msg.push_str(&format!("  [{i}] {p}  ({size} bytes)\n"));
+                                        }
+                                        msg.push_str("\n  /context-rm <idx>  to remove  ·  /context-clear  to remove all");
+                                        msg
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(note));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /context-rm <idx|path> — remove from persistent context
+                                cmd_str if cmd_str.starts_with("/context-rm ") => {
+                                    let arg = cmd_str[12..].trim();
+                                    let removed = if let Ok(idx) = arg.parse::<usize>() {
+                                        if idx < ui.context_files.len() {
+                                            let removed = ui.context_files.remove(idx);
+                                            Some(removed)
+                                        } else {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("Index {idx} out of range (have {} entries)", ui.context_files.len())
+                                            ));
+                                            None
+                                        }
+                                    } else {
+                                        if let Some(pos) = ui.context_files.iter().position(|p| p == arg || p.ends_with(arg)) {
+                                            Some(ui.context_files.remove(pos))
+                                        } else {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("Not found in context: {arg}")
+                                            ));
+                                            None
+                                        }
+                                    };
+                                    if let Some(path) = removed {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("Removed from context: {path}  ({} remaining)", ui.context_files.len())
+                                        ));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /context-clear — remove all persistent context files
+                                "/context-clear" | "/ctx-clear" => {
+                                    let n = ui.context_files.len();
+                                    ui.context_files.clear();
+                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                        format!("Context cleared ({n} file{} removed).", if n == 1 { "" } else { "s" })
+                                    ));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -18604,6 +18700,26 @@ CTF Toolkit — Aether AI-assisted\n\
                                     expanded + &appendix
                                 }
                             };
+                            // Inject persistent context files (added via /add) at the top.
+                            let msg = if !ui.context_files.is_empty() {
+                                let mut ctx_block = String::new();
+                                for path in &ui.context_files {
+                                    match std::fs::read_to_string(path) {
+                                        Ok(contents) => {
+                                            ctx_block.push_str(&format!(
+                                                "[CONTEXT FILE: {path}]\n```\n{}\n```\n\n",
+                                                contents.chars().take(8000).collect::<String>()
+                                            ));
+                                        }
+                                        Err(_) => {
+                                            ctx_block.push_str(&format!("[CONTEXT FILE: {path}] (could not read)\n\n"));
+                                        }
+                                    }
+                                }
+                                format!("{ctx_block}{msg}")
+                            } else {
+                                msg
+                            };
                             // Prepend prompt_prefix silently to the API message (not shown in chat)
                             let api_msg = match &ui.prompt_prefix {
                                 Some(pfx) => format!("{pfx}\n\n{msg}"),
@@ -18684,6 +18800,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/setenv ", "/unsetenv ", "/session-info", "/si",
                             "/compact full", "/inject ", "/model-list", "/models",
                             "/tool-stats", "/tstats",
+                            "/add ", "/context-list", "/ctx-list", "/added",
+                            "/context-rm ", "/context-clear", "/ctx-clear",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

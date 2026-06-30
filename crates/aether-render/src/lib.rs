@@ -310,6 +310,9 @@ pub struct UiState {
     /// Word and char count of the last completed AI response (for tools panel badge).
     pub last_response_words: u32,
     pub last_response_chars: u32,
+    /// Persistent file-context list: paths added with /add whose contents
+    /// are injected at the top of every AI request.
+    pub context_files: Vec<String>,
 }
 
 impl UiState {
@@ -449,6 +452,7 @@ impl UiState {
             prompt_prefix: None,
             last_response_words: 0,
             last_response_chars: 0,
+            context_files: Vec::new(),
         }
     }
 
