@@ -873,6 +873,12 @@ pub enum UiCommand {
     QueryCompactionThresholdShow,
     /// Show the auto-commit setting and template.
     QueryAutoCommitShow,
+    /// Show the token-budget warn threshold.
+    QueryTokenBudgetWarnShow,
+    /// Show the token-budget hard-stop threshold.
+    QueryTokenBudgetHardShow,
+    /// Show the configured post-turn hook command.
+    QueryPostTurnHookShow,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

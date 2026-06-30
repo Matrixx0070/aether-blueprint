@@ -7617,6 +7617,46 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryTokenBudgetWarnShow => {
+                    if session.token_budget_warn_pct <= 0.0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Token-budget warn: OFF. Use /token-budget-warn <pct> to set.".to_string()
+                        ));
+                    } else {
+                        let fired = if session.token_budget_warn_fired { " (already fired)" } else { "" };
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Token-budget warn: {:.0}% context fill threshold{fired}.", session.token_budget_warn_pct * 100.0
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryTokenBudgetHardShow => {
+                    if session.token_budget_hard_pct <= 0.0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Token-budget hard-stop: OFF. Use /token-budget-hard <pct> to set.".to_string()
+                        ));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Token-budget hard-stop: {:.0}% context fill hard-stops the agent.", session.token_budget_hard_pct * 100.0
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryPostTurnHookShow => {
+                    match &session.post_turn_hook {
+                        Some(cmd) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Post-turn hook: {cmd:?}. Runs after each tool-using turn."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "No post-turn hook configured. Use /on-finish-run <cmd> to set one.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -32671,6 +32711,30 @@ CTF Toolkit — Aether AI-assisted\n\
                                 // /auto-commit-show — show auto-commit setting
                                 "/auto-commit-show" => {
                                     if _ctx.send(UiCommand::QueryAutoCommitShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /token-budget-warn-show — show token-budget warn threshold
+                                "/token-budget-warn-show" => {
+                                    if _ctx.send(UiCommand::QueryTokenBudgetWarnShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /token-budget-hard-show — show token-budget hard-stop threshold
+                                "/token-budget-hard-show" => {
+                                    if _ctx.send(UiCommand::QueryTokenBudgetHardShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /post-turn-hook-show — show configured post-turn hook
+                                "/post-turn-hook-show" => {
+                                    if _ctx.send(UiCommand::QueryPostTurnHookShow).is_err() { break 'outer; }
                                     ui.input_buffer.clear();
                                     ui.input_cursor = 0;
                                     ui.follow_tail = true;
