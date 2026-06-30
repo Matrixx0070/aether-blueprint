@@ -18754,6 +18754,167 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /tdd [cmd] — run tests, inject failures into AI for fixing
+                                cmd_str if cmd_str == "/tdd" || cmd_str.starts_with("/tdd ") => {
+                                    let user_cmd = cmd_str.trim_start_matches("/tdd").trim();
+                                    // Auto-detect test command if not specified
+                                    let test_cmd = if !user_cmd.is_empty() {
+                                        user_cmd.to_string()
+                                    } else if std::path::Path::new("Cargo.toml").exists() {
+                                        "cargo test 2>&1".to_string()
+                                    } else if std::path::Path::new("package.json").exists() {
+                                        "npm test 2>&1".to_string()
+                                    } else if std::path::Path::new("pyproject.toml").exists() || std::path::Path::new("setup.py").exists() {
+                                        "python -m pytest 2>&1".to_string()
+                                    } else if std::path::Path::new("go.mod").exists() {
+                                        "go test ./... 2>&1".to_string()
+                                    } else {
+                                        "make test 2>&1".to_string()
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(format!("Running: {test_cmd}")));
+                                    let out = std::process::Command::new("sh")
+                                        .args(["-c", &test_cmd])
+                                        .output();
+                                    match out {
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("/tdd: failed to run '{test_cmd}': {e}")));
+                                        }
+                                        Ok(o) => {
+                                            let stdout = String::from_utf8_lossy(&o.stdout).to_string();
+                                            let stderr = String::from_utf8_lossy(&o.stderr).to_string();
+                                            let combined = format!("{stdout}{stderr}");
+                                            let exit_code = o.status.code().unwrap_or(-1);
+                                            if exit_code == 0 {
+                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                    format!("All tests pass (exit {exit_code}). Nothing to fix.")
+                                                ));
+                                            } else {
+                                                // Truncate output to avoid huge prompts
+                                                let truncated: String = combined.lines()
+                                                    .take(80)
+                                                    .collect::<Vec<_>>()
+                                                    .join("\n");
+                                                let suffix = if combined.lines().count() > 80 {
+                                                    "\n[… output truncated to 80 lines …]"
+                                                } else { "" };
+                                                let fix_prompt = format!(
+                                                    "The following tests failed (exit code {exit_code}). Please diagnose and fix the issues:\n\n```\n{truncated}{suffix}\n```\n\nFix the failing tests. Read the relevant source files first, then edit them.",
+                                                );
+                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                    format!("Tests failed (exit {exit_code}). Sending to AI for repair…")
+                                                ));
+                                                let ts2 = std::time::SystemTime::now()
+                                                    .duration_since(std::time::UNIX_EPOCH)
+                                                    .unwrap_or_default()
+                                                    .as_secs();
+                                                ui.chat_lines.push(ChatLine::User(fix_prompt.clone(), ts2));
+                                                ui.follow_tail = true;
+                                                ui.status_running = true;
+                                                ui.waiting_since = Some(std::time::Instant::now());
+                                                ui.msg_times_secs.push(ts2);
+                                                if _ctx.send(UiCommand::UserMessage(fix_prompt)).is_err() { break 'outer; }
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /write-all — extract ALL fenced code blocks from last AI response and write to files
+                                "/write-all" => {
+                                    let last_ai = ui.chat_lines.iter().rev().find_map(|cl| match cl {
+                                        ChatLine::Assistant(text, _, _) => Some(text.clone()),
+                                        _ => None,
+                                    });
+                                    match last_ai {
+                                        None => {
+                                            ui.chat_lines.push(ChatLine::SystemNote("No AI response found.".into()));
+                                        }
+                                        Some(ai_text) => {
+                                            // Extract ALL code blocks with their context lines as filename hints
+                                            let lines: Vec<&str> = ai_text.lines().collect();
+                                            let mut written = 0usize;
+                                            let mut skipped = 0usize;
+                                            let mut i = 0;
+                                            while i < lines.len() {
+                                                let line = lines[i];
+                                                if line.starts_with("```") || line.starts_with("~~~") {
+                                                    // Look backward for filename hint (backtick-quoted file in prev 3 lines)
+                                                    let mut filename: Option<String> = None;
+                                                    for j in (i.saturating_sub(4)..i).rev() {
+                                                        let prev = lines[j];
+                                                        // Match patterns like: `src/main.rs`, **`main.rs`**, "main.rs":
+                                                        if let Some(start) = prev.find('`') {
+                                                            let after = &prev[start + 1..];
+                                                            if let Some(end) = after.find('`') {
+                                                                let candidate = &after[..end];
+                                                                if candidate.contains('.') && !candidate.contains(' ') {
+                                                                    filename = Some(candidate.to_string());
+                                                                    break;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    // Collect block content
+                                                    let fence = if line.starts_with("```") { "```" } else { "~~~" };
+                                                    let mut block: Vec<&str> = Vec::new();
+                                                    i += 1;
+                                                    while i < lines.len() && !lines[i].starts_with(fence) {
+                                                        block.push(lines[i]);
+                                                        i += 1;
+                                                    }
+                                                    if let Some(ref fname) = filename {
+                                                        let content = block.join("\n");
+                                                        match std::fs::write(fname, &content) {
+                                                            Ok(_) => {
+                                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                                    format!("  → wrote {fname} ({} lines)", block.len())
+                                                                ));
+                                                                written += 1;
+                                                            }
+                                                            Err(e) => {
+                                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                                    format!("  ✗ {fname}: {e}")
+                                                                ));
+                                                                skipped += 1;
+                                                            }
+                                                        }
+                                                    } else {
+                                                        skipped += 1;
+                                                    }
+                                                }
+                                                i += 1;
+                                            }
+                                            let summary = format!("/write-all: wrote {written} file(s), {skipped} block(s) without filename.");
+                                            ui.chat_lines.push(ChatLine::SystemNote(summary));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /focus-file <path> — set primary focus file (add to context + set goal)
+                                cmd_str if cmd_str.starts_with("/focus-file ") || cmd_str == "/focus-file" => {
+                                    let path = cmd_str.trim_start_matches("/focus-file").trim();
+                                    if path.is_empty() {
+                                        let current = ui.context_files.first().cloned().unwrap_or_else(|| "(none)".to_string());
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("Usage: /focus-file <path>\n  Sets primary focus file and adds to context.\n  Current first context file: {current}")
+                                        ));
+                                    } else {
+                                        // Add to context files (front)
+                                        if !ui.context_files.contains(&path.to_string()) {
+                                            ui.context_files.insert(0, path.to_string());
+                                        }
+                                        // Set focused goal
+                                        let goal_text = format!("You are primarily working on `{path}`. Keep your edits focused on this file unless explicitly asked to change others.");
+                                        ui.session_goal = Some(goal_text.clone());
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("Focus file: {path}\n  Added to context (position 0) and set as session goal.\n  /goal clear to remove  ·  /context-rm 0 to remove from context")
+                                        ));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /goal [text|show|clear] — set a persistent session goal
                                 cmd_str if cmd_str == "/goal" || cmd_str.starts_with("/goal ") => {
                                     let arg = cmd_str.trim_start_matches("/goal").trim();
@@ -19625,6 +19786,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-schema ",
                             "/goal", "/goal ", "/goal show", "/goal clear",
                             "/history-clear", "/clear-memory", "/notool", "/notool ",
+                            "/tdd", "/tdd ", "/write-all", "/focus-file ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

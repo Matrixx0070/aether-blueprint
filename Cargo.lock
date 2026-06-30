@@ -37,6 +37,7 @@ dependencies = [
  "ed448-goldilocks",
  "flate2",
  "futures-util",
+ "glob",
  "hex",
  "hmac",
  "jsonwebtoken",
