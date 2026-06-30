@@ -6707,6 +6707,52 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::SetRequestPrefix(text) => {
+                    let preview: String = text.chars().take(60).collect();
+                    let ellipsis = if text.len() > 60 { "…" } else { "" };
+                    session.request_prefix = Some(text);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Request prefix set: \"{preview}{ellipsis}\"\n  Prepended to every user message before AI dispatch."
+                    )));
+                    continue;
+                }
+                UiCommand::ClearRequestPrefix => {
+                    session.request_prefix = None;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(
+                        "Request prefix cleared.".to_string()
+                    ));
+                    continue;
+                }
+                UiCommand::SetRequestSuffix(text) => {
+                    let preview: String = text.chars().take(60).collect();
+                    let ellipsis = if text.len() > 60 { "…" } else { "" };
+                    session.request_suffix = Some(text);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Request suffix set: \"{preview}{ellipsis}\"\n  Appended to every user message before AI dispatch."
+                    )));
+                    continue;
+                }
+                UiCommand::ClearRequestSuffix => {
+                    session.request_suffix = None;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(
+                        "Request suffix cleared.".to_string()
+                    ));
+                    continue;
+                }
+                UiCommand::QueryRequestWrap => {
+                    let prefix_line = match &session.request_prefix {
+                        Some(p) => format!("Prefix: \"{}{}\"", p.chars().take(80).collect::<String>(), if p.len() > 80 { "…" } else { "" }),
+                        None => "Prefix: off".to_string(),
+                    };
+                    let suffix_line = match &session.request_suffix {
+                        Some(s) => format!("Suffix: \"{}{}\"", s.chars().take(80).collect::<String>(), if s.len() > 80 { "…" } else { "" }),
+                        None => "Suffix: off".to_string(),
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Request wrap:\n  {prefix_line}\n  {suffix_line}\n  Use /request-prefix <text>, /request-suffix <text>, or /request-prefix off / /request-suffix off."
+                    )));
+                    continue;
+                }
                 UiCommand::SetNextTurnModel(model) => {
                     let prev = session.next_turn_model.replace(model.clone());
                     let note = if let Some(p) = prev {
@@ -8476,6 +8522,20 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 format!("{preamble}\n\n{user_msg}")
             } else {
                 user_msg
+            };
+            // Request prefix/suffix: wrap the user message before AI dispatch.
+            let user_msg = {
+                let prefix = session.request_prefix.as_deref().unwrap_or("");
+                let suffix = session.request_suffix.as_deref().unwrap_or("");
+                if !prefix.is_empty() && !suffix.is_empty() {
+                    format!("{prefix}\n\n{user_msg}\n\n{suffix}")
+                } else if !prefix.is_empty() {
+                    format!("{prefix}\n\n{user_msg}")
+                } else if !suffix.is_empty() {
+                    format!("{user_msg}\n\n{suffix}")
+                } else {
+                    user_msg
+                }
             };
             // Capture: write the user message to the capture file (if active).
             if let Some(ref mut cf) = capture_file {
@@ -27561,6 +27621,40 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /request-prefix <text> | off — prepend text to every user message
+                                cmd_str if cmd_str == "/request-prefix off" || cmd_str.starts_with("/request-prefix ") => {
+                                    if cmd_str == "/request-prefix off" {
+                                        if _ctx.send(UiCommand::ClearRequestPrefix).is_err() { break 'outer; }
+                                    } else {
+                                        let text = cmd_str.trim_start_matches("/request-prefix ").trim().to_string();
+                                        if _ctx.send(UiCommand::SetRequestPrefix(text)).is_err() { break 'outer; }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /request-suffix <text> | off — append text to every user message
+                                cmd_str if cmd_str == "/request-suffix off" || cmd_str.starts_with("/request-suffix ") => {
+                                    if cmd_str == "/request-suffix off" {
+                                        if _ctx.send(UiCommand::ClearRequestSuffix).is_err() { break 'outer; }
+                                    } else {
+                                        let text = cmd_str.trim_start_matches("/request-suffix ").trim().to_string();
+                                        if _ctx.send(UiCommand::SetRequestSuffix(text)).is_err() { break 'outer; }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /request-wrap-show — show current request prefix and suffix
+                                "/request-wrap-show" => {
+                                    if _ctx.send(UiCommand::QueryRequestWrap).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -28124,6 +28218,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/bookmarks",
                             "/bookmark-jump ",
                             "/bookmark-del ",
+                            "/request-prefix ", "/request-prefix off",
+                            "/request-suffix ", "/request-suffix off",
+                            "/request-wrap-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

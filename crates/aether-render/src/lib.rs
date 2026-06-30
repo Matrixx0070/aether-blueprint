@@ -417,6 +417,16 @@ pub enum UiCommand {
     JumpBookmark(usize),
     /// Delete a bookmark by 0-based index.
     DeleteBookmark(usize),
+    /// Set a text prefix prepended to every user message before AI dispatch.
+    SetRequestPrefix(String),
+    /// Clear the per-request prefix.
+    ClearRequestPrefix,
+    /// Set a text suffix appended to every user message before AI dispatch.
+    SetRequestSuffix(String),
+    /// Clear the per-request suffix.
+    ClearRequestSuffix,
+    /// Show current request prefix and suffix settings.
+    QueryRequestWrap,
     /// Remove the last N items from conversation history — alias for the existing TrimHistory variant.
     TrimLastN(usize),
     /// Remove all User items from conversation history.

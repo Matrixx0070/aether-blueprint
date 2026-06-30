@@ -354,6 +354,13 @@ pub struct Session {
     pub token_budget_hard_pct: f64,
     /// True once the warn threshold has fired so the note only shows once.
     pub token_budget_warn_fired: bool,
+
+    /// When Some, this string is prepended to every user message before AI dispatch.
+    /// Applied after think-aloud. Cleared with /request-prefix off.
+    pub request_prefix: Option<String>,
+    /// When Some, this string is appended to every user message before AI dispatch.
+    /// Applied after think-aloud. Cleared with /request-suffix off.
+    pub request_suffix: Option<String>,
 }
 
 impl Session {
@@ -445,6 +452,8 @@ impl Session {
             token_budget_warn_pct: 0.0,
             token_budget_hard_pct: 0.0,
             token_budget_warn_fired: false,
+            request_prefix: None,
+            request_suffix: None,
         }
     }
 
