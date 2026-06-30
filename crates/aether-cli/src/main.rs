@@ -6406,6 +6406,40 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 UiCommand::SetAlias(_, _) | UiCommand::RemoveAlias(_) | UiCommand::QueryAliases => {
                     continue;
                 }
+                UiCommand::LabelTurn(turn, label) => {
+                    // When turn==0 (sentinel from TUI), use the current session turn_index.
+                    let effective_turn = if turn == 0 { session.turn_index } else { turn };
+                    let preview: String = label.chars().take(60).collect();
+                    session.turn_labels.push((effective_turn, label.clone()));
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Turn {effective_turn} labeled: \"{preview}{}\"  ({} label(s) total)",
+                        if label.len() > 60 { "…" } else { "" },
+                        session.turn_labels.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTurnLabels => {
+                    let note = if session.turn_labels.is_empty() {
+                        "No turn labels set. Use /label <text> to annotate the current turn.".to_string()
+                    } else {
+                        let lines: Vec<String> = session.turn_labels.iter().enumerate()
+                            .map(|(i, (turn, label))| format!("  [{i}] Turn {turn}: {label}"))
+                            .collect();
+                        format!("=== Turn labels ({} entry/entries) ===\n{}", lines.len(), lines.join("\n"))
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::RemoveTurnLabel(idx) => {
+                    let note = if idx < session.turn_labels.len() {
+                        let (turn, label) = session.turn_labels.remove(idx);
+                        format!("Turn label [{idx}] removed: turn {turn} \"{label}\".")
+                    } else {
+                        format!("No label at index {idx}.")
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::AddStickyContext(snippet) => {
                     let preview: String = snippet.chars().take(60).collect();
                     session.sticky_context.push(snippet.clone());
@@ -25249,6 +25283,35 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /label <text> — annotate the current turn with a label
+                                cmd_str if cmd_str.starts_with("/label ") => {
+                                    let label = cmd_str.trim_start_matches("/label ").trim().to_string();
+                                    // Pass 0 as turn placeholder; driver replaces with session.turn_index.
+                                    if _ctx.send(UiCommand::LabelTurn(0, label)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /labels — list all labeled turns
+                                "/labels" => {
+                                    if _ctx.send(UiCommand::QueryTurnLabels).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /label-rm <n> — remove a turn label by index
+                                cmd_str if cmd_str.starts_with("/label-rm ") => {
+                                    let arg = cmd_str.trim_start_matches("/label-rm ").trim();
+                                    if let Ok(n) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::RemoveTurnLabel(n)).is_err() { break 'outer; }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /sticky-add <text> — add to sticky context (prepended to system prompt)
                                 cmd_str if cmd_str.starts_with("/sticky-add ") => {
                                     let text = cmd_str.trim_start_matches("/sticky-add ").trim().to_string();
@@ -26043,6 +26106,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/sticky-rm ",
                             "/sticky-list",
                             "/sticky-clear",
+                            "/label ",
+                            "/labels",
+                            "/label-rm ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

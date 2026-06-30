@@ -287,6 +287,12 @@ pub enum UiCommand {
     RemovePlaybookEntry(usize),
     /// List all error playbook entries.
     QueryPlaybook,
+    /// Annotate the current turn with a label (turn_index, label).
+    LabelTurn(usize, String),
+    /// List all labeled turns.
+    QueryTurnLabels,
+    /// Remove a turn label by 0-based index in the label list.
+    RemoveTurnLabel(usize),
     /// Add a snippet to the sticky context list (prepended to system prompt every turn).
     AddStickyContext(String),
     /// Remove a sticky context entry by 0-based index.

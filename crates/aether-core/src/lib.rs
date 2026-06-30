@@ -279,6 +279,10 @@ pub struct Session {
     /// Higher priority than persistent_reminders — injected before the
     /// conversation history so the LLM sees them as "ground truth."
     pub sticky_context: Vec<String>,
+
+    /// User annotations on turns: Vec of (turn_index, label_text).
+    /// Set by the user mid-session to mark important moments for navigation.
+    pub turn_labels: Vec<(usize, String)>,
 }
 
 impl Session {
@@ -349,6 +353,7 @@ impl Session {
             session_env: std::collections::HashMap::new(),
             response_format: None,
             sticky_context: Vec::new(),
+            turn_labels: Vec::new(),
         }
     }
 
