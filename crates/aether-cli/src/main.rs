@@ -5242,7 +5242,13 @@ Git advanced\n\
   /git-tags [n]           tag list sorted newest first with date + message\n\
 Code debt\n\
   /todo-scan [dir]        scan TODO/FIXME/HACK/XXX/BUG in source files (9 tags)\n\
-  /lines [dir]            lines-of-code count grouped by file extension"),
+  /lines [dir]            lines-of-code count grouped by file extension\n\
+Data processing\n\
+  /json [file]            pretty-print + validate JSON; no arg = last code block\n\
+  /yaml <file>            pretty-print + validate YAML (serde_yaml)\n\
+  /jq <expr> [file]       run jq expression on JSON; graceful no-jq error\n\
+  /csv <file> [rows]      display CSV as aligned table (up to 200 rows)\n\
+  /xml <file>             pretty-print XML via xmllint or raw fallback"),
                                         ("keys", &["keys", "keyboard", "shortcuts", "bindings"], "\
 Input shortcuts\n\
   ↑ ↓  / Ctrl+R           history recall / reverse-i-search\n\
@@ -5348,6 +5354,7 @@ Input shortcuts\n\
     ◈ /curl /ping /dns /ip /cert                             network + HTTP utils\n\
     ◈ /standup /release-notes /code-tour /explain-regex /ai-fix  AI workflow\n\
     ◈ /git-branches /git-stash /git-tags /todo-scan /lines      git + debt audit\n\
+    ◈ /json /yaml /csv /jq /xml                                 data processing\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -11159,6 +11166,226 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // ── Batch 98: Data / text processing tools ───────────────────────
+                                cmd if cmd == "/json" || cmd.starts_with("/json ") => {
+                                    // /json [file]  — pretty-print + validate JSON
+                                    let file_arg = cmd.trim_start_matches("/json").trim();
+                                    let raw = if file_arg.is_empty() {
+                                        // show last JSON code block from chat
+                                        let mut found = String::new();
+                                        let mut in_block = false;
+                                        for cl in &ui.chat_lines {
+                                            let text = match cl {
+                                                ChatLine::Assistant(s, _, _) => s.as_str(),
+                                                _ => continue,
+                                            };
+                                            for line in text.lines() {
+                                                if line.trim_start().starts_with("```json") || line.trim_start().starts_with("```JSON") {
+                                                    in_block = true; found.clear(); continue;
+                                                }
+                                                if in_block && line.trim_start().starts_with("```") { in_block = false; }
+                                                if in_block { found.push_str(line); found.push('\n'); }
+                                            }
+                                        }
+                                        if found.is_empty() {
+                                            ui.chat_lines.push(ChatLine::SystemNote("Usage: /json <file>  or paste JSON in a code block first.".to_string()));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                        found
+                                    } else {
+                                        match std::fs::read_to_string(file_arg) {
+                                            Ok(s) => s,
+                                            Err(e) => {
+                                                ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {file_arg}: {e}")));
+                                                ui.follow_tail = true;
+                                                continue;
+                                            }
+                                        }
+                                    };
+                                    match serde_json::from_str::<serde_json::Value>(&raw) {
+                                        Ok(v) => {
+                                            let pretty = serde_json::to_string_pretty(&v).unwrap_or_default();
+                                            let lines = pretty.lines().count();
+                                            let label = if file_arg.is_empty() { "(last code block)".to_string() } else { file_arg.to_string() };
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("JSON valid — {label}  ({lines} lines)\n```json\n{pretty}\n```")));
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("JSON parse error: {e}")));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/yaml" || cmd.starts_with("/yaml ") => {
+                                    // /yaml [file]  — pretty-print + validate YAML
+                                    let file_arg = cmd.trim_start_matches("/yaml").trim();
+                                    if file_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /yaml <file>".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    match std::fs::read_to_string(file_arg) {
+                                        Ok(raw) => {
+                                            match serde_yaml::from_str::<serde_yaml::Value>(&raw) {
+                                                Ok(v) => {
+                                                    match serde_yaml::to_string(&v) {
+                                                        Ok(pretty) => {
+                                                            let lines = pretty.lines().count();
+                                                            ui.chat_lines.push(ChatLine::SystemNote(format!("YAML valid — {file_arg}  ({lines} lines)\n```yaml\n{pretty}\n```")));
+                                                        }
+                                                        Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("YAML serialize error: {e}"))); }
+                                                    }
+                                                }
+                                                Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("YAML parse error: {e}"))); }
+                                            }
+                                        }
+                                        Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {file_arg}: {e}"))); }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/jq ") || cmd == "/jq" => {
+                                    // /jq <expr> [file]  — run jq expression on JSON file
+                                    let args = cmd.trim_start_matches("/jq").trim();
+                                    if args.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /jq <expression> [file]\n  Requires jq to be installed.".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    // split expression from file (file is optional last arg)
+                                    let parts: Vec<&str> = args.splitn(2, ' ').collect();
+                                    let (expr, file_opt) = if parts.len() == 2 && std::path::Path::new(parts[1].trim()).exists() {
+                                        (parts[0], Some(parts[1].trim()))
+                                    } else {
+                                        (args, None)
+                                    };
+                                    let mut cmd_args = vec!["-C", expr];
+                                    if let Some(f) = file_opt { cmd_args.push(f); }
+                                    let out = std::process::Command::new("jq")
+                                        .args(&cmd_args)
+                                        .output();
+                                    match out {
+                                        Ok(o) => {
+                                            let stdout = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                                            let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
+                                            if !stdout.is_empty() {
+                                                ui.chat_lines.push(ChatLine::SystemNote(format!("jq `{expr}`{}\n{stdout}",
+                                                    file_opt.map(|f| format!("  {f}")).unwrap_or_default())));
+                                            } else if !stderr.is_empty() {
+                                                ui.chat_lines.push(ChatLine::SystemNote(format!("jq error: {stderr}")));
+                                            } else {
+                                                ui.chat_lines.push(ChatLine::SystemNote("(no output)".to_string()));
+                                            }
+                                        }
+                                        Err(_) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote("jq not found. Install: https://jqlang.github.io/jq/\n  Alternatively use /json to validate/pretty-print.".to_string()));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/csv" || cmd.starts_with("/csv ") => {
+                                    // /csv <file> [n]  — display CSV as aligned table
+                                    let args = cmd.trim_start_matches("/csv").trim();
+                                    if args.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /csv <file> [rows]".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let mut parts = args.splitn(2, ' ');
+                                    let file_arg = parts.next().unwrap_or("").trim();
+                                    let max_rows = parts.next().and_then(|s| s.trim().parse::<usize>().ok()).unwrap_or(30).min(200);
+                                    match std::fs::read_to_string(file_arg) {
+                                        Ok(content) => {
+                                            let mut rows: Vec<Vec<String>> = Vec::new();
+                                            for line in content.lines().take(max_rows + 1) {
+                                                // simple CSV split (handles quoted fields partially)
+                                                let mut fields: Vec<String> = Vec::new();
+                                                let mut field = String::new();
+                                                let mut in_quotes = false;
+                                                for ch in line.chars() {
+                                                    match ch {
+                                                        '"' => in_quotes = !in_quotes,
+                                                        ',' if !in_quotes => { fields.push(field.trim().to_string()); field.clear(); }
+                                                        _ => field.push(ch),
+                                                    }
+                                                }
+                                                fields.push(field.trim().to_string());
+                                                rows.push(fields);
+                                            }
+                                            if rows.is_empty() {
+                                                ui.chat_lines.push(ChatLine::SystemNote("(empty CSV)".to_string()));
+                                                ui.follow_tail = true;
+                                                continue;
+                                            }
+                                            // compute column widths
+                                            let ncols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+                                            let mut widths = vec![0usize; ncols];
+                                            for row in &rows {
+                                                for (i, cell) in row.iter().enumerate() {
+                                                    if i < ncols { widths[i] = widths[i].max(cell.len().min(30)); }
+                                                }
+                                            }
+                                            let total_rows = content.lines().count();
+                                            let mut body = format!("CSV — {file_arg}  ({total_rows} rows, {ncols} cols, showing {})\n", rows.len());
+                                            body.push_str("─────────────────────────────────────────────────────\n");
+                                            for (ridx, row) in rows.iter().enumerate() {
+                                                let mut line = String::from("  ");
+                                                for (i, w) in widths.iter().enumerate() {
+                                                    let cell = row.get(i).map(|s| s.as_str()).unwrap_or("");
+                                                    let truncated: String = cell.chars().take(30).collect();
+                                                    line.push_str(&format!("{:<width$}  ", truncated, width = w));
+                                                }
+                                                body.push_str(line.trim_end());
+                                                body.push('\n');
+                                                if ridx == 0 {
+                                                    let sep: String = widths.iter().map(|w| "─".repeat(*w + 2)).collect::<Vec<_>>().join("");
+                                                    body.push_str(&format!("  {sep}\n"));
+                                                }
+                                            }
+                                            ui.chat_lines.push(ChatLine::SystemNote(body));
+                                        }
+                                        Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {file_arg}: {e}"))); }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/xml" || cmd.starts_with("/xml ") => {
+                                    // /xml [file]  — pretty-print XML via xmllint or manual indent
+                                    let file_arg = cmd.trim_start_matches("/xml").trim();
+                                    if file_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /xml <file>".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    // try xmllint first
+                                    let out = std::process::Command::new("xmllint")
+                                        .args(["--format", file_arg])
+                                        .output();
+                                    match out {
+                                        Ok(o) if o.status.success() => {
+                                            let txt = String::from_utf8_lossy(&o.stdout).to_string();
+                                            let lines = txt.lines().count();
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("XML — {file_arg}  ({lines} lines)\n```xml\n{txt}\n```")));
+                                        }
+                                        _ => {
+                                            // fallback: read raw, show first 100 lines
+                                            match std::fs::read_to_string(file_arg) {
+                                                Ok(raw) => {
+                                                    let preview: String = raw.lines().take(100).collect::<Vec<_>>().join("\n");
+                                                    let total = raw.lines().count();
+                                                    ui.chat_lines.push(ChatLine::SystemNote(format!(
+                                                        "XML — {file_arg}  ({total} lines)  [xmllint not found]\n```xml\n{preview}\n```"
+                                                    )));
+                                                }
+                                                Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {file_arg}: {e}"))); }
+                                            }
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -11797,7 +12024,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/ai-fix", "/ai-fix ", "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/curl ", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jwt-decode ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ",
+                            "/ai-commit", "/ai-commit ", "/ai-fix", "/ai-fix ", "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
