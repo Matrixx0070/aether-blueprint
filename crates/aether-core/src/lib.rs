@@ -170,6 +170,10 @@ pub struct Session {
     /// When > 0, the session goal is re-injected as a reminder every N turns.
     /// Keeps long autonomous runs from drifting off-target. 0 = off.
     pub turn_reminder_every: usize,
+
+    /// When > 0, the agent pauses for user review after every N total tool calls.
+    /// Prevents runaway automation. 0 = off.
+    pub checkpoint_every_tools: usize,
 }
 
 impl Session {
@@ -214,6 +218,7 @@ impl Session {
             context_warned_60pct: false,
             verify_enabled: true,
             turn_reminder_every: 0,
+            checkpoint_every_tools: 0,
         }
     }
 

@@ -6320,6 +6320,50 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::SetCheckpointEveryTools(n) => {
+                    session.checkpoint_every_tools = n;
+                    let note = if n == 0 {
+                        "Tool checkpoint: off.".to_string()
+                    } else {
+                        format!("Tool checkpoint: agent will pause every {n} cumulative tool call(s).")
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryLastTools => {
+                    use aether_core::context::ConversationItem;
+                    let tools = session.history.iter().rev()
+                        .find_map(|item| match item {
+                            ConversationItem::Assistant { tool_uses, .. } if !tool_uses.is_empty() =>
+                                Some(tool_uses.iter().map(|t| format!("  {} ({})", t.name, t.input)).collect::<Vec<_>>()),
+                            _ => None,
+                        });
+                    let note = match tools {
+                        None => "No tool calls found in recent history.".to_string(),
+                        Some(lines) => format!("=== Last tool calls ({}) ===\n{}", lines.len(), lines.join("\n")),
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryToolCallCount => {
+                    let total: usize = session.plan.tool_call_stats.values().map(|(ok, err)| ok + err).sum();
+                    let ok_total: usize = session.plan.tool_call_stats.values().map(|(ok, _)| ok).sum();
+                    let err_total: usize = session.plan.tool_call_stats.values().map(|(_, err)| err).sum();
+                    let checkpoint_desc = if session.checkpoint_every_tools == 0 {
+                        "off".to_string()
+                    } else {
+                        format!("every {} calls (next at {})",
+                            session.checkpoint_every_tools,
+                            if total == 0 { session.checkpoint_every_tools }
+                            else { (total / session.checkpoint_every_tools + 1) * session.checkpoint_every_tools })
+                    };
+                    let note = format!(
+                        "Total tool calls: {total} ({ok_total} ok, {err_total} err)\n\
+                         Checkpoint: {checkpoint_desc}"
+                    );
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::SetTurnReminderEvery(n) => {
                     session.turn_reminder_every = n;
                     let note = if n == 0 {
@@ -6641,6 +6685,21 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 match outcome {
                     TurnOutcome::AwaitUser => { auto_continue_count = 0; break; }
                     TurnOutcome::ContinueImmediately => {
+                        // Tool-call checkpoint: pause after every N cumulative tool calls.
+                        if session.checkpoint_every_tools > 0 {
+                            let total_calls: usize = session.plan.tool_call_stats.values()
+                                .map(|(ok, err)| ok + err)
+                                .sum();
+                            if total_calls > 0 && total_calls % session.checkpoint_every_tools == 0 {
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                    "Tool checkpoint: {total_calls} total tool calls. \
+                                     Pausing for review. Send any message to resume. \
+                                     (/checkpoint-every off to disable)"
+                                )));
+                                auto_continue_count = 0;
+                                break;
+                            }
+                        }
                         auto_continue_count += 1;
                         if auto_continue_count >= AUTO_CONTINUE_LIMIT {
                             auto_continue_count = 0;
@@ -23826,6 +23885,38 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /checkpoint-every <N>|off — pause after every N tool calls
+                                cmd_str if cmd_str == "/checkpoint-every" || cmd_str.starts_with("/checkpoint-every ") => {
+                                    let arg = cmd_str.trim_start_matches("/checkpoint-every").trim();
+                                    let cmd = if arg.is_empty() || arg == "off" {
+                                        UiCommand::SetCheckpointEveryTools(0)
+                                    } else if let Ok(n) = arg.parse::<usize>() {
+                                        UiCommand::SetCheckpointEveryTools(n)
+                                    } else {
+                                        UiCommand::SetCheckpointEveryTools(0)
+                                    };
+                                    if _ctx.send(cmd).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /last-tools — show tools called in the most recent turn
+                                "/last-tools" => {
+                                    if _ctx.send(UiCommand::QueryLastTools).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tool-calls — show cumulative tool call counts
+                                "/tool-calls" => {
+                                    if _ctx.send(UiCommand::QueryToolCallCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /remind-every <N>|off — re-inject goal every N turns
                                 cmd_str if cmd_str == "/remind-every" || cmd_str.starts_with("/remind-every ") => {
                                     let arg = cmd_str.trim_start_matches("/remind-every").trim();
@@ -24383,6 +24474,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/pins",
                             "/remind-every ", "/remind-every off",
                             "/context-health",
+                            "/checkpoint-every ", "/checkpoint-every off",
+                            "/last-tools",
+                            "/tool-calls",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

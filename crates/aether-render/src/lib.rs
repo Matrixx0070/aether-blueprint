@@ -249,6 +249,12 @@ pub enum UiCommand {
     SetTurnReminderEvery(usize),
     /// Show a breakdown of context usage by history item type.
     QueryContextHealth,
+    /// Set the tool-call checkpoint interval (0 = off).
+    SetCheckpointEveryTools(usize),
+    /// Show the tools called in the most recent agent turn.
+    QueryLastTools,
+    /// Show total tool call counts across the session.
+    QueryToolCallCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
