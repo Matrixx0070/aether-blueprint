@@ -153,6 +153,15 @@ pub struct Session {
     /// cumulative token usage exceeds this value, a SystemNote warning is
     /// pushed so the user knows they're over budget. 0 = unlimited.
     pub token_budget: u64,
+
+    /// Per-turn LLM call timeout in seconds. When > 0, the complete/complete_streamed
+    /// call is wrapped in tokio::time::timeout. On expiry, a synthetic error
+    /// is injected and the turn returns ContinueImmediately with guidance.
+    pub llm_timeout_secs: u64,
+
+    /// Set to true when cumulative context usage first exceeds 60%.
+    /// The TUI driver reads this flag, emits a SystemNote, and clears it.
+    pub context_warned_60pct: bool,
 }
 
 impl Session {
@@ -193,6 +202,8 @@ impl Session {
             persistent_reminders: Vec::new(),
             compaction_threshold_pct: 0.0,
             token_budget: 0,
+            llm_timeout_secs: 0,
+            context_warned_60pct: false,
         }
     }
 
@@ -413,15 +424,47 @@ async fn agent_turn_inner(
 
     // ── tool-sel (LLM call) ──────────────────────────────────────────
     let llm_start = std::time::Instant::now();
-    let resp = match on_delta {
-        None => session.llm.complete(req).await?,
-        Some(cb) => session.llm.complete_streamed(req, cb).await?,
+    let timeout_dur = if session.llm_timeout_secs > 0 {
+        Some(std::time::Duration::from_secs(session.llm_timeout_secs))
+    } else {
+        None
     };
+    let llm_result = match (timeout_dur, on_delta) {
+        (Some(dur), None) => {
+            match tokio::time::timeout(dur, session.llm.complete(req)).await {
+                Ok(r) => r,
+                Err(_) => Err(aether_llm::LlmError::Transport(
+                    format!("LLM call timed out after {}s (set by /timeout)", dur.as_secs())
+                )),
+            }
+        }
+        (Some(dur), Some(cb)) => {
+            match tokio::time::timeout(dur, session.llm.complete_streamed(req, cb)).await {
+                Ok(r) => r,
+                Err(_) => Err(aether_llm::LlmError::Transport(
+                    format!("LLM call timed out after {}s (set by /timeout)", dur.as_secs())
+                )),
+            }
+        }
+        (None, None) => session.llm.complete(req).await,
+        (None, Some(cb)) => session.llm.complete_streamed(req, cb).await,
+    };
+    let resp = llm_result?;
     let llm_elapsed_ms = llm_start.elapsed().as_millis() as u64;
     session.llm_ms_last = llm_elapsed_ms;
     session.llm_ms_total += llm_elapsed_ms;
     if let Some(u) = &resp.usage {
         session.usage_total.add(u);
+    }
+
+    // Context 60% early-warning: set a flag the TUI driver will convert to a
+    // SystemNote. Fires at most once per session so it doesn't spam the user.
+    if !session.context_warned_60pct {
+        let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
+        let window = compaction::context_window_for_model(&session.config.model);
+        if window > 0 && (used as f64 / window as f64) >= 0.60 {
+            session.context_warned_60pct = true;
+        }
     }
 
     // Token budget check — warn the user when total usage exceeds the budget.

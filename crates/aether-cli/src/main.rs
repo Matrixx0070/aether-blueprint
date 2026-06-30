@@ -6193,6 +6193,23 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::SetLlmTimeout(secs) => {
+                    session.llm_timeout_secs = secs;
+                    let note = if secs == 0 {
+                        "LLM timeout: disabled (waits indefinitely per turn).".to_string()
+                    } else {
+                        format!("LLM timeout: {secs}s per turn. Long calls will be cancelled.")
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::WipeToolStats => {
+                    let n = session.plan.tool_call_stats.len();
+                    session.plan.tool_call_stats.clear();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(
+                        format!("Cleared lifetime stats for {n} tool(s).")));
+                    continue;
+                }
                 UiCommand::QuerySessionStats => {
                     use aether_core::compaction::context_window_for_model;
                     let now = std::time::SystemTime::now()
@@ -6234,6 +6251,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
             let mut next_input: Option<String> = Some(user_msg);
             const AUTO_CONTINUE_LIMIT: usize = 50;
             let mut auto_continue_count: usize = 0;
+            let mut context_60_note_shown: bool = false;
             loop {
                 let etx_inner = etx_for_driver.clone();
                 let mut started = false;
@@ -6261,6 +6279,18 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         "Context compacted at turn {} — history summarised to free context budget. \
                          Current usage: {} tokens. Use /context-info to see details.",
                         session.turn_index, used
+                    )));
+                }
+
+                // Early-warning when context crosses 60% full (fires once per session).
+                // context_warned_60pct stays true once set — the local bool prevents
+                // duplicate notes without clearing the session flag each turn.
+                if session.context_warned_60pct && !context_60_note_shown {
+                    context_60_note_shown = true;
+                    let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Context is 60%+ full ({used} tokens). Compaction will fire at 80%. \
+                         Consider /compact, /trim-history, or /compact-at to tune the threshold."
                     )));
                 }
 
@@ -18955,6 +18985,25 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /timeout N — set per-turn LLM timeout in seconds (0=off)
+                                cmd_str if cmd_str.starts_with("/timeout ") || cmd_str == "/timeout" => {
+                                    let arg = cmd_str.trim_start_matches("/timeout").trim();
+                                    let secs: u64 = if arg.is_empty() || arg == "off" { 0 }
+                                        else { arg.parse().unwrap_or(0) };
+                                    if _ctx.send(UiCommand::SetLlmTimeout(secs)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /wipe-tool-stats — clear lifetime tool call statistics
+                                "/wipe-tool-stats" => {
+                                    if _ctx.send(UiCommand::WipeToolStats).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /compact-at N — set compaction threshold percentage
                                 cmd_str if cmd_str.starts_with("/compact-at ") || cmd_str == "/compact-at" => {
                                     let arg = cmd_str.trim_start_matches("/compact-at").trim();
@@ -23870,6 +23919,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/set-window", "/set-window ",
                             "/compact-at", "/compact-at ",
                             "/token-budget", "/token-budget ",
+                            "/timeout", "/timeout ",
+                            "/wipe-tool-stats",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

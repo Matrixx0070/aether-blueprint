@@ -216,6 +216,10 @@ pub enum UiCommand {
     SetCompactionThreshold(u8),
     /// Set the total session token budget (0 = unlimited).
     SetTokenBudget(u64),
+    /// Set the per-turn LLM timeout in seconds (0 = no timeout).
+    SetLlmTimeout(u64),
+    /// Clear lifetime tool call statistics (tool_call_stats).
+    WipeToolStats,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
