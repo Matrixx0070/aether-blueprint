@@ -7522,6 +7522,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryDedupToolsShow => {
+                    let status = if session.dedup_tool_calls { "ON" } else { "OFF" };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Dedup-tool-calls: {status}. Use /dedup-tools on|off to toggle."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryCheckpointEveryShow => {
+                    if session.checkpoint_every_tools == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Checkpoint-every-tools: OFF. Use /checkpoint-every <n> to pause every N tool calls.".to_string()
+                        ));
+                    } else {
+                        let used: usize = session.plan.tool_call_stats.values().map(|(ok, err)| ok + err).sum();
+                        let next = if used < session.checkpoint_every_tools {
+                            session.checkpoint_every_tools - used
+                        } else {
+                            session.checkpoint_every_tools - (used % session.checkpoint_every_tools)
+                        };
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Checkpoint every {} tool calls (used {used}, next checkpoint in {next}).",
+                            session.checkpoint_every_tools
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryAutoThinkShow => {
+                    let status = if session.auto_think_on_stuck { "ON" } else { "OFF" };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Auto-think-on-stuck: {status}. Use /auto-think-stuck on|off to toggle."
+                    )));
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -32509,6 +32542,30 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /dedup-tools-show — show dedup-tool-calls setting
+                                "/dedup-tools-show" => {
+                                    if _ctx.send(UiCommand::QueryDedupToolsShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /checkpoint-every-show — show checkpoint-every-tools setting
+                                "/checkpoint-every-show" => {
+                                    if _ctx.send(UiCommand::QueryCheckpointEveryShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /auto-think-show — show auto-think-on-stuck setting
+                                "/auto-think-show" => {
+                                    if _ctx.send(UiCommand::QueryAutoThinkShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -33243,6 +33300,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/auto-status-show",
                             "/max-turns-show",
                             "/fail-fast-show",
+                            "/dedup-tools-show",
+                            "/checkpoint-every-show",
+                            "/auto-think-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

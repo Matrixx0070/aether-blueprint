@@ -855,6 +855,12 @@ pub enum UiCommand {
     QueryMaxTurnsShow,
     /// Show the fail-fast error threshold setting.
     QueryFailFastShow,
+    /// Show whether consecutive-tool dedup is enabled.
+    QueryDedupToolsShow,
+    /// Show the checkpoint-every-tools setting.
+    QueryCheckpointEveryShow,
+    /// Show the auto-think-on-stuck setting.
+    QueryAutoThinkShow,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
