@@ -6778,6 +6778,60 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QuerySessionVar(name) => {
+                    match session.session_vars.get(&name) {
+                        Some(v) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Session var '{}' = \"{}\"", name, v)));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Session var '{}' is not set. Total vars: {}.", name, session.session_vars.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::HistorySearchReplaceAll(old, new) => {
+                    let mut count = 0usize;
+                    for item in session.history.iter_mut() {
+                        if let ConversationItem::User(ref mut t) = item {
+                            if t.contains(&old) {
+                                *t = t.replace(&old, &new);
+                                count += 1;
+                            }
+                        }
+                    }
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History search-replace: replaced {:?} → {:?} in {count} user message(s).", old, new
+                    )));
+                    continue;
+                }
+                UiCommand::QueryModelCompareCost(model_name) => {
+                    let total_in: u64 = session.turn_cost_log.iter().map(|&(_, tin, _, _)| tin as u64).sum();
+                    let total_out: u64 = session.turn_cost_log.iter().map(|&(_, _, tout, _)| tout as u64).sum();
+                    let actual_cost: f64 = session.turn_cost_log.iter().map(|&(_, _, _, c)| c).sum();
+                    // Approximate pricing per 1M tokens (input/output) as of 2025
+                    let (cost_in, cost_out) = match model_name.to_lowercase().as_str() {
+                        m if m.contains("opus") => (15.0f64, 75.0f64),
+                        m if m.contains("sonnet") => (3.0f64, 15.0f64),
+                        m if m.contains("haiku") => (0.25f64, 1.25f64),
+                        _ => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Unknown model '{}'. Known: opus, sonnet, haiku.", model_name
+                            )));
+                            continue;
+                        }
+                    };
+                    let est_cost = (total_in as f64 / 1_000_000.0) * cost_in
+                        + (total_out as f64 / 1_000_000.0) * cost_out;
+                    let delta = est_cost - actual_cost;
+                    let sign = if delta >= 0.0 { "+" } else { "" };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Model cost comparison:\n  Current model:  {} = ${actual_cost:.6}\n  {} (est):     ${est_cost:.6}  ({sign}${delta:.6})\n  Input: {total_in} tok × ${cost_in}/M  |  Output: {total_out} tok × ${cost_out}/M",
+                        session.config.model, model_name
+                    )));
+                    continue;
+                }
                 UiCommand::QueryCompactHistoryStats => {
                     let mut user_count = 0usize;
                     let mut user_chars = 0usize;
@@ -29984,6 +30038,47 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /session-var-show <name> — show value of one session variable
+                                cmd_str if cmd_str.starts_with("/session-var-show ") => {
+                                    let name = cmd_str.trim_start_matches("/session-var-show ").trim().to_string();
+                                    if name.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /session-var-show <name>".to_string()));
+                                    } else if _ctx.send(UiCommand::QuerySessionVar(name)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-search-replace-all <old>|<new> — replace across ALL user items
+                                cmd_str if cmd_str.starts_with("/history-search-replace-all ") => {
+                                    let rest = cmd_str.trim_start_matches("/history-search-replace-all ").trim();
+                                    if let Some(pipe) = rest.find('|') {
+                                        let old = rest[..pipe].to_string();
+                                        let new = rest[pipe + 1..].to_string();
+                                        if _ctx.send(UiCommand::HistorySearchReplaceAll(old, new)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /history-search-replace-all <old>|<new>".to_string()));
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /model-compare-cost <model> — estimate cost with a different model
+                                cmd_str if cmd_str.starts_with("/model-compare-cost ") => {
+                                    let model = cmd_str.trim_start_matches("/model-compare-cost ").trim().to_string();
+                                    if model.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /model-compare-cost <model> (opus|sonnet|haiku)".to_string()));
+                                    } else if _ctx.send(UiCommand::QueryModelCompareCost(model)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /compact-history-stats — per-type token estimate
                                 "/compact-history-stats" => {
                                     if _ctx.send(UiCommand::QueryCompactHistoryStats).is_err() { break 'outer; }
@@ -30891,6 +30986,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/compact-history-stats",
                             "/bookmark-export ",
                             "/response-word-freq", "/response-word-freq ",
+                            "/session-var-show ",
+                            "/history-search-replace-all ",
+                            "/model-compare-cost ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

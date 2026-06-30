@@ -685,6 +685,12 @@ pub enum UiCommand {
     ExportBookmarks(String),
     /// Show top N most frequent words across all assistant responses.
     QueryResponseWordFreq(usize),
+    /// Show the value of a specific named session variable.
+    QuerySessionVar(String),
+    /// Find-and-replace text across ALL User history items (not just the last).
+    HistorySearchReplaceAll(String, String),
+    /// Estimate what the session would have cost on a different model.
+    QueryModelCompareCost(String),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
