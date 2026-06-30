@@ -37,12 +37,34 @@ pub enum ToolError {
     Io(String),
 }
 
+/// Channel for streaming line-by-line output from a running tool to the UI.
+/// Sender end is passed to `Tool::run_streamed`; receiver end is handled
+/// by the Executor which forwards each line to the UiEvent bus.
+pub type StreamSink = tokio::sync::mpsc::Sender<String>;
+
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
     fn input_schema(&self) -> serde_json::Value;
     async fn run(&self, input: serde_json::Value) -> Result<String, ToolError>;
+
+    /// Whether this tool supports streaming line output via `run_streamed`.
+    /// Default: false (most tools just use `run`).
+    fn supports_streaming(&self) -> bool {
+        false
+    }
+
+    /// Streaming variant of `run`. Sends output lines to `sink` as they arrive;
+    /// the full combined output is still returned as the result.
+    /// Default: calls `run` and ignores the sink (no streaming).
+    async fn run_streamed(
+        &self,
+        input: serde_json::Value,
+        _sink: &StreamSink,
+    ) -> Result<String, ToolError> {
+        self.run(input).await
+    }
 }
 
 #[derive(Default)]

@@ -5509,6 +5509,15 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
     let (etx, mut erx, _ctx, mut crx) = channels();
     let etx_for_driver = etx.clone();
 
+    // Wire streaming Bash output: each line from a running BashTool call is
+    // forwarded to the UI as ToolOutputLine so the tool panel shows live progress.
+    {
+        let etx_stream = etx_for_driver.clone();
+        session.executor.set_stream_callback(std::sync::Arc::new(move |tool_id, line| {
+            let _ = etx_stream.send(UiEvent::ToolOutputLine { id: tool_id, line });
+        }));
+    }
+
     // Move ownership of session + hooks into the driver task. Communication
     // back to UI via `etx_for_driver`. Commands from UI come over `crx`.
     let driver_handle = tokio::spawn(async move {

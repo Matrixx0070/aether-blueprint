@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tokio::process::Command;
 
 // ── shared helpers ────────────────────────────────────────────────────────
@@ -209,6 +209,111 @@ impl Tool for BashTool {
                     )))
                 }
             }
+        }
+    }
+
+    fn supports_streaming(&self) -> bool {
+        true
+    }
+
+    async fn run_streamed(
+        &self,
+        input: Value,
+        sink: &crate::StreamSink,
+    ) -> Result<String, ToolError> {
+        let inp: BashInput = parse_input(input)?;
+        let timeout_ms = inp
+            .timeout
+            .unwrap_or(DEFAULT_BASH_TIMEOUT_MS)
+            .min(MAX_BASH_TIMEOUT_MS);
+
+        let mut child = Command::new("/bin/bash")
+            .arg("-c")
+            .arg(&inp.command)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| ToolError::Io(format!("spawn: {e}")))?;
+
+        let stdout = child.stdout.take().expect("stdout piped");
+        let stderr = child.stderr.take().expect("stderr piped");
+
+        // Merge stdout+stderr into a single ordered channel.
+        let (line_tx, mut line_rx) = tokio::sync::mpsc::channel::<(bool, String)>(256);
+        let tx_out = line_tx.clone();
+        let tx_err = line_tx.clone();
+        drop(line_tx);
+
+        let stdout_task = tokio::spawn(async move {
+            let mut lines = tokio::io::BufReader::new(stdout).lines();
+            while let Ok(Some(l)) = lines.next_line().await {
+                if tx_out.send((true, l)).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let stderr_task = tokio::spawn(async move {
+            let mut lines = tokio::io::BufReader::new(stderr).lines();
+            while let Ok(Some(l)) = lines.next_line().await {
+                if tx_err.send((false, l)).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        let mut combined = String::new();
+        let sink_clone = sink.clone();
+
+        let collect = async {
+            while let Some((is_stdout, line)) = line_rx.recv().await {
+                let display = if is_stdout {
+                    line.clone()
+                } else {
+                    format!("[err] {line}")
+                };
+                let _ = sink_clone.send(display).await;
+                combined.push_str(&line);
+                combined.push('\n');
+                if cancelled() {
+                    break;
+                }
+            }
+        };
+
+        let timed_out = tokio::select! {
+            _ = tokio::time::timeout(Duration::from_millis(timeout_ms), collect) => false,
+            _ = async {
+                loop {
+                    if cancelled() { break; }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            } => true,
+        };
+
+        let status = child.wait().await.ok();
+        let _ = stdout_task.await;
+        let _ = stderr_task.await;
+
+        if timed_out || cancelled() {
+            let _ = child.start_kill();
+            return if cancelled() {
+                Err(ToolError::Io("cancelled by user (Ctrl-C)".into()))
+            } else {
+                Err(ToolError::Io(format!(
+                    "command timed out after {timeout_ms}ms"
+                )))
+            };
+        }
+
+        let code = status.and_then(|s| s.code()).unwrap_or(-1);
+        if combined.is_empty() {
+            combined = "(no output)\n".to_string();
+        }
+        combined = truncate_smart(&combined, MAX_TOOL_OUTPUT);
+        if code != 0 {
+            Ok(format!("{combined}\n[exit code: {code}]"))
+        } else {
+            Ok(combined)
         }
     }
 }

@@ -157,6 +157,12 @@ pub type ToolHookCallback = Box<
         + Sync,
 >;
 
+/// Callback for streaming tool output lines (BashTool). Receives the
+/// tool_use_id and the text line. Called from inside `run_one` as each
+/// line arrives. Must be `Send + Sync` because the Executor is used
+/// inside a Tokio task.
+pub type ToolStreamCallback = std::sync::Arc<dyn Fn(String, String) + Send + Sync>;
+
 /// W4 + X2: per-tool argument-filter row. Matches a regex against
 /// either a specific input JSON field (dotted path) OR the whole
 /// serialised input JSON. Loaded from policy.json via
@@ -180,6 +186,9 @@ pub struct Executor {
     pub mode: PermissionMode,
     prompter: Option<PermissionPrompter>,
     tool_hook: Option<ToolHookCallback>,
+    /// Optional sink for streaming Bash output lines to the UI.
+    /// Receives (tool_use_id, line) for each line emitted by a streaming tool.
+    stream_callback: Option<ToolStreamCallback>,
     /// Collected hook outputs to be drained by `agent_turn` and pushed as
     /// reminders for the next turn.
     pending_reminders: std::sync::Mutex<Vec<String>>,
@@ -200,11 +209,19 @@ impl Executor {
             mode,
             prompter: None,
             tool_hook: None,
+            stream_callback: None,
             pending_reminders: std::sync::Mutex::new(Vec::new()),
             always_allowed: std::sync::Mutex::new(std::collections::HashSet::new()),
             policy_blocklist: Vec::new(),
             arg_filters: Vec::new(),
         }
+    }
+
+    /// Install a streaming-output callback. Each line emitted by a streaming
+    /// tool (currently only BashTool) is forwarded to this callback as
+    /// (tool_use_id, line). Used by the TUI driver to show live Bash output.
+    pub fn set_stream_callback(&mut self, cb: ToolStreamCallback) {
+        self.stream_callback = Some(cb);
     }
 
     /// Replace the policy tool-blocklist. Tool names matching any entry
@@ -432,10 +449,38 @@ impl Executor {
 
         let (content, is_error) = match decision {
             PermissionOutcome::Allowed => match registry.get(&tu.name) {
-                Some(tool) => match tool.run(tu.input.clone()).await {
-                    Ok(s) => (s, false),
-                    Err(e) => (format!("tool error: {e}"), true),
-                },
+                Some(tool) => {
+                    if tool.supports_streaming() {
+                        if let Some(cb) = &self.stream_callback {
+                            let cb = cb.clone();
+                            let id = tu.id.clone();
+                            let (tx, mut rx) =
+                                tokio::sync::mpsc::channel::<String>(256);
+                            let forward = tokio::spawn(async move {
+                                while let Some(line) = rx.recv().await {
+                                    cb(id.clone(), line);
+                                }
+                            });
+                            let result = tool.run_streamed(tu.input.clone(), &tx).await;
+                            drop(tx);
+                            let _ = forward.await;
+                            match result {
+                                Ok(s) => (s, false),
+                                Err(e) => (format!("tool error: {e}"), true),
+                            }
+                        } else {
+                            match tool.run(tu.input.clone()).await {
+                                Ok(s) => (s, false),
+                                Err(e) => (format!("tool error: {e}"), true),
+                            }
+                        }
+                    } else {
+                        match tool.run(tu.input.clone()).await {
+                            Ok(s) => (s, false),
+                            Err(e) => (format!("tool error: {e}"), true),
+                        }
+                    }
+                }
                 None => (format!("unknown tool: {}", tu.name), true),
             },
             PermissionOutcome::Refused(why) => (format!("refused: {why}"), true),

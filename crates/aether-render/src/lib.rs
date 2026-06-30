@@ -115,6 +115,9 @@ pub enum UiEvent {
     SystemNote(String),
     /// Response to QueryTools: list of (name, description) pairs.
     ToolList(Vec<(String, String)>),
+    /// A single line of streaming output from a running Bash tool call.
+    /// `id` is the tool_use_id; `line` is the text (may start with "[err] ").
+    ToolOutputLine { id: String, line: String },
 }
 
 /// Commands sent from the UI back to the session driver.
@@ -313,6 +316,9 @@ pub struct UiState {
     /// Persistent file-context list: paths added with /add whose contents
     /// are injected at the top of every AI request.
     pub context_files: Vec<String>,
+    /// Ring-buffer of the last 50 streaming output lines from the running
+    /// Bash tool. Cleared on ToolDone. Shown in the tool panel while running.
+    pub tool_stream_lines: Vec<String>,
 }
 
 impl UiState {
@@ -453,6 +459,7 @@ impl UiState {
             last_response_words: 0,
             last_response_chars: 0,
             context_files: Vec::new(),
+            tool_stream_lines: Vec::new(),
         }
     }
 
@@ -533,6 +540,7 @@ impl UiState {
                 is_error,
                 preview,
             } => {
+                self.tool_stream_lines.clear();
                 for entry in self.tool_log.iter_mut().rev() {
                     if entry.name == name && matches!(entry.status, ToolStatus::Running) {
                         entry.elapsed_ms = Some(entry.start.elapsed().as_millis() as u64);
@@ -543,6 +551,21 @@ impl UiState {
                             entry.status = ToolStatus::Ok(preview.clone());
                             self.tools_ok += 1;
                         }
+                        break;
+                    }
+                }
+            }
+            UiEvent::ToolOutputLine { id: _, line } => {
+                self.tool_stream_lines.push(line);
+                if self.tool_stream_lines.len() > 50 {
+                    self.tool_stream_lines.remove(0);
+                }
+                // Mirror latest line into the running tool entry's summary so
+                // the tool panel shows live progress without render changes.
+                for entry in self.tool_log.iter_mut().rev() {
+                    if matches!(entry.status, ToolStatus::Running) {
+                        let last = self.tool_stream_lines.last().map(|s| s.as_str()).unwrap_or("");
+                        entry.summary = last.chars().take(80).collect();
                         break;
                     }
                 }
