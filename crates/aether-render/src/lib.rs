@@ -170,6 +170,8 @@ pub enum UiCommand {
     QueryContextInfo,
     /// Query session statistics (turns, tokens, cost, wall time, LLM latency).
     QuerySessionStats,
+    /// Show the most recent tool error text + tool name.
+    QueryLastError,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

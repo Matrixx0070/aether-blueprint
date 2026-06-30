@@ -68,6 +68,15 @@ pub struct Plan {
     #[serde(default)]
     pub goal: Option<String>,
 
+    /// The content of the most recent is_error tool result. Overwritten on
+    /// each new error. Used by /last-error and future auto-diagnosis features.
+    #[serde(default)]
+    pub last_error_text: Option<String>,
+
+    /// Name of the tool that produced `last_error_text`.
+    #[serde(default)]
+    pub last_error_tool: Option<String>,
+
     dirty: bool,
 }
 
@@ -156,6 +165,13 @@ impl Plan {
             self.goal = None;
             self.dirty = true;
         }
+    }
+
+    /// Store the content of the most recent tool error for inspection via
+    /// /last-error. Called alongside `record_tool_error`.
+    pub fn record_tool_error_text(&mut self, tool_name: &str, content: &str) {
+        self.last_error_tool = Some(tool_name.to_string());
+        self.last_error_text = Some(content.chars().take(1200).collect());
     }
 
     /// Record a consecutive tool error. When the count reaches

@@ -5759,6 +5759,14 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::QueryLastError => {
+                    let note = match (&session.plan.last_error_tool, &session.plan.last_error_text) {
+                        (Some(tool), Some(text)) => format!("Last tool error ({tool}):\n{text}"),
+                        _ => "No tool errors recorded in this session.".to_string(),
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::QuerySessionStats => {
                     use aether_core::compaction::context_window_for_model;
                     let now = std::time::SystemTime::now()
@@ -22702,6 +22710,14 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /last-error — show the most recent tool error content
+                                "/last-error" => {
+                                    if _ctx.send(UiCommand::QueryLastError).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /goal [text] — set or show session goal (survives compaction)
                                 cmd_str if cmd_str.starts_with("/goal ") || cmd_str == "/goal" => {
                                     let arg = cmd_str.trim_start_matches("/goal").trim();
@@ -23120,6 +23136,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/ai-critique",
                             "/plan-status", "/stuck", "/reset-errors",
                             "/goal", "/goal ", "/context-info", "/session-stats",
+                            "/last-error",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

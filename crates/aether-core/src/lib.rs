@@ -462,6 +462,7 @@ async fn agent_turn_inner(
         if let Some(tu) = tool_uses.iter().find(|tu| tu.id == r.tool_use_id) {
             if r.is_error {
                 session.plan.record_tool_error(&tu.name);
+                session.plan.record_tool_error_text(&tu.name, &r.content);
             } else {
                 session.plan.record_tool_success(&tu.name);
             }

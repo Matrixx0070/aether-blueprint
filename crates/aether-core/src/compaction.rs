@@ -76,12 +76,24 @@ pub fn serialize_history(items: &[ConversationItem]) -> String {
             }
             ConversationItem::ToolResults(rs) => {
                 for r in rs {
-                    let preview = r.content.lines().next().unwrap_or("").chars().take(120).collect::<String>();
-                    out.push_str(&format!(
-                        "TOOL_RESULT: {} ({})\n",
-                        preview,
-                        if r.is_error { "err" } else { "ok" }
-                    ));
+                    if r.is_error {
+                        // Errors get up to 5 lines (400 chars total) so the
+                        // summarizer can include the actual error message in
+                        // the ERRORS section — not just that an error occurred.
+                        let err_preview: String = r
+                            .content
+                            .lines()
+                            .take(5)
+                            .collect::<Vec<_>>()
+                            .join(" | ")
+                            .chars()
+                            .take(400)
+                            .collect();
+                        out.push_str(&format!("TOOL_ERROR: {err_preview}\n"));
+                    } else {
+                        let preview = r.content.lines().next().unwrap_or("").chars().take(120).collect::<String>();
+                        out.push_str(&format!("TOOL_RESULT: {preview} (ok)\n"));
+                    }
                 }
             }
         }
@@ -307,6 +319,29 @@ mod tests {
         u.cache_creation_input_tokens = 500_000;
         u.cache_read_input_tokens = 500_000;
         assert!(!over_threshold(&u, "claude-sonnet-4-6", 0.80));
+    }
+
+    #[test]
+    fn serialize_history_errors_get_multi_line_prefix() {
+        use crate::context::RecordedToolResult;
+        let items = vec![ConversationItem::ToolResults(vec![
+            RecordedToolResult {
+                tool_use_id: "t1".into(),
+                content: "line1\nline2\nline3".into(),
+                is_error: true,
+            },
+            RecordedToolResult {
+                tool_use_id: "t2".into(),
+                content: "success output".into(),
+                is_error: false,
+            },
+        ])];
+        let text = serialize_history(&items);
+        assert!(text.contains("TOOL_ERROR:"), "error prefix missing: {text}");
+        assert!(text.contains("line1"), "line1 missing: {text}");
+        assert!(text.contains("line2"), "line2 missing: {text}");
+        assert!(text.contains("TOOL_RESULT: success output (ok)"), "ok result missing: {text}");
+        assert!(!text.contains("TOOL_ERROR: success"), "ok result wrongly flagged as error: {text}");
     }
 
     #[test]
