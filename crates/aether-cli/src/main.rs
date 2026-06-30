@@ -5296,7 +5296,7 @@ AI workflow\n\
   /ai-refactor <f> [inst] AI refactors code preserving behavior (default: clean up)\n\
   /ai-doc-gen <file>      AI adds docstrings/comments in language-appropriate style\n\
   /ai-improve-commit      AI rewrites last/staged commit message to best practices\n\
-  /ai-translate <f> <lng> AI translates source file to another programming language\nSession & environment\n  /env-set <KEY>=<val>    set (or unset) env var in this aether process session\n  /git-amend [msg]        show last commit info; with msg: amend commit message\n  /ai-estimate <task>     AI estimates complexity + time for a described task\n  /clipboard [get|clear]  paste clipboard into chat, or clear it (xclip/xsel/pbpaste)\n  /ai-standup-report [h]  AI writes standup from last N hours of git + TODOs\nCode intelligence\n  /loc [dir]              lines-of-code breakdown by language (sorted by size)\n  /git-undo [n]           soft-reset last N commits — changes stay staged\n  /ai-rename-symbol <f> <sym>  AI suggests 3 rename options + all call sites\n  /ai-complexity-report [f]    cyclomatic/cognitive complexity audit + refactor tips\n  /ai-changelog-commit [n]     AI writes CHANGELOG.md entry from last N commits"),
+  /ai-translate <f> <lng> AI translates source file to another programming language\nSession & environment\n  /env-set <KEY>=<val>    set (or unset) env var in this aether process session\n  /git-amend [msg]        show last commit info; with msg: amend commit message\n  /ai-estimate <task>     AI estimates complexity + time for a described task\n  /clipboard [get|clear]  paste clipboard into chat, or clear it (xclip/xsel/pbpaste)\n  /ai-standup-report [h]  AI writes standup from last N hours of git + TODOs\nCode intelligence\n  /loc [dir]              lines-of-code breakdown by language (sorted by size)\n  /git-undo [n]           soft-reset last N commits — changes stay staged\n  /ai-rename-symbol <f> <sym>  AI suggests 3 rename options + all call sites\n  /ai-complexity-report [f]    cyclomatic/cognitive complexity audit + refactor tips\n  /ai-changelog-commit [n]     AI writes CHANGELOG.md entry from last N commits\nDiff & project tools\n  /diff-stat [base]       rich git diff with file-type add/del breakdown\n  /ai-explain-diff [base] AI explains what the current diff actually changes\n  /file-watch <path>      show last 20 lines of a file (re-run to refresh)\n  /ai-onboard            AI writes onboarding guide from tree + README + manifest\n  /deps-outdated         list outdated deps (cargo-outdated / npm outdated / pip)"),
                                         ("keys", &["keys", "keyboard", "shortcuts", "bindings"], "\
 Input shortcuts\n\
   ↑ ↓  / Ctrl+R           history recall / reverse-i-search\n\
@@ -5421,6 +5421,7 @@ Input shortcuts\n\
     ◈ /ai-test-gen /ai-refactor /ai-doc-gen /ai-improve-commit /ai-translate  B114\n\
     ◈ /env-set /git-amend /ai-estimate /clipboard /ai-standup-report         B115\n\
     ◈ /loc /git-undo /ai-rename-symbol /ai-complexity-report /ai-changelog-commit  B116\n\
+    ◈ /diff-stat /ai-explain-diff /file-watch /ai-onboard /deps-outdated        B117\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -14779,6 +14780,181 @@ CTF Toolkit — Aether AI-assisted\n\
                                     if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
                                     continue;
                                 }
+                                // /diff-stat [base] — rich git diff stat with file-type breakdown
+                                cmd if cmd == "/diff-stat" || cmd.starts_with("/diff-stat ") => {
+                                    let base = cmd.trim_start_matches("/diff-stat").trim();
+                                    let base = if base.is_empty() { "HEAD" } else { base };
+                                    let stat_out = std::process::Command::new("git")
+                                        .args(["diff", "--stat", base])
+                                        .output().ok();
+                                    let stat_raw = stat_out.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+                                    let numstat = std::process::Command::new("git")
+                                        .args(["diff", "--numstat", base])
+                                        .output().ok();
+                                    let num_raw = numstat.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+                                    if stat_raw.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("diff-stat: no changes vs '{}'", base)));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    // Group by extension
+                                    let mut by_ext: std::collections::HashMap<String, (i64, i64)> = std::collections::HashMap::new();
+                                    for line in num_raw.lines() {
+                                        let parts: Vec<&str> = line.split('\t').collect();
+                                        if parts.len() >= 3 {
+                                            let add: i64 = parts[0].parse().unwrap_or(0);
+                                            let del: i64 = parts[1].parse().unwrap_or(0);
+                                            let ext = std::path::Path::new(parts[2])
+                                                .extension().and_then(|e| e.to_str()).unwrap_or("other").to_string();
+                                            let entry = by_ext.entry(ext).or_insert((0, 0));
+                                            entry.0 += add;
+                                            entry.1 += del;
+                                        }
+                                    }
+                                    let mut ext_rows: Vec<(String, i64, i64)> = by_ext.into_iter().map(|(k, (a, d))| (k, a, d)).collect();
+                                    ext_rows.sort_by(|a, b| (b.1 + b.2).cmp(&(a.1 + a.2)));
+                                    let mut body = format!("diff-stat vs {}\n\n{}", base, stat_raw.trim());
+                                    if !ext_rows.is_empty() {
+                                        body.push_str("\n\nBy file type:\n");
+                                        for (ext, add, del) in &ext_rows {
+                                            body.push_str(&format!("  .{:<10} +{:<6} -{}\n", ext, add, del));
+                                        }
+                                    }
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-explain-diff [base] — AI explains what the current diff actually does
+                                cmd if cmd == "/ai-explain-diff" || cmd.starts_with("/ai-explain-diff ") => {
+                                    let base = cmd.trim_start_matches("/ai-explain-diff").trim();
+                                    let base = if base.is_empty() { "HEAD" } else { base };
+                                    let diff_out = std::process::Command::new("git")
+                                        .args(["diff", base])
+                                        .output().ok();
+                                    let diff_raw = diff_out.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+                                    if diff_raw.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("ai-explain-diff: no changes vs '{}'", base)));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let prompt = format!(
+                                        "You are a senior code reviewer. Explain the following git diff in plain English.\n\nDiff (vs {}):\n```diff\n{}\n```\n\nProvide:\n1. **Summary** (1-2 sentences): what this change does overall\n2. **Key changes** (bullet list): each logical change with file and why\n3. **Risk assessment**: any potential issues, regressions, or areas needing tests\n4. **Verdict**: Approved / Needs minor changes / Needs review",
+                                        base,
+                                        diff_raw.chars().take(6000).collect::<String>()
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts));
+                                    ui.follow_tail = true;
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.msg_times_secs.push(ts);
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                // /file-watch <path> — show last 20 lines of a file
+                                cmd if cmd.starts_with("/file-watch ") || cmd == "/file-watch" => {
+                                    let path = cmd.trim_start_matches("/file-watch").trim();
+                                    if path.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /file-watch <path>\n  Shows the last 20 lines of the file (re-run to refresh).".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let out = std::process::Command::new("tail").args(["-n", "20", path]).output().ok();
+                                    let body = match out {
+                                        Some(o) if o.status.success() => {
+                                            let content = String::from_utf8_lossy(&o.stdout).to_string();
+                                            let line_count = content.lines().count();
+                                            format!("file-watch: {} (last {} lines)\n\n{}", path, line_count, content.trim())
+                                        }
+                                        Some(o) => format!("file-watch error: {}", String::from_utf8_lossy(&o.stderr).trim()),
+                                        None => format!("file-watch: could not read '{}'", path),
+                                    };
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-onboard — AI generates onboarding guide for new contributors
+                                cmd if cmd == "/ai-onboard" || cmd.starts_with("/ai-onboard ") => {
+                                    let out_tree = std::process::Command::new("sh").arg("-c")
+                                        .arg("find . -maxdepth 3 -not -path '*/target/*' -not -path '*/.git/*' -not -path '*/node_modules/*' 2>/dev/null | head -60")
+                                        .output().ok();
+                                    let tree_raw = out_tree.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+                                    let readme = std::fs::read_to_string("README.md")
+                                        .or_else(|_| std::fs::read_to_string("readme.md"))
+                                        .unwrap_or_else(|_| "(no README found)".to_string());
+                                    let pkg = std::fs::read_to_string("Cargo.toml")
+                                        .or_else(|_| std::fs::read_to_string("package.json"))
+                                        .unwrap_or_else(|_| "(no manifest found)".to_string());
+                                    let prompt = format!(
+                                        "You are a senior developer writing an onboarding guide for a new contributor.\n\nProject structure:\n```\n{}\n```\n\nREADME:\n```\n{}\n```\n\nManifest:\n```\n{}\n```\n\nWrite a concise onboarding guide covering:\n1. **Project overview** — what it does, who uses it\n2. **Tech stack** — languages, frameworks, key deps\n3. **Setup** — step-by-step to get a dev environment running\n4. **Architecture** — directory layout explanation\n5. **First contribution** — where to find good first issues, how to submit a PR\n6. **Key contacts / resources** — docs, CI, tests",
+                                        tree_raw.chars().take(2000).collect::<String>(),
+                                        readme.chars().take(2000).collect::<String>(),
+                                        pkg.chars().take(1000).collect::<String>()
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts));
+                                    ui.follow_tail = true;
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.msg_times_secs.push(ts);
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                // /deps-outdated — list outdated dependencies (cargo/npm/pip)
+                                cmd if cmd == "/deps-outdated" || cmd.starts_with("/deps-outdated ") => {
+                                    let mut sections: Vec<String> = vec![];
+                                    // Cargo
+                                    if std::path::Path::new("Cargo.toml").exists() {
+                                        let out = std::process::Command::new("cargo").args(["outdated", "--depth", "1"]).output().ok();
+                                        match out {
+                                            Some(o) if o.status.success() => {
+                                                let raw = String::from_utf8_lossy(&o.stdout).to_string();
+                                                sections.push(format!("Cargo (Rust):\n{}", raw.trim()));
+                                            }
+                                            _ => {
+                                                // cargo outdated may not be installed — fall back to reading Cargo.lock
+                                                sections.push("Cargo: run `cargo install cargo-outdated` for detailed output.".to_string());
+                                            }
+                                        }
+                                    }
+                                    // npm
+                                    if std::path::Path::new("package.json").exists() {
+                                        let out = std::process::Command::new("npm").args(["outdated"]).output().ok();
+                                        match out {
+                                            Some(o) => {
+                                                let raw = String::from_utf8_lossy(&o.stdout).to_string();
+                                                if !raw.trim().is_empty() {
+                                                    sections.push(format!("npm:\n{}", raw.trim()));
+                                                } else {
+                                                    sections.push("npm: all packages up to date.".to_string());
+                                                }
+                                            }
+                                            None => sections.push("npm: not found.".to_string()),
+                                        }
+                                    }
+                                    // pip
+                                    if std::path::Path::new("requirements.txt").exists() || std::path::Path::new("pyproject.toml").exists() {
+                                        let out = std::process::Command::new("pip").args(["list", "--outdated", "--format=columns"]).output().ok();
+                                        match out {
+                                            Some(o) if o.status.success() => {
+                                                let raw = String::from_utf8_lossy(&o.stdout).to_string();
+                                                if !raw.trim().is_empty() {
+                                                    sections.push(format!("pip (Python):\n{}", raw.trim()));
+                                                } else {
+                                                    sections.push("pip: all packages up to date.".to_string());
+                                                }
+                                            }
+                                            _ => sections.push("pip: run `pip list --outdated` manually.".to_string()),
+                                        }
+                                    }
+                                    if sections.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("deps-outdated: no package manifests found (Cargo.toml, package.json, requirements.txt).".to_string()));
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("Outdated dependencies:\n\n{}", sections.join("\n\n"))));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -15417,7 +15593,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/cve ", "/dotenv", "/dotenv ", "/calc ", "/chars", "/chars ", "/ai-arch", "/ai-arch ", "/ai-explain ", "/cheat ", "/color ", "/duck ", "/env-diff ", "/env-vars", "/env-vars ", "/flashcard ", "/format-sql ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/gh-search ", "/http-codes", "/http-codes ", "/impl ", "/json-schema ", "/man-ai ", "/mkscript ", "/open ", "/path", "/ai-bugs ", "/ai-code-review ", "/ai-doc-gen ", "/ai-improve-commit", "/ai-optimize ", "/ai-pr", "/ai-pr ", "/ai-refactor ", "/ai-security ", "/ai-test-gen ", "/ai-translate ", "/bundle-size", "/bundle-size ", "/changelog-ai", "/changelog-ai ", "/codebase-summary", "/git-cherry", "/git-cherry ", "/git-conflicts", "/git-log-file ", "/git-remote", "/git-remote ", "/git-show ", "/net-stat", "/perf-diff ", "/pwd", "/regex-test ", "/run-test ", "/ssh-key", "/ssh-key ", "/tail ", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/semver ", "/session-summary", "/spell ", "/teach ", "/time", "/time ", "/which-all ", "/wiki ", "/workflow", "/workflow ", "/ai-estimate ", "/ai-standup-report", "/ai-standup-report ", "/clipboard", "/clipboard ", "/env-set ", "/git-amend", "/git-amend ", "/ai-changelog-commit", "/ai-changelog-commit ", "/ai-complexity-report", "/ai-complexity-report ", "/ai-rename-symbol ", "/git-undo", "/git-undo ", "/loc", "/loc ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
+                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/cve ", "/dotenv", "/dotenv ", "/calc ", "/chars", "/chars ", "/ai-arch", "/ai-arch ", "/ai-explain ", "/cheat ", "/color ", "/duck ", "/env-diff ", "/env-vars", "/env-vars ", "/flashcard ", "/format-sql ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/gh-search ", "/http-codes", "/http-codes ", "/impl ", "/json-schema ", "/man-ai ", "/mkscript ", "/open ", "/path", "/ai-bugs ", "/ai-code-review ", "/ai-doc-gen ", "/ai-improve-commit", "/ai-optimize ", "/ai-pr", "/ai-pr ", "/ai-refactor ", "/ai-security ", "/ai-test-gen ", "/ai-translate ", "/bundle-size", "/bundle-size ", "/changelog-ai", "/changelog-ai ", "/codebase-summary", "/git-cherry", "/git-cherry ", "/git-conflicts", "/git-log-file ", "/git-remote", "/git-remote ", "/git-show ", "/net-stat", "/perf-diff ", "/pwd", "/regex-test ", "/run-test ", "/ssh-key", "/ssh-key ", "/tail ", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/semver ", "/session-summary", "/spell ", "/teach ", "/time", "/time ", "/which-all ", "/wiki ", "/workflow", "/workflow ", "/ai-estimate ", "/ai-standup-report", "/ai-standup-report ", "/clipboard", "/clipboard ", "/env-set ", "/git-amend", "/git-amend ", "/ai-changelog-commit", "/ai-changelog-commit ", "/ai-complexity-report", "/ai-complexity-report ", "/ai-rename-symbol ", "/git-undo", "/git-undo ", "/loc", "/loc ", "/ai-explain-diff", "/ai-explain-diff ", "/ai-onboard", "/deps-outdated", "/diff-stat", "/diff-stat ", "/file-watch ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
