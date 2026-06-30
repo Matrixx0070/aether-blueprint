@@ -287,6 +287,8 @@ pub enum UiCommand {
     RemovePlaybookEntry(usize),
     /// List all error playbook entries.
     QueryPlaybook,
+    /// Compute and show a composite session health score.
+    QuerySessionHealth,
     /// Configure auto-retry: (error_threshold, max_retries). 0,0 = off.
     SetRetryOnError(usize, usize),
     /// Show current auto-retry configuration.

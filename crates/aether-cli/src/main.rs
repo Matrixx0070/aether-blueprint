@@ -6406,6 +6406,53 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                 UiCommand::SetAlias(_, _) | UiCommand::RemoveAlias(_) | UiCommand::QueryAliases => {
                     continue;
                 }
+                UiCommand::QuerySessionHealth => {
+                    use aether_core::compaction::context_window_for_model;
+                    // Compute health components (0..100 each, higher = healthier).
+                    let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
+                    let window = context_window_for_model(&session.config.model);
+                    let ctx_fill = if window > 0 { used as f64 / window as f64 } else { 0.0 };
+                    let ctx_score = ((1.0 - ctx_fill) * 100.0) as u64;
+
+                    let total_calls: usize = session.plan.tool_call_stats.values().map(|(ok, err)| ok + err).sum();
+                    let total_errs: usize = session.plan.tool_call_stats.values().map(|(_, err)| err).sum();
+                    let tool_score = if total_calls == 0 { 100u64 } else {
+                        let ok = total_calls.saturating_sub(total_errs);
+                        ((ok as f64 / total_calls as f64) * 100.0) as u64
+                    };
+
+                    let cost = estimate_cost_usd(&session.config.model, &session.usage_total);
+                    let cost_score = if session.cost_cap_usd > 0.0 {
+                        let pct = cost / session.cost_cap_usd;
+                        ((1.0 - pct.min(1.0)) * 100.0) as u64
+                    } else {
+                        100u64
+                    };
+
+                    let turns_score = if session.max_turns > 0 {
+                        let pct = session.turn_index as f64 / session.max_turns as f64;
+                        ((1.0 - pct.min(1.0)) * 100.0) as u64
+                    } else {
+                        100u64
+                    };
+
+                    let overall = (ctx_score + tool_score + cost_score + turns_score) / 4;
+                    let grade = if overall >= 90 { "A" } else if overall >= 75 { "B" } else if overall >= 60 { "C" } else if overall >= 40 { "D" } else { "F" };
+                    let note = format!(
+                        "=== Session health: {overall}/100 ({grade}) ===\n\
+                         Context:   {ctx_score:3}/100  ({:.1}% used)\n\
+                         Tool OK:   {tool_score:3}/100  ({ok} ok, {total_errs} err of {total_calls} calls)\n\
+                         Cost:      {cost_score:3}/100  (${cost:.4}{cap_str})\n\
+                         Turns:     {turns_score:3}/100  ({turns} of {max_str})",
+                        ctx_fill * 100.0,
+                        ok = total_calls.saturating_sub(total_errs),
+                        cap_str = if session.cost_cap_usd > 0.0 { format!(" / ${:.4}", session.cost_cap_usd) } else { String::new() },
+                        turns = session.turn_index,
+                        max_str = if session.max_turns == 0 { "∞".to_string() } else { session.max_turns.to_string() }
+                    );
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::SetRetryOnError(threshold, max_retries) => {
                     session.retry_on_error_threshold = threshold;
                     session.retry_on_error_max = max_retries;
@@ -25335,6 +25382,14 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /health — session health score (0-100)
+                                "/health" => {
+                                    if _ctx.send(UiCommand::QuerySessionHealth).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /retry-on-error [N max|off] — auto-retry when turn has ≥N errors
                                 cmd_str if cmd_str == "/retry-on-error" || cmd_str.starts_with("/retry-on-error ") => {
                                     let arg = cmd_str.trim_start_matches("/retry-on-error").trim();
@@ -26183,6 +26238,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/labels",
                             "/label-rm ",
                             "/retry-on-error", "/retry-on-error ", "/retry-on-error off",
+                            "/health",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
