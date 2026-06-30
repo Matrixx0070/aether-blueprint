@@ -8304,6 +8304,260 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // ── BATCH 83: FILE INTELLIGENCE + DEV ENVIRONMENT ─────────────────
+                                cmd if cmd == "/heatmap" || cmd.starts_with("/heatmap ") => {
+                                    let n = cmd.trim_start_matches("/heatmap").trim().parse::<usize>().unwrap_or(50);
+                                    let capped = n.min(200);
+                                    // git log --name-only to count file change frequency
+                                    let log_out = std::process::Command::new("git")
+                                        .args(["log", "--name-only", "--pretty=format:", "--no-merges", &format!("-{}", capped * 5)])
+                                        .current_dir(std::env::current_dir().unwrap_or_default())
+                                        .output();
+                                    match log_out {
+                                        Ok(out) if out.status.success() => {
+                                            let stdout = String::from_utf8_lossy(&out.stdout);
+                                            let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+                                            for line in stdout.lines() {
+                                                let t = line.trim();
+                                                if !t.is_empty() { *counts.entry(t.to_string()).or_insert(0) += 1; }
+                                            }
+                                            if counts.is_empty() {
+                                                ui.chat_lines.push(ChatLine::SystemNote("No git history found.".to_string()));
+                                                ui.follow_tail = true;
+                                                continue;
+                                            }
+                                            let mut sorted: Vec<(String, usize)> = counts.into_iter().collect();
+                                            sorted.sort_by(|a, b| b.1.cmp(&a.1));
+                                            let max_count = sorted.first().map(|(_, c)| *c).unwrap_or(1);
+                                            let show = sorted.len().min(capped);
+                                            let mut msg = format!("Git change heatmap  (top {show} files)\n\n");
+                                            for (file, count) in &sorted[..show] {
+                                                let bar_len = (count * 20 + max_count / 2) / max_count;
+                                                let heat = if bar_len >= 16 { "🔥" } else if bar_len >= 10 { "♨" } else if bar_len >= 5 { "▲" } else { "·" };
+                                                let bar = "█".repeat(bar_len).chars().take(20).collect::<String>();
+                                                msg.push_str(&format!("  {:>4}  {:<3} {:<40}  {}\n", count, heat, &file[..file.len().min(40)], bar));
+                                            }
+                                            msg.push_str("\n  High-churn files are candidates for refactoring or increased test coverage.");
+                                            ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                        }
+                                        _ => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                "git log failed — run from a git repository.".to_string()
+                                            ));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/refactor ") || cmd == "/refactor" => {
+                                    let rest = cmd.trim_start_matches("/refactor").trim();
+                                    if rest.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /refactor <file> [instruction]\n  AI refactors the file with your instruction\n  e.g. /refactor src/main.rs extract the auth logic into its own module\n       /refactor app.py improve error handling".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let mut parts = rest.splitn(2, char::is_whitespace);
+                                    let file_part = parts.next().unwrap_or("");
+                                    let instruction = parts.next().unwrap_or("").trim();
+                                    let fpath = if file_part.starts_with('/') {
+                                        std::path::PathBuf::from(file_part)
+                                    } else {
+                                        std::env::current_dir().unwrap_or_default().join(file_part)
+                                    };
+                                    let content = match std::fs::read_to_string(&fpath) {
+                                        Ok(c) => c,
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {file_part}: {e}")));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                    };
+                                    let lines = content.lines().count();
+                                    let ext = fpath.extension().and_then(|e| e.to_str()).unwrap_or("");
+                                    let lang = match ext { "rs" => "rust", "py" => "python", "js"|"mjs" => "javascript", "ts"|"tsx" => "typescript", "go" => "go", "java" => "java", "rb" => "ruby", other => other };
+                                    let refactor_instruction = if instruction.is_empty() {
+                                        "Refactor this code for clarity, maintainability, and idiomatic style. Show the complete refactored version."
+                                    } else { instruction };
+                                    let prompt = format!(
+                                        "Refactor task: {refactor_instruction}\n\nFile: {file_part}  ({lines} lines)\n```{lang}\n{}\n```\n\n\
+                                         Instructions:\n\
+                                         1. Apply the refactoring as requested\n\
+                                         2. Show the complete refactored file in a code block\n\
+                                         3. After the code, list what changed and why in bullet points\n\
+                                         4. Produce a ```diff block showing the key changes for /patch",
+                                        if lines <= 300 { content.clone() } else { content.lines().take(300).collect::<Vec<_>>().join("\n") }
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/refactor {file_part}"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/code-review ") || cmd == "/code-review" => {
+                                    let file_arg = cmd.trim_start_matches("/code-review").trim();
+                                    if file_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /code-review <file>  — comprehensive AI review of a file\n  e.g. /code-review src/auth.rs".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let fpath = if file_arg.starts_with('/') { std::path::PathBuf::from(file_arg) }
+                                               else { std::env::current_dir().unwrap_or_default().join(file_arg) };
+                                    let content = match std::fs::read_to_string(&fpath) {
+                                        Ok(c) => c,
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {file_arg}: {e}")));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                    };
+                                    let lines = content.lines().count();
+                                    let ext = fpath.extension().and_then(|e| e.to_str()).unwrap_or("");
+                                    let lang = match ext { "rs" => "rust", "py" => "python", "js"|"mjs" => "javascript", "ts"|"tsx" => "typescript", "go" => "go", "java" => "java", "rb" => "ruby", other => other };
+                                    let truncated_content = if lines > 350 {
+                                        let head: String = content.lines().take(200).collect::<Vec<_>>().join("\n");
+                                        let tail: String = content.lines().rev().take(100).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
+                                        format!("{head}\n\n[… {} lines omitted …]\n\n{tail}", lines - 300)
+                                    } else { content.clone() };
+                                    let prompt = format!(
+                                        "Perform a comprehensive code review of this file:\n\n{file_arg}  ({lines} lines)\n```{lang}\n{truncated_content}\n```\n\n\
+                                         Structure your review as:\n\
+                                         ## Overview\n(purpose, architecture, quality grade A–F)\n\
+                                         ## Correctness\n(bugs, edge cases, error handling gaps)\n\
+                                         ## Security\n(vulnerabilities, unsafe patterns, input validation)\n\
+                                         ## Performance\n(O(n²) loops, unnecessary allocations, caching opportunities)\n\
+                                         ## Maintainability\n(naming, complexity, test coverage signals, documentation)\n\
+                                         ## Top 3 Recommended Fixes\n(most impactful improvements, with line refs)"
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/code-review {file_arg}"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd == "/setup-env" || cmd.starts_with("/setup-env ") => {
+                                    let cwd = std::env::current_dir().unwrap_or_default();
+                                    // Detect project stack and show setup steps
+                                    let mut detected: Vec<(&str, String)> = Vec::new();
+                                    if cwd.join("Cargo.toml").exists() {
+                                        let has_rust = std::process::Command::new("rustc").arg("--version").output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_else(|_| "not found".to_string());
+                                        let has_cargo = std::process::Command::new("cargo").arg("--version").output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_else(|_| "not found".to_string());
+                                        detected.push(("Rust", has_rust));
+                                        detected.push(("Cargo", has_cargo));
+                                    }
+                                    if cwd.join("package.json").exists() {
+                                        let has_node = std::process::Command::new("node").arg("--version").output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_else(|_| "not found".to_string());
+                                        let has_npm = std::process::Command::new("npm").arg("--version").output().map(|o| format!("npm {}", String::from_utf8_lossy(&o.stdout).trim())).unwrap_or_else(|_| "not found".to_string());
+                                        detected.push(("Node.js", has_node));
+                                        detected.push(("npm", has_npm));
+                                    }
+                                    if cwd.join("go.mod").exists() {
+                                        let has_go = std::process::Command::new("go").arg("version").output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_else(|_| "not found".to_string());
+                                        detected.push(("Go", has_go));
+                                    }
+                                    if cwd.join("pyproject.toml").exists() || cwd.join("requirements.txt").exists() || cwd.join("setup.py").exists() {
+                                        let has_py = std::process::Command::new("python3").arg("--version").output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_else(|_| "not found".to_string());
+                                        detected.push(("Python", has_py));
+                                    }
+                                    if cwd.join("Dockerfile").exists() || cwd.join("docker-compose.yml").exists() || cwd.join("docker-compose.yaml").exists() {
+                                        let has_docker = std::process::Command::new("docker").arg("--version").output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_else(|_| "not found".to_string());
+                                        detected.push(("Docker", has_docker));
+                                    }
+                                    if cwd.join(".git").exists() {
+                                        let has_git = std::process::Command::new("git").arg("--version").output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_else(|_| "not found".to_string());
+                                        detected.push(("Git", has_git));
+                                    }
+                                    if detected.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("No recognized project in {}\n  Checked: Cargo.toml, package.json, go.mod, pyproject.toml, Dockerfile", cwd.display())
+                                        ));
+                                    } else {
+                                        let mut msg = format!("Environment check  {}\n\n", cwd.display());
+                                        for (name, version) in &detected {
+                                            let ok = !version.contains("not found");
+                                            let badge = if ok { "✓" } else { "✗" };
+                                            msg.push_str(&format!("  {badge}  {name:<12}  {version}\n"));
+                                        }
+                                        // Quick setup hints for missing tools
+                                        let missing: Vec<&&str> = detected.iter().filter(|(_, v)| v.contains("not found")).map(|(n, _)| n).collect();
+                                        if !missing.is_empty() {
+                                            msg.push_str("\n  Install missing:\n");
+                                            for tool in missing {
+                                                let hint = match *tool {
+                                                    "Rust"|"Cargo" => "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh",
+                                                    "Node.js"|"npm" => "  curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && apt-get install nodejs",
+                                                    "Go"    => "  apt-get install golang-go",
+                                                    "Python" => "  apt-get install python3 python3-pip",
+                                                    "Docker" => "  curl -fsSL https://get.docker.com | sh",
+                                                    _       => "  (see docs)",
+                                                };
+                                                msg.push_str(&format!("  {tool}: {hint}\n"));
+                                            }
+                                        }
+                                        ui.chat_lines.push(ChatLine::SystemNote(msg));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/doc-gen ") || cmd == "/doc-gen" => {
+                                    let file_arg = cmd.trim_start_matches("/doc-gen").trim();
+                                    if file_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /doc-gen <file>  — AI generates documentation for all public items\n  e.g. /doc-gen src/lib.rs\n       /doc-gen app.py".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let fpath = if file_arg.starts_with('/') { std::path::PathBuf::from(file_arg) }
+                                               else { std::env::current_dir().unwrap_or_default().join(file_arg) };
+                                    let content = match std::fs::read_to_string(&fpath) {
+                                        Ok(c) => c,
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {file_arg}: {e}")));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                    };
+                                    let lines = content.lines().count();
+                                    let ext = fpath.extension().and_then(|e| e.to_str()).unwrap_or("");
+                                    let lang = match ext { "rs" => "rust", "py" => "python", "js"|"mjs" => "javascript", "ts"|"tsx" => "typescript", "go" => "go", "java" => "java", "rb" => "ruby", other => other };
+                                    let (doc_style, doc_example) = match ext {
+                                        "rs"  => ("/// doc-comments", "/// # Examples\n/// ```rust\n/// // example\n/// ```"),
+                                        "py"  => ("docstrings (Google style)", "\"\"\"Summary.\n\nArgs:\n    param: Description.\n\nReturns:\n    Description.\n\"\"\""),
+                                        "go"  => ("// GoDoc comments", "// FunctionName does something.\n// It returns an error if ..."),
+                                        "js"|"ts"|"tsx"|"jsx" => ("JSDoc", "@param {Type} name - Description\n@returns {Type} Description"),
+                                        "java" => ("Javadoc", "/** @param name Description\n * @return Description */"),
+                                        _     => ("inline comments", "// Purpose and usage"),
+                                    };
+                                    let prompt = format!(
+                                        "Generate complete documentation for {file_arg}  ({lines} lines)\n\n```{lang}\n{}\n```\n\n\
+                                         Rules:\n\
+                                         - Use {doc_style} style\n\
+                                         - Document every public function, struct/class, and module\n\
+                                         - Include purpose, parameters, return values, errors, and examples\n\
+                                         - Example format: {doc_example}\n\
+                                         - Output the COMPLETE file with documentation added (not just snippets)\n\
+                                         - After the file, add a ## Public API Summary section",
+                                        content.lines().take(400).collect::<Vec<_>>().join("\n")
+                                    );
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/doc-gen {file_arg}"), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -8942,7 +9196,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ask-code ", "/bench", "/bench ", "/blame ", "/changelog", "/changelog ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/flow ", "/grep-code ", "/lint", "/lint ", "/metrics", "/metrics ", "/patch", "/patch ", "/pr-review", "/pr-review ", "/profile ", "/recent", "/recent ", "/test", "/test ", "/todo-ai ", "/watch ",
+                            "/ask-code ", "/bench", "/bench ", "/blame ", "/changelog", "/changelog ", "/code-review ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/doc-gen ", "/flow ", "/grep-code ", "/heatmap", "/heatmap ", "/lint", "/lint ", "/metrics", "/metrics ", "/patch", "/patch ", "/pr-review", "/pr-review ", "/profile ", "/recent", "/recent ", "/refactor ", "/setup-env", "/test", "/test ", "/todo-ai ", "/watch ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
