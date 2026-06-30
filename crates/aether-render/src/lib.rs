@@ -723,6 +723,12 @@ pub enum UiCommand {
     QueryToolErrorSummary,
     /// Hard-truncate history to keep only the last N items (drop from head).
     HistoryTruncateTo(usize),
+    /// Show all pending_reminders that will be injected into the next turn.
+    QueryPendingReminders,
+    /// Merge two consecutive User history items (by index) into one concatenated message.
+    HistoryMergeUser(usize, usize),
+    /// Show count and summary of tools currently in the deny list.
+    QueryDenyList,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

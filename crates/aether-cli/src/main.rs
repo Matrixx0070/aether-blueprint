@@ -6778,6 +6778,60 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryPendingReminders => {
+                    if session.pending_reminders.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No pending reminders queued for next turn.".to_string()));
+                    } else {
+                        let lines: Vec<String> = session.pending_reminders.iter().enumerate().map(|(i, r)| {
+                            let preview: String = r.body.chars().take(80).collect::<String>().replace('\n', " ");
+                            format!("  #{i}: {preview}")
+                        }).collect();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Pending reminders for next turn ({}):\n{}", session.pending_reminders.len(), lines.join("\n")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::HistoryMergeUser(a, b) => {
+                    let len = session.history.len();
+                    if a >= len || b >= len {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Index out of range (history len={len}). Both indices must be < {len}."
+                        )));
+                        continue;
+                    }
+                    let text_a = if let ConversationItem::User(t) = &session.history[a] { Some(t.clone()) } else { None };
+                    let text_b = if let ConversationItem::User(t) = &session.history[b] { Some(t.clone()) } else { None };
+                    match (text_a, text_b) {
+                        (Some(ta), Some(tb)) => {
+                            let merged = format!("{ta}\n\n{tb}");
+                            let keep = a.min(b);
+                            let drop = a.max(b);
+                            session.history[keep] = ConversationItem::User(merged);
+                            session.history.remove(drop);
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Merged user items [{a}] and [{b}] into [{keep}]. History now {} items.", session.history.len()
+                            )));
+                        }
+                        _ => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Both history[{a}] and history[{b}] must be User items."
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryDenyList => {
+                    if session.tool_deny.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Tool deny list is empty. Use /deny-tool <name> to add.".to_string()));
+                    } else {
+                        let list = session.tool_deny.iter().map(|s| format!("  - {s}")).collect::<Vec<_>>().join("\n");
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Tool deny list ({} entries):\n{}", session.tool_deny.len(), list
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::SetFocusMode(topic) => {
                     session.focus_mode = topic.clone();
                     let note = match topic {
@@ -30376,6 +30430,41 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /pending-reminders-show — show reminders queued for next turn
+                                "/pending-reminders-show" => {
+                                    if _ctx.send(UiCommand::QueryPendingReminders).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-merge-user <a> <b> — merge two user history items
+                                cmd_str if cmd_str.starts_with("/history-merge-user ") => {
+                                    let rest = cmd_str.trim_start_matches("/history-merge-user ").trim();
+                                    let mut parts = rest.split_whitespace();
+                                    let a = parts.next().and_then(|s| s.parse::<usize>().ok());
+                                    let b = parts.next().and_then(|s| s.parse::<usize>().ok());
+                                    match (a, b) {
+                                        (Some(ai), Some(bi)) => {
+                                            if _ctx.send(UiCommand::HistoryMergeUser(ai, bi)).is_err() { break 'outer; }
+                                        }
+                                        _ => {
+                                            ui.chat_lines.push(ChatLine::SystemNote("Usage: /history-merge-user <idx_a> <idx_b>".to_string()));
+                                        }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /deny-list-show — show tools currently in the deny list
+                                "/deny-list-show" => {
+                                    if _ctx.send(UiCommand::QueryDenyList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /session-focus <topic> | off — set focus mode reminder
                                 cmd_str if cmd_str == "/session-focus off" || cmd_str.starts_with("/session-focus ") => {
                                     if cmd_str == "/session-focus off" {
@@ -31524,6 +31613,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-focus-show",
                             "/tool-error-summary",
                             "/history-truncate-to ",
+                            "/pending-reminders-show",
+                            "/history-merge-user ",
+                            "/deny-list-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
