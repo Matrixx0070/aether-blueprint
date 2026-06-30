@@ -409,6 +409,12 @@ pub enum UiCommand {
     ReplayLast,
     /// List past user messages with their indices.
     QueryReplayList,
+    /// Use a specific model for the next turn only, then revert.
+    SetNextTurnModel(String),
+    /// Clear any pending next-turn model override.
+    ClearNextTurnModel,
+    /// Show current next-turn model override (if any).
+    QueryNextTurnModel,
     /// Show a line-diff between two assistant turns by 0-based index.
     QueryTurnDiff(usize, usize),
     /// Show total word count in conversation history by role.

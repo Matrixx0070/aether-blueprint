@@ -333,6 +333,10 @@ pub struct Session {
     /// 0 = unlimited.
     pub tool_call_budget: usize,
 
+    /// When Some, use this model for the next turn only, then revert to config.model.
+    /// Set by /model-for-next, cleared by the driver after one turn.
+    pub next_turn_model: Option<String>,
+
     /// Context-fill fraction (0.0–1.0) at which a warning SystemNote fires.
     /// 0.0 = off. Fires once per session (token_budget_warn_fired tracks this).
     pub token_budget_warn_pct: f64,
@@ -425,6 +429,7 @@ impl Session {
             pause_now: false,
             session_notes: Vec::new(),
             tool_call_budget: 0,
+            next_turn_model: None,
             token_budget_warn_pct: 0.0,
             token_budget_hard_pct: 0.0,
             token_budget_warn_fired: false,

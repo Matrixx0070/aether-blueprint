@@ -6564,6 +6564,42 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::SetNextTurnModel(model) => {
+                    let prev = session.next_turn_model.replace(model.clone());
+                    let note = if let Some(p) = prev {
+                        format!("Next-turn model: '{model}' (replacing '{p}'). Will revert to '{}' after one turn.", session.config.model)
+                    } else {
+                        format!("Next-turn model: '{model}' for the next turn only. Will revert to '{}' after.", session.config.model)
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::ClearNextTurnModel => {
+                    if let Some(m) = session.next_turn_model.take() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Next-turn model override '{m}' cleared."
+                        )));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Next-turn model: no override set.".to_string()
+                        ));
+                    }
+                    continue;
+                }
+                UiCommand::QueryNextTurnModel => {
+                    let note = match &session.next_turn_model {
+                        Some(m) => format!(
+                            "Next-turn model: '{m}' (one-shot override).  Primary: '{}'.\n  Use /model-for-next-clear to cancel.",
+                            session.config.model
+                        ),
+                        None => format!(
+                            "Next-turn model: using primary model '{}'.  Use /model-for-next <model> to override once.",
+                            session.config.model
+                        ),
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::QueryTurnDiff(idx_a, idx_b) => {
                     use aether_core::context::ConversationItem;
                     let asst_turns: Vec<&str> = session.history.iter()
@@ -8309,6 +8345,17 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     let _ = etx_inner.send(UiEvent::AssistantDelta(delta.to_string()));
                 });
+                // Apply one-shot model override if set; restore primary model after this turn.
+                let restore_model: Option<String> = if let Some(override_model) = session.next_turn_model.take() {
+                    let primary = session.config.model.clone();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "[Model override] Using '{override_model}' for this turn (primary: '{primary}')."
+                    )));
+                    session.config.model = override_model;
+                    Some(primary)
+                } else {
+                    None
+                };
                 let pre_turn_usage = session.usage_total.clone();
                 let first_result = agent_turn_streamed(&mut session, next_input.take(), sink).await;
                 let outcome = match first_result {
@@ -8353,6 +8400,14 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                 };
 
+                // Restore primary model after one-shot override.
+                if let Some(primary) = restore_model {
+                    let used = session.config.model.clone();
+                    session.config.model = primary.clone();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "[Model override] Turn complete with '{used}'. Restored primary model '{primary}'."
+                    )));
+                }
                 // Record per-turn cost entry for /cost-per-turn / /cost-report.
                 {
                     let d_in  = session.usage_total.input_tokens.saturating_sub(pre_turn_usage.input_tokens);
@@ -26776,6 +26831,31 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /model-for-next <model> — use a specific model for the next turn only
+                                cmd_str if cmd_str.starts_with("/model-for-next ") => {
+                                    let model = cmd_str.trim_start_matches("/model-for-next ").trim().to_string();
+                                    if _ctx.send(UiCommand::SetNextTurnModel(model)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /model-for-next-clear — cancel any pending one-shot model override
+                                "/model-for-next-clear" => {
+                                    if _ctx.send(UiCommand::ClearNextTurnModel).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /model-for-next-show — show current one-shot override (if any)
+                                "/model-for-next-show" => {
+                                    if _ctx.send(UiCommand::QueryNextTurnModel).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /turn-diff <n> <m> — line-diff between two assistant turns
                                 cmd_str if cmd_str.starts_with("/turn-diff ") => {
                                     let arg = cmd_str.trim_start_matches("/turn-diff ").trim();
@@ -27782,6 +27862,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/char-count",
                             "/session-volume",
                             "/turn-diff ",
+                            "/model-for-next ",
+                            "/model-for-next-clear",
+                            "/model-for-next-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
