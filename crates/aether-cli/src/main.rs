@@ -5206,7 +5206,12 @@ Power & security tools\n\
   /shell <cmd>            run shell command, paste output\n\
   /tree [dir] [depth]     directory tree (hidden + target excluded)\n\
   /template <name>        expand workflow template (23 types)\n\
-  /diff git               show git diff as code block"),
+DevOps & code intelligence\n\
+  /git-log [n]            pretty-printed git history with +/- stats (default 20)\n\
+  /diff [file]            unstaged + staged diff stats for file or all\n\
+  /env-check              installed dev tool versions + key env vars\n\
+  /complexity <file>      cyclomatic-complexity score per function (CRITICAL/HIGH/MEDIUM/LOW)\n\
+  /docker [sub]           ps | ps-a | images | logs <n> | inspect <n> | stats"),
                                         ("keys", &["keys", "keyboard", "shortcuts", "bindings"], "\
 Input shortcuts\n\
   ↑ ↓  / Ctrl+R           history recall / reverse-i-search\n\
@@ -5306,6 +5311,7 @@ Input shortcuts\n\
     ◈ /ask-code /explain-error /debug-ai /doc-gen /todo-ai     AI-powered dev\n\
     ◈ /status /log-parse /api-test /changelog /recent          ops + project mgmt\n\
     ◈ /watch /profile /patch /rename /count-tokens             precision tools\n\
+    ◈ /git-log /diff /complexity /env-check /docker           devops + intelligence\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -9731,6 +9737,285 @@ CTF Toolkit — Aether AI-assisted\n\
                                     if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
                                     continue;
                                 }
+                                // ── Batch 92: DevOps + deep code intelligence ────────────────────
+                                cmd if cmd == "/git-log" || cmd.starts_with("/git-log ") => {
+                                    // /git-log [n]  — pretty-printed git history with stats
+                                    let arg = cmd.trim_start_matches("/git-log").trim();
+                                    let count = arg.parse::<usize>().unwrap_or(20).min(200);
+                                    let out = std::process::Command::new("git")
+                                        .args(["log", "--oneline", "--decorate", "--color=never",
+                                               &format!("-{count}"),
+                                               "--format=%h %as %<(20,trunc)%an  %s"])
+                                        .output();
+                                    match out {
+                                        Ok(o) if o.status.success() => {
+                                            let log_text = String::from_utf8_lossy(&o.stdout);
+                                            let lines: Vec<&str> = log_text.lines().collect();
+                                            let mut body = format!("git log  (last {} commits)\n", lines.len());
+                                            body.push_str("─────────────────────────────────────────────────────\n");
+                                            for line in &lines {
+                                                body.push_str("  ");
+                                                body.push_str(line);
+                                                body.push('\n');
+                                            }
+                                            // also show stats summary
+                                            if let Ok(s) = std::process::Command::new("git")
+                                                .args(["log", "--shortstat", "--color=never", &format!("-{count}")])
+                                                .output()
+                                            {
+                                                let stat_txt = String::from_utf8_lossy(&s.stdout);
+                                                let insertions: usize = stat_txt.lines()
+                                                    .filter_map(|l| {
+                                                        let m = l.trim();
+                                                        if m.contains("insertion") {
+                                                            m.split_whitespace().find_map(|w| w.parse::<usize>().ok())
+                                                        } else { None }
+                                                    }).sum();
+                                                let deletions: usize = stat_txt.lines()
+                                                    .filter_map(|l| {
+                                                        let m = l.trim();
+                                                        if m.contains("deletion") {
+                                                            m.split_whitespace().find_map(|w| w.parse::<usize>().ok())
+                                                        } else { None }
+                                                    }).sum();
+                                                body.push_str(&format!("\n  Total across {} commits:  +{insertions} / -{deletions} lines\n", lines.len()));
+                                            }
+                                            ui.chat_lines.push(ChatLine::SystemNote(body));
+                                        }
+                                        Ok(o) => {
+                                            let err = String::from_utf8_lossy(&o.stderr);
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("git log failed: {err}")));
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("git not found: {e}")));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/diff" || cmd.starts_with("/diff ") => {
+                                    // /diff [file]  — show git diff (staged + unstaged) for file or all
+                                    let file_arg = cmd.trim_start_matches("/diff").trim();
+                                    let mut args = vec!["diff", "--stat", "--color=never"];
+                                    let owned_file: String;
+                                    if !file_arg.is_empty() {
+                                        owned_file = file_arg.to_string();
+                                        args.push("--");
+                                        args.push(&owned_file);
+                                    }
+                                    let out = std::process::Command::new("git").args(&args).output();
+                                    let mut body = String::new();
+                                    match out {
+                                        Ok(o) => {
+                                            let stat = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                                            if stat.is_empty() {
+                                                body.push_str("  (no unstaged changes");
+                                                if !file_arg.is_empty() { body.push_str(&format!(" in {file_arg}")); }
+                                                body.push_str(")\n");
+                                            } else {
+                                                body.push_str("  Unstaged changes:\n");
+                                                for line in stat.lines() {
+                                                    body.push_str("    "); body.push_str(line); body.push('\n');
+                                                }
+                                            }
+                                        }
+                                        Err(e) => { body.push_str(&format!("git not found: {e}\n")); }
+                                    }
+                                    // also check staged
+                                    let mut staged_args = vec!["diff", "--cached", "--stat", "--color=never"];
+                                    let owned_file2: String;
+                                    if !file_arg.is_empty() {
+                                        owned_file2 = file_arg.to_string();
+                                        staged_args.push("--");
+                                        staged_args.push(&owned_file2);
+                                    }
+                                    if let Ok(so) = std::process::Command::new("git").args(&staged_args).output() {
+                                        let staged = String::from_utf8_lossy(&so.stdout).trim().to_string();
+                                        if !staged.is_empty() {
+                                            body.push_str("  Staged (index) changes:\n");
+                                            for line in staged.lines() {
+                                                body.push_str("    "); body.push_str(line); body.push('\n');
+                                            }
+                                        }
+                                    }
+                                    let label = if file_arg.is_empty() { "all files".to_string() } else { file_arg.to_string() };
+                                    ui.chat_lines.push(ChatLine::SystemNote(format!("git diff — {label}\n{body}")));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/env-check" => {
+                                    // /env-check  — check installed dev tool versions
+                                    let tools = [
+                                        ("rustc", &["--version"][..]),
+                                        ("cargo", &["--version"]),
+                                        ("git", &["--version"]),
+                                        ("node", &["--version"]),
+                                        ("npm", &["--version"]),
+                                        ("python3", &["--version"]),
+                                        ("go", &["version"]),
+                                        ("docker", &["--version"]),
+                                        ("kubectl", &["version", "--client", "--short"]),
+                                        ("terraform", &["version", "-json"]),
+                                        ("make", &["--version"]),
+                                        ("gcc", &["--version"]),
+                                        ("clang", &["--version"]),
+                                        ("jq", &["--version"]),
+                                        ("curl", &["--version"]),
+                                    ];
+                                    let mut body = "Environment check\n─────────────────────────────────────────\n".to_string();
+                                    for (tool, args) in &tools {
+                                        match std::process::Command::new(tool).args(*args).output() {
+                                            Ok(o) => {
+                                                let ver_raw = String::from_utf8_lossy(&o.stdout);
+                                                let ver_raw2 = String::from_utf8_lossy(&o.stderr);
+                                                let ver = ver_raw.lines().next()
+                                                    .or_else(|| ver_raw2.lines().next())
+                                                    .unwrap_or("(unknown)")
+                                                    .trim();
+                                                body.push_str(&format!("  ✓  {:<12}  {}\n", tool, ver));
+                                            }
+                                            Err(_) => {
+                                                body.push_str(&format!("  ✗  {:<12}  not found\n", tool));
+                                            }
+                                        }
+                                    }
+                                    // also show key env vars
+                                    body.push_str("\nKey environment\n─────────────────────────────────────────\n");
+                                    for var in &["RUST_LOG", "CARGO_HOME", "GOPATH", "HOME", "EDITOR", "SHELL"] {
+                                        let val = std::env::var(var).unwrap_or_else(|_| "(unset)".to_string());
+                                        body.push_str(&format!("  {:<15}  {}\n", var, val));
+                                    }
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/complexity" || cmd.starts_with("/complexity ") => {
+                                    // /complexity [file]  — approximate cyclomatic complexity per function
+                                    let file_arg = cmd.trim_start_matches("/complexity").trim();
+                                    if file_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /complexity <file>\n  Counts branches (if/for/while/match/&&/||) to estimate complexity.".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    match std::fs::read_to_string(file_arg) {
+                                        Ok(src) => {
+                                            // simple line-by-line complexity scoring
+                                            struct FnInfo { name: String, score: usize, lines: usize }
+                                            let mut fns: Vec<FnInfo> = Vec::new();
+                                            let mut current_name = String::new();
+                                            let mut current_score: usize = 1;
+                                            let mut current_lines: usize = 0;
+                                            let mut depth: usize = 0;
+                                            let fn_patterns = ["fn ", "func ", "function ", "def ", "void ", "int ", "class "];
+                                            let branch_words = ["if ", "else if", "for ", "while ", "match ", "case ", "catch ", "&& ", "|| ", "? "];
+                                            for line in src.lines() {
+                                                let trimmed = line.trim();
+                                                // detect function start (heuristic)
+                                                let is_fn_start = fn_patterns.iter().any(|p| trimmed.starts_with(p))
+                                                    && trimmed.contains('{');
+                                                if is_fn_start && depth == 0 {
+                                                    if !current_name.is_empty() && current_lines > 0 {
+                                                        fns.push(FnInfo { name: current_name.clone(), score: current_score, lines: current_lines });
+                                                    }
+                                                    // extract name heuristically
+                                                    let after_fn = trimmed.split_once(|c: char| c.is_whitespace())
+                                                        .map(|(_, r)| r).unwrap_or(trimmed);
+                                                    current_name = after_fn.split(|c: char| !c.is_alphanumeric() && c != '_')
+                                                        .next().unwrap_or("?").to_string();
+                                                    current_score = 1;
+                                                    current_lines = 0;
+                                                }
+                                                // track brace depth
+                                                depth = depth.saturating_add(trimmed.chars().filter(|&c| c == '{').count());
+                                                let close = trimmed.chars().filter(|&c| c == '}').count();
+                                                depth = depth.saturating_sub(close);
+                                                // count branch complexity indicators
+                                                for bp in &branch_words {
+                                                    current_score += trimmed.matches(bp).count();
+                                                }
+                                                if !current_name.is_empty() { current_lines += 1; }
+                                            }
+                                            if !current_name.is_empty() && current_lines > 0 {
+                                                fns.push(FnInfo { name: current_name, score: current_score, lines: current_lines });
+                                            }
+                                            fns.sort_by(|a, b| b.score.cmp(&a.score));
+                                            let mut body = format!("Complexity — {file_arg}\n");
+                                            body.push_str("─────────────────────────────────────────────────────\n");
+                                            body.push_str("  Score  Lines  Risk        Function\n");
+                                            body.push_str("  ─────  ─────  ──────────  ────────\n");
+                                            for fi in fns.iter().take(30) {
+                                                let risk = if fi.score >= 15 { "CRITICAL" }
+                                                    else if fi.score >= 10 { "HIGH    " }
+                                                    else if fi.score >= 5  { "MEDIUM  " }
+                                                    else                   { "LOW     " };
+                                                body.push_str(&format!("  {:>5}  {:>5}  {}  {}\n", fi.score, fi.lines, risk, fi.name));
+                                            }
+                                            if fns.is_empty() {
+                                                body.push_str("  (no function boundaries detected)\n");
+                                            }
+                                            ui.chat_lines.push(ChatLine::SystemNote(body));
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {file_arg}: {e}")));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/docker" || cmd.starts_with("/docker ") => {
+                                    // /docker [ps|logs <name>|inspect <name>|images|stats]
+                                    let sub = cmd.trim_start_matches("/docker").trim();
+                                    let docker_available = std::process::Command::new("docker")
+                                        .arg("info").output().map(|o| o.status.success()).unwrap_or(false);
+                                    if !docker_available {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Docker not available or daemon not running.\n  Install Docker: https://docs.docker.com/get-docker/".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let (docker_args, label): (Vec<&str>, &str) = if sub.is_empty() || sub == "ps" {
+                                        (vec!["ps", "--format", "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"], "containers (running)")
+                                    } else if sub == "ps -a" || sub == "ps-a" || sub == "all" {
+                                        (vec!["ps", "-a", "--format", "table {{.Names}}\t{{.Image}}\t{{.Status}}"], "containers (all)")
+                                    } else if sub == "images" {
+                                        (vec!["images", "--format", "table {{.Repository}}:{{.Tag}}\t{{.Size}}\t{{.CreatedSince}}"], "images")
+                                    } else if sub.starts_with("logs ") {
+                                        let name = sub.trim_start_matches("logs ").trim();
+                                        (vec!["logs", "--tail", "50", name], "logs")
+                                    } else if sub.starts_with("inspect ") {
+                                        let name = sub.trim_start_matches("inspect ").trim();
+                                        (vec!["inspect", "--format", "{{json .Config}}", name], "inspect")
+                                    } else if sub == "stats" {
+                                        (vec!["stats", "--no-stream", "--format", "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"], "stats")
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /docker [ps | ps-a | images | logs <name> | inspect <name> | stats]".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    };
+                                    match std::process::Command::new("docker").args(&docker_args).output() {
+                                        Ok(o) => {
+                                            let out_txt = String::from_utf8_lossy(&o.stdout);
+                                            let err_txt = String::from_utf8_lossy(&o.stderr);
+                                            let body = if out_txt.trim().is_empty() {
+                                                if err_txt.trim().is_empty() { format!("docker {label}: (no output)") }
+                                                else { format!("docker {label} error:\n{err_txt}") }
+                                            } else {
+                                                format!("docker {label}\n─────────────────────────────────────────\n{out_txt}")
+                                            };
+                                            ui.chat_lines.push(ChatLine::SystemNote(body));
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("docker command failed: {e}")));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -10369,7 +10654,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/bench", "/bench ", "/blame ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/debug-ai ", "/deps-graph", "/deps-graph ", "/doc-gen ", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/grep-code ", "/heatmap", "/heatmap ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/pr-review", "/pr-review ", "/profile ", "/recent", "/recent ", "/refactor ", "/rename ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/status", "/test", "/test ", "/todo-ai ", "/translate-code ", "/undo-last", "/undo-exchange", "/vulnscan", "/vulnscan ", "/watch ",
+                            "/ai-commit", "/ai-commit ", "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/bench", "/bench ", "/blame ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-log", "/git-log ", "/grep-code ", "/heatmap", "/heatmap ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/pr-review", "/pr-review ", "/profile ", "/recent", "/recent ", "/refactor ", "/rename ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/status", "/test", "/test ", "/todo-ai ", "/translate-code ", "/undo-last", "/undo-exchange", "/vulnscan", "/vulnscan ", "/watch ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
