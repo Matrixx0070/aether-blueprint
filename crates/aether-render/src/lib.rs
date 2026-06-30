@@ -981,6 +981,12 @@ pub enum UiCommand {
     QueryPlanLastError,
     /// Show per-tool consecutive error counts from the plan.
     QueryPlanToolErrors,
+    /// Show the plan sliding-window size.
+    QueryPlanWindowShow,
+    /// Show total verifier blocks recorded in this plan.
+    QueryPlanBlocksRecorded,
+    /// Show the last verification result (blocked / passed / findings).
+    QueryVerifierLastShow,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

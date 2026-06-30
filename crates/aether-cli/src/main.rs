@@ -7700,6 +7700,50 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryPlanWindowShow => {
+                    match session.plan.window {
+                        Some(w) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Plan sliding window: {w} turns (blocks older than {w} turns are pruned)."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Plan sliding window: OFF (monotonic counters, blocks never pruned).".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanBlocksRecorded => {
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan blocks recorded: {} total across {} rules.",
+                        session.plan.blocks_recorded,
+                        session.plan.block_counts.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierLastShow => {
+                    match &session.last_verification {
+                        Some(vr) => {
+                            let status = if vr.is_blocked() {
+                                format!("BLOCKED ({} reason(s))", vr.blocked_reasons.len())
+                            } else {
+                                format!("PASSED ({} finding(s))", vr.findings.len())
+                            };
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Last verification: {status}. Message preview: {}",
+                                if vr.message.len() > 100 { format!("{}…", &vr.message[..100]) } else { vr.message.clone() }
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "No verification run yet this session.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryPlanBlockCounts => {
                     if session.plan.block_counts.is_empty() {
                         let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
@@ -33776,6 +33820,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /plan-window-show — show plan sliding-window size
+                                "/plan-window-show" => {
+                                    if _ctx.send(UiCommand::QueryPlanWindowShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /plan-blocks-recorded — show total verifier blocks recorded
+                                "/plan-blocks-recorded" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlocksRecorded).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /verifier-last-show — show last verification result
+                                "/verifier-last-show" => {
+                                    if _ctx.send(UiCommand::QueryVerifierLastShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -34573,6 +34635,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-block-counts",
                             "/plan-last-error",
                             "/plan-tool-errors",
+                            "/plan-window-show",
+                            "/plan-blocks-recorded",
+                            "/verifier-last-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
