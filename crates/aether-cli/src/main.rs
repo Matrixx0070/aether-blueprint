@@ -21497,6 +21497,239 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /ai-commit-all — stage all, AI generates commit message, commits
+                                "/ai-commit-all" => {
+                                    // Stage everything
+                                    let _ = std::process::Command::new("git").args(["add", "-A"]).output();
+                                    let diff = std::process::Command::new("git")
+                                        .args(["diff", "--staged", "--stat"])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    if diff.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("/ai-commit-all: nothing to commit (working tree clean).".into()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let full_diff = std::process::Command::new("git")
+                                        .args(["diff", "--staged"])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    let truncated: String = full_diff.chars().take(6000).collect();
+                                    let prompt = format!(
+                                        "Generate a concise git commit message for the following staged diff. \
+                                         Follow conventional commits format (feat/fix/refactor/docs/test/chore). \
+                                         Return ONLY the commit message, no quotes, no markdown.\n\n\
+                                         ## Staged files\n```\n{diff}\n```\n## Diff\n```diff\n{truncated}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /file-diff <file> — show diff for a file and ask AI to explain
+                                cmd_str if cmd_str.starts_with("/file-diff ") || cmd_str == "/file-diff" => {
+                                    let file_arg = cmd_str.trim_start_matches("/file-diff").trim();
+                                    let file_path_arg = if file_arg.is_empty() {
+                                        ui.context_files.first().cloned().unwrap_or_default()
+                                    } else {
+                                        file_arg.to_string()
+                                    };
+                                    if file_path_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /file-diff <file>  — shows git diff for one file and explains changes.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let diff = std::process::Command::new("git")
+                                        .args(["diff", "HEAD", "--", &file_path_arg])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    if diff.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("/file-diff: no changes in {file_path_arg} vs HEAD.")));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let truncated: String = diff.chars().take(8000).collect();
+                                    let prompt = format!(
+                                        "Explain the following diff for `{file_path_arg}`. \
+                                         What changed, why might it have changed, and are there any concerns?\n\n```diff\n{truncated}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /ai-review-pr <number> — fetch PR diff and AI code review
+                                cmd_str if cmd_str.starts_with("/ai-review-pr ") || cmd_str == "/ai-review-pr" => {
+                                    let pr_arg = cmd_str.trim_start_matches("/ai-review-pr").trim();
+                                    if pr_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /ai-review-pr <PR number>  — fetches a PR diff and does a thorough AI review.".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let diff = std::process::Command::new("gh")
+                                        .args(["pr", "diff", pr_arg])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    let pr_info = std::process::Command::new("gh")
+                                        .args(["pr", "view", pr_arg, "--json", "title,body,author,additions,deletions,changedFiles"])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    if diff.trim().is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("/ai-review-pr: no diff for PR #{pr_arg}. Is `gh` installed and authenticated?")));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let truncated: String = diff.chars().take(8000).collect();
+                                    let prompt = format!(
+                                        "Please do a thorough code review of PR #{pr_arg}. Rate each finding BLOCKER/HIGH/MEDIUM/LOW. \
+                                         Cover: correctness, security, performance, test coverage, documentation, and style.\n\n\
+                                         ## PR info\n```json\n{pr_info}\n```\n## Diff\n```diff\n{truncated}\n```"
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /new-file <path> [description] — AI creates a new file with boilerplate
+                                cmd_str if cmd_str.starts_with("/new-file ") || cmd_str == "/new-file" => {
+                                    let args = cmd_str.trim_start_matches("/new-file").trim();
+                                    let (file_path_arg, description) = if let Some(sp) = args.find(' ') {
+                                        (&args[..sp], args[sp+1..].trim())
+                                    } else {
+                                        (args, "")
+                                    };
+                                    if file_path_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /new-file <path> [description]\n  e.g. /new-file src/auth/jwt.rs JWT validation module".into()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let ext = std::path::Path::new(file_path_arg)
+                                        .extension()
+                                        .and_then(|e| e.to_str())
+                                        .unwrap_or("");
+                                    let lang = match ext {
+                                        "rs" => "Rust", "ts" => "TypeScript", "js" => "JavaScript",
+                                        "py" => "Python", "go" => "Go", "sh" => "bash",
+                                        "toml" => "TOML", "yaml" | "yml" => "YAML",
+                                        _ => "the appropriate language",
+                                    };
+                                    let desc_line = if !description.is_empty() {
+                                        format!("\nPurpose: {description}")
+                                    } else { String::new() };
+                                    let prompt = format!(
+                                        "Create a new {lang} file at `{file_path_arg}`.{desc_line}\n\n\
+                                         Include: 1) appropriate file header/module declaration, \
+                                         2) imports/use statements, 3) a skeleton implementation with TODO markers, \
+                                         4) doc comments on public items, 5) a basic test module/file if applicable.\n\n\
+                                         Return the complete file content in a single fenced code block with a filename hint above it."
+                                    );
+                                    let ts2 = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User(prompt.clone(), ts2));
+                                    if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /project-health — comprehensive health check of the project
+                                "/project-health" => {
+                                    let mut health: Vec<String> = Vec::new();
+                                    // Git status
+                                    let git_status = std::process::Command::new("git")
+                                        .args(["status", "--short"])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                                        .unwrap_or_default();
+                                    let uncommitted = git_status.lines().count();
+                                    health.push(format!("Git: {} uncommitted file(s)", uncommitted));
+                                    // Branch info
+                                    let branch = std::process::Command::new("git")
+                                        .args(["branch", "--show-current"])
+                                        .output()
+                                        .ok()
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                                        .unwrap_or_else(|| "unknown".to_string());
+                                    health.push(format!("Branch: {branch}"));
+                                    // Cargo check
+                                    if std::path::Path::new("Cargo.toml").exists() {
+                                        let check = std::process::Command::new("cargo")
+                                            .args(["check", "--quiet"])
+                                            .output()
+                                            .ok();
+                                        match check {
+                                            Some(o) if o.status.success() => health.push("Rust build: ✓ cargo check passes".into()),
+                                            Some(_) => health.push("Rust build: ✗ cargo check FAILED".into()),
+                                            None => health.push("Rust build: ✗ cargo not found".into()),
+                                        }
+                                    }
+                                    // Test count
+                                    if std::path::Path::new("Cargo.toml").exists() {
+                                        let tests = std::process::Command::new("cargo")
+                                            .args(["test", "--", "--list"])
+                                            .output()
+                                            .ok()
+                                            .map(|o| String::from_utf8_lossy(&o.stdout).lines().filter(|l| l.ends_with(": test")).count())
+                                            .unwrap_or(0);
+                                        health.push(format!("Tests: {} test(s) registered", tests));
+                                    }
+                                    // TODO count
+                                    let todo_count = std::process::Command::new("grep")
+                                        .args(["-rn", "--include=*.rs", "--include=*.ts", "--include=*.py", "-c", "TODO", "."])
+                                        .output()
+                                        .ok()
+                                        .map(|o| {
+                                            String::from_utf8_lossy(&o.stdout).lines()
+                                                .filter_map(|l| l.split(':').nth(1))
+                                                .filter_map(|n| n.parse::<usize>().ok())
+                                                .sum::<usize>()
+                                        })
+                                        .unwrap_or(0);
+                                    health.push(format!("TODOs: {} TODO comment(s)", todo_count));
+                                    // Session cost
+                                    health.push(format!("Session cost: ${:.4}  ({} in / {} out tokens)", ui.cost_usd, ui.tokens_in, ui.tokens_out));
+                                    let report = format!("─── Project Health ───\n{}", health.join("\n"));
+                                    ui.chat_lines.push(ChatLine::SystemNote(report));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -21884,6 +22117,8 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/check-types", "/format-all", "/rewrite-prompt", "/coverage-ai",
                             "/ai-compose ", "/git-log-file ", "/ai-propose-test ",
                             "/open-issues", "/open-issues ", "/ai-debug",
+                            "/ai-commit-all", "/file-diff", "/file-diff ",
+                            "/ai-review-pr ", "/new-file ", "/project-health",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
