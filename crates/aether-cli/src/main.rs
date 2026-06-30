@@ -1290,6 +1290,7 @@ async fn run_print_agent(
         model: model.to_string(),
         permission_mode,
         max_tokens_per_turn: PRINT_MODE_MAX_TOKENS,
+        thinking_budget: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("self-check gate: {e}"))?;
@@ -1470,6 +1471,7 @@ async fn run_print(
         max_tokens,
         tools: vec![],
         stream: false,
+        thinking: None,
     };
     let resp = provider
         .complete(req)
@@ -1547,6 +1549,7 @@ async fn run_repl(
         model: model.to_string(),
         permission_mode,
         max_tokens_per_turn: REPL_MAX_TOKENS,
+        thinking_budget: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("self-check gate: {e}"))?;
@@ -2069,6 +2072,7 @@ fn handle_slash(
             eprintln!("  /diff [file]        show git diff HEAD in colored output");
             eprintln!("  /git <cmd>          run read-only git commands (status/log/…)");
             eprintln!("  /clear              wipe in-memory conversation");
+            eprintln!("  /think [N]          toggle extended thinking (N=budget tokens, default 8000)");
             eprintln!("  /compact            manually compact the context window now");
             eprintln!("  /model [NAME]       show or change the active model");
             eprintln!("  /tools              list registered tools");
@@ -2339,6 +2343,23 @@ fn handle_slash(
                     }
                     if !err.is_empty() { eprintln!("{err}"); }
                 }
+            }
+            SlashAction::Continue
+        }
+        // /think [N] — toggle extended thinking mode. N = budget tokens (default 8000).
+        "think" => {
+            if session.config.thinking_budget.is_some() {
+                session.config.thinking_budget = None;
+                eprintln!("[think] extended thinking disabled");
+            } else {
+                let budget: u32 = args.parse().unwrap_or(8_000);
+                session.config.thinking_budget = Some(budget);
+                let model = &session.config.model;
+                if !model.contains("opus") {
+                    eprintln!("[think] warning: extended thinking works best with Opus 4+ (current: {model})");
+                }
+                eprintln!("[think] extended thinking enabled — budget {budget} tokens per turn");
+                eprintln!("[think] note: tools are disabled while thinking is active");
             }
             SlashAction::Continue
         }
@@ -4168,6 +4189,7 @@ async fn complete_run_one_turn(
         model: model.to_string(),
         permission_mode,
         max_tokens_per_turn: PRINT_MODE_MAX_TOKENS,
+        thinking_budget: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -4663,6 +4685,7 @@ async fn ws_run_one_turn_streamed(
         model: model.to_string(),
         permission_mode,
         max_tokens_per_turn: PRINT_MODE_MAX_TOKENS,
+        thinking_budget: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -4797,6 +4820,7 @@ async fn serve_one_turn(
         model: model.to_string(),
         permission_mode,
         max_tokens_per_turn: PRINT_MODE_MAX_TOKENS,
+        thinking_budget: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -4864,6 +4888,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
         model: model.to_string(),
         permission_mode,
         max_tokens_per_turn: REPL_MAX_TOKENS,
+        thinking_budget: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("self-check gate: {e}"))?;
@@ -18158,6 +18183,7 @@ async fn review_security_file(
         model: model.to_string(),
         permission_mode,
         max_tokens_per_turn: 8192,
+        thinking_budget: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     // Review mode produces a STRUCTURED report (lots of short keyword
@@ -19577,6 +19603,7 @@ async fn run_threat_model(
         model: model.to_string(),
         permission_mode,
         max_tokens_per_turn: 8192,
+        thinking_budget: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     // Empty ruleset — same reasoning as run_review (structured analysis output).
@@ -19678,6 +19705,7 @@ async fn run_ctf(
         model: model.to_string(),
         permission_mode,
         max_tokens_per_turn: 8192,
+        thinking_budget: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(Vec::new()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -20220,6 +20248,7 @@ async fn run_eval_case(
         model: model.to_string(),
         permission_mode,
         max_tokens_per_turn: PRINT_MODE_MAX_TOKENS,
+        thinking_budget: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -20422,6 +20451,7 @@ async fn run_doctor(probe: bool, json_out: bool) -> Result<()> {
                     max_tokens: 4,
                     tools: vec![],
                     stream: false,
+                    thinking: None,
                 };
                 match p.complete(req).await {
                     Ok(resp) => {
@@ -27374,6 +27404,7 @@ impl Tool for AgentTool {
             model: self.model.clone(),
             permission_mode: self.permission_mode,
             max_tokens_per_turn: SUB_AGENT_MAX_TOKENS,
+            thinking_budget: None,
         };
         let overlay = Fable5Overlay::new(OverlayConfig::default());
         let gate = Gate::new(default_rules())

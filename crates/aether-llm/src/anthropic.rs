@@ -606,6 +606,11 @@ impl AnthropicProvider {
                                     .to_string(),
                                 input_json: String::new(),
                             },
+                            "thinking" => {
+                                // Show dim "thinking..." header when block opens.
+                                on_delta("\x1b[2m⟨thinking⟩\n");
+                                PendingBlock::Thinking { thinking: String::new() }
+                            }
                             _ => continue,
                         };
                         blocks.insert(idx, pending);
@@ -639,11 +644,27 @@ impl AnthropicProvider {
                                         input_json.push_str(s);
                                     }
                                 }
+                                // Extended thinking deltas — stream in dim gray.
+                                (PendingBlock::Thinking { thinking }, "thinking_delta") => {
+                                    if let Some(t) = delta
+                                        .and_then(|d| d.get("thinking"))
+                                        .and_then(|v| v.as_str())
+                                    {
+                                        on_delta(t); // dim is already on from block_start
+                                        thinking.push_str(t);
+                                    }
+                                }
                                 _ => {}
                             }
                         }
                     }
-                    "content_block_stop" => {}
+                    "content_block_stop" => {
+                        // If this index held a Thinking block, close the dim span.
+                        let idx = ev.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
+                        if matches!(blocks.get(&idx), Some(PendingBlock::Thinking { .. })) {
+                            on_delta("\n⟨/thinking⟩\x1b[0m\n");
+                        }
+                    }
                     "message_delta" => {
                         if let Some(stop_str) = ev
                             .get("delta")
@@ -701,6 +722,7 @@ impl AnthropicProvider {
                     };
                     ContentBlock::ToolUse { id, name, input }
                 }
+                PendingBlock::Thinking { thinking } => ContentBlock::Thinking { thinking },
             })
             .collect();
 
@@ -722,6 +744,9 @@ enum PendingBlock {
         id: String,
         name: String,
         input_json: String,
+    },
+    Thinking {
+        thinking: String,
     },
 }
 

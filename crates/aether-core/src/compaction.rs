@@ -170,6 +170,7 @@ pub async fn maybe_compact(session: &mut Session) -> Result<bool, AgentError> {
         max_tokens: SUMMARY_MAX_TOKENS,
         tools: vec![],
         stream: false,
+        thinking: None,
     };
     let resp = session.llm.complete(req).await?;
     let summary: String = resp

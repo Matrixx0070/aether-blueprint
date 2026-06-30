@@ -15,6 +15,22 @@ pub mod vertex;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+/// Extended-thinking configuration (Opus 4+ only).
+/// `budget_tokens` is how many thinking tokens the model may consume.
+/// Must be < `max_tokens`. When enabled, tool_use is disallowed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThinkingConfig {
+    #[serde(rename = "type")]
+    pub thinking_type: String, // always "enabled"
+    pub budget_tokens: u32,
+}
+
+impl ThinkingConfig {
+    pub fn enabled(budget_tokens: u32) -> Self {
+        Self { thinking_type: "enabled".into(), budget_tokens }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessagesRequest {
     pub model: String,
@@ -26,6 +42,9 @@ pub struct MessagesRequest {
     pub tools: Vec<ToolDef>,
     #[serde(default)]
     pub stream: bool,
+    /// Extended thinking (Opus 4+). When Some, tools must be empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +133,10 @@ pub enum ContentBlock {
         content: String,
         #[serde(default)]
         is_error: bool,
+    },
+    /// Extended-thinking content block (Opus 4+ with thinking enabled).
+    Thinking {
+        thinking: String,
     },
 }
 

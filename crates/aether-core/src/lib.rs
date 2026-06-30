@@ -40,6 +40,10 @@ pub struct SessionConfig {
     pub model: String,
     pub permission_mode: PermissionMode,
     pub max_tokens_per_turn: u32,
+    /// When Some, enables extended thinking with this token budget (Opus 4+ only).
+    /// Tools are auto-disabled when thinking is active.
+    #[serde(default)]
+    pub thinking_budget: Option<u32>,
 }
 
 impl Default for SessionConfig {
@@ -48,6 +52,7 @@ impl Default for SessionConfig {
             model: "claude-opus-4-7".into(),
             permission_mode: PermissionMode::Default,
             max_tokens_per_turn: 8_192,
+            thinking_budget: None,
         }
     }
 }
@@ -230,7 +235,7 @@ async fn agent_turn_inner(
     } else {
         None
     };
-    let (req, telemetry) = session.assembler.build(
+    let (mut req, telemetry) = session.assembler.build(
         &session.history,
         &session.config,
         &session.overlay,
@@ -240,6 +245,17 @@ async fn agent_turn_inner(
         plan_text.as_deref(),
     );
     session.last_assembly_telemetry = Some(telemetry);
+
+    // Inject extended thinking config when enabled. Tools must be empty while
+    // thinking is active — the model cannot mix thinking + tool_use.
+    if let Some(budget) = session.config.thinking_budget {
+        req.thinking = Some(aether_llm::ThinkingConfig::enabled(budget));
+        req.tools.clear(); // required by the API
+        // max_tokens must exceed budget_tokens.
+        if req.max_tokens <= budget {
+            req.max_tokens = budget + 16_384;
+        }
+    }
 
     // ── tool-sel (LLM call) ──────────────────────────────────────────
     let resp = match on_delta {
@@ -262,6 +278,9 @@ async fn agent_turn_inner(
             }),
             ContentBlock::ToolResult { .. } => {
                 // never emitted by a model in assistant role; drop silently
+            }
+            ContentBlock::Thinking { .. } => {
+                // Already streamed to the user via on_delta; skip from text_parts.
             }
         }
     }
