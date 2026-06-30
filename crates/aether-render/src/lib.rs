@@ -409,6 +409,12 @@ pub enum UiCommand {
     ReplayLast,
     /// List past user messages with their indices.
     QueryReplayList,
+    /// Show total word count in conversation history by role.
+    QueryWordCount,
+    /// Show total character count in conversation history by role.
+    QueryCharCount,
+    /// Show a comprehensive session volume report (words, chars, tokens, items).
+    QuerySessionVolume,
     /// Set a total tool-call budget for the session (0 = unlimited).
     SetToolBudget(usize),
     /// Show current tool-call budget and usage.

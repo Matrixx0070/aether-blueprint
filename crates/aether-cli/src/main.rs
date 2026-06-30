@@ -6564,6 +6564,84 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::QueryWordCount => {
+                    use aether_core::context::ConversationItem;
+                    let mut user_words = 0usize;
+                    let mut asst_words = 0usize;
+                    for item in &session.history {
+                        match item {
+                            ConversationItem::User(t) => user_words += t.split_whitespace().count(),
+                            ConversationItem::Assistant { text: Some(t), .. } => asst_words += t.split_whitespace().count(),
+                            _ => {}
+                        }
+                    }
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Word count: {} total  (User: {user_words}, Assistant: {asst_words})",
+                        user_words + asst_words
+                    )));
+                    continue;
+                }
+                UiCommand::QueryCharCount => {
+                    use aether_core::context::ConversationItem;
+                    let mut user_chars = 0usize;
+                    let mut asst_chars = 0usize;
+                    for item in &session.history {
+                        match item {
+                            ConversationItem::User(t) => user_chars += t.len(),
+                            ConversationItem::Assistant { text: Some(t), .. } => asst_chars += t.len(),
+                            _ => {}
+                        }
+                    }
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Char count: {} total  (User: {user_chars}, Assistant: {asst_chars})",
+                        user_chars + asst_chars
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySessionVolume => {
+                    use aether_core::context::ConversationItem;
+                    let mut user_words = 0usize;
+                    let mut asst_words = 0usize;
+                    let mut user_chars = 0usize;
+                    let mut asst_chars = 0usize;
+                    let mut user_items = 0usize;
+                    let mut asst_items = 0usize;
+                    let mut tool_items = 0usize;
+                    for item in &session.history {
+                        match item {
+                            ConversationItem::User(t) => {
+                                user_items += 1;
+                                user_words += t.split_whitespace().count();
+                                user_chars += t.len();
+                            }
+                            ConversationItem::Assistant { text: Some(t), .. } => {
+                                asst_items += 1;
+                                asst_words += t.split_whitespace().count();
+                                asst_chars += t.len();
+                            }
+                            ConversationItem::Assistant { text: None, .. } => { asst_items += 1; }
+                            ConversationItem::ToolResults(_) => { tool_items += 1; }
+                        }
+                    }
+                    let tokens = session.usage_total.input_tokens + session.usage_total.output_tokens;
+                    let cost = estimate_cost_usd(&session.config.model, &session.usage_total);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "=== Session volume ===\n\
+                         History items: {} total  (User: {user_items}, Assistant: {asst_items}, ToolResults: {tool_items})\n\
+                         Words:  {:>8} total  (User: {user_words:>7}, Assistant: {asst_words:>7})\n\
+                         Chars:  {:>8} total  (User: {user_chars:>7}, Assistant: {asst_chars:>7})\n\
+                         Tokens: {:>8} total  (in: {}, out: {})\n\
+                         Turns:  {:>8}  Cost: ${cost:.4}",
+                        session.history.len(),
+                        user_words + asst_words,
+                        user_chars + asst_chars,
+                        tokens,
+                        session.usage_total.input_tokens,
+                        session.usage_total.output_tokens,
+                        session.turn_index
+                    )));
+                    continue;
+                }
                 UiCommand::SetToolBudget(n) => {
                     session.tool_call_budget = n;
                     let note = if n == 0 {
@@ -26645,6 +26723,30 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /word-count — total words in conversation by role
+                                "/word-count" => {
+                                    if _ctx.send(UiCommand::QueryWordCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /char-count — total characters in conversation by role
+                                "/char-count" => {
+                                    if _ctx.send(UiCommand::QueryCharCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-volume — comprehensive session volume report
+                                "/session-volume" => {
+                                    if _ctx.send(UiCommand::QuerySessionVolume).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /tool-budget [n|off] — cap total tool calls per session
                                 cmd_str if cmd_str == "/tool-budget" || cmd_str.starts_with("/tool-budget ") => {
                                     let arg = cmd_str.trim_start_matches("/tool-budget").trim();
@@ -27601,6 +27703,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/hist-clear",
                             "/tool-budget", "/tool-budget ", "/tool-budget off",
                             "/tool-budget-show",
+                            "/word-count",
+                            "/char-count",
+                            "/session-volume",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
