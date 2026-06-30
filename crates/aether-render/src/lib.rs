@@ -146,6 +146,9 @@ pub enum UiCommand {
     SetTemperature(Option<f32>),
     /// Set per-turn max_tokens cap.
     SetMaxTokens(u32),
+    /// Set/clear the user-defined system prompt suffix (`/persona`).
+    /// None clears the suffix; Some(text) replaces it.
+    SetPersona(Option<String>),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

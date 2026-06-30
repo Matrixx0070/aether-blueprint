@@ -1294,6 +1294,7 @@ async fn run_print_agent(
         thinking_budget: None,
         temperature: None,
         tools_disabled_turns: 0,
+        system_suffix: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("self-check gate: {e}"))?;
@@ -1556,6 +1557,7 @@ async fn run_repl(
         thinking_budget: None,
         temperature: None,
         tools_disabled_turns: 0,
+        system_suffix: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("self-check gate: {e}"))?;
@@ -4636,6 +4638,7 @@ async fn complete_run_one_turn(
         thinking_budget: None,
         temperature: None,
         tools_disabled_turns: 0,
+        system_suffix: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -5134,6 +5137,7 @@ async fn ws_run_one_turn_streamed(
         thinking_budget: None,
         temperature: None,
         tools_disabled_turns: 0,
+        system_suffix: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -5271,6 +5275,7 @@ async fn serve_one_turn(
         thinking_budget: None,
         temperature: None,
         tools_disabled_turns: 0,
+        system_suffix: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -5341,6 +5346,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
         thinking_budget: None,
         temperature: None,
         tools_disabled_turns: 0,
+        system_suffix: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("self-check gate: {e}"))?;
@@ -5633,6 +5639,15 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(
                         format!("max_tokens_per_turn: {n}")
                     ));
+                    continue;
+                }
+                UiCommand::SetPersona(persona) => {
+                    let note = match &persona {
+                        None => "Persona cleared — using default AetherCode kernel.".to_string(),
+                        Some(p) => format!("Persona set ({} chars): {}", p.len(), p.chars().take(60).collect::<String>()),
+                    };
+                    session.config.system_suffix = persona;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
             };
@@ -18696,6 +18711,27 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /persona [text|off|show] — set/clear/show user system prompt suffix
+                                cmd_str if cmd_str == "/persona" || cmd_str.starts_with("/persona ") => {
+                                    let arg = cmd_str.trim_start_matches("/persona").trim();
+                                    match arg {
+                                        "" | "show" => {
+                                            // Show current persona — we don't track it on UiState yet;
+                                            // emit a QueryPersona or just note that driver holds it
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                "Use /persona <text> to set a persona suffix.\n  Use /persona off to clear.\n  The suffix is appended after the kernel system prompt and persists for the session.".into()
+                                            ));
+                                        }
+                                        "off" | "clear" | "none" | "reset" => {
+                                            if _ctx.send(UiCommand::SetPersona(None)).is_err() { break 'outer; }
+                                        }
+                                        text => {
+                                            if _ctx.send(UiCommand::SetPersona(Some(text.to_string()))).is_err() { break 'outer; }
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /write-last [file] — extract last AI code block and write to file
                                 cmd_str if cmd_str == "/write-last" || cmd_str.starts_with("/write-last ") => {
                                     let file_arg = cmd_str.trim_start_matches("/write-last").trim();
@@ -19348,6 +19384,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/set-cost-limit ", "/set-cost-limit off", "/model-context", "/ctx-bar",
                             "/retry-last", "/retry-last ", "/cost-history", "/cost-breakdown", "/auto-diff",
                             "/write-last", "/write-last ", "/debug-context", "/ctx-debug", "/env-list", "/env-vars-session",
+                            "/persona ", "/persona off", "/persona show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
@@ -20121,6 +20158,7 @@ async fn review_security_file(
         thinking_budget: None,
         temperature: None,
         tools_disabled_turns: 0,
+        system_suffix: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     // Review mode produces a STRUCTURED report (lots of short keyword
@@ -21543,6 +21581,7 @@ async fn run_threat_model(
         thinking_budget: None,
         temperature: None,
         tools_disabled_turns: 0,
+        system_suffix: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     // Empty ruleset — same reasoning as run_review (structured analysis output).
@@ -21647,6 +21686,7 @@ async fn run_ctf(
         thinking_budget: None,
         temperature: None,
         tools_disabled_turns: 0,
+        system_suffix: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(Vec::new()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -22192,6 +22232,7 @@ async fn run_eval_case(
         thinking_budget: None,
         temperature: None,
         tools_disabled_turns: 0,
+        system_suffix: None,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -29351,6 +29392,7 @@ impl Tool for AgentTool {
             thinking_budget: None,
             temperature: None,
             tools_disabled_turns: 0,
+            system_suffix: None,
         };
         let overlay = Fable5Overlay::new(OverlayConfig::default());
         let gate = Gate::new(default_rules())

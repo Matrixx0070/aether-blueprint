@@ -160,6 +160,14 @@ impl ContextAssembler {
             system.push_str(LONG_CONV_DIGEST);
             tele.long_conv_injected = true;
         }
+        // User-defined persona suffix — appended last so it overrides defaults
+        if let Some(ref suffix) = config.system_suffix {
+            if !suffix.trim().is_empty() {
+                system.push_str("\n\n<user-persona>\n");
+                system.push_str(suffix.trim());
+                system.push_str("\n</user-persona>");
+            }
+        }
 
         let messages = translate_history(history);
         let req = MessagesRequest {

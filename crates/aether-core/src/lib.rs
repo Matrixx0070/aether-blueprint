@@ -51,6 +51,11 @@ pub struct SessionConfig {
     /// then the counter resets to 0. Set by `/notool [N]`.
     #[serde(default)]
     pub tools_disabled_turns: usize,
+    /// Optional user-defined suffix appended to the kernel system prompt.
+    /// Injected after all kernel rules so it can specialize or constrain the AI persona.
+    /// Set via `/persona <text>`, cleared with `/persona off`.
+    #[serde(default)]
+    pub system_suffix: Option<String>,
 }
 
 impl Default for SessionConfig {
@@ -62,6 +67,7 @@ impl Default for SessionConfig {
             thinking_budget: None,
             temperature: None,
             tools_disabled_turns: 0,
+            system_suffix: None,
         }
     }
 }
