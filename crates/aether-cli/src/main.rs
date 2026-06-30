@@ -6876,6 +6876,55 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryHistoryFirstUser => {
+                    let first = session.history.iter().find_map(|item| {
+                        if let ConversationItem::User(text) = item { Some(text.as_str()) } else { None }
+                    });
+                    match first {
+                        Some(text) => {
+                            let preview = if text.len() > 500 { &text[..500] } else { text };
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "First user message:\n{preview}{}", if text.len() > 500 { "\n[truncated...]" } else { "" }
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote("No user messages in history yet.".to_string()));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnCostStats => {
+                    if session.turn_cost_log.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No turn cost data yet.".to_string()));
+                    } else {
+                        let costs: Vec<f64> = session.turn_cost_log.iter().map(|&(_, _, _, c)| c).collect();
+                        let total: f64 = costs.iter().sum();
+                        let min = costs.iter().cloned().fold(f64::INFINITY, f64::min);
+                        let max = costs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                        let avg = total / costs.len() as f64;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn cost stats ({} turns):\n  Total:   ${total:.6}\n  Average: ${avg:.6}\n  Min:     ${min:.6}\n  Max:     ${max:.6}",
+                            costs.len()
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryContextFillPct => {
+                    let history_bytes: usize = session.history.iter().map(|item| match item {
+                        ConversationItem::User(t) => t.len(),
+                        ConversationItem::Assistant { text, .. } => text.as_deref().map(|t| t.len()).unwrap_or(0),
+                        ConversationItem::ToolResults(r) => r.iter().map(|rr| rr.content.len()).sum::<usize>(),
+                    }).sum();
+                    let window_chars = aether_core::compaction::context_window_for_model(&session.config.model);
+                    let pct = if window_chars > 0 {
+                        (history_bytes as f64 / window_chars as f64 * 100.0).min(100.0)
+                    } else { 0.0 };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Context fill: ~{history_bytes}B used / ~{window_chars}B window = {pct:.1}%  (model: {})",
+                        session.config.model
+                    )));
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -31476,6 +31525,30 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /history-first-user — show the first user message in history
+                                "/history-first-user" => {
+                                    if _ctx.send(UiCommand::QueryHistoryFirstUser).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /turn-cost-stats — min/max/avg cost per turn
+                                "/turn-cost-stats" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostStats).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /context-fill-pct — estimated context fill percentage
+                                "/context-fill-pct" => {
+                                    if _ctx.send(UiCommand::QueryContextFillPct).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -32165,6 +32238,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-dedup",
                             "/session-health",
                             "/top-cost-turns", "/top-cost-turns ",
+                            "/history-first-user",
+                            "/turn-cost-stats",
+                            "/context-fill-pct",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

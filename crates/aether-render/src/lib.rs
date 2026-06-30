@@ -765,6 +765,12 @@ pub enum UiCommand {
     HistoryDedup,
     /// Show top N most expensive turns by token cost.
     QueryTopCostTurns(usize),
+    /// Show the first user message in conversation history.
+    QueryHistoryFirstUser,
+    /// Show min/max/avg turn cost from the turn cost log.
+    QueryTurnCostStats,
+    /// Show estimated context fill percentage vs model window.
+    QueryContextFillPct,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
