@@ -7198,6 +7198,44 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryMacroCount => {
+                    let count = session.prompt_macros.len();
+                    if count == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No macros defined. Use /macro-save <name> <text>.".to_string()));
+                    } else {
+                        let names: Vec<&str> = session.prompt_macros.keys().map(|s| s.as_str()).collect();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Macros ({count}): {}", names.join(", ")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryGrepCount(pattern) => {
+                    let pat_lower = pattern.to_lowercase();
+                    let count: usize = session.history.iter().filter(|item| {
+                        let text = match item {
+                            ConversationItem::User(t) => t.clone(),
+                            ConversationItem::Assistant { text, .. } => text.clone().unwrap_or_default(),
+                            ConversationItem::ToolResults(r) => r.iter().map(|rr| rr.content.as_str()).collect::<Vec<_>>().join(" "),
+                        };
+                        text.to_lowercase().contains(&pat_lower)
+                    }).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History items matching {:?}: {count} / {}", pattern, session.history.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QueryWarmupCount => {
+                    let count = session.warmup_files.len();
+                    if count == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No warmup files. Use /warmup-add <path>.".to_string()));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Warmup files ({count}): {}", session.warmup_files.join(", ")
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -31981,6 +32019,35 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /macro-count — count defined prompt macros
+                                "/macro-count" => {
+                                    if _ctx.send(UiCommand::QueryMacroCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-grep-count <pattern> — count history items matching pattern
+                                cmd_str if cmd_str.starts_with("/history-grep-count ") => {
+                                    let pattern = cmd_str.trim_start_matches("/history-grep-count ").trim().to_string();
+                                    if pattern.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /history-grep-count <pattern>".to_string()));
+                                    } else if _ctx.send(UiCommand::QueryHistoryGrepCount(pattern)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /warmup-count — count warmup files
+                                "/warmup-count" => {
+                                    if _ctx.send(UiCommand::QueryWarmupCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -32691,6 +32758,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-items-range ",
                             "/session-env-count",
                             "/label-count",
+                            "/macro-count",
+                            "/history-grep-count ",
+                            "/warmup-count",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

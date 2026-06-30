@@ -807,6 +807,12 @@ pub enum UiCommand {
     QuerySessionEnvCount,
     /// Count user-defined turn labels.
     QueryLabelCount,
+    /// Count defined prompt macros.
+    QueryMacroCount,
+    /// Count history items matching a grep pattern.
+    QueryHistoryGrepCount(String),
+    /// Count files in the warmup-files list.
+    QueryWarmupCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
