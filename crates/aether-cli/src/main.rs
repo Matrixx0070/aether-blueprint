@@ -6707,6 +6707,46 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::SetCooldown(ms) => {
+                    session.auto_continue_cooldown_ms = ms;
+                    if ms == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Auto-continue cooldown cleared.".to_string()));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Auto-continue cooldown set: {ms}ms between ticks. Affects ContinueImmediately loops only."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::ClearCooldown => {
+                    session.auto_continue_cooldown_ms = 0;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote("Auto-continue cooldown cleared (no delay).".to_string()));
+                    continue;
+                }
+                UiCommand::QueryCooldown => {
+                    let note = if session.auto_continue_cooldown_ms == 0 {
+                        "Auto-continue cooldown: off (no delay between ticks).".to_string()
+                    } else {
+                        format!("Auto-continue cooldown: {}ms between each ContinueImmediately tick.", session.auto_continue_cooldown_ms)
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::QueryTokenVelocity => {
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                    let elapsed_s = now.saturating_sub(session.started_at).max(1);
+                    let total_in: u64 = session.turn_cost_log.iter().map(|&(_, i, _, _)| i).sum();
+                    let total_out: u64 = session.turn_cost_log.iter().map(|&(_, _, o, _)| o).sum();
+                    let total_tokens = total_in + total_out;
+                    let tps = total_tokens as f64 / elapsed_s as f64;
+                    let tpm = tps * 60.0;
+                    let wall_total: u64 = session.turn_wall_ms.iter().sum::<u64>().max(1);
+                    let tps_llm = total_tokens as f64 / (wall_total as f64 / 1000.0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Token velocity\n  Session time:      {elapsed_s}s\n  Total tokens:      {total_tokens} (in {total_in} / out {total_out})\n  Wall-clock t/s:    {tps:.1}  ({tpm:.0} t/min)\n  LLM-time t/s:      {tps_llm:.1}  (excludes idle wait)"
+                    )));
+                    continue;
+                }
                 UiCommand::SetSmartPause(pattern) => {
                     let preview: String = pattern.chars().take(60).collect();
                     session.smart_pause_pattern = Some(pattern);
@@ -9588,6 +9628,10 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                  Send any message to resume, or /max-turns to adjust the limit."
                             )));
                             break;
+                        }
+                        // Cooldown: enforce a minimum delay between auto-continue ticks.
+                        if session.auto_continue_cooldown_ms > 0 {
+                            tokio::time::sleep(tokio::time::Duration::from_millis(session.auto_continue_cooldown_ms)).await;
                         }
                         continue;
                     }
@@ -28369,6 +28413,39 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /cooldown <ms> | off — set/clear auto-continue tick delay
+                                cmd_str if cmd_str == "/cooldown off" || cmd_str.starts_with("/cooldown ") => {
+                                    if cmd_str == "/cooldown off" {
+                                        if _ctx.send(UiCommand::ClearCooldown).is_err() { break 'outer; }
+                                    } else {
+                                        let arg = cmd_str.trim_start_matches("/cooldown ").trim();
+                                        if let Ok(ms) = arg.parse::<u64>() {
+                                            if _ctx.send(UiCommand::SetCooldown(ms)).is_err() { break 'outer; }
+                                        } else {
+                                            ui.chat_lines.push(ChatLine::SystemNote("Usage: /cooldown <ms>  or  /cooldown off".to_string()));
+                                        }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /cooldown-show — show current cooldown
+                                "/cooldown-show" => {
+                                    if _ctx.send(UiCommand::QueryCooldown).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /token-velocity — show tokens/sec and tokens/min
+                                "/token-velocity" => {
+                                    if _ctx.send(UiCommand::QueryTokenVelocity).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /smart-pause <pattern> | off — pause agent when pattern matches response
                                 cmd_str if cmd_str == "/smart-pause off" || cmd_str.starts_with("/smart-pause ") => {
                                     if cmd_str == "/smart-pause off" {
@@ -29344,6 +29421,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/smart-pause-show",
                             "/debug-tools",
                             "/session-report",
+                            "/cooldown ", "/cooldown off",
+                            "/cooldown-show",
+                            "/token-velocity",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

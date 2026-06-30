@@ -417,6 +417,14 @@ pub enum UiCommand {
     JumpBookmark(usize),
     /// Delete a bookmark by 0-based index.
     DeleteBookmark(usize),
+    /// Set minimum milliseconds between auto-continue ticks (0 = off).
+    SetCooldown(u64),
+    /// Clear the auto-continue cooldown.
+    ClearCooldown,
+    /// Show current cooldown setting.
+    QueryCooldown,
+    /// Show tokens-per-second and tokens-per-minute for the session.
+    QueryTokenVelocity,
     /// Set a pattern that pauses the agent when found in an assistant response.
     SetSmartPause(String),
     /// Clear the smart-pause pattern.

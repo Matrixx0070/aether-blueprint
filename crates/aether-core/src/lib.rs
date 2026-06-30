@@ -383,6 +383,10 @@ pub struct Session {
     /// When Some, pause the agent after any turn whose assistant response contains
     /// this substring (case-insensitive). Cleared with /smart-pause off.
     pub smart_pause_pattern: Option<String>,
+
+    /// Minimum milliseconds to enforce between auto-continue ticks.
+    /// Useful to avoid rate-limit hammering in long autonomous runs. 0 = off.
+    pub auto_continue_cooldown_ms: u64,
 }
 
 impl Session {
@@ -482,6 +486,7 @@ impl Session {
             session_tags: Vec::new(),
             turn_models: Vec::new(),
             smart_pause_pattern: None,
+            auto_continue_cooldown_ms: 0,
         }
     }
 
