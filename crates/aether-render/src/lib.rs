@@ -326,6 +326,9 @@ pub struct UiState {
     /// When set, a new AI call is blocked if `cost_usd >= cost_limit_usd`.
     /// Cleared with `/set-cost-limit off`.
     pub cost_limit_usd: Option<f64>,
+    /// When true, `git diff --stat HEAD` is injected as a SystemNote after
+    /// every AI turn that invoked at least one tool. Toggled by /auto-diff.
+    pub auto_diff_enabled: bool,
 }
 
 impl UiState {
@@ -468,6 +471,7 @@ impl UiState {
             context_files: Vec::new(),
             tool_stream_lines: Vec::new(),
             cost_limit_usd: None,
+            auto_diff_enabled: false,
         }
     }
 

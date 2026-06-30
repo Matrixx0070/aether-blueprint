@@ -5733,7 +5733,26 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
     'outer: loop {
         // Drain pending events
         while let Ok(ev) = erx.try_recv() {
+            let is_done = matches!(ev, UiEvent::AssistantDone(_));
             ui.apply(ev);
+            // Auto-diff: inject git diff --stat after AI turns that used tools
+            if is_done && ui.auto_diff_enabled {
+                let had_tools = ui.tool_log.iter().any(|t| {
+                    matches!(t.status, aether_render::ToolStatus::Ok(_) | aether_render::ToolStatus::Err(_))
+                });
+                if had_tools {
+                    let diff_out = std::process::Command::new("git")
+                        .args(["diff", "--stat", "HEAD"])
+                        .output()
+                        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                        .unwrap_or_default();
+                    if !diff_out.is_empty() {
+                        ui.chat_lines.push(ChatLine::SystemNote(
+                            format!("[auto-diff]\n{diff_out}")
+                        ));
+                    }
+                }
+            }
         }
         // Snapshot the fleet registry every frame. Cheap (Mutex lock + clone).
         ui.fleet = FLEET
@@ -18591,6 +18610,81 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /retry-last [hint] — re-submit last user message with optional extra hint
+                                cmd_str if cmd_str == "/retry-last" || cmd_str.starts_with("/retry-last ") => {
+                                    let hint = cmd_str.trim_start_matches("/retry-last").trim();
+                                    // Find last User message from input history
+                                    let last_user = ui.input_history.iter().rev()
+                                        .find(|s| !s.starts_with('/'))
+                                        .cloned();
+                                    match last_user {
+                                        None => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                "No previous message to retry.".into()
+                                            ));
+                                        }
+                                        Some(prev) => {
+                                            let retry_msg = if hint.is_empty() {
+                                                prev.clone()
+                                            } else {
+                                                format!("{prev}\n\n[Additional hint: {hint}]")
+                                            };
+                                            if !hint.is_empty() {
+                                                ui.chat_lines.push(ChatLine::SystemNote(
+                                                    format!("Retrying with hint: {hint}")
+                                                ));
+                                            }
+                                            if _ctx.send(UiCommand::UserMessage(retry_msg)).is_err() { break 'outer; }
+                                            ui.status_running = true;
+                                            ui.waiting_since = Some(std::time::Instant::now());
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /cost-history — per-exchange cost breakdown table
+                                "/cost-history" | "/cost-breakdown" => {
+                                    if ui.msg_cost_snapshots.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "No exchanges yet. Cost history will appear after the first AI response.".into()
+                                        ));
+                                    } else {
+                                        let mut table = format!(
+                                            "Cost history ({} exchanges):\n\n  #   Δ cost ($)   cumulative ($)   resp (s)\n  ─────────────────────────────────────────",
+                                            ui.msg_cost_snapshots.len()
+                                        );
+                                        let mut prev_cum = 0.0_f64;
+                                        for (i, &cum) in ui.msg_cost_snapshots.iter().enumerate() {
+                                            let delta = cum - prev_cum;
+                                            let dur = ui.response_durations.get(i).copied().unwrap_or(0.0);
+                                            table.push_str(&format!(
+                                                "\n  {i:>2}  {delta:>10.6}   {cum:>14.6}   {dur:>7.2}s"
+                                            ));
+                                            prev_cum = cum;
+                                        }
+                                        table.push_str(&format!(
+                                            "\n  ─────────────────────────────────────────\n  Total: ${:.6}",
+                                            ui.cost_usd
+                                        ));
+                                        ui.chat_lines.push(ChatLine::SystemNote(table));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /auto-diff — toggle automatic git diff --stat after AI tool turns
+                                "/auto-diff" => {
+                                    ui.auto_diff_enabled = !ui.auto_diff_enabled;
+                                    let state = if ui.auto_diff_enabled { "ON" } else { "OFF" };
+                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                        format!("Auto-diff {state}. {}", if ui.auto_diff_enabled {
+                                            "git diff --stat HEAD will appear after each AI tool turn."
+                                        } else {
+                                            "Auto-diff disabled."
+                                        })
+                                    ));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /snapshot [tag] — create a git stash restore-point
                                 // /snapshot-list   — list all stash entries
                                 // /snapshot-pop    — pop (restore) the latest stash
@@ -19111,6 +19205,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/export", "/export json", "/multi-add ",
                             "/snapshot", "/snapshot ", "/snapshot-list", "/snapshot-pop",
                             "/set-cost-limit ", "/set-cost-limit off", "/model-context", "/ctx-bar",
+                            "/retry-last", "/retry-last ", "/cost-history", "/cost-breakdown", "/auto-diff",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
