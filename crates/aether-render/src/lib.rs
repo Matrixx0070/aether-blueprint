@@ -709,6 +709,12 @@ pub enum UiCommand {
     StripToolResults,
     /// Show cost grouped by model when multiple models were used in a session.
     QueryCostBreakdownByModel,
+    /// Show the Nth User turn and its immediately following Assistant response.
+    QueryUserContext(usize),
+    /// Append a response-length hint to the system suffix (short/medium/long).
+    SetResponseLengthHint(String),
+    /// Show a delta summary of context stats vs what they were N turns ago.
+    QueryContextStatsDiff(usize),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

@@ -6778,6 +6778,69 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryUserContext(n) => {
+                    let user_turns: Vec<(usize, &str)> = session.history.iter().enumerate()
+                        .filter_map(|(i, item)| {
+                            if let ConversationItem::User(t) = item { Some((i, t.as_str())) } else { None }
+                        })
+                        .collect();
+                    if n >= user_turns.len() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "User turn #{n} not found. Total user turns: {}.", user_turns.len()
+                        )));
+                    } else {
+                        let (hist_idx, user_text) = user_turns[n];
+                        let asst_text = session.history.get(hist_idx + 1).and_then(|item| {
+                            if let ConversationItem::Assistant { text, .. } = item { text.as_deref() } else { None }
+                        }).unwrap_or("(no assistant response follows)");
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "User turn #{n} [hist:{hist_idx}]:\n  USER: {}\n  ASST: {}",
+                            user_text.chars().take(200).collect::<String>(),
+                            asst_text.chars().take(200).collect::<String>()
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::SetResponseLengthHint(hint) => {
+                    let directive = match hint.to_lowercase().as_str() {
+                        "short" => "Keep your response concise and under 150 words unless detail is essential.",
+                        "medium" => "Aim for a balanced response of 150–400 words.",
+                        "long" => "Provide a thorough, detailed response without artificial brevity.",
+                        _ => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Unknown hint '{}'. Use: short, medium, long.", hint
+                            )));
+                            continue;
+                        }
+                    };
+                    let existing = session.config.system_suffix.get_or_insert_with(String::new);
+                    if !existing.contains(directive) {
+                        if !existing.is_empty() { existing.push('\n'); }
+                        existing.push_str(directive);
+                    }
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Response length hint '{}' added to system suffix.", hint
+                    )));
+                    continue;
+                }
+                UiCommand::QueryContextStatsDiff(n) => {
+                    let total_in: u64 = session.turn_cost_log.iter().map(|&(_, tin, _, _)| tin as u64).sum();
+                    let total_out: u64 = session.turn_cost_log.iter().map(|&(_, _, tout, _)| tout as u64).sum();
+                    let total_cost: f64 = session.turn_cost_log.iter().map(|&(_, _, _, c)| c).sum();
+                    let current_turns = session.turn_cost_log.len();
+                    let snap_at = current_turns.saturating_sub(n);
+                    let snap_in: u64 = session.turn_cost_log.iter().take(snap_at).map(|&(_, tin, _, _)| tin as u64).sum();
+                    let snap_out: u64 = session.turn_cost_log.iter().take(snap_at).map(|&(_, _, tout, _)| tout as u64).sum();
+                    let snap_cost: f64 = session.turn_cost_log.iter().take(snap_at).map(|&(_, _, _, c)| c).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Context stats delta (last {} turns vs now):\n  Tokens in:  +{}  ({} → {})\n  Tokens out: +{}  ({} → {})\n  Cost:       +${:.6}  (${:.6} → ${:.6})",
+                        n,
+                        total_in - snap_in, snap_in, total_in,
+                        total_out - snap_out, snap_out, total_out,
+                        total_cost - snap_cost, snap_cost, total_cost
+                    )));
+                    continue;
+                }
                 UiCommand::RunMacroChain(names) => {
                     let mut parts: Vec<String> = Vec::new();
                     let mut missing: Vec<String> = Vec::new();
@@ -30257,6 +30320,39 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /history-user-context <n> — show nth user turn + response
+                                cmd_str if cmd_str.starts_with("/history-user-context ") => {
+                                    let arg = cmd_str.trim_start_matches("/history-user-context ").trim();
+                                    let n = arg.parse::<usize>().unwrap_or(0);
+                                    if _ctx.send(UiCommand::QueryUserContext(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /set-response-length-hint <short|medium|long> — add hint to system suffix
+                                cmd_str if cmd_str.starts_with("/set-response-length-hint ") => {
+                                    let hint = cmd_str.trim_start_matches("/set-response-length-hint ").trim().to_string();
+                                    if hint.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /set-response-length-hint short|medium|long".to_string()));
+                                    } else if _ctx.send(UiCommand::SetResponseLengthHint(hint)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /context-stats-diff <n> — delta in context stats vs n turns ago
+                                cmd_str if cmd_str.starts_with("/context-stats-diff ") => {
+                                    let arg = cmd_str.trim_start_matches("/context-stats-diff ").trim();
+                                    let n = arg.parse::<usize>().unwrap_or(5);
+                                    if _ctx.send(UiCommand::QueryContextStatsDiff(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /macro-chain <m1> <m2>... — run macros in sequence as one message
                                 cmd_str if cmd_str.starts_with("/macro-chain ") => {
                                     let rest = cmd_str.trim_start_matches("/macro-chain ").trim();
@@ -31323,6 +31419,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/macro-chain ",
                             "/history-strip-tool-results",
                             "/cost-breakdown-by-model",
+                            "/history-user-context ",
+                            "/set-response-length-hint ",
+                            "/context-stats-diff ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
