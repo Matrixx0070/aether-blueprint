@@ -1841,13 +1841,22 @@ async fn run_repl(
                 // The agent_turn_inner only appends to session.history AFTER the
                 // LLM call returns, so cancelling mid-stream leaves history clean
                 // except for the User message pushed at turn start (handled below).
+                // Print the "thinking" indicator immediately so the user
+                // sees visual feedback during LLM warmup before first token.
+                print!("\naether › \x1b[2m…\x1b[0m");
+                std::io::stdout().flush().ok();
+
                 let renderer = std::sync::Arc::new(std::sync::Mutex::new(LineRenderer::new()));
                 let renderer_for_sink = std::sync::Arc::clone(&renderer);
-                let mut started = false;
+                let thinking_active = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+                let thinking_for_sink = std::sync::Arc::clone(&thinking_active);
+                let mut first_token = true;
                 let sink: aether_llm::TextDeltaSink = Box::new(move |delta: &str| {
-                    if !started {
-                        print!("\naether › ");
-                        started = true;
+                    if first_token {
+                        // Erase the "…" thinking indicator and reprint the prefix.
+                        print!("\r\x1b[2K\raether › ");
+                        first_token = false;
+                        thinking_for_sink.store(false, std::sync::atomic::Ordering::Relaxed);
                     }
                     let mut r = renderer_for_sink.lock().unwrap();
                     let rendered = r.push_delta(delta);
@@ -1858,8 +1867,14 @@ async fn run_repl(
                 });
 
                 // Helper: flush partial renderer line and flush stdout.
+                // Also clears the thinking indicator if no tokens ever arrived.
                 macro_rules! flush_renderer {
                     () => {{
+                        if thinking_active.load(std::sync::atomic::Ordering::Relaxed) {
+                            // No tokens arrived — erase the "…" line.
+                            print!("\r\x1b[2K");
+                            std::io::stdout().flush().ok();
+                        }
                         let tail = renderer.lock().unwrap().flush();
                         if !tail.is_empty() {
                             print!("{tail}");
@@ -2216,9 +2231,24 @@ fn handle_slash(
         "model" => {
             match parts.next() {
                 None => eprintln!("[model: {}]", session.config.model),
-                Some(m) => {
+                Some(raw) => {
+                    // Expand shorthand aliases.
+                    let m = match raw {
+                        "opus"   => "claude-opus-4-7",
+                        "sonnet" => "claude-sonnet-4-6",
+                        "haiku"  => "claude-haiku-4-5-20251001",
+                        other    => other,
+                    };
+                    // Warn on names that don't look like Claude model IDs.
+                    let looks_valid = m.starts_with("claude-")
+                        || m.contains("opus") || m.contains("sonnet") || m.contains("haiku")
+                        || m.contains("fable");
+                    if !looks_valid {
+                        eprintln!("[model] warning: '{m}' doesn't look like a Claude model ID");
+                        eprintln!("[model] known aliases: opus → claude-opus-4-7 | sonnet → claude-sonnet-4-6 | haiku → claude-haiku-4-5-20251001");
+                    }
                     session.config.model = m.to_string();
-                    eprintln!("[model set to {m}]");
+                    eprintln!("[model → {m}]");
                 }
             }
             SlashAction::Continue
@@ -2339,19 +2369,33 @@ fn handle_slash(
             eprintln!("  est cost:   ${cost:.4}");
             SlashAction::Continue
         }
-        // /grep <pattern> [path] — quick project search from the REPL.
+        // /grep [-i] <pattern> [path] — quick project search from the REPL.
+        // -i enables case-insensitive matching.
         "grep" => {
             if args.is_empty() {
-                eprintln!("[usage] /grep <pattern> [path]");
+                eprintln!("[usage] /grep [-i] <pattern> [path]");
                 return SlashAction::Continue;
             }
-            let mut parts = args.splitn(2, char::is_whitespace);
+            // Parse optional -i flag.
+            let (case_flag, rest) = if args.starts_with("-i ") || args == "-i" {
+                (true, args.trim_start_matches("-i").trim())
+            } else {
+                (false, args)
+            };
+            let mut parts = rest.splitn(2, char::is_whitespace);
             let pattern = parts.next().unwrap_or("");
             let search_path = parts.next().unwrap_or(".").trim();
-            let out = std::process::Command::new("grep")
-                .args(["-r", "-n", "--include=*.rs", "--include=*.ts",
+            if pattern.is_empty() {
+                eprintln!("[usage] /grep [-i] <pattern> [path]");
+                return SlashAction::Continue;
+            }
+            let mut grep_args = vec!["-r", "-n", "--include=*.rs", "--include=*.ts",
                        "--include=*.py", "--include=*.js", "--include=*.go",
-                       "-m", "40", pattern, search_path])
+                       "-m", "40"];
+            if case_flag { grep_args.push("-i"); }
+            grep_args.extend_from_slice(&[pattern, search_path]);
+            let out = std::process::Command::new("grep")
+                .args(&grep_args)
                 .output();
             match out {
                 Err(e) => eprintln!("[grep] error: {e}"),
