@@ -1948,7 +1948,7 @@ async fn run_repl(
                         }
                         for tu in tool_uses {
                             let pretty = format_tool_use(tu);
-                            eprintln!("  [tool] {pretty}");
+                            eprintln!("  \x1b[35m[tool]\x1b[0m {pretty}");
                             append_session_line(&session_path, &SessionLine::tool_use(tu)).ok();
                         }
                     }
@@ -2186,6 +2186,9 @@ fn handle_slash(
             eprintln!("  /echo               reprint the last assistant response");
             eprintln!("  /history [N]        show last N user/assistant exchanges (default 5)");
             eprintln!("  /snippet-load <n>   inject a saved snippet as user input");
+            eprintln!("  /short <q>          ask a question with a brevity instruction");
+            eprintln!("  /verbose <q>        ask a question requesting a comprehensive answer");
+            eprintln!("  /inject <text>      queue a kernel reminder for the next turn");
             eprintln!("  /compact            manually compact the context window now");
             eprintln!("  /model [NAME]       show or change the active model");
             eprintln!("  /tools              list registered tools");
@@ -2673,6 +2676,45 @@ fn handle_slash(
                 )
             }
         }
+        // /short <q> | /concise <q> — ask the question with a brevity instruction.
+        "short" | "brief" | "concise" => {
+            if args.is_empty() {
+                eprintln!("[short] usage: /short <question> — append a brevity instruction");
+                SlashAction::Continue
+            } else {
+                SlashAction::SendAsUser(format!(
+                    "{args}\n\n(Keep your response brief and focused — 3–5 sentences max.)"
+                ))
+            }
+        }
+        // /verbose <q> | /long <q> | /detailed <q> — ask with a detail instruction.
+        "verbose" | "long" | "detailed" => {
+            if args.is_empty() {
+                eprintln!("[verbose] usage: /verbose <question> — append a detail instruction");
+                SlashAction::Continue
+            } else {
+                SlashAction::SendAsUser(format!(
+                    "{args}\n\n(Provide a comprehensive, detailed response with examples and \
+                     reasoning. Do not truncate.)"
+                ))
+            }
+        }
+        // /inject <text> — queue arbitrary text as a kernel-source reminder for the next turn.
+        // Useful for injecting ad-hoc instructions without editing the system prompt.
+        "inject" => {
+            if args.is_empty() {
+                eprintln!("[inject] usage: /inject <reminder text>");
+                eprintln!("  Queues a kernel reminder that fires on the next model call.");
+            } else {
+                session.push_reminder(Reminder::new(
+                    ReminderKind::SystemWarning,
+                    Source::Kernel,
+                    args.to_string(),
+                ));
+                eprintln!("[inject] reminder queued: {}", if args.len() > 60 { &args[..60] } else { args });
+            }
+            SlashAction::Continue
+        }
         // /echo | /repeat — print the last assistant response again.
         // Useful after the terminal has scrolled past it.
         "echo" | "repeat" | "last" => {
@@ -2915,15 +2957,15 @@ impl LineRenderer {
         if self.in_code_block {
             return format!("\x1b[38;5;117m{line}\x1b[0m");
         }
-        // Headers.
+        // Headers — strip the `#` markers and style the text only.
         if let Some(r) = line.strip_prefix("### ") {
-            return format!("\x1b[1;35m### {r}\x1b[0m");
+            return format!("\x1b[1;35m{r}\x1b[0m"); // bold magenta
         }
         if let Some(r) = line.strip_prefix("## ") {
-            return format!("\x1b[1;34m## {r}\x1b[0m");
+            return format!("\x1b[1;4;34m{r}\x1b[0m"); // bold + underline blue
         }
         if let Some(r) = line.strip_prefix("# ") {
-            return format!("\x1b[1;36m# {r}\x1b[0m");
+            return format!("\x1b[1;4;36m{r}\x1b[0m"); // bold + underline cyan
         }
         // Horizontal rules.
         if trimmed == "---" || trimmed == "***" || trimmed == "___" {
