@@ -6778,6 +6778,87 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryResponseLengthTrend => {
+                    let lengths: Vec<(usize, usize)> = session.history.iter().enumerate()
+                        .filter_map(|(i, item)| {
+                            if let ConversationItem::Assistant { text: Some(t), .. } = item {
+                                Some((i, t.len()))
+                            } else { None }
+                        })
+                        .collect();
+                    if lengths.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No assistant responses yet.".to_string()));
+                    } else {
+                        let max_len = lengths.iter().map(|&(_, l)| l).max().unwrap_or(1).max(1);
+                        let bar_w = 24usize;
+                        let mut msg = format!("Response length trend ({} responses):\n", lengths.len());
+                        let n = lengths.len();
+                        for (pos, (idx, len)) in lengths.iter().enumerate() {
+                            let bar_len = len * bar_w / max_len;
+                            let bar: String = "=".repeat(bar_len);
+                            let trend = if pos == 0 { " " } else if *len > lengths[pos-1].1 { "↑" } else if *len < lengths[pos-1].1 { "↓" } else { "→" };
+                            msg.push_str(&format!("  [hist:{idx:>3}] {len:>6}B {trend} {bar}\n"));
+                        }
+                        let first = lengths.first().map(|&(_, l)| l).unwrap_or(0);
+                        let last = lengths.last().map(|&(_, l)| l).unwrap_or(0);
+                        let overall = if n > 1 { if last > first { "growing" } else if last < first { "shrinking" } else { "stable" } } else { "n/a" };
+                        msg.push_str(&format!("  Overall trend: {overall} ({first}B → {last}B)"));
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryTypeFilter(filter) => {
+                    let items: Vec<(usize, String)> = session.history.iter().enumerate()
+                        .filter_map(|(i, item)| {
+                            let (kind, preview) = match item {
+                                ConversationItem::User(t) if filter == "user" => {
+                                    let p: String = t.chars().take(60).collect::<String>().replace('\n', " ");
+                                    ("User", p)
+                                }
+                                ConversationItem::Assistant { text, .. } if filter == "asst" => {
+                                    let p: String = text.as_deref().unwrap_or("").chars().take(60).collect::<String>().replace('\n', " ");
+                                    ("Asst", p)
+                                }
+                                ConversationItem::ToolResults(r) if filter == "tool" => {
+                                    ("ToolRes", format!("{} result(s)", r.len()))
+                                }
+                                _ => return None,
+                            };
+                            Some((i, format!("[{i:>3}] {kind}: {preview}")))
+                        })
+                        .collect();
+                    if items.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!("No '{}' items in history.", filter)));
+                    } else {
+                        let msg = format!("History filter '{}' ({} items):\n{}", filter, items.len(), items.iter().map(|(_, s)| s.as_str()).collect::<Vec<_>>().join("\n"));
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
+                UiCommand::SetCostCeiling(usd) => {
+                    session.cost_ceiling_usd = usd;
+                    if usd <= 0.0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Cost ceiling cleared.".to_string()));
+                    } else {
+                        let current: f64 = session.turn_cost_log.iter().map(|&(_, _, _, c)| c).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Cost ceiling set to ${usd:.4}. Current cost: ${current:.6}."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryCostCeiling => {
+                    let current: f64 = session.turn_cost_log.iter().map(|&(_, _, _, c)| c).sum();
+                    if session.cost_ceiling_usd <= 0.0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Cost ceiling: OFF. Current cost: ${current:.6}.")));
+                    } else {
+                        let pct = (current / session.cost_ceiling_usd * 100.0).min(100.0);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Cost ceiling: ${:.4}. Current: ${current:.6} ({pct:.1}%).", session.cost_ceiling_usd
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryExtractJson => {
                     let mut found: Vec<(usize, String)> = Vec::new();
                     for (idx, item) in session.history.iter().enumerate() {
@@ -10549,6 +10630,17 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         "Cost alert: ${current_cost:.4} has reached threshold ${:.4}. Agent continues — use /cost-cap to stop on limit.",
                         session.cost_alert_usd
                     )));
+                }
+            }
+            // Cost ceiling enforcement — hard stop if cumulative cost exceeds ceiling.
+            if session.cost_ceiling_usd > 0.0 {
+                let current_cost: f64 = session.turn_cost_log.iter().map(|&(_, _, _, c)| c).sum();
+                if current_cost >= session.cost_ceiling_usd {
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "COST CEILING HIT: ${current_cost:.4} >= ${:.4}. Agent stopped. Use /cost-ceiling off to disable.",
+                        session.cost_ceiling_usd
+                    )));
+                    session.max_turns = session.turn_index; // halt autonomous loop
                 }
             }
             // Dequeue next task before awaiting user — auto-inject if queued.
@@ -29759,6 +29851,52 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /response-length-trend — show response lengths per turn
+                                "/response-length-trend" => {
+                                    if _ctx.send(UiCommand::QueryResponseLengthTrend).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-type-filter <type> — show only user|asst|tool items
+                                cmd_str if cmd_str.starts_with("/history-type-filter ") => {
+                                    let t = cmd_str.trim_start_matches("/history-type-filter ").trim().to_lowercase();
+                                    if t.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /history-type-filter user|asst|tool".to_string()));
+                                    } else if _ctx.send(UiCommand::QueryHistoryTypeFilter(t)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /cost-ceiling <usd> | off — hard cost stop
+                                cmd_str if cmd_str == "/cost-ceiling off" || cmd_str.starts_with("/cost-ceiling ") => {
+                                    if cmd_str == "/cost-ceiling off" {
+                                        if _ctx.send(UiCommand::SetCostCeiling(0.0)).is_err() { break 'outer; }
+                                    } else {
+                                        let arg = cmd_str.trim_start_matches("/cost-ceiling ").trim();
+                                        if let Ok(v) = arg.parse::<f64>() {
+                                            if _ctx.send(UiCommand::SetCostCeiling(v)).is_err() { break 'outer; }
+                                        } else {
+                                            ui.chat_lines.push(ChatLine::SystemNote("Usage: /cost-ceiling <usd>  or  /cost-ceiling off".to_string()));
+                                        }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /cost-ceiling-show — show current cost ceiling
+                                "/cost-ceiling-show" => {
+                                    if _ctx.send(UiCommand::QueryCostCeiling).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /history-extract-json — pull JSON code blocks from responses
                                 "/history-extract-json" => {
                                     if _ctx.send(UiCommand::QueryExtractJson).is_err() { break 'outer; }
@@ -30545,6 +30683,10 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-extract-json",
                             "/session-efficiency-report",
                             "/tool-call-density",
+                            "/response-length-trend",
+                            "/history-type-filter ",
+                            "/cost-ceiling ", "/cost-ceiling off",
+                            "/cost-ceiling-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

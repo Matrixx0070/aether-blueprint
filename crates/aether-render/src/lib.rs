@@ -665,6 +665,14 @@ pub enum UiCommand {
     QueryEfficiencyReport,
     /// Show tool-calls-per-turn as a mini histogram.
     QueryToolCallDensity,
+    /// Show assistant response lengths turn-by-turn with a trend indicator.
+    QueryResponseLengthTrend,
+    /// Show only history items matching a given type (user/asst/tool).
+    QueryHistoryTypeFilter(String),
+    /// Set a hard cost ceiling in USD; agent stops when exceeded (0.0 = off).
+    SetCostCeiling(f64),
+    /// Show current cost ceiling and cumulative cost.
+    QueryCostCeiling,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

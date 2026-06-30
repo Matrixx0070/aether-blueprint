@@ -390,6 +390,10 @@ pub struct Session {
 
     /// When > 0, automatically add a bookmark every N turns.
     pub auto_bookmark_every: usize,
+
+    /// Hard cost ceiling in USD (0.0 = off). When cumulative cost exceeds this,
+    /// the agent stops with a note rather than continuing.
+    pub cost_ceiling_usd: f64,
 }
 
 impl Session {
@@ -491,6 +495,7 @@ impl Session {
             smart_pause_pattern: None,
             auto_continue_cooldown_ms: 0,
             auto_bookmark_every: 0,
+            cost_ceiling_usd: 0.0,
         }
     }
 
