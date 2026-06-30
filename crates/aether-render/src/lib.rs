@@ -703,6 +703,12 @@ pub enum UiCommand {
     QuerySessionTimeline,
     /// Save the active plan text to a file at the given path.
     ExportPlan(String),
+    /// Run multiple named macros in sequence, joined by newline, as one agent message.
+    RunMacroChain(Vec<String>),
+    /// Remove all ToolResults items from history (alias for SmartTrimHistory).
+    StripToolResults,
+    /// Show cost grouped by model when multiple models were used in a session.
+    QueryCostBreakdownByModel,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

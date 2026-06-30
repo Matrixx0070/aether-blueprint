@@ -6778,6 +6778,60 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::RunMacroChain(names) => {
+                    let mut parts: Vec<String> = Vec::new();
+                    let mut missing: Vec<String> = Vec::new();
+                    for name in &names {
+                        match session.prompt_macros.get(name) {
+                            Some(text) => { parts.push(text.clone()); }
+                            None => { missing.push(name.clone()); }
+                        }
+                    }
+                    if !missing.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Macro chain: unknown macro(s): {}. Chain aborted.", missing.join(", ")
+                        )));
+                        continue;
+                    }
+                    let combined = parts.join("\n\n");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "[Macro chain: {}] Running {} macro(s).", names.join(" → "), names.len()
+                    )));
+                    combined
+                }
+                UiCommand::StripToolResults => {
+                    let before = session.history.len();
+                    session.history.retain(|item| !matches!(item, ConversationItem::ToolResults(_)));
+                    let after = session.history.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Stripped {} ToolResults item(s) from history ({before} → {after} items).", before - after
+                    )));
+                    continue;
+                }
+                UiCommand::QueryCostBreakdownByModel => {
+                    if session.turn_models.is_empty() || session.turn_cost_log.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("No turn data yet.".to_string()));
+                    } else {
+                        let mut by_model: std::collections::HashMap<String, (usize, f64)> = std::collections::HashMap::new();
+                        for (i, &(turn_idx, _, _, cost)) in session.turn_cost_log.iter().enumerate() {
+                            let model = session.turn_models.get(turn_idx).or_else(|| session.turn_models.get(i))
+                                .map(|s| s.clone()).unwrap_or_else(|| session.config.model.clone());
+                            let entry = by_model.entry(model).or_insert((0, 0.0));
+                            entry.0 += 1;
+                            entry.1 += cost;
+                        }
+                        let total: f64 = by_model.values().map(|&(_, c)| c).sum();
+                        let mut rows: Vec<(String, usize, f64)> = by_model.into_iter().map(|(m, (n, c))| (m, n, c)).collect();
+                        rows.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+                        let mut msg = format!("Cost by model  (total ${total:.6}):\n");
+                        for (model, turns, cost) in &rows {
+                            let pct = if total > 0.0 { cost / total * 100.0 } else { 0.0 };
+                            msg.push_str(&format!("  {:<40}  {:>4} turns  ${:.6}  ({:.1}%)\n", model, turns, cost, pct));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(msg));
+                    }
+                    continue;
+                }
                 UiCommand::QueryResponseSearchContext(pat, ctx_n) => {
                     let lower = pat.to_lowercase();
                     let mut results: Vec<String> = Vec::new();
@@ -30203,6 +30257,36 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /macro-chain <m1> <m2>... — run macros in sequence as one message
+                                cmd_str if cmd_str.starts_with("/macro-chain ") => {
+                                    let rest = cmd_str.trim_start_matches("/macro-chain ").trim();
+                                    let names: Vec<String> = rest.split_whitespace().map(|s| s.to_string()).collect();
+                                    if names.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /macro-chain <name1> <name2> ...".to_string()));
+                                    } else if _ctx.send(UiCommand::RunMacroChain(names)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-strip-tool-results — remove ToolResults from history
+                                "/history-strip-tool-results" => {
+                                    if _ctx.send(UiCommand::StripToolResults).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /cost-breakdown-by-model — cost per model when mixed models used
+                                "/cost-breakdown-by-model" => {
+                                    if _ctx.send(UiCommand::QueryCostBreakdownByModel).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /response-search-context <pat> [n] — search with surrounding context
                                 cmd_str if cmd_str.starts_with("/response-search-context ") => {
                                     let rest = cmd_str.trim_start_matches("/response-search-context ").trim();
@@ -31236,6 +31320,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/response-search-context ",
                             "/session-timeline",
                             "/plan-export ",
+                            "/macro-chain ",
+                            "/history-strip-tool-results",
+                            "/cost-breakdown-by-model",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
