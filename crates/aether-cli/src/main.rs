@@ -9322,6 +9322,245 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // ── BATCH 89: CONTEXT + SESSION INTELLIGENCE ─────────────────────
+                                cmd if cmd.starts_with("/context-inject ") || cmd == "/context-inject" => {
+                                    // Inject one or more files into the next AI request as reference context
+                                    let files_arg = cmd.trim_start_matches("/context-inject").trim();
+                                    if files_arg.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /context-inject <file1> [file2 ...]\n  Injects files as background context before next message\n  (Similar to @file, but separates injection from your question)\n  e.g. /context-inject src/main.rs Cargo.toml".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let cwd = std::env::current_dir().unwrap_or_default();
+                                    let mut injected = String::from("Background context files:\n\n");
+                                    let mut count = 0usize;
+                                    let mut total_chars = 0usize;
+                                    for file in files_arg.split_whitespace() {
+                                        let fpath = if file.starts_with('/') { std::path::PathBuf::from(file) } else { cwd.join(file) };
+                                        match std::fs::read_to_string(&fpath) {
+                                            Ok(content) => {
+                                                let lines = content.lines().count();
+                                                let ext = fpath.extension().and_then(|e| e.to_str()).unwrap_or("");
+                                                let lang = match ext { "rs" => "rust", "py" => "python", "js" => "javascript", "ts" => "typescript", "go" => "go", other => other };
+                                                injected.push_str(&format!("### {file}  ({lines} lines)\n```{lang}\n{}\n```\n\n",
+                                                    if lines <= 200 { content.clone() } else { content.lines().take(200).collect::<Vec<_>>().join("\n") + &format!("\n… ({} more lines)", lines - 200) }
+                                                ));
+                                                total_chars += content.len();
+                                                count += 1;
+                                            }
+                                            Err(e) => { injected.push_str(&format!("### {file}\n(error: {e})\n\n")); }
+                                        }
+                                    }
+                                    if count == 0 {
+                                        ui.chat_lines.push(ChatLine::SystemNote("No files could be read.".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    injected.push_str("---\nReply 'ready' to confirm you've received this context, then I'll ask my question.");
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    let est_tokens = total_chars / 4;
+                                    ui.chat_lines.push(ChatLine::User(format!("/context-inject  {count} file{}  (~{est_tokens} tokens)", if count == 1 { "" } else { "s" }), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(injected)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/multi-file ") || cmd == "/multi-file" => {
+                                    // Read multiple files and send them with a question to AI
+                                    let rest = cmd.trim_start_matches("/multi-file").trim();
+                                    if rest.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            "Usage: /multi-file <pattern> [question]\n  Injects all matching files + asks question\n  e.g. /multi-file src/*.rs identify shared patterns\n       /multi-file *.toml check for version mismatches".to_string()
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    // Split: try to find where files end and question begins
+                                    // Strategy: first word(s) before a space that aren't file refs are the question
+                                    let parts: Vec<&str> = rest.splitn(2, "  ").collect(); // double-space separator
+                                    let (pattern_part, question_part) = if parts.len() >= 2 {
+                                        (parts[0].trim(), parts[1].trim())
+                                    } else {
+                                        // Single word = just the pattern, no question
+                                        (rest, "")
+                                    };
+                                    let cwd = std::env::current_dir().unwrap_or_default();
+                                    // Expand pattern using walkdir+regex or glob
+                                    let skip = ["target", "node_modules", ".git", "dist", "__pycache__"];
+                                    use walkdir::WalkDir;
+                                    let pattern_lower = pattern_part.to_lowercase();
+                                    // Extract extension hint from pattern (e.g. "*.rs" → "rs")
+                                    let ext_filter: Option<String> = if pattern_lower.contains("*.") {
+                                        pattern_lower.split("*.").last().map(|s| s.split_whitespace().next().unwrap_or("").to_string())
+                                    } else { None };
+                                    let prefix_filter = pattern_part.trim_start_matches("*.").trim_start_matches('*');
+                                    let mut files: Vec<std::path::PathBuf> = WalkDir::new(&cwd).into_iter()
+                                        .filter_entry(|e| { let n = e.file_name().to_string_lossy(); !n.starts_with('.') && !skip.contains(&n.as_ref()) })
+                                        .filter_map(|e| e.ok())
+                                        .filter(|e| e.file_type().is_file())
+                                        .filter(|e| {
+                                            let name = e.file_name().to_string_lossy().to_lowercase();
+                                            let ext = e.path().extension().and_then(|x| x.to_str()).unwrap_or("").to_string();
+                                            if let Some(ref ef) = ext_filter { ext == *ef }
+                                            else if !prefix_filter.is_empty() { name.contains(&prefix_filter.to_lowercase()) }
+                                            else { true }
+                                        })
+                                        .map(|e| e.path().to_path_buf())
+                                        .take(10)
+                                        .collect();
+                                    files.sort();
+                                    if files.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("No files matched pattern: {pattern_part}")));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let mut context = format!("{} files matched '{}'\n\n", files.len(), pattern_part);
+                                    let mut total_lines = 0usize;
+                                    for fpath in &files {
+                                        let rel = fpath.strip_prefix(&cwd).unwrap_or(fpath);
+                                        let Ok(content) = std::fs::read_to_string(fpath) else { continue };
+                                        let lines = content.lines().count();
+                                        total_lines += lines;
+                                        let ext = fpath.extension().and_then(|e| e.to_str()).unwrap_or("");
+                                        let lang = match ext { "rs" => "rust", "py" => "python", "js" => "javascript", "ts" => "typescript", other => other };
+                                        context.push_str(&format!("### {}\n```{lang}\n{}\n```\n\n",
+                                            rel.display(),
+                                            if lines <= 100 { content } else { content.lines().take(100).collect::<Vec<_>>().join("\n") + &format!("\n… ({} more lines)", lines - 100) }
+                                        ));
+                                    }
+                                    let q = if question_part.is_empty() {
+                                        "Analyse these files and identify: 1) Common patterns, 2) Inconsistencies, 3) Improvement opportunities"
+                                    } else { question_part };
+                                    context.push_str(&format!("---\n{q}"));
+                                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    ui.chat_lines.push(ChatLine::User(format!("/multi-file '{pattern_part}'  {} file{}, {total_lines} lines", files.len(), if files.len() == 1 { "" } else { "s" }), ts));
+                                    ui.msg_times_secs.push(ts);
+                                    ui.status_running = true;
+                                    ui.waiting_since = Some(std::time::Instant::now());
+                                    ui.follow_tail = true;
+                                    if _ctx.send(UiCommand::UserMessage(context)).is_err() { break 'outer; }
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/session-tag ") || cmd == "/session-tag" => {
+                                    // Tag the current session with a label for easier recall
+                                    let tag = cmd.trim_start_matches("/session-tag").trim();
+                                    if tag.is_empty() {
+                                        let current = ui.session_title.as_deref().unwrap_or("(none)");
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("Current session tag: {current}\n  Usage: /session-tag <label>  — set a label for this session\n  e.g. /session-tag auth-refactor")
+                                        ));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    // Save tag to session file as first line
+                                    let tag_str = tag.to_string();
+                                    ui.session_title = Some(tag_str.clone());
+                                    // Also persist to session file header if possible
+                                    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+                                    let tag_file = std::path::Path::new(&home).join(".aether").join("sessions").join(format!("{}.tag", ui.session_id));
+                                    let _ = std::fs::create_dir_all(tag_file.parent().unwrap());
+                                    let _ = std::fs::write(&tag_file, &tag_str);
+                                    ui.chat_lines.push(ChatLine::SystemNote(
+                                        format!("Session tagged: {tag_str}\n  Shown in header bar  ·  Tag file: {}", tag_file.display())
+                                    ));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/undo-last" || cmd == "/undo-exchange" => {
+                                    // Remove the last complete exchange (user + assistant) from display
+                                    // More aggressive than /undo which only removes last edit
+                                    let mut removed = 0usize;
+                                    // Remove trailing assistant messages
+                                    while matches!(ui.chat_lines.last(), Some(ChatLine::Assistant(_, _, _)) | Some(ChatLine::AssistantPartial(_))) {
+                                        ui.chat_lines.pop();
+                                        removed += 1;
+                                    }
+                                    // Remove trailing system notes (tool output etc)
+                                    while matches!(ui.chat_lines.last(), Some(ChatLine::SystemNote(_))) {
+                                        ui.chat_lines.pop();
+                                    }
+                                    // Remove the user message
+                                    if matches!(ui.chat_lines.last(), Some(ChatLine::User(_, _))) {
+                                        ui.chat_lines.pop();
+                                        removed += 1;
+                                    }
+                                    if removed > 0 {
+                                        ui.chat_lines.push(ChatLine::SystemNote(
+                                            format!("Last exchange removed from display. ({removed} messages hidden)\n  AI context still includes it — /compact to prune context too.")
+                                        ));
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("No exchange to remove.".to_string()));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/snippet ") || cmd == "/snippet" => {
+                                    // Extract, label, and save a snippet from conversation or clipboard
+                                    let rest = cmd.trim_start_matches("/snippet").trim();
+                                    let (label, content_src) = if rest.is_empty() {
+                                        // Save last code block from AI
+                                        let last_code = ui.chat_lines.iter().rev().find_map(|cl| {
+                                            if let ChatLine::Assistant(body, _, _) = cl {
+                                                let mut in_fence = false;
+                                                let mut block = String::new();
+                                                let mut lang = "";
+                                                for line in body.lines() {
+                                                    if !in_fence && line.trim_start().starts_with("```") {
+                                                        in_fence = true;
+                                                        lang = line.trim().trim_start_matches('`').trim();
+                                                    } else if in_fence && line.trim() == "```" {
+                                                        in_fence = false;
+                                                        if !block.trim().is_empty() { return Some((lang.to_string(), block)); }
+                                                        block = String::new();
+                                                    } else if in_fence {
+                                                        block.push_str(line);
+                                                        block.push('\n');
+                                                    }
+                                                }
+                                                None
+                                            } else { None }
+                                        });
+                                        if let Some((lang, code)) = last_code {
+                                            ("snippet".to_string(), format!("```{lang}\n{code}```"))
+                                        } else {
+                                            ui.chat_lines.push(ChatLine::SystemNote("No code block found in last AI response. Use: /snippet <name> <content>".to_string()));
+                                            ui.follow_tail = true;
+                                            continue;
+                                        }
+                                    } else {
+                                        let mut sp = rest.splitn(2, char::is_whitespace);
+                                        let name = sp.next().unwrap_or("snippet");
+                                        let body = sp.next().unwrap_or("").trim();
+                                        (name.to_string(), body.to_string())
+                                    };
+                                    // Save to ~/.aether/snippets/<label>.md
+                                    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+                                    let snip_dir = std::path::Path::new(&home).join(".aether").join("snippets");
+                                    let _ = std::fs::create_dir_all(&snip_dir);
+                                    let filename = format!("{}.md", label.replace(char::is_whitespace, "-").replace('/', "-"));
+                                    let snip_path = snip_dir.join(&filename);
+                                    let ts_str = {
+                                        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                        format!("{}", ts)
+                                    };
+                                    let file_content = format!("# {label}\n\n{content_src}\n\n<!-- saved {ts_str} -->\n");
+                                    match std::fs::write(&snip_path, &file_content) {
+                                        Ok(_) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(
+                                                format!("Snippet saved: {}\n  {}", filename, snip_path.display())
+                                            ));
+                                        }
+                                        Err(e) => {
+                                            ui.chat_lines.push(ChatLine::SystemNote(format!("Save failed: {e}")));
+                                        }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -9960,7 +10199,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/bench", "/bench ", "/blame ", "/changelog", "/changelog ", "/code-review ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/debug-ai ", "/deps-graph", "/deps-graph ", "/doc-gen ", "/explain-error", "/explain-error ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/grep-code ", "/heatmap", "/heatmap ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/metrics", "/metrics ", "/mock ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/pr-review", "/pr-review ", "/profile ", "/recent", "/recent ", "/refactor ", "/rename ", "/setup-env", "/status", "/test", "/test ", "/todo-ai ", "/translate-code ", "/vulnscan", "/vulnscan ", "/watch ",
+                            "/api-test ", "/arch-review", "/arch-review ", "/ask-code ", "/bench", "/bench ", "/blame ", "/changelog", "/changelog ", "/code-review ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/ctf", "/ctf-tools", "/debug-ai ", "/deps-graph", "/deps-graph ", "/doc-gen ", "/explain-error", "/explain-error ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/grep-code ", "/heatmap", "/heatmap ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/pr-review", "/pr-review ", "/profile ", "/recent", "/recent ", "/refactor ", "/rename ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/status", "/test", "/test ", "/todo-ai ", "/translate-code ", "/undo-last", "/undo-exchange", "/vulnscan", "/vulnscan ", "/watch ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
