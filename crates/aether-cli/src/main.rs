@@ -6231,6 +6231,30 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         format!("System suffix appended ({total_len} chars total).")));
                     continue;
                 }
+                UiCommand::ClearAll => {
+                    session.history.clear();
+                    session.plan = aether_core::planner::Plan::default();
+                    session.usage_total = aether_llm::Usage::default();
+                    session.llm_ms_total = 0;
+                    session.llm_ms_last = 0;
+                    session.persistent_reminders.clear();
+                    session.pending_reminders.clear();
+                    session.turn_index = 0;
+                    session.started_at = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(
+                        "Full reset: history, plan, stats, persistent reminders, pending reminders cleared.".to_string()));
+                    continue;
+                }
+                UiCommand::PauseAtNext => {
+                    // Set max_turns to current turn_index so the next AwaitUser is immediate.
+                    session.max_turns = session.turn_index;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(
+                        format!("Pause scheduled: agent will stop after turn {}.", session.turn_index)));
+                    continue;
+                }
                 UiCommand::QuerySessionStats => {
                     use aether_core::compaction::context_window_for_model;
                     let now = std::time::SystemTime::now()
@@ -19006,6 +19030,35 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /clear-all — comprehensive reset of history, plan, stats, reminders
+                                "/clear-all" => {
+                                    if _ctx.send(UiCommand::ClearAll).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /pause — schedule a pause at the next AwaitUser
+                                "/pause" => {
+                                    if _ctx.send(UiCommand::PauseAtNext).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /next — send "Continue." to the agent (shortcut)
+                                "/next" => {
+                                    let ts = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    ui.chat_lines.push(ChatLine::User("Continue.".to_string(), ts));
+                                    if _ctx.send(UiCommand::UserMessage("Continue.".to_string())).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /verify [on|off] — toggle D7 self-check verifier
                                 cmd_str if cmd_str == "/verify" || cmd_str.starts_with("/verify ") => {
                                     let arg = cmd_str.trim_start_matches("/verify").trim();
@@ -23966,6 +24019,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/wipe-tool-stats",
                             "/verify", "/verify ",
                             "/system-append ",
+                            "/clear-all",
+                            "/pause",
+                            "/next",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

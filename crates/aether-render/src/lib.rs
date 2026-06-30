@@ -224,6 +224,10 @@ pub enum UiCommand {
     SetVerifyEnabled(bool),
     /// Append text to the system prompt suffix (does not replace existing suffix).
     AppendSystemSuffix(String),
+    /// Reset everything: history, plan, errors, stats, persistent reminders.
+    ClearAll,
+    /// Pause autonomous agent at next AwaitUser by setting max_turns to turn_index.
+    PauseAtNext,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
