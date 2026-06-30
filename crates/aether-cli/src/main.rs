@@ -1760,6 +1760,7 @@ async fn run_repl(
         let mut next_input: Option<String> = Some(user_msg);
         let stream_disabled = std::env::var("AETHER_NO_STREAM").ok().as_deref() == Some("1");
         let pre_usage = session.usage_total.clone();
+        let turn_start = std::time::Instant::now();
         loop {
             // Stream text deltas to stdout as they arrive. The leading
             // "aether › " is printed up-front so the cursor is in the
@@ -1929,7 +1930,13 @@ async fn run_repl(
                 } else {
                     String::new()
                 };
-                eprintln!("  [tokens in={di} out={do_}{cache_part} cost~${cost:.4}]");
+                let elapsed_secs = turn_start.elapsed().as_secs_f64();
+                let tps_part = if do_ > 0 && elapsed_secs > 0.1 {
+                    format!(" {:.1} t/s", do_ as f64 / elapsed_secs)
+                } else {
+                    String::new()
+                };
+                eprintln!("  [tokens in={di} out={do_}{cache_part}{tps_part} cost~${cost:.4}]");
             }
         }
         record_turn_delta(&session, &session_id, &pre_usage);
@@ -2031,6 +2038,7 @@ fn handle_slash(
             eprintln!("  /tools              list registered tools");
             eprintln!("  /memory             list ~/.aether/memory/ entries");
             eprintln!("  /usage              show token totals for this session");
+            eprintln!("  /stats              session statistics (turns, cost, cache rate)");
             eprintln!("  /uptime             system uptime, load, and memory");
             eprintln!("  /sessions [N]       list N most-recent sessions (default 20)");
             eprintln!("  /fleet [cancel ID]  list sub-agents (or signal cancel)");
@@ -2173,6 +2181,25 @@ fn handle_slash(
                     SlashAction::SendAsUser(msg)
                 }
             }
+        }
+        "stats" => {
+            // Session statistics: turn count, model, total tokens, cost.
+            let u = &session.usage_total;
+            let total = u.input_tokens + u.output_tokens;
+            let cost = estimate_cost_usd(&session.config.model, u);
+            let turns = session.turn_index;
+            eprintln!("session stats:");
+            eprintln!("  turns:      {turns}");
+            eprintln!("  model:      {}", session.config.model);
+            eprintln!("  tokens in:  {}", u.input_tokens);
+            eprintln!("  tokens out: {}", u.output_tokens);
+            if u.cache_read_input_tokens > 0 {
+                let pct = u.cache_read_input_tokens as f64 / u.input_tokens.max(1) as f64 * 100.0;
+                eprintln!("  cache read: {} ({pct:.0}% of input)", u.cache_read_input_tokens);
+            }
+            eprintln!("  total:      {total}");
+            eprintln!("  est cost:   ${cost:.4}");
+            SlashAction::Continue
         }
         "compact" => SlashAction::Compact,
         "sessions" => {
