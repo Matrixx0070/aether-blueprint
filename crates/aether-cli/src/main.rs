@@ -5361,6 +5361,7 @@ Input shortcuts\n\
     ◈ /flashcard /quiz /teach /man-ai /compare                  learning + productivity\n\
     ◈ /scaffold /impl /gen-readme /gen-api-docs /pseudocode     code generation\n\
     ◈ /session-summary /ai-plan /workflow /prompt-engineer /ai-debug  AI session tools\n\
+    ◈ /env-vars /dotenv /config-lint /path /which-all             env + config mgmt\n\
 \n\
   /help power  ·  /help for key bindings  ·  /model to switch AI  ·  /cost",
                                         version = version,
@@ -12553,6 +12554,202 @@ CTF Toolkit — Aether AI-assisted\n\
                                     if _ctx.send(UiCommand::UserMessage(prompt)).is_err() { break 'outer; }
                                     continue;
                                 }
+                                // ── Batch 105: Environment + config management ────────────────────
+                                cmd if cmd == "/env-vars" || cmd.starts_with("/env-vars ") => {
+                                    // /env-vars [filter]  — show env vars (masks secret values)
+                                    let filter = cmd.trim_start_matches("/env-vars").trim().to_lowercase();
+                                    let secret_patterns = ["KEY", "SECRET", "TOKEN", "PASSWORD", "PASS", "PWD",
+                                                           "CREDENTIAL", "CRED", "AUTH", "PRIVATE", "API_",
+                                                           "ANTHROPIC", "OPENAI", "AWS_SECRET", "DB_PASS"];
+                                    let mut vars: Vec<(String, String)> = std::env::vars()
+                                        .filter(|(k, _)| filter.is_empty() || k.to_lowercase().contains(&filter))
+                                        .collect();
+                                    vars.sort_by(|a, b| a.0.cmp(&b.0));
+                                    let mut body = format!("Environment variables{}  ({} total)\n",
+                                        if filter.is_empty() { String::new() } else { format!("  filter={filter}") },
+                                        vars.len());
+                                    body.push_str("─────────────────────────────────────────────────────\n");
+                                    for (key, val) in vars.iter().take(100) {
+                                        let is_secret = secret_patterns.iter().any(|p| key.to_uppercase().contains(p));
+                                        let display_val = if is_secret && !val.is_empty() {
+                                            format!("****** ({} chars)", val.len())
+                                        } else {
+                                            val.chars().take(80).collect::<String>() +
+                                            if val.len() > 80 { "…" } else { "" }
+                                        };
+                                        body.push_str(&format!("  {:<30}  {display_val}\n", key));
+                                    }
+                                    if vars.len() > 100 { body.push_str(&format!("  … {} more\n", vars.len() - 100)); }
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/dotenv" || cmd.starts_with("/dotenv ") => {
+                                    // /dotenv [file]  — validate .env file syntax + show keys
+                                    let file_arg = cmd.trim_start_matches("/dotenv").trim();
+                                    let path = if file_arg.is_empty() { ".env" } else { file_arg };
+                                    match std::fs::read_to_string(path) {
+                                        Ok(content) => {
+                                            let mut valid = 0usize;
+                                            let mut errors: Vec<String> = Vec::new();
+                                            let mut keys: Vec<String> = Vec::new();
+                                            for (ln, line) in content.lines().enumerate() {
+                                                let t = line.trim();
+                                                if t.is_empty() || t.starts_with('#') { continue; }
+                                                if let Some(eq_pos) = t.find('=') {
+                                                    let key = t[..eq_pos].trim();
+                                                    if key.chars().all(|c| c.is_alphanumeric() || c == '_') && !key.is_empty() {
+                                                        valid += 1;
+                                                        keys.push(key.to_string());
+                                                    } else {
+                                                        errors.push(format!("Line {}: invalid key name: {key}", ln + 1));
+                                                    }
+                                                } else {
+                                                    errors.push(format!("Line {}: no '=' found: {t}", ln + 1));
+                                                }
+                                            }
+                                            let mut body = format!(".env — {path}\n─────────────────────────────────────────────────────\n");
+                                            body.push_str(&format!("  ✓ Valid entries: {valid}\n"));
+                                            if !errors.is_empty() {
+                                                body.push_str(&format!("  ✗ Errors: {}\n", errors.len()));
+                                                for e in &errors { body.push_str(&format!("    {e}\n")); }
+                                            }
+                                            body.push_str("\n  Keys defined:\n");
+                                            for k in &keys {
+                                                let masked = if std::env::var(k).is_ok() { "  (set in env)" } else { "  (not in env)" };
+                                                body.push_str(&format!("    {k}{masked}\n"));
+                                            }
+                                            ui.chat_lines.push(ChatLine::SystemNote(body));
+                                        }
+                                        Err(e) => { ui.chat_lines.push(ChatLine::SystemNote(format!("Cannot read {path}: {e}"))); }
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/config-lint" || cmd.starts_with("/config-lint ") => {
+                                    // /config-lint [dir]  — validate all config files in directory
+                                    let dir_arg = cmd.trim_start_matches("/config-lint").trim();
+                                    let scan_dir = if dir_arg.is_empty() { "." } else { dir_arg };
+                                    use walkdir::WalkDir;
+                                    let mut results: Vec<(String, bool, String)> = Vec::new(); // (file, ok, msg)
+                                    for entry in WalkDir::new(scan_dir).max_depth(4).into_iter()
+                                        .filter_map(|e| e.ok())
+                                        .filter(|e| e.file_type().is_file())
+                                    {
+                                        let path = entry.path();
+                                        let skip = path.components().any(|c| {
+                                            let s = c.as_os_str().to_string_lossy();
+                                            s == "target" || s == ".git" || s == "node_modules"
+                                        });
+                                        if skip { continue; }
+                                        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                                        let path_str = path.to_string_lossy().to_string();
+                                        match ext {
+                                            "json" => {
+                                                if let Ok(raw) = std::fs::read_to_string(path) {
+                                                    match serde_json::from_str::<serde_json::Value>(&raw) {
+                                                        Ok(_) => results.push((path_str, true, "valid JSON".to_string())),
+                                                        Err(e) => results.push((path_str, false, format!("JSON error: {e}"))),
+                                                    }
+                                                }
+                                            }
+                                            "yaml" | "yml" => {
+                                                if let Ok(raw) = std::fs::read_to_string(path) {
+                                                    match serde_yaml::from_str::<serde_yaml::Value>(&raw) {
+                                                        Ok(_) => results.push((path_str, true, "valid YAML".to_string())),
+                                                        Err(e) => results.push((path_str, false, format!("YAML error: {e}"))),
+                                                    }
+                                                }
+                                            }
+                                            "env" | _ if path.file_name().map(|n| n == ".env").unwrap_or(false) => {
+                                                if let Ok(raw) = std::fs::read_to_string(path) {
+                                                    let bad = raw.lines().enumerate()
+                                                        .filter(|(_, l)| {
+                                                            let t = l.trim();
+                                                            !t.is_empty() && !t.starts_with('#') && !t.contains('=')
+                                                        })
+                                                        .count();
+                                                    if bad == 0 {
+                                                        results.push((path_str, true, "valid .env".to_string()));
+                                                    } else {
+                                                        results.push((path_str, false, format!("{bad} lines missing '='")));
+                                                    }
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    let ok_count = results.iter().filter(|(_, ok, _)| *ok).count();
+                                    let err_count = results.len() - ok_count;
+                                    let mut body = format!("Config lint — {scan_dir}  ({} files: {} ok / {} errors)\n",
+                                        results.len(), ok_count, err_count);
+                                    body.push_str("─────────────────────────────────────────────────────\n");
+                                    for (f, ok, msg) in &results {
+                                        let icon = if *ok { "✓" } else { "✗" };
+                                        body.push_str(&format!("  {icon} {f}  — {msg}\n"));
+                                    }
+                                    if results.is_empty() { body.push_str("  (no JSON/YAML/.env files found)\n"); }
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd == "/path" => {
+                                    // /path  — show PATH entries one per line, mark missing/duplicates
+                                    let path_val = std::env::var("PATH").unwrap_or_default();
+                                    let entries: Vec<&str> = path_val.split(':').collect();
+                                    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+                                    let mut body = format!("PATH  ({} entries)\n──────────────────────────────────────────────────────\n", entries.len());
+                                    for entry in &entries {
+                                        let exists = std::path::Path::new(entry).is_dir();
+                                        let dup = !seen.insert(entry);
+                                        let status = match (exists, dup) {
+                                            (_, true) => "DUPLICATE",
+                                            (false, _) => "MISSING",
+                                            _ => "ok",
+                                        };
+                                        body.push_str(&format!("  {:<8}  {entry}\n", status));
+                                    }
+                                    ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd if cmd.starts_with("/which-all ") || cmd == "/which-all" => {
+                                    // /which-all <cmd>  — find all versions of a command in PATH
+                                    let target = cmd.trim_start_matches("/which-all").trim();
+                                    if target.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /which-all <command>".to_string()));
+                                        ui.follow_tail = true;
+                                        continue;
+                                    }
+                                    let path_val = std::env::var("PATH").unwrap_or_default();
+                                    let mut found: Vec<(String, String)> = Vec::new();
+                                    for dir in path_val.split(':') {
+                                        let candidate = std::path::Path::new(dir).join(target);
+                                        if candidate.is_file() {
+                                            // try to get version
+                                            let ver = std::process::Command::new(&candidate)
+                                                .arg("--version").output()
+                                                .map(|o| {
+                                                    let v = String::from_utf8_lossy(&o.stdout).to_string()
+                                                        + &String::from_utf8_lossy(&o.stderr);
+                                                    v.lines().next().unwrap_or("").trim().chars().take(60).collect::<String>()
+                                                })
+                                                .unwrap_or_else(|_| "(version unavailable)".to_string());
+                                            found.push((candidate.to_string_lossy().to_string(), ver));
+                                        }
+                                    }
+                                    if found.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("  {target}: not found in PATH")));
+                                    } else {
+                                        let mut body = format!("which-all {target}  ({} found)\n────────────────────────────────────\n", found.len());
+                                        for (path, ver) in &found {
+                                            body.push_str(&format!("  {path}\n    {ver}\n"));
+                                        }
+                                        ui.chat_lines.push(ChatLine::SystemNote(body));
+                                    }
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // ─────────────────────────────────────────────────────────────────
                                 cmd if cmd == "/retry" || cmd == "/r" || cmd.starts_with("/retry ") => {
                                     // /retry [new text] — resend last message, or replace with new text
@@ -13191,7 +13388,7 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias ", "/bm ", "/bookmark ", "/bookmarks",
                             "/clear", "/clear-history", "/clear-tools", "/clh", "/cltools", "/compact", "/context", "/copy", "/copy all", "/copy code ", "/cost", "/count", "/ctx", "/deps", "/diff", "/doctor", "/drop ", "/export", "/extract", "/focus", "/format",
                             "/find ", "/git ", "/go ", "/goto ", "/grep ", "/help", "/help ", "/hist", "/history", "/init", "/last", "/linenums", "/load ", "/ls", "/model ", "/note ", "/num", "/numbers", "/pin ", "/pin-cmd ", "/quit",
-                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/flashcard ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/impl ", "/man-ai ", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/session-summary", "/teach ", "/workflow", "/workflow ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
+                            "/ai-commit", "/ai-commit ", "/ai-debug ", "/ai-fix", "/ai-fix ", "/ai-improve", "/ai-improve ", "/ai-perf ", "/ai-plan ", "/ai-review-diff", "/ai-secure ", "/ai-simplify ", "/api-test ", "/compare ", "/config-lint", "/config-lint ", "/dotenv", "/dotenv ", "/env-vars", "/env-vars ", "/flashcard ", "/gen-api-docs ", "/gen-readme", "/gen-readme ", "/impl ", "/man-ai ", "/path", "/prompt-engineer ", "/pseudocode ", "/quiz ", "/scaffold ", "/session-summary", "/teach ", "/which-all ", "/workflow", "/workflow ", "/arch-review", "/arch-review ", "/ask-code ", "/base64 ", "/bench", "/bench ", "/blame ", "/brainstorm ", "/cert ", "/changelog", "/changelog ", "/code-review ", "/code-smell", "/code-smell ", "/code-tour", "/code-tour ", "/complexity ", "/context-inject ", "/count-tokens", "/count-tokens ", "/coverage", "/coverage ", "/cron-explain ", "/csv ", "/ctf", "/ctf-tools", "/curl ", "/dashboard", "/debug-ai ", "/deps-graph", "/deps-graph ", "/diff", "/diff ", "/disk", "/disk ", "/dns ", "/docker", "/docker ", "/doc-gen ", "/env-check", "/explain-commit", "/explain-commit ", "/explain-error", "/explain-error ", "/explain-regex ", "/find-large", "/find-large ", "/find-old", "/find-old ", "/flow ", "/format-code", "/format-code ", "/gen-tests ", "/git-branches", "/git-branches ", "/git-log", "/git-log ", "/git-stash", "/git-stash ", "/git-tags", "/git-tags ", "/grep-code ", "/hash ", "/heatmap", "/heatmap ", "/ip", "/jq ", "/json", "/json ", "/jwt-decode ", "/k8s", "/k8s ", "/lines", "/lines ", "/lint", "/lint ", "/log-parse", "/log-parse ", "/mem", "/metrics", "/metrics ", "/mock ", "/multi-file ", "/naming ", "/optimize ", "/patch", "/patch ", "/perf-hint", "/perf-hint ", "/ping ", "/port", "/port ", "/pr-review", "/pr-review ", "/proc", "/proc ", "/profile ", "/pros-cons ", "/recent", "/recent ", "/refactor ", "/release-notes", "/release-notes ", "/rename ", "/review-diff", "/secret-gen", "/secret-gen ", "/session-tag", "/session-tag ", "/setup-env", "/snippet", "/snippet ", "/snippet-list", "/snippets", "/standup", "/standup ", "/status", "/sys", "/test", "/test ", "/todo-ai ", "/todo-scan", "/todo-scan ", "/translate-code ", "/undo-last", "/undo-exchange", "/url ", "/uuid", "/uuid ", "/vulnscan", "/vulnscan ", "/watch ", "/xml", "/xml ", "/yaml", "/yaml ",
                             "/outline", "/owasp", "/owasp ", "/raw", "/read ", "/replay ", "/reset-cost", "/retry ", "/run ", "/sbom", "/scan", "/secrets", "/search ", "/sessions", "/share", "/shell ", "/speed", "/stats", "/summary", "/template ", "/theme", "/tmpl ", "/timestamps", "/todo ", "/tree", "/undo", "/unpin", "/version", "/wc", "/wrap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
