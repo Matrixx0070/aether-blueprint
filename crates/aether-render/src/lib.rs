@@ -927,6 +927,12 @@ pub enum UiCommand {
     QueryTokenBudgetRaw,
     /// List distinct tool names used in history.
     QueryHistoryToolNames,
+    /// Show total token usage for this session.
+    QueryUsageTotal,
+    /// Show total and last-turn LLM latency.
+    QueryLlmMsTotal,
+    /// Show max-tool-calls-per-turn config.
+    QueryMaxToolCallsShow,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

@@ -7700,6 +7700,38 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryUsageTotal => {
+                    let inp = session.usage_total.input_tokens;
+                    let out = session.usage_total.output_tokens;
+                    let total = inp + out;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session token usage: {total} total ({inp} in / {out} out)."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryLlmMsTotal => {
+                    let avg = if session.turn_index > 0 {
+                        session.llm_ms_total / session.turn_index as u64
+                    } else { 0 };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "LLM latency: {}ms total, {}ms last turn, ~{}ms avg over {} turns.",
+                        session.llm_ms_total, session.llm_ms_last, avg, session.turn_index
+                    )));
+                    continue;
+                }
+                UiCommand::QueryMaxToolCallsShow => {
+                    let n = session.config.max_tool_calls_per_turn;
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Max tool calls per turn: unlimited.".to_string()
+                        ));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Max tool calls per turn: {n}. Use /max-tool-calls <n> to change."
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionNotesCount => {
                     let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
                         "Session notes: {} note(s) stored. Use /session-notes-export to view all.",
@@ -33246,6 +33278,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /usage-total — show total token usage for this session
+                                "/usage-total" => {
+                                    if _ctx.send(UiCommand::QueryUsageTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /llm-ms-total — show total and last-turn LLM latency
+                                "/llm-ms-total" => {
+                                    if _ctx.send(UiCommand::QueryLlmMsTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /max-tool-calls-show — show max-tool-calls-per-turn config
+                                "/max-tool-calls-show" => {
+                                    if _ctx.send(UiCommand::QueryMaxToolCallsShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -34016,6 +34066,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-notes-count",
                             "/token-budget-raw",
                             "/history-tool-names",
+                            "/usage-total",
+                            "/llm-ms-total",
+                            "/max-tool-calls-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
