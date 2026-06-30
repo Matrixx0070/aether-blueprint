@@ -1784,9 +1784,12 @@ async fn run_repl(
                 }
                 r
             } else {
-                // Streaming mode: render markdown line-by-line as each newline
-                // arrives. Partial lines (no trailing newline yet) are buffered
-                // inside LineRenderer and flushed after the stream ends.
+                // Streaming mode with Ctrl-C interrupt support.
+                // Race the agent turn against SIGINT; on interrupt, cancel
+                // the request, flush the partial line, and break back to prompt.
+                // The agent_turn_inner only appends to session.history AFTER the
+                // LLM call returns, so cancelling mid-stream leaves history clean
+                // except for the User message pushed at turn start (handled below).
                 let renderer = std::sync::Arc::new(std::sync::Mutex::new(LineRenderer::new()));
                 let renderer_for_sink = std::sync::Arc::clone(&renderer);
                 let mut started = false;
@@ -1802,17 +1805,47 @@ async fn run_repl(
                         let _ = std::io::stdout().flush();
                     }
                 });
-                let res = agent_turn_streamed(&mut session, next_input.take(), sink).await;
-                // Flush any partial line still buffered.
-                {
-                    let mut r = renderer.lock().unwrap();
-                    let tail = r.flush();
-                    if !tail.is_empty() {
-                        print!("{tail}");
-                        std::io::stdout().flush().ok();
+
+                // Helper: flush partial renderer line and flush stdout.
+                macro_rules! flush_renderer {
+                    () => {{
+                        let tail = renderer.lock().unwrap().flush();
+                        if !tail.is_empty() {
+                            print!("{tail}");
+                            std::io::stdout().flush().ok();
+                        }
+                    }};
+                }
+
+                enum SelectResult {
+                    Done(Result<TurnOutcome, aether_core::AgentError>),
+                    Interrupted,
+                }
+
+                let sel = tokio::select! {
+                    res = agent_turn_streamed(&mut session, next_input.take(), sink) => {
+                        flush_renderer!();
+                        SelectResult::Done(res)
+                    }
+                    _ = tokio::signal::ctrl_c() => {
+                        flush_renderer!();
+                        SelectResult::Interrupted
+                    }
+                };
+
+                match sel {
+                    SelectResult::Done(res) => res,
+                    SelectResult::Interrupted => {
+                        eprintln!("\n[interrupted — Ctrl-C]");
+                        // agent_turn_inner may have pushed a User message at start
+                        // of the turn (before the LLM call). Pop it to keep history
+                        // in a valid state for the next request.
+                        if matches!(session.history.last(), Some(ConversationItem::User(_))) {
+                            session.history.pop();
+                        }
+                        break; // break inner loop → back to user prompt
                     }
                 }
-                res
             };
             let outcome = match result {
                 Ok(o) => o,
