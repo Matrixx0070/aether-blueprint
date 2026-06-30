@@ -6320,6 +6320,51 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::AddProgressItem(text) => {
+                    session.progress_items.push((text.clone(), false));
+                    let note = format!(
+                        "Progress [{idx}] added: {text}",
+                        idx = session.progress_items.len() - 1
+                    );
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::DoneProgressItem(idx) => {
+                    let note = if let Some(item) = session.progress_items.get_mut(idx) {
+                        item.1 = true;
+                        format!("Progress [{idx}] marked DONE: {}", item.0)
+                    } else {
+                        format!("No progress item at index {idx}.")
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::ClearProgressItems => {
+                    let n = session.progress_items.len();
+                    session.progress_items.clear();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(
+                        format!("Cleared {n} progress item(s).")
+                    ));
+                    continue;
+                }
+                UiCommand::QueryProgressItems => {
+                    let note = if session.progress_items.is_empty() {
+                        "No progress items. Use /progress-add <text> to add tasks.".to_string()
+                    } else {
+                        let lines: Vec<String> = session.progress_items.iter()
+                            .enumerate()
+                            .map(|(i, (t, done))| {
+                                format!("[{i}] {} {t}", if *done { "DONE" } else { "TODO" })
+                            })
+                            .collect();
+                        format!("=== Progress ({}/{}) ===\n{}",
+                            session.progress_items.iter().filter(|(_, d)| *d).count(),
+                            session.progress_items.len(),
+                            lines.join("\n"))
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
                 UiCommand::AddWarmupFile(path) => {
                     let already = session.warmup_files.contains(&path);
                     let note = if already {
@@ -23949,6 +23994,44 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /progress-add <text> — add item to the session progress tracker
+                                cmd_str if cmd_str.starts_with("/progress-add ") => {
+                                    let text = cmd_str.trim_start_matches("/progress-add ").trim().to_string();
+                                    if _ctx.send(UiCommand::AddProgressItem(text)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /progress-done <n> — mark progress item n as done
+                                cmd_str if cmd_str.starts_with("/progress-done ") => {
+                                    let arg = cmd_str.trim_start_matches("/progress-done ").trim();
+                                    if let Ok(n) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::DoneProgressItem(n)).is_err() { break 'outer; }
+                                    } else {
+                                        if _ctx.send(UiCommand::QueryProgressItems).is_err() { break 'outer; }
+                                    }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /progress-clear — remove all progress items
+                                "/progress-clear" => {
+                                    if _ctx.send(UiCommand::ClearProgressItems).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /progress-list — show current progress tracker
+                                "/progress-list" => {
+                                    if _ctx.send(UiCommand::QueryProgressItems).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /warmup-add <path> — add file to post-compaction re-injection list
                                 cmd_str if cmd_str.starts_with("/warmup-add ") => {
                                     let path = cmd_str.trim_start_matches("/warmup-add ").trim().to_string();
@@ -24570,6 +24653,10 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/warmup-add ",
                             "/warmup-rm ",
                             "/warmup-list",
+                            "/progress-add ",
+                            "/progress-done ",
+                            "/progress-clear",
+                            "/progress-list",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

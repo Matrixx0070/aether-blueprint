@@ -178,6 +178,10 @@ pub struct Session {
     /// File paths that are re-injected as user context after each compaction event.
     /// Keeps key project files visible to the model even after history is summarised.
     pub warmup_files: Vec<String>,
+
+    /// In-session progress tracker: (description, done).
+    /// When non-empty, injected as a reminder every turn so the agent sees current status.
+    pub progress_items: Vec<(String, bool)>,
 }
 
 impl Session {
@@ -224,6 +228,7 @@ impl Session {
             turn_reminder_every: 0,
             checkpoint_every_tools: 0,
             warmup_files: Vec::new(),
+            progress_items: Vec::new(),
         }
     }
 
@@ -382,6 +387,21 @@ async fn agent_turn_inner(
             ReminderKind::SystemWarning,
             Source::Kernel,
             format!("[Standing instruction] {body}"),
+        ));
+    }
+
+    // Progress tracker: re-inject the current task list every turn when non-empty.
+    if !session.progress_items.is_empty() {
+        let items: Vec<String> = session.progress_items.iter()
+            .enumerate()
+            .map(|(i, (text, done))| {
+                format!("[{}] {} {}", i, if *done { "DONE" } else { "TODO" }, text)
+            })
+            .collect();
+        session.pending_reminders.push(Reminder::new(
+            ReminderKind::SystemWarning,
+            Source::Kernel,
+            format!("[Progress tracker]\n{}", items.join("\n")),
         ));
     }
 

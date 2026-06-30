@@ -261,6 +261,14 @@ pub enum UiCommand {
     RemoveWarmupFile(String),
     /// List all warmup files.
     QueryWarmupFiles,
+    /// Add an item to the in-session progress tracker.
+    AddProgressItem(String),
+    /// Mark a progress item (by 0-based index) as done.
+    DoneProgressItem(usize),
+    /// Clear all progress items.
+    ClearProgressItems,
+    /// List current progress items.
+    QueryProgressItems,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
