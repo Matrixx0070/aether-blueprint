@@ -409,6 +409,14 @@ pub enum UiCommand {
     ReplayLast,
     /// List past user messages with their indices.
     QueryReplayList,
+    /// Schedule a pause after N more autonomous turns (0 = clear).
+    SetPauseAfter(usize),
+    /// Pause the agent after the current turn completes.
+    SetPauseNow,
+    /// Clear all pending pause signals.
+    ClearPause,
+    /// Show current pause configuration.
+    QueryPauseStatus,
     /// Show elapsed time for the last agent turn.
     QueryTurnTime,
     /// Show average elapsed time across all agent turns this session.

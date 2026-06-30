@@ -317,6 +317,13 @@ pub struct Session {
     /// Appended by the driver after each agent turn for /turn-time and /latency-log.
     pub turn_wall_ms: Vec<u64>,
 
+    /// When > 0, pause the agent after this many more ContinueImmediately ticks.
+    /// Each tick decrements the counter; when it hits 0 the agent stops.
+    /// 0 = no scheduled pause.
+    pub pause_after_turns: usize,
+    /// When true, stop the agent after the current turn completes (checked in AwaitUser).
+    pub pause_now: bool,
+
     /// Context-fill fraction (0.0–1.0) at which a warning SystemNote fires.
     /// 0.0 = off. Fires once per session (token_budget_warn_fired tracks this).
     pub token_budget_warn_pct: f64,
@@ -405,6 +412,8 @@ impl Session {
             session_vars: std::collections::HashMap::new(),
             prompt_macros: std::collections::HashMap::new(),
             turn_wall_ms: Vec::new(),
+            pause_after_turns: 0,
+            pause_now: false,
             token_budget_warn_pct: 0.0,
             token_budget_hard_pct: 0.0,
             token_budget_warn_fired: false,

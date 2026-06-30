@@ -6564,6 +6564,45 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
+                UiCommand::SetPauseAfter(n) => {
+                    session.pause_after_turns = n;
+                    session.pause_now = false;
+                    let note = if n == 0 {
+                        "Pause schedule cleared. Agent will run freely.".to_string()
+                    } else {
+                        format!("Agent will pause after {n} more autonomous turn(s).")
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
+                    continue;
+                }
+                UiCommand::SetPauseNow => {
+                    session.pause_now = true;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(
+                        "Pause-now set: agent will stop after the current turn completes.".to_string()
+                    ));
+                    continue;
+                }
+                UiCommand::ClearPause => {
+                    session.pause_after_turns = 0;
+                    session.pause_now = false;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(
+                        "All pause signals cleared. Agent will run freely.".to_string()
+                    ));
+                    continue;
+                }
+                UiCommand::QueryPauseStatus => {
+                    let pause_str = if session.pause_now {
+                        "pause-now ACTIVE".to_string()
+                    } else if session.pause_after_turns > 0 {
+                        format!("pause after {} more turn(s)", session.pause_after_turns)
+                    } else {
+                        "off (no pause scheduled)".to_string()
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Pause status: {pause_str}\n  /pause-after <n> | /pause-now | /resume"
+                    )));
+                    continue;
+                }
                 UiCommand::QueryTurnTime => {
                     let note = match session.turn_wall_ms.last() {
                         Some(&ms) => {
@@ -8101,6 +8140,26 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                                      Stopping agent. Use /cost-cap off to remove the cap.",
                                     session.cost_cap_usd
                                 )));
+                                auto_continue_count = 0;
+                                break;
+                            }
+                        }
+                        // Pause-now: break immediately (agent requested or user set /pause-now).
+                        if session.pause_now {
+                            session.pause_now = false;
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Pause-now: stopping after this turn. Use any message to resume.".to_string()
+                            ));
+                            auto_continue_count = 0;
+                            break;
+                        }
+                        // Pause-after countdown: decrement and break when it reaches zero.
+                        if session.pause_after_turns > 0 {
+                            session.pause_after_turns -= 1;
+                            if session.pause_after_turns == 0 {
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                    "Pause-after: scheduled pause reached. Send any message to resume.".to_string()
+                                ));
                                 auto_continue_count = 0;
                                 break;
                             }
@@ -26345,6 +26404,40 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /pause-after <n> — schedule a pause after N more autonomous turns
+                                cmd_str if cmd_str.starts_with("/pause-after ") => {
+                                    let arg = cmd_str.trim_start_matches("/pause-after ").trim();
+                                    let n = arg.parse::<usize>().unwrap_or(1);
+                                    if _ctx.send(UiCommand::SetPauseAfter(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /pause-now — stop agent after current turn
+                                "/pause-now" => {
+                                    if _ctx.send(UiCommand::SetPauseNow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /resume — clear all pending pause signals
+                                "/resume" => {
+                                    if _ctx.send(UiCommand::ClearPause).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /pause-status — show current pause state
+                                "/pause-status" => {
+                                    if _ctx.send(UiCommand::QueryPauseStatus).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /turn-time — show elapsed time for the last agent turn
                                 "/turn-time" => {
                                     if _ctx.send(UiCommand::QueryTurnTime).is_err() { break 'outer; }
@@ -27081,6 +27174,10 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-time",
                             "/turn-time-avg",
                             "/latency-log",
+                            "/pause-after ",
+                            "/pause-now",
+                            "/resume",
+                            "/pause-status",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
