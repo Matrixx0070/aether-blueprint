@@ -1292,6 +1292,7 @@ async fn run_print_agent(
         max_tokens_per_turn: PRINT_MODE_MAX_TOKENS,
         thinking_budget: None,
         temperature: None,
+        tools_disabled_turns: 0,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("self-check gate: {e}"))?;
@@ -1553,6 +1554,7 @@ async fn run_repl(
         max_tokens_per_turn: REPL_MAX_TOKENS,
         thinking_budget: None,
         temperature: None,
+        tools_disabled_turns: 0,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("self-check gate: {e}"))?;
@@ -2134,6 +2136,9 @@ fn handle_slash(
             eprintln!("  /temperature [N]    show or set sampling temperature (0.0–1.0; reset to clear)");
             eprintln!("  /budget [N|off]     set session cost cap in USD; warn at 80%, stop at 100%");
             eprintln!("  /retry              regenerate the last response with fresh sampling");
+            eprintln!("  /config [field [v]] show or set session config (model/max_tokens/temperature/…)");
+            eprintln!("  /notool [N]         disable tools for next N turns (default 1)");
+            eprintln!("  /summarize          ask the model to summarize the conversation so far");
             eprintln!("  /compact            manually compact the context window now");
             eprintln!("  /model [NAME]       show or change the active model");
             eprintln!("  /tools              list registered tools");
@@ -2493,6 +2498,103 @@ fn handle_slash(
             } else {
                 eprintln!("[retry] nothing to retry");
                 SlashAction::Continue
+            }
+        }
+        // /config [field [value]] — show or edit SessionConfig values.
+        "config" | "cfg" => {
+            let mut parts2 = args.splitn(2, char::is_whitespace);
+            let field = parts2.next().unwrap_or("").trim();
+            let value = parts2.next().unwrap_or("").trim();
+            match field {
+                "" => {
+                    // Show all.
+                    eprintln!("[config]");
+                    eprintln!("  model              = {}", session.config.model);
+                    eprintln!("  max_tokens_per_turn= {}", session.config.max_tokens_per_turn);
+                    eprintln!("  temperature        = {}",
+                        session.config.temperature.map(|t| format!("{t:.2}")).unwrap_or_else(|| "default (1.0)".into()));
+                    eprintln!("  thinking_budget    = {}",
+                        session.config.thinking_budget.map(|b| b.to_string()).unwrap_or_else(|| "off".into()));
+                    eprintln!("  tools_disabled_turns = {}", session.config.tools_disabled_turns);
+                    eprintln!("  permission_mode    = {:?}", session.config.permission_mode);
+                }
+                "model" => {
+                    if value.is_empty() {
+                        eprintln!("[config] model = {}", session.config.model);
+                    } else {
+                        session.config.model = value.to_string();
+                        eprintln!("[config] model → {value}");
+                    }
+                }
+                "max_tokens" | "max_tokens_per_turn" => {
+                    if value.is_empty() {
+                        eprintln!("[config] max_tokens_per_turn = {}", session.config.max_tokens_per_turn);
+                    } else if let Ok(n) = value.parse::<u32>() {
+                        session.config.max_tokens_per_turn = n;
+                        eprintln!("[config] max_tokens_per_turn → {n}");
+                    } else {
+                        eprintln!("[config] invalid value for max_tokens; expected u32");
+                    }
+                }
+                "temperature" | "temp" => {
+                    if value.is_empty() {
+                        eprintln!("[config] temperature = {}",
+                            session.config.temperature.map(|t| format!("{t:.2}")).unwrap_or_else(|| "default".into()));
+                    } else if value == "off" || value == "reset" {
+                        session.config.temperature = None;
+                        eprintln!("[config] temperature → default");
+                    } else if let Ok(t) = value.parse::<f32>() {
+                        if (0.0..=1.0).contains(&t) {
+                            session.config.temperature = Some(t);
+                            eprintln!("[config] temperature → {t:.2}");
+                        } else {
+                            eprintln!("[config] temperature must be 0.0–1.0");
+                        }
+                    } else {
+                        eprintln!("[config] invalid value for temperature");
+                    }
+                }
+                "thinking_budget" | "thinking" => {
+                    if value.is_empty() {
+                        eprintln!("[config] thinking_budget = {}",
+                            session.config.thinking_budget.map(|b| b.to_string()).unwrap_or_else(|| "off".into()));
+                    } else if value == "off" {
+                        session.config.thinking_budget = None;
+                        eprintln!("[config] thinking_budget → off");
+                    } else if let Ok(n) = value.parse::<u32>() {
+                        session.config.thinking_budget = Some(n);
+                        eprintln!("[config] thinking_budget → {n}");
+                    } else {
+                        eprintln!("[config] invalid value; expected u32 or 'off'");
+                    }
+                }
+                _ => eprintln!("[config] unknown field {field:?}  (model | max_tokens | temperature | thinking_budget)"),
+            }
+            SlashAction::Continue
+        }
+        // /notool [N] — disable tools for N upcoming turns (default 1).
+        "notool" | "no-tool" | "notools" => {
+            let n: usize = args.parse().unwrap_or(1);
+            session.config.tools_disabled_turns = n;
+            if n == 1 {
+                eprintln!("[notool] tools disabled for next 1 turn");
+            } else {
+                eprintln!("[notool] tools disabled for next {n} turns");
+            }
+            SlashAction::Continue
+        }
+        // /summarize — ask the model to summarize the conversation so far.
+        "summarize" | "digest" | "recap" => {
+            if session.history.is_empty() {
+                eprintln!("[summarize] no conversation history yet");
+                SlashAction::Continue
+            } else {
+                SlashAction::SendAsUser(
+                    "Please provide a concise summary of our conversation so far — \
+                     key decisions made, files touched, problems solved, and what is \
+                     still in progress or unresolved. Keep it under 250 words."
+                        .to_string(),
+                )
             }
         }
         "compact" => SlashAction::Compact,
@@ -4323,6 +4425,7 @@ async fn complete_run_one_turn(
         max_tokens_per_turn: PRINT_MODE_MAX_TOKENS,
         thinking_budget: None,
         temperature: None,
+        tools_disabled_turns: 0,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -4820,6 +4923,7 @@ async fn ws_run_one_turn_streamed(
         max_tokens_per_turn: PRINT_MODE_MAX_TOKENS,
         thinking_budget: None,
         temperature: None,
+        tools_disabled_turns: 0,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -4956,6 +5060,7 @@ async fn serve_one_turn(
         max_tokens_per_turn: PRINT_MODE_MAX_TOKENS,
         thinking_budget: None,
         temperature: None,
+        tools_disabled_turns: 0,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -5025,6 +5130,7 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
         max_tokens_per_turn: REPL_MAX_TOKENS,
         thinking_budget: None,
         temperature: None,
+        tools_disabled_turns: 0,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("self-check gate: {e}"))?;
@@ -18321,6 +18427,7 @@ async fn review_security_file(
         max_tokens_per_turn: 8192,
         thinking_budget: None,
         temperature: None,
+        tools_disabled_turns: 0,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     // Review mode produces a STRUCTURED report (lots of short keyword
@@ -19742,6 +19849,7 @@ async fn run_threat_model(
         max_tokens_per_turn: 8192,
         thinking_budget: None,
         temperature: None,
+        tools_disabled_turns: 0,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     // Empty ruleset — same reasoning as run_review (structured analysis output).
@@ -19845,6 +19953,7 @@ async fn run_ctf(
         max_tokens_per_turn: 8192,
         thinking_budget: None,
         temperature: None,
+        tools_disabled_turns: 0,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(Vec::new()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -20389,6 +20498,7 @@ async fn run_eval_case(
         max_tokens_per_turn: PRINT_MODE_MAX_TOKENS,
         thinking_budget: None,
         temperature: None,
+        tools_disabled_turns: 0,
     };
     let overlay = Fable5Overlay::new(OverlayConfig::default());
     let gate = Gate::new(default_rules()).map_err(|e| anyhow!("gate: {e}"))?;
@@ -27547,6 +27657,7 @@ impl Tool for AgentTool {
             max_tokens_per_turn: SUB_AGENT_MAX_TOKENS,
             thinking_budget: None,
             temperature: None,
+            tools_disabled_turns: 0,
         };
         let overlay = Fable5Overlay::new(OverlayConfig::default());
         let gate = Gate::new(default_rules())

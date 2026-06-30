@@ -47,6 +47,10 @@ pub struct SessionConfig {
     /// Sampling temperature injected into every request. None → API default (1.0).
     #[serde(default)]
     pub temperature: Option<f32>,
+    /// When > 0 the tool registry is cleared for this many upcoming turns,
+    /// then the counter resets to 0. Set by `/notool [N]`.
+    #[serde(default)]
+    pub tools_disabled_turns: usize,
 }
 
 impl Default for SessionConfig {
@@ -57,6 +61,7 @@ impl Default for SessionConfig {
             max_tokens_per_turn: 8_192,
             thinking_budget: None,
             temperature: None,
+            tools_disabled_turns: 0,
         }
     }
 }
@@ -263,6 +268,12 @@ async fn agent_turn_inner(
 
     // Sampling temperature override (None → let the API use its default of 1.0).
     req.temperature = session.config.temperature;
+
+    // /notool — clear tools for this turn and decrement the counter.
+    if session.config.tools_disabled_turns > 0 {
+        req.tools.clear();
+        session.config.tools_disabled_turns -= 1;
+    }
 
     // ── tool-sel (LLM call) ──────────────────────────────────────────
     let resp = match on_delta {
