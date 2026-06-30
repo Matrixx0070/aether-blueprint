@@ -31,6 +31,10 @@ pub const MAX_BLOCK_RECORDS: usize = 10;
 /// sustained-guidance line.
 pub const SUSTAINED_THRESHOLD: usize = 3;
 
+/// Consecutive tool-error count at which the plan emits a "stuck" guidance
+/// note telling the agent to try a different approach.
+pub const TOOL_ERROR_THRESHOLD: usize = 3;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Plan {
     pub text: String,
@@ -51,6 +55,12 @@ pub struct Plan {
     /// `Some(N)` = blocks age out once `current_turn - turn_index >= N`.
     #[serde(default)]
     pub window: Option<usize>,
+
+    /// Consecutive error count per tool name. Incremented by `record_tool_error`,
+    /// reset to 0 by `record_tool_success`. When a tool's count reaches
+    /// TOOL_ERROR_THRESHOLD, `refresh` emits a stuck-guidance line.
+    #[serde(default)]
+    pub tool_error_counts: HashMap<String, usize>,
 
     dirty: bool,
 }
@@ -127,6 +137,28 @@ impl Plan {
         self.dirty = true;
     }
 
+    /// Record a consecutive tool error. When the count reaches
+    /// `TOOL_ERROR_THRESHOLD`, marks the plan dirty so the next `refresh`
+    /// emits a stuck-guidance note.
+    pub fn record_tool_error(&mut self, tool_name: &str) {
+        let count = self.tool_error_counts.entry(tool_name.to_string()).or_insert(0);
+        *count += 1;
+        if *count >= TOOL_ERROR_THRESHOLD {
+            self.dirty = true;
+        }
+    }
+
+    /// Reset the consecutive error count for a tool (call on success). Marks
+    /// the plan dirty if a stuck-guidance note is being cleared.
+    pub fn record_tool_success(&mut self, tool_name: &str) {
+        if let Some(n) = self.tool_error_counts.get_mut(tool_name) {
+            if *n >= TOOL_ERROR_THRESHOLD {
+                self.dirty = true;
+            }
+            *n = 0;
+        }
+    }
+
     /// Drop `block_turns` entries where `t + window <= current_turn` and
     /// recompute `block_counts` from the survivors. No-op when monotonic.
     /// Returns the total number of entries pruned.
@@ -185,6 +217,9 @@ static RAW_LINE_RE: Lazy<Regex> =
 static SUSTAINED_LINE_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^\[sustained: rules=(\S+) blocked (\d+) times .+\]$").unwrap());
 
+static TOOL_STUCK_LINE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^\[tool-stuck: .+\]$").unwrap());
+
 fn rule_guidance(rule_id: &str) -> &'static str {
     match rule_id {
         "secret_in_output" => "stop attempting to reveal credentials or API keys",
@@ -223,7 +258,11 @@ impl Planner {
     pub fn refresh(&self, plan: &mut Plan, current_turn: usize) {
         plan.prune_window(current_turn);
 
-        if plan.block_counts.is_empty() && plan.text.is_empty() {
+        let has_stuck_tools = plan
+            .tool_error_counts
+            .values()
+            .any(|&n| n >= TOOL_ERROR_THRESHOLD);
+        if plan.block_counts.is_empty() && plan.text.is_empty() && !has_stuck_tools {
             plan.clear_dirty();
             return;
         }
@@ -266,6 +305,11 @@ impl Planner {
             if SUSTAINED_LINE_RE.is_match(line) {
                 continue;
             }
+            // Skip stale tool-stuck lines — they are regenerated from
+            // tool_error_counts below, so we never copy the old version.
+            if TOOL_STUCK_LINE_RE.is_match(line) {
+                continue;
+            }
             if let Some(cap) = RAW_LINE_RE.captures(line) {
                 let rids: Vec<String> = cap
                     .get(1)
@@ -288,6 +332,25 @@ impl Planner {
             }
             if new_lines.len() >= MAX_BLOCK_RECORDS {
                 break;
+            }
+        }
+
+        // Tools with consecutive errors >= TOOL_ERROR_THRESHOLD emit a
+        // stuck-guidance line so the agent sees an explicit "try differently"
+        // signal rather than silently repeating the same failing call.
+        let mut stuck: Vec<(&String, usize)> = plan
+            .tool_error_counts
+            .iter()
+            .filter(|(_, &n)| n >= TOOL_ERROR_THRESHOLD)
+            .map(|(name, &n)| (name, n))
+            .collect();
+        stuck.sort_by_key(|(name, _)| name.as_str());
+        for (tool, count) in &stuck {
+            if new_lines.len() < MAX_BLOCK_RECORDS {
+                new_lines.push(format!(
+                    "[tool-stuck: {tool} failed {count} times consecutively — \
+                     read the FULL error output; try smaller input or a different approach]"
+                ));
             }
         }
 
@@ -583,6 +646,67 @@ mod tests {
             full_prune_ns < 10_000_000,
             "single full prune took {} ns (target < 10ms)",
             full_prune_ns
+        );
+    }
+
+    // ── tool error tracking ───────────────────────────────────────────
+
+    #[test]
+    fn record_tool_error_increments_count() {
+        let mut p = Plan::default();
+        p.record_tool_error("Bash");
+        assert_eq!(p.tool_error_counts.get("Bash"), Some(&1));
+        assert!(!p.is_dirty(), "below threshold — no dirty flag yet");
+        p.record_tool_error("Bash");
+        p.record_tool_error("Bash");
+        assert_eq!(p.tool_error_counts.get("Bash"), Some(&3));
+        assert!(p.is_dirty(), "at threshold — plan must be dirty");
+    }
+
+    #[test]
+    fn record_tool_success_resets_count() {
+        let mut p = Plan::default();
+        for _ in 0..5 {
+            p.record_tool_error("Write");
+        }
+        assert!(p.is_dirty());
+        p.clear_dirty();
+        p.record_tool_success("Write");
+        assert_eq!(p.tool_error_counts.get("Write"), Some(&0));
+        assert!(p.is_dirty(), "clearing a stuck tool must re-dirty the plan");
+    }
+
+    #[test]
+    fn refresh_emits_stuck_guidance_at_threshold() {
+        let mut p = Plan::default();
+        for _ in 0..TOOL_ERROR_THRESHOLD {
+            p.record_tool_error("Bash");
+        }
+        Planner::new().refresh(&mut p, 0);
+        assert!(
+            p.text.contains("[tool-stuck: Bash failed"),
+            "expected stuck-guidance line, got: {}",
+            p.text
+        );
+        assert!(p.text.contains("FULL error output"));
+    }
+
+    #[test]
+    fn refresh_drops_stuck_guidance_after_success() {
+        let mut p = Plan::default();
+        for _ in 0..TOOL_ERROR_THRESHOLD {
+            p.record_tool_error("Read");
+        }
+        let planner = Planner::new();
+        planner.refresh(&mut p, 0);
+        assert!(p.text.contains("[tool-stuck: Read"));
+        // Tool succeeds — count resets
+        p.record_tool_success("Read");
+        planner.refresh(&mut p, 0);
+        assert!(
+            !p.text.contains("[tool-stuck: Read"),
+            "stuck line must disappear after success, got: {}",
+            p.text
         );
     }
 

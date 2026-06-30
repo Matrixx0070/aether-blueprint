@@ -37,8 +37,10 @@ pub fn context_window_for_model(model: &str) -> u64 {
 /// Fraction of the context window at which compaction triggers.
 pub const COMPACTION_THRESHOLD_PCT: f64 = 0.80;
 
-/// Maximum tokens we ask the summarizer to produce.
-const SUMMARY_MAX_TOKENS: u32 = 2048;
+/// Maximum tokens we ask the summarizer to produce. Increased to 4096 to
+/// give the structured 6-section prompt enough room to preserve error
+/// messages, file paths, and current step without truncation.
+const SUMMARY_MAX_TOKENS: u32 = 4096;
 
 /// Returns true if cumulative usage exceeds `pct * window`.
 pub fn over_threshold(usage: &Usage, model: &str, pct: f64) -> bool {
@@ -87,14 +89,23 @@ pub fn serialize_history(items: &[ConversationItem]) -> String {
     out
 }
 
-/// Prompt the summarizer with. Asks for a 200-word digest preserving
-/// decisions, in-progress work, key facts. Drops tool I/O minutiae.
-fn summary_prompt(history_text: &str) -> String {
+/// Structured 6-section summary prompt. Each section has a labelled heading
+/// so critical signal (error messages, file paths, next step) is never lost
+/// in prose compression. The agent reads this on every turn after compaction.
+pub fn summary_prompt(history_text: &str) -> String {
     format!(
-        "You are summarizing an in-progress agent conversation so it fits in fewer tokens. \
-         Produce a 200-word-or-fewer digest. Preserve: key facts and identifiers, decisions made, \
-         the current goal, any in-progress task and what step it's on, uncommitted work. \
-         Drop: redundant chatter, exact tool I/O text, repeated context. Use compact prose, no headers.\n\n\
+        "Summarize this in-progress agent conversation so it fits in fewer tokens.\n\
+         Use EXACTLY these six labelled sections — no other format. One header per line:\n\n\
+         GOAL: [one sentence — what the user asked for or what is being built]\n\
+         PROGRESS: [what was completed; which files changed; test results if any]\n\
+         CURRENT-STEP: [the exact task or command in progress when this summary was cut]\n\
+         ERRORS: [any unresolved tool errors, build failures, or test failures — \
+                  include exact error messages and file:line references if present]\n\
+         KEY-IDS: [file paths, function names, variable names, PR numbers, and \
+                   other identifiers referenced in this session]\n\
+         NEXT-ACTION: [what the agent was about to do next]\n\n\
+         Write NONE for a section if truly nothing belongs there. \
+         Keep each section to 1-3 lines. Do not add extra sections or commentary.\n\n\
          Conversation transcript:\n{history_text}"
     )
 }
@@ -234,6 +245,17 @@ async fn compact_inner(session: &mut Session, force: bool) -> Result<bool, Agent
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn summary_prompt_contains_all_six_sections() {
+        let p = summary_prompt("USER: hi\nASSISTANT: hello\n");
+        for section in &["GOAL:", "PROGRESS:", "CURRENT-STEP:", "ERRORS:", "KEY-IDS:", "NEXT-ACTION:"] {
+            assert!(
+                p.contains(section),
+                "summary_prompt missing section {section}. Got:\n{p}"
+            );
+        }
+    }
 
     #[test]
     fn context_window_known_families() {

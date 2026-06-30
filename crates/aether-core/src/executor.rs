@@ -299,6 +299,18 @@ fn json_to_match_string(v: &serde_json::Value) -> String {
     }
 }
 
+/// Prepend a structured recovery header to failed tool output so the agent
+/// sees an actionable hint exactly at the point of failure — not buried in
+/// the system prompt. Keeps the hint terse (2 lines) to avoid burning tokens.
+fn enrich_error_content(tool_name: &str, raw: String) -> String {
+    format!(
+        "[TOOL ERROR: {tool_name}]\n\
+         [Recovery hint: read the FULL message below; look for file:line patterns; \
+         try a more targeted call or smaller input rather than repeating verbatim]\n\
+         {raw}"
+    )
+}
+
 impl Executor {
 
     /// Install a prompter that's consulted when running in `Default` mode
@@ -486,6 +498,14 @@ impl Executor {
             PermissionOutcome::Refused(why) => (format!("refused: {why}"), true),
         };
 
+        // Enrich failed results with a structured recovery header so the
+        // agent sees actionable guidance inline with the error content.
+        let (content, is_error) = if is_error {
+            (enrich_error_content(&tu.name, content), true)
+        } else {
+            (content, false)
+        };
+
         // PostToolUse hook: always fires after a call attempt (even
         // refused ones) so operators can audit failed permission decisions.
         if let Some(h) = &self.tool_hook {
@@ -621,6 +641,14 @@ mod tests {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(self.name.to_string())
         }
+    }
+
+    #[test]
+    fn enrich_error_content_includes_tool_name_and_hint() {
+        let enriched = super::enrich_error_content("Bash", "exit status 1: make: *** [all] Error 1".into());
+        assert!(enriched.contains("[TOOL ERROR: Bash]"), "missing header: {enriched}");
+        assert!(enriched.contains("Recovery hint:"), "missing hint: {enriched}");
+        assert!(enriched.contains("exit status 1"), "missing original error: {enriched}");
     }
 
     fn use_call(id: &str, name: &str) -> RecordedToolUse {

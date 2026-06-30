@@ -393,6 +393,20 @@ async fn agent_turn_inner(
         ));
     }
 
+    // Feed tool outcomes into the planner's consecutive-error tracker.
+    // Consecutive failures accumulate; a success resets the counter for
+    // that tool. When a tool hits TOOL_ERROR_THRESHOLD consecutive errors
+    // the next refresh() injects a stuck-guidance note into the system prompt.
+    for r in &tool_results {
+        if let Some(tu) = tool_uses.iter().find(|tu| tu.id == r.tool_use_id) {
+            if r.is_error {
+                session.plan.record_tool_error(&tu.name);
+            } else {
+                session.plan.record_tool_success(&tu.name);
+            }
+        }
+    }
+
     // ── observe — record the turn ────────────────────────────────────
     session.history.push(ConversationItem::Assistant {
         text: final_text,
