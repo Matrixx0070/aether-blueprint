@@ -7700,6 +7700,61 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryTurnCostTop => {
+                    if session.turn_cost_log.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn cost log: empty — no turns completed yet.".to_string()
+                        ));
+                    } else {
+                        let mut sorted = session.turn_cost_log.clone();
+                        sorted.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
+                        let top: Vec<String> = sorted.iter().take(5).map(|(idx, inp, out, cost)| {
+                            format!("  turn {idx}: ${cost:.4} ({inp} in / {out} out tokens)")
+                        }).collect();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Top {} most expensive turns:\n{}", top.len(), top.join("\n")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanStats => {
+                    let stats = &session.plan.tool_call_stats;
+                    if stats.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Plan tool-call stats: no tool calls recorded yet.".to_string()
+                        ));
+                    } else {
+                        let mut lines = vec![format!("Plan tool-call stats ({} tools):", stats.len())];
+                        let mut entries: Vec<_> = stats.iter().collect();
+                        entries.sort_by_key(|(k, _)| k.as_str());
+                        for (name, (ok, err)) in &entries {
+                            lines.push(format!("  {name}: {ok} ok, {err} err"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(lines.join("\n")));
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnModelList => {
+                    if session.turn_models.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn model list: no turns completed yet.".to_string()
+                        ));
+                    } else {
+                        let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+                        for m in &session.turn_models {
+                            *counts.entry(m.as_str()).or_insert(0) += 1;
+                        }
+                        let mut entries: Vec<_> = counts.iter().collect();
+                        entries.sort_by(|a, b| b.1.cmp(a.1));
+                        let summary: Vec<String> = entries.iter()
+                            .map(|(m, n)| format!("  {m}: {n} turn(s)"))
+                            .collect();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Models used across {} turns:\n{}", session.turn_models.len(), summary.join("\n")
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryBookmarkList => {
                     if session.bookmarks.is_empty() {
                         let _ = etx_for_driver.send(UiEvent::SystemNote(
@@ -32985,6 +33040,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /turn-cost-top — show top 5 most expensive turns
+                                "/turn-cost-top" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostTop).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /plan-stats — show plan tool-call success/error stats
+                                "/plan-stats" => {
+                                    if _ctx.send(UiCommand::QueryPlanStats).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /turn-model-list — list models used across all turns
+                                "/turn-model-list" => {
+                                    if _ctx.send(UiCommand::QueryTurnModelList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -33743,6 +33816,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/bookmark-list",
                             "/alias-list",
                             "/turn-wall-avg",
+                            "/turn-cost-top",
+                            "/plan-stats",
+                            "/turn-model-list",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

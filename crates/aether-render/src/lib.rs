@@ -903,6 +903,12 @@ pub enum UiCommand {
     QueryAliasList,
     /// Show average wall-clock time per turn.
     QueryTurnWallAvg,
+    /// Show the top 5 most expensive turns by cost.
+    QueryTurnCostTop,
+    /// Show plan tool-call success/error stats.
+    QueryPlanStats,
+    /// List models used across all turns.
+    QueryTurnModelList,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
