@@ -182,6 +182,12 @@ pub enum UiCommand {
     QueryHistory(usize),
     /// List all registered tools with their descriptions (alias for QueryTools with empty filter).
     QueryToolsList,
+    /// Drop all but the last N conversation history items (0 = keep all, 1 = keep last pair).
+    TrimHistory(usize),
+    /// Change the session model mid-flight.
+    SetModel(String),
+    /// Serialize session history to a JSON file at the given path.
+    SaveSession(String),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

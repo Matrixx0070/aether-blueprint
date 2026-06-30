@@ -5753,14 +5753,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let window = context_window_for_model(&session.config.model);
                     let pct = if window > 0 { (used as f64 / window as f64 * 100.0) as u64 } else { 0 };
                     let compact_pct = if session.plan.tool_error_counts.values().any(|&n| n >= 3) { 70u64 } else { 80u64 };
+                    let turn_budget = if session.max_turns == 0 {
+                        "unlimited".to_string()
+                    } else {
+                        format!("{}/{}", session.turn_index, session.max_turns)
+                    };
+                    let tool_cap = if session.config.max_tool_calls_per_turn == 0 {
+                        "unlimited".to_string()
+                    } else {
+                        session.config.max_tool_calls_per_turn.to_string()
+                    };
                     let note = format!(
                         "Context usage: {used} / {window} tokens ({pct}%)\n\
                          Model: {model}\n\
                          Compaction fires at: {compact_pct}% ({threshold} tokens)\n\
-                         Remaining before compaction: {remaining} tokens",
+                         Remaining before compaction: {remaining} tokens\n\
+                         Turn budget: {turn_budget}  Tool cap: {tool_cap}/turn\n\
+                         History items: {hist}",
                         model = session.config.model,
                         threshold = window * compact_pct / 100,
                         remaining = (window * compact_pct / 100).saturating_sub(used),
+                        hist = session.history.len(),
                     );
                     let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
@@ -5884,6 +5897,53 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                         }
                         let _ = etx_for_driver.send(UiEvent::SystemNote(lines));
                     }
+                    continue;
+                }
+                UiCommand::TrimHistory(n) => {
+                    let total = session.history.len();
+                    if n == 0 || n >= total {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            format!("History unchanged ({total} items, n={n}).")));
+                    } else {
+                        let dropped = total - n;
+                        session.history.drain(..dropped);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            format!("Trimmed {dropped} history item(s); {n} remain.")));
+                    }
+                    continue;
+                }
+                UiCommand::SetModel(new_model) => {
+                    let old = session.config.model.clone();
+                    session.config.model = new_model.clone();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(
+                        format!("Model switched: {old} → {new_model}")));
+                    continue;
+                }
+                UiCommand::SaveSession(path) => {
+                    use aether_core::context::ConversationItem;
+                    #[derive(serde::Serialize)]
+                    struct SavedItem<'a> {
+                        role: &'static str,
+                        text: Option<&'a str>,
+                        tools: Vec<&'a str>,
+                    }
+                    let items: Vec<SavedItem> = session.history.iter().map(|item| match item {
+                        ConversationItem::User(t) => SavedItem { role: "user", text: Some(t), tools: vec![] },
+                        ConversationItem::Assistant { text, tool_uses } => SavedItem {
+                            role: "assistant",
+                            text: text.as_deref(),
+                            tools: tool_uses.iter().map(|u| u.name.as_str()).collect(),
+                        },
+                        ConversationItem::ToolResults(_) => SavedItem { role: "tool_results", text: None, tools: vec![] },
+                    }).collect();
+                    let note = match serde_json::to_string_pretty(&items) {
+                        Ok(json) => match std::fs::write(&path, json) {
+                            Ok(_) => format!("Session saved to {path} ({} items).", session.history.len()),
+                            Err(e) => format!("Save failed: {e}"),
+                        },
+                        Err(e) => format!("Serialise failed: {e}"),
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(note));
                     continue;
                 }
                 UiCommand::QuerySessionStats => {
@@ -22894,6 +22954,44 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.follow_tail = true;
                                     continue;
                                 }
+                                // /trim-history N — keep only last N history items
+                                cmd_str if cmd_str.starts_with("/trim-history ") || cmd_str == "/trim-history" => {
+                                    let arg = cmd_str.trim_start_matches("/trim-history").trim();
+                                    let n = if arg.is_empty() { 20usize } else { arg.parse().unwrap_or(20) };
+                                    if _ctx.send(UiCommand::TrimHistory(n)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /switch-model M — change model for this session
+                                cmd_str if cmd_str.starts_with("/switch-model ") => {
+                                    let m = cmd_str.trim_start_matches("/switch-model").trim().to_string();
+                                    if m.is_empty() {
+                                        let _ = _ctx.send(UiCommand::QuerySessionStats);
+                                    } else if _ctx.send(UiCommand::SetModel(m)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /save-session [path] — save history to JSON file
+                                cmd_str if cmd_str.starts_with("/save-session ") || cmd_str == "/save-session" => {
+                                    let arg = cmd_str.trim_start_matches("/save-session").trim();
+                                    let path = if arg.is_empty() {
+                                        format!("aether-session-{}.json",
+                                            std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default().as_secs())
+                                    } else {
+                                        arg.to_string()
+                                    };
+                                    if _ctx.send(UiCommand::SaveSession(path)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear();
+                                    ui.input_cursor = 0;
+                                    ui.follow_tail = true;
+                                    continue;
+                                }
                                 // /auto-fix — AI diagnoses the last tool error and proposes a concrete fix
                                 "/auto-fix" => {
                                     let last_error_info = ui.chat_lines.iter().rev().find_map(|cl| {
@@ -23349,6 +23447,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/max-turns", "/max-turns ",
                             "/history", "/history ",
                             "/tools-list",
+                            "/trim-history", "/trim-history ",
+                            "/switch-model ",
+                            "/save-session", "/save-session ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
