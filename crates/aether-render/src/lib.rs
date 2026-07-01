@@ -2739,6 +2739,12 @@ pub enum UiCommand {
     QueryTurnLabelTurnTotal,
     /// Turn-label density: label count divided by total session turns.
     QueryTurnLabelDensity,
+    /// Total word count across all session notes.
+    QuerySessionNoteWordTotal,
+    /// Average word count per session note.
+    QuerySessionNoteAvgWords,
+    /// Maximum word count in any single session note.
+    QuerySessionNoteMaxWords,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
