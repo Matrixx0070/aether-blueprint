@@ -14156,6 +14156,30 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryBookmarkMaxTurnIdx => {
+                    let max = session.bookmarks.iter().map(|(idx, _, _)| *idx).max().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Bookmark max turn idx: {max}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryBookmarkMinTurnIdx => {
+                    let min = session.bookmarks.iter().map(|(idx, _, _)| *idx).min().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Bookmark min turn idx: {min}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifFindingFirstId => {
+                    let id = session.last_verification.as_ref()
+                        .and_then(|v| v.findings.first())
+                        .map(|f| f.rule_id.as_str())
+                        .unwrap_or("none");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verif first finding id: {id}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -43963,6 +43987,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/bookmark-max-turn-idx" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkMaxTurnIdx).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/bookmark-min-turn-idx" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkMinTurnIdx).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verif-finding-first-id" => {
+                                    if _ctx.send(UiCommand::QueryVerifFindingFirstId).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -45361,6 +45400,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-output-limit-val-min",
                             "/tool-output-limit-val-avg",
                             "/bookmark-avg-turn-idx",
+                            "/bookmark-max-turn-idx",
+                            "/bookmark-min-turn-idx",
+                            "/verif-finding-first-id",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

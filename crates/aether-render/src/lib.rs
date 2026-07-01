@@ -2133,6 +2133,12 @@ pub enum UiCommand {
     QueryToolOutputLimitValAvg,
     /// Show the avg turn index across all bookmarks.
     QueryBookmarkAvgTurnIdx,
+    /// Show the max turn index across all bookmarks.
+    QueryBookmarkMaxTurnIdx,
+    /// Show the min turn index across all bookmarks.
+    QueryBookmarkMinTurnIdx,
+    /// Show the rule_id of the first finding from last verification.
+    QueryVerifFindingFirstId,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
