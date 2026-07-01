@@ -1185,6 +1185,12 @@ pub enum UiCommand {
     QueryTurnLabelAt(usize),
     /// Show previous output for a specific tool from output history.
     QueryToolOutputPrev(String),
+    /// Show word count of the current plan goal.
+    QueryPlanGoalWords,
+    /// Show the second-to-last user message in history.
+    QueryHistoryUserLast2,
+    /// Show whether long-conversation digest was injected in last assembly.
+    QueryAssemblyLongConv,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

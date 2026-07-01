@@ -8964,6 +8964,59 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QueryPlanGoalWords => {
+                    match &session.plan.goal {
+                        Some(g) => {
+                            let words = g.split_whitespace().count();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Plan goal: {words} words / {} chars.", g.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Plan goal: not set.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryUserLast2 => {
+                    let user_msgs: Vec<_> = session.history.iter().rev()
+                        .filter_map(|item| {
+                            if let aether_core::context::ConversationItem::User(s) = item { Some(s.as_str()) } else { None }
+                        })
+                        .take(2)
+                        .collect();
+                    match user_msgs.get(1) {
+                        Some(msg) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "2nd-to-last user message: {}", msg.chars().take(200).collect::<String>()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "No second-to-last user message (fewer than 2 user messages).".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryAssemblyLongConv => {
+                    match &session.last_assembly_telemetry {
+                        Some(t) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Assembly long-conv digest: {} in last assembly.",
+                                if t.long_conv_injected { "INJECTED" } else { "not injected" }
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "No assembly telemetry yet.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionNoteAt(idx) => {
                     match session.session_notes.get(idx) {
                         Some((text, ts)) => {
@@ -35908,6 +35961,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/plan-goal-words" => {
+                                    if _ctx.send(UiCommand::QueryPlanGoalWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-user-last2" => {
+                                    if _ctx.send(UiCommand::QueryHistoryUserLast2).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/assembly-long-conv" => {
+                                    if _ctx.send(UiCommand::QueryAssemblyLongConv).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -36807,6 +36875,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-note-at ",
                             "/turn-label-at ",
                             "/tool-output-prev ",
+                            "/plan-goal-words",
+                            "/history-user-last2",
+                            "/assembly-long-conv",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
