@@ -1947,6 +1947,12 @@ pub enum UiCommand {
     QueryTurnCostLogMinOutTokens,
     /// Show the turn index of the first entry in the turn cost log.
     QueryTurnCostLogFirstTurnIdx,
+    /// Show the turn index of the last entry in the turn cost log.
+    QueryTurnCostLogLastTurnIdx,
+    /// Show the count of completed progress items.
+    QueryProgressItemDoneCount,
+    /// Show the count of pending (not done) progress items.
+    QueryProgressItemPendingCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

@@ -13360,6 +13360,28 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryTurnCostLogLastTurnIdx => {
+                    let last = session.turn_cost_log.last().map(|(idx, _, _, _)| *idx);
+                    match last {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Turn cost log last turn idx: no turns logged.".to_string())); }
+                        Some(v) => { let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Last turn index in cost log: {}", v))); }
+                    }
+                    continue;
+                }
+                UiCommand::QueryProgressItemDoneCount => {
+                    let count = session.progress_items.iter().filter(|(_, done)| *done).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Progress items done: {}", count
+                    )));
+                    continue;
+                }
+                UiCommand::QueryProgressItemPendingCount => {
+                    let count = session.progress_items.iter().filter(|(_, done)| !done).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Progress items pending: {}", count
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -42702,6 +42724,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/turn-cost-log-last-turn-idx" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogLastTurnIdx).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/progress-item-done-count" => {
+                                    if _ctx.send(UiCommand::QueryProgressItemDoneCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/progress-item-pending-count" => {
+                                    if _ctx.send(UiCommand::QueryProgressItemPendingCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -44007,6 +44044,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-cost-log-max-out-tokens",
                             "/turn-cost-log-min-out-tokens",
                             "/turn-cost-log-first-turn-idx",
+                            "/turn-cost-log-last-turn-idx",
+                            "/progress-item-done-count",
+                            "/progress-item-pending-count",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
