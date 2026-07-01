@@ -2265,6 +2265,12 @@ pub enum UiCommand {
     QueryLastToolSigFirstVal,
     /// Show the value of the last last_tool_signature entry.
     QueryLastToolSigLastVal,
+    /// Show the first entry of turn_wall_ms.
+    QueryTurnWallFirst,
+    /// Show the count of entries in turn_wall_ms.
+    QueryTurnWallCount,
+    /// Show the first model in turn_models.
+    QueryTurnModelFirst,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

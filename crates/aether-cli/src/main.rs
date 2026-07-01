@@ -14755,6 +14755,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryTurnWallFirst => {
+                    let ms = session.turn_wall_ms.first().copied().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Turn wall first: {ms}ms"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTurnWallCount => {
+                    let n = session.turn_wall_ms.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Turn wall count: {n} entries"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTurnModelFirst => {
+                    let m = session.turn_models.first().map(|s| s.as_str()).unwrap_or("none");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Turn model first: {m}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -44892,6 +44913,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/turn-wall-first" => {
+                                    if _ctx.send(UiCommand::QueryTurnWallFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-wall-count" => {
+                                    if _ctx.send(UiCommand::QueryTurnWallCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-model-first" => {
+                                    if _ctx.send(UiCommand::QueryTurnModelFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -46356,6 +46392,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/last-tool-sig-last",
                             "/last-tool-sig-first-val",
                             "/last-tool-sig-last-val",
+                            "/turn-wall-first",
+                            "/turn-wall-count",
+                            "/turn-model-first",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
