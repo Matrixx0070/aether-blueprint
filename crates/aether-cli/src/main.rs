@@ -17323,6 +17323,49 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryBookmarkTurnGapAvg => {
+                    let turns: Vec<usize> = session.bookmarks.iter().map(|(t, _, _)| *t).collect();
+                    if turns.len() < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Bookmark turn gap avg: need at least 2 bookmarks.".to_string()
+                        ));
+                    } else {
+                        let gaps: Vec<usize> = turns.windows(2).map(|w| w[1].saturating_sub(w[0])).collect();
+                        let avg = gaps.iter().sum::<usize>() as f64 / gaps.len() as f64;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Bookmark turn gap avg: {avg:.1} ({} gaps)", gaps.len()
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryBookmarkTurnGapMax => {
+                    let turns: Vec<usize> = session.bookmarks.iter().map(|(t, _, _)| *t).collect();
+                    if turns.len() < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Bookmark turn gap max: need at least 2 bookmarks.".to_string()
+                        ));
+                    } else {
+                        let max_gap = turns.windows(2).map(|w| w[1].saturating_sub(w[0])).max().unwrap_or(0);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Bookmark turn gap max: {max_gap}"
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryBookmarkTurnGapMin => {
+                    let turns: Vec<usize> = session.bookmarks.iter().map(|(t, _, _)| *t).collect();
+                    if turns.len() < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Bookmark turn gap min: need at least 2 bookmarks.".to_string()
+                        ));
+                    } else {
+                        let min_gap = turns.windows(2).map(|w| w[1].saturating_sub(w[0])).min().unwrap_or(0);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Bookmark turn gap min: {min_gap}"
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryHistoryAnnotGapAvg => {
                     let turns: Vec<usize> = session.history_annotations.iter().map(|(t, _)| *t).collect();
                     if turns.len() < 2 {
@@ -49350,6 +49393,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/bookmark-turn-gap-avg" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkTurnGapAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/bookmark-turn-gap-max" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkTurnGapMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/bookmark-turn-gap-min" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkTurnGapMin).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -51129,6 +51187,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-annot-gap-avg",
                             "/history-annot-gap-max",
                             "/history-annot-gap-min",
+                            "/bookmark-turn-gap-avg",
+                            "/bookmark-turn-gap-max",
+                            "/bookmark-turn-gap-min",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
