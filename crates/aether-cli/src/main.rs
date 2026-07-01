@@ -17323,6 +17323,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryErrorPlaybookHintWordTotal => {
+                    let total: usize = session.error_playbook.iter()
+                        .map(|(_, hint)| hint.split_whitespace().count())
+                        .sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Error playbook hint word total: {total} (across {} entries)",
+                        session.error_playbook.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QueryErrorPlaybookHintAvgWords => {
+                    let n = session.error_playbook.len();
+                    let avg = if n == 0 { 0.0 } else {
+                        let total: usize = session.error_playbook.iter()
+                            .map(|(_, hint)| hint.split_whitespace().count())
+                            .sum();
+                        total as f64 / n as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Error playbook hint avg words: {avg:.1} ({n} entries)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryErrorPlaybookHintMaxWords => {
+                    let max = session.error_playbook.iter()
+                        .map(|(_, hint)| hint.split_whitespace().count())
+                        .max();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match max {
+                        Some(v) => format!("Error playbook hint max words: {v}"),
+                        None => "Error playbook: no entries.".to_string(),
+                    }));
+                    continue;
+                }
                 UiCommand::QueryAutoTagRulePatWordTotal => {
                     let total: usize = session.auto_tag_rules.iter()
                         .map(|(pat, _)| pat.split_whitespace().count())
@@ -48995,6 +49028,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/error-playbook-hint-word-total" => {
+                                    if _ctx.send(UiCommand::QueryErrorPlaybookHintWordTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/error-playbook-hint-avg-words" => {
+                                    if _ctx.send(UiCommand::QueryErrorPlaybookHintAvgWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/error-playbook-hint-max-words" => {
+                                    if _ctx.send(UiCommand::QueryErrorPlaybookHintMaxWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -50753,6 +50801,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/auto-tag-rule-pat-word-total",
                             "/auto-tag-rule-pat-avg-words",
                             "/auto-tag-rule-pat-max-words",
+                            "/error-playbook-hint-word-total",
+                            "/error-playbook-hint-avg-words",
+                            "/error-playbook-hint-max-words",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
