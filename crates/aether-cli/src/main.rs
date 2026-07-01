@@ -15403,6 +15403,32 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QuerySavedSnapshotPlanTextTotalChars => {
+                    let total: usize = session.saved_snapshots.values().map(|(_, plan)| plan.text.len()).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Saved snapshots total plan text chars: {total}"
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySavedSnapshotPlanTextMaxLen => {
+                    let max = session.saved_snapshots.values().map(|(_, plan)| plan.text.len()).max().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Saved snapshots max plan text length: {max}"
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySavedSnapshotPlanTextAvgLen => {
+                    let count = session.saved_snapshots.len();
+                    let avg = if count == 0 {
+                        0
+                    } else {
+                        session.saved_snapshots.values().map(|(_, plan)| plan.text.len()).sum::<usize>() / count
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Saved snapshots avg plan text length: {avg} (over {count} snapshots)"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -45945,6 +45971,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/snapshot-plan-text-total-chars" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotPlanTextTotalChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/snapshot-plan-text-max-len" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotPlanTextMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/snapshot-plan-text-avg-len" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotPlanTextAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -47490,6 +47531,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/snapshot-plan-block-turns-total",
                             "/snapshot-plan-tool-errors-total",
                             "/snapshot-plan-has-error-count",
+                            "/snapshot-plan-text-total-chars",
+                            "/snapshot-plan-text-max-len",
+                            "/snapshot-plan-text-avg-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

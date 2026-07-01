@@ -2427,6 +2427,12 @@ pub enum UiCommand {
     QuerySavedSnapshotPlanToolErrorsTotal,
     /// Show the count of saved snapshots whose plan has a last_error_text set.
     QuerySavedSnapshotPlanHasErrorCount,
+    /// Show the total chars across all saved snapshot plan texts.
+    QuerySavedSnapshotPlanTextTotalChars,
+    /// Show the maximum plan text length across all saved snapshots.
+    QuerySavedSnapshotPlanTextMaxLen,
+    /// Show the average plan text length across all saved snapshots.
+    QuerySavedSnapshotPlanTextAvgLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
