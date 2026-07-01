@@ -2061,6 +2061,12 @@ pub enum UiCommand {
     QueryTurnReminderEveryVal,
     /// Show the count of plan blocks recorded.
     QueryPlanBlocksRecordedVal,
+    /// Show the auto-continue cooldown ms value.
+    QueryAutoContinueCooldownVal,
+    /// Show the count of entries in plan.tool_call_stats.
+    QueryPlanToolStatsCount,
+    /// Show the count of entries in plan.tool_error_counts.
+    QueryPlanToolErrorCountsCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

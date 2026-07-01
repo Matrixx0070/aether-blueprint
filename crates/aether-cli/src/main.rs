@@ -13825,6 +13825,24 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryAutoContinueCooldownVal => {
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Auto continue cooldown: {}ms", session.auto_continue_cooldown_ms
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlanToolStatsCount => {
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan tool stats entries: {}", session.plan.tool_call_stats.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlanToolErrorCountsCount => {
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan tool error counts entries: {}", session.plan.tool_error_counts.len()
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -43452,6 +43470,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/auto-continue-cooldown-val" => {
+                                    if _ctx.send(UiCommand::QueryAutoContinueCooldownVal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-tool-stats-count" => {
+                                    if _ctx.send(UiCommand::QueryPlanToolStatsCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-tool-error-counts-count" => {
+                                    if _ctx.send(UiCommand::QueryPlanToolErrorCountsCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -44814,6 +44847,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-text-set",
                             "/turn-reminder-every-val",
                             "/plan-blocks-recorded-val",
+                            "/auto-continue-cooldown-val",
+                            "/plan-tool-stats-count",
+                            "/plan-tool-error-counts-count",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
