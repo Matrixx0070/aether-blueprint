@@ -1929,6 +1929,12 @@ pub enum UiCommand {
     QueryTurnCostLogOutTokensAvg,
     /// Show the reminders_admitted count from the last assembly telemetry.
     QueryAssemblyRemindersAdmitted,
+    /// Show the reminders_dropped count from the last assembly telemetry.
+    QueryAssemblyRemindersDropped,
+    /// Show whether plan was included in last assembly telemetry.
+    QueryAssemblyPlanIncluded,
+    /// Show the maximum cost in a single turn from the turn cost log.
+    QueryTurnCostLogMaxCost,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

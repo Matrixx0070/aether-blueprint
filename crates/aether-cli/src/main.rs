@@ -13280,6 +13280,33 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryAssemblyRemindersDropped => {
+                    let count = session.last_assembly_telemetry.as_ref().map(|t| t.reminders_dropped).unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Assembly reminders dropped: {}", count
+                    )));
+                    continue;
+                }
+                UiCommand::QueryAssemblyPlanIncluded => {
+                    let included = session.last_assembly_telemetry.as_ref().map(|t| t.plan_included).unwrap_or(false);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Assembly plan included: {}", included
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTurnCostLogMaxCost => {
+                    let max = session.turn_cost_log.iter().map(|(_, _, _, cost)| *cost).fold(f64::NEG_INFINITY, f64::max);
+                    if max == f64::NEG_INFINITY {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn cost log max cost: no turns logged.".to_string()
+                        ));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Max cost in single turn: ${:.6}", max
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -42577,6 +42604,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/assembly-reminders-dropped" => {
+                                    if _ctx.send(UiCommand::QueryAssemblyRemindersDropped).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/assembly-plan-included" => {
+                                    if _ctx.send(UiCommand::QueryAssemblyPlanIncluded).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-cost-log-max-cost" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogMaxCost).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -43873,6 +43915,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-cost-log-in-tokens-avg",
                             "/turn-cost-log-out-tokens-avg",
                             "/assembly-reminders-admitted",
+                            "/assembly-reminders-dropped",
+                            "/assembly-plan-included",
+                            "/turn-cost-log-max-cost",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
