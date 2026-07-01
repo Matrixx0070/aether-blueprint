@@ -1395,6 +1395,12 @@ pub enum UiCommand {
     QuerySmartPausePat,
     /// Count of tool-deny entries.
     QueryToolDenyCount,
+    /// Show auto-continue cooldown in ms.
+    QueryCooldownMsShow,
+    /// Count of history annotations.
+    QueryHistoryAnnotCount,
+    /// Show a specific progress item by index.
+    QueryProgressItemAt(usize),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

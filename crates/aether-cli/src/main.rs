@@ -11192,6 +11192,43 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryCooldownMsShow => {
+                    let ms = session.auto_continue_cooldown_ms;
+                    if ms == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Auto-continue cooldown: OFF (0 ms).".to_string()
+                        ));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Auto-continue cooldown: {ms}ms between ticks."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryAnnotCount => {
+                    let n = session.history_annotations.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History annotations: {n}. Use /history-annotation-at <i> to inspect."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryProgressItemAt(idx) => {
+                    match session.progress_items.get(idx) {
+                        Some((desc, done)) => {
+                            let status = if *done { "✓ done" } else { "pending" };
+                            let preview = desc.chars().take(120).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Progress[{idx}]: [{status}] {preview}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Progress[{idx}]: out of range ({} items).", session.progress_items.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryRequestSuffixText => {
                     match &session.request_suffix {
                         Some(suffix) => {
@@ -38056,6 +38093,26 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/cooldown-ms-show" => {
+                                    if _ctx.send(UiCommand::QueryCooldownMsShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-annot-count" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd_str if cmd_str.starts_with("/progress-item-at ") => {
+                                    let rest = cmd_str.trim_start_matches("/progress-item-at ").trim();
+                                    if let Ok(idx) = rest.parse::<usize>() {
+                                        if _ctx.send(UiCommand::QueryProgressItemAt(idx)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /progress-item-at <index>".to_string()));
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 cmd_str if cmd_str.starts_with("/history-annotation-at ") => {
                                     let rest = cmd_str.trim_start_matches("/history-annotation-at ").trim();
                                     if let Ok(idx) = rest.parse::<usize>() {
@@ -39070,6 +39127,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/request-suffix-text",
                             "/smart-pause-pat",
                             "/tool-deny-count",
+                            "/cooldown-ms-show",
+                            "/history-annot-count",
+                            "/progress-item-at ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
