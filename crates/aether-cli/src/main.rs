@@ -8964,6 +8964,53 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QueryAutoTagRuleAt(idx) => {
+                    match session.auto_tag_rules.get(idx) {
+                        Some((pattern, tag)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Auto-tag rule[{idx}]: pattern='{pattern}' → tag='{tag}'"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Auto-tag rule[{idx}]: out of range ({} rules).", session.auto_tag_rules.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryBookmarkByLabel(label) => {
+                    let lower = label.to_lowercase();
+                    let matches: Vec<_> = session.bookmarks.iter().enumerate()
+                        .filter(|(_, (_, _, l))| l.to_lowercase().contains(&lower))
+                        .map(|(i, (turn, hist, lbl))| format!("  [{i}] turn={turn}, hist={hist}, label='{lbl}'"))
+                        .take(5)
+                        .collect();
+                    if matches.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "No bookmarks matching '{label}'."
+                        )));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Bookmarks matching '{label}':\n{}", matches.join("\n")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanBlockAt(name) => {
+                    let count = session.plan.block_counts.get(&name).copied().unwrap_or(0);
+                    let turns = session.plan.block_turns.get(&name).map(|v| v.len()).unwrap_or(0);
+                    if count == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Plan block '{name}': not found in block_counts."
+                        )));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Plan block '{name}': count={count}, turns={turns}."
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryContextWindowSize => {
                     let model = &session.config.model;
                     let window = aether_core::compaction::context_window_for_model(model);
@@ -36344,6 +36391,28 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                cmd_str if cmd_str.starts_with("/auto-tag-rule-at ") => {
+                                    let arg = cmd_str.trim_start_matches("/auto-tag-rule-at ").trim();
+                                    if let Ok(idx) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::QueryAutoTagRuleAt(idx)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /auto-tag-rule-at <index>".to_string()));
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd_str if cmd_str.starts_with("/bookmark-by-label ") => {
+                                    let label = cmd_str.trim_start_matches("/bookmark-by-label ").trim().to_string();
+                                    if _ctx.send(UiCommand::QueryBookmarkByLabel(label)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd_str if cmd_str.starts_with("/plan-block-at ") => {
+                                    let name = cmd_str.trim_start_matches("/plan-block-at ").trim().to_string();
+                                    if _ctx.send(UiCommand::QueryPlanBlockAt(name)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -37264,6 +37333,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/context-window-size",
                             "/history-total-bytes",
                             "/sticky-context-top",
+                            "/auto-tag-rule-at ",
+                            "/bookmark-by-label ",
+                            "/plan-block-at ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

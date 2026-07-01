@@ -1227,6 +1227,12 @@ pub enum UiCommand {
     QueryHistoryTotalBytes,
     /// Show the first sticky context entry.
     QueryStickyContextTop,
+    /// Show auto-tag rule at a specific index (pattern, tag).
+    QueryAutoTagRuleAt(usize),
+    /// Find bookmark(s) matching a label substring.
+    QueryBookmarkByLabel(String),
+    /// Show count of recorded turns for a specific plan block type.
+    QueryPlanBlockAt(String),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
