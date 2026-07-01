@@ -1491,6 +1491,12 @@ pub enum UiCommand {
     QueryToolOutputHistLast,
     /// Show the last pending reminder body.
     QueryPendingReminderLast,
+    /// Show the last verifier gate rule id and description.
+    QueryVerifierRuleLast,
+    /// Show the plan block name with the highest count.
+    QueryPlanBlockMax,
+    /// Show the average turn cost across all logged turns.
+    QueryTurnCostAvgAll,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

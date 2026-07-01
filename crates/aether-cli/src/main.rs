@@ -11192,6 +11192,55 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryVerifierRuleLast => {
+                    match session.verifier.gate.rules.last() {
+                        Some(cr) => {
+                            let desc = cr.rule.description.chars().take(100).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Verifier rule[last] (of {}): id='{}' — {desc}",
+                                session.verifier.gate.rules.len(), cr.rule.id
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Verifier rules: none loaded.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanBlockMax => {
+                    let best = session.plan.block_counts.iter()
+                        .max_by_key(|(_, v)| *v);
+                    match best {
+                        Some((name, count)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Plan block with highest count: '{name}' ({count} times)."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Plan block counts: none recorded.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnCostAvgAll => {
+                    let n = session.turn_cost_log.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn cost avg: no turns logged yet.".to_string()
+                        ));
+                    } else {
+                        let total: f64 = session.turn_cost_log.iter().map(|(_, _, _, c)| c).sum();
+                        let avg = total / n as f64;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn cost avg: ${avg:.6}/turn across {n} turns."
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryTurnCostSum => {
                     let total: f64 = session.turn_cost_log.iter().map(|(_, _, _, c)| c).sum();
                     let n = session.turn_cost_log.len();
@@ -39081,6 +39130,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/verifier-rule-last" => {
+                                    if _ctx.send(UiCommand::QueryVerifierRuleLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-block-max" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-cost-avg-all" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostAvgAll).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -40158,6 +40222,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-cost-sum",
                             "/tool-output-hist-last",
                             "/pending-reminder-last",
+                            "/verifier-rule-last",
+                            "/plan-block-max",
+                            "/turn-cost-avg-all",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
