@@ -2577,6 +2577,12 @@ pub enum UiCommand {
     QueryVerifierGateAppliesDistress,
     /// Count of rules with AppliesWhen::UserDidNotCurse in the verifier gate.
     QueryVerifierGateAppliesNoCurse,
+    /// Count of rules with AppliesWhen::NotUserAskedAboutMemory in the verifier gate.
+    QueryVerifierGateAppliesNotMemQuery,
+    /// Count of rules with AppliesWhen::CiteTagsPresent in the verifier gate.
+    QueryVerifierGateAppliesCiteTags,
+    /// Count of rules with AppliesWhen::NotCiteTagsPresent in the verifier gate.
+    QueryVerifierGateAppliesNoCiteTags,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
