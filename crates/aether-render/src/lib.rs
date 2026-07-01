@@ -1359,6 +1359,12 @@ pub enum UiCommand {
     QueryPlanGoalSet,
     /// Show first key=value pair in session env.
     QuerySessionEnvPreview,
+    /// Show alias at a specific sorted index.
+    QueryAliasAt(usize),
+    /// Show total count of session vars.
+    QuerySessionVarCountTotal,
+    /// Show median (p50) wall-clock time across all turns.
+    QueryTurnWallP50,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

@@ -11153,6 +11153,45 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryAliasAt(idx) => {
+                    let mut pairs: Vec<_> = session.aliases.iter().collect();
+                    pairs.sort_by_key(|(k, _)| k.as_str());
+                    match pairs.get(idx) {
+                        Some((k, v)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Alias[{idx}]: '{k}' → '{}'", v.chars().take(100).collect::<String>()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Alias[{idx}]: out of range ({} aliases).", session.aliases.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionVarCountTotal => {
+                    let n = session.session_vars.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session vars: {n} defined. Use /session-var-at <i> to inspect."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTurnWallP50 => {
+                    if session.turn_wall_ms.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn wall p50: no turns recorded yet.".to_string()
+                        ));
+                    } else {
+                        let mut sorted = session.turn_wall_ms.clone();
+                        sorted.sort_unstable();
+                        let mid = sorted[sorted.len() / 2];
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn wall p50 (median): {mid}ms ({} turns).", sorted.len()
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -37706,6 +37745,29 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /alias-at <index> — show alias at sorted index
+                                cmd_str if cmd_str.starts_with("/alias-at ") => {
+                                    let arg = cmd_str.trim_start_matches("/alias-at ").trim();
+                                    if let Ok(idx) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::QueryAliasAt(idx)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /alias-at <index>".to_string()));
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-var-count-total — total count of session vars
+                                "/session-var-count-total" => {
+                                    if _ctx.send(UiCommand::QuerySessionVarCountTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /turn-wall-p50 — median wall time across all turns
+                                "/turn-wall-p50" => {
+                                    if _ctx.send(UiCommand::QueryTurnWallP50).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -38692,6 +38754,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-assistant-preview",
                             "/plan-goal-set",
                             "/session-env-preview",
+                            "/alias-at ",
+                            "/session-var-count-total",
+                            "/turn-wall-p50",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
