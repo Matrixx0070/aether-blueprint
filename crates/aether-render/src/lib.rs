@@ -2721,6 +2721,12 @@ pub enum UiCommand {
     QueryBookmarkHistLenTotal,
     /// Average turn_index across all bookmarks.
     QueryBookmarkTurnAvg,
+    /// Total (in_tokens + out_tokens) summed across all logged turns.
+    QueryTurnCostLogTotalTokensSum,
+    /// Average (in_tokens + out_tokens) per logged turn.
+    QueryTurnCostLogAvgTotalTokens,
+    /// Maximum (in_tokens + out_tokens) in a single logged turn.
+    QueryTurnCostLogMaxTotalTokens,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

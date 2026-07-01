@@ -16684,6 +16684,37 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryTurnCostLogTotalTokensSum => {
+                    let total: u64 = session.turn_cost_log.iter()
+                        .map(|(_, in_tok, out_tok, _)| in_tok + out_tok)
+                        .sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Turn cost log total tokens (in+out): {total}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTurnCostLogAvgTotalTokens => {
+                    let n = session.turn_cost_log.len();
+                    let avg = if n == 0 { 0.0 } else {
+                        session.turn_cost_log.iter()
+                            .map(|(_, in_tok, out_tok, _)| (in_tok + out_tok) as f64)
+                            .sum::<f64>() / n as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Turn cost log avg total tokens per turn: {avg:.1} ({n} turns)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTurnCostLogMaxTotalTokens => {
+                    let max = session.turn_cost_log.iter()
+                        .map(|(_, in_tok, out_tok, _)| in_tok + out_tok)
+                        .max();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match max {
+                        Some(v) => format!("Turn cost log max total tokens in one turn: {v}"),
+                        None => "Turn cost log max total tokens: no turns logged".to_string(),
+                    }));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -47961,6 +47992,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/turn-cost-log-total-tokens-sum" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogTotalTokensSum).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-cost-log-avg-total-tokens" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogAvgTotalTokens).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-cost-log-max-total-tokens" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogMaxTotalTokens).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -49653,6 +49699,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/bookmark-hist-len-avg",
                             "/bookmark-hist-len-total",
                             "/bookmark-turn-avg",
+                            "/turn-cost-log-total-tokens-sum",
+                            "/turn-cost-log-avg-total-tokens",
+                            "/turn-cost-log-max-total-tokens",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
