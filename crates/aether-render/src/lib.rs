@@ -1515,6 +1515,12 @@ pub enum UiCommand {
     QueryTurnWallMaxAll,
     /// Show the last verifier finding from last_verification.
     QueryVerifierFindingLast,
+    /// Show the minimum single-turn wall-clock time.
+    QueryTurnWallMinAll,
+    /// Show ratio of plan tool ok to total plan tool calls.
+    QueryPlanToolCallRate,
+    /// Show average length of session notes.
+    QuerySessionNoteAvgLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

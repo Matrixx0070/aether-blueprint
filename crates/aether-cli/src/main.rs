@@ -11192,6 +11192,52 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryTurnWallMinAll => {
+                    match session.turn_wall_ms.iter().min() {
+                        Some(min) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Turn wall min: {min}ms (fastest single turn across {} turns).", session.turn_wall_ms.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Turn wall min: no turns recorded yet.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanToolCallRate => {
+                    let total_ok: usize = session.plan.tool_call_stats.values().map(|(ok, _)| *ok).sum();
+                    let total_err: usize = session.plan.tool_call_stats.values().map(|(_, e)| *e).sum();
+                    let total = total_ok + total_err;
+                    if total == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Plan tool call rate: no tool calls recorded.".to_string()
+                        ));
+                    } else {
+                        let pct = total_ok as f64 / total as f64 * 100.0;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Plan tool call ok rate: {:.1}% ({total_ok}/{total} calls succeeded).", pct
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionNoteAvgLen => {
+                    let n = session.session_notes.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Session note avg len: no notes yet.".to_string()
+                        ));
+                    } else {
+                        let total_chars: usize = session.session_notes.iter().map(|(t, _)| t.len()).sum();
+                        let avg = total_chars / n;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session note avg len: {avg} chars/note across {n} notes."
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryTurnCostMinAll => {
                     let min = session.turn_cost_log.iter()
                         .map(|(_, _, _, c)| *c)
@@ -39318,6 +39364,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/turn-wall-min-all" => {
+                                    if _ctx.send(UiCommand::QueryTurnWallMinAll).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-tool-call-rate" => {
+                                    if _ctx.send(UiCommand::QueryPlanToolCallRate).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-note-avg-len" => {
+                                    if _ctx.send(UiCommand::QuerySessionNoteAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -40407,6 +40468,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-cost-min-all",
                             "/turn-wall-max-all",
                             "/verifier-finding-last",
+                            "/turn-wall-min-all",
+                            "/plan-tool-call-rate",
+                            "/session-note-avg-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
