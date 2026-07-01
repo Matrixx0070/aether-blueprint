@@ -1701,6 +1701,12 @@ pub enum UiCommand {
     QueryHistoryAnnotTurnMax,
     /// Show the highest turn index with a turn label.
     QueryTurnLabelTurnMax,
+    /// Show the highest turn index with a bookmark.
+    QueryBookmarkTurnMax,
+    /// Show the lowest turn index with a history annotation.
+    QueryHistoryAnnotTurnMin,
+    /// Show the lowest turn index with a turn label.
+    QueryTurnLabelTurnMin,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
