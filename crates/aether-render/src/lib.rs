@@ -2025,6 +2025,12 @@ pub enum UiCommand {
     QueryTurnIndexCurrent,
     /// Show whether a smart pause pattern is set.
     QuerySmartPauseSet,
+    /// Show whether agent persona is set.
+    QueryAgentPersonaSet,
+    /// Show whether request prefix is set.
+    QueryRequestPrefixSet,
+    /// Show whether request suffix is set.
+    QueryRequestSuffixSet,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

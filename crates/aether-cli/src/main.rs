@@ -13700,6 +13700,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryAgentPersonaSet => {
+                    let set = session.agent_persona.is_some();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Agent persona set: {}", set
+                    )));
+                    continue;
+                }
+                UiCommand::QueryRequestPrefixSet => {
+                    let set = session.request_prefix.is_some();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Request prefix set: {}", set
+                    )));
+                    continue;
+                }
+                UiCommand::QueryRequestSuffixSet => {
+                    let set = session.request_suffix.is_some();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Request suffix set: {}", set
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -43237,6 +43258,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/agent-persona-set" => {
+                                    if _ctx.send(UiCommand::QueryAgentPersonaSet).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/request-prefix-set" => {
+                                    if _ctx.send(UiCommand::QueryRequestPrefixSet).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/request-suffix-set" => {
+                                    if _ctx.send(UiCommand::QueryRequestSuffixSet).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -44581,6 +44617,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/llm-fallback-count-total",
                             "/turn-index-current",
                             "/smart-pause-set",
+                            "/agent-persona-set",
+                            "/request-prefix-set",
+                            "/request-suffix-set",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
