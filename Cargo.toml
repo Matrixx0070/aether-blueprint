@@ -78,6 +78,8 @@ aether-concolic    = { path = "crates/aether-concolic",    version = "0.35.0" }
 aether-invariant   = { path = "crates/aether-invariant",   version = "0.35.0" }
 aether-shuttle     = { path = "crates/aether-shuttle",     version = "0.35.0" }
 aether-lockgraph   = { path = "crates/aether-lockgraph",   version = "0.35.0" }
+aether-threat-intel = { path = "crates/aether-threat-intel", version = "0.35.0" }
+aether-hwsec       = { path = "crates/aether-hwsec",       version = "0.35.0" }
 
 [profile.release]
 lto = "thin"

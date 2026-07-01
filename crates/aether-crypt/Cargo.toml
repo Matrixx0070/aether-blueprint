@@ -1,0 +1,11 @@
+[package]
+name = "aether-crypt"
+version = "0.35.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }

@@ -84,6 +84,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-container"
+version = "0.35.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "aether-core"
 version = "0.35.0"
 dependencies = [
@@ -109,12 +119,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-crypt"
+version = "0.35.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "aether-difffuzz"
 version = "0.35.0"
 dependencies = [
  "anyhow",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "aether-distrib"
+version = "0.35.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -137,6 +167,28 @@ dependencies = [
  "regex",
  "serde",
  "serde_yaml",
+]
+
+[[package]]
+name = "aether-hwsec"
+version = "0.35.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "aether-incident"
+version = "0.35.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -180,6 +232,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-malware"
+version = "0.35.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "aether-mcp"
 version = "0.35.0"
 dependencies = [
@@ -218,6 +280,16 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "aether-nsd"
+version = "0.35.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -274,6 +346,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-redteam"
+version = "0.35.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "aether-render"
 version = "0.35.0"
 dependencies = [
@@ -282,6 +364,16 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "aether-reveng"
+version = "0.35.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -356,6 +448,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-threat-intel"
+version = "0.35.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "aether-threat-model"
+version = "0.35.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "aether-tools"
 version = "0.35.0"
 dependencies = [
@@ -370,6 +487,16 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "walkdir",
+]
+
+[[package]]
+name = "aether-zk"
+version = "0.35.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
