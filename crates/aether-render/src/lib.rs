@@ -1467,6 +1467,12 @@ pub enum UiCommand {
     QueryStickyLast,
     /// Show the last turn label (turn_index, text).
     QueryTurnLabelLast,
+    /// Show the last persistent reminder text.
+    QueryPersistentReminderLast,
+    /// Show the last session note text.
+    QuerySessionNoteLast,
+    /// Show the last plan block name from block_counts.
+    QueryPlanBlockLast,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

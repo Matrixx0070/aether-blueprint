@@ -11192,6 +11192,58 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryPersistentReminderLast => {
+                    match session.persistent_reminders.last() {
+                        Some(r) => {
+                            let preview = r.chars().take(160).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Persistent reminder[last] (of {}): {preview}",
+                                session.persistent_reminders.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Persistent reminders: none set.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionNoteLast => {
+                    match session.session_notes.last() {
+                        Some((text, ts)) => {
+                            let preview = text.chars().take(120).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Session note[last] (of {}, ts={ts}): {preview}",
+                                session.session_notes.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Session notes: none.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanBlockLast => {
+                    let mut blocks: Vec<_> = session.plan.block_counts.iter().collect();
+                    blocks.sort_by_key(|(k, _)| k.as_str());
+                    match blocks.last() {
+                        Some((name, count)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Plan block[last] (of {}): '{name}' count={count}",
+                                session.plan.block_counts.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Plan block counts: none recorded.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryWarmupFileLast => {
                     match session.warmup_files.last() {
                         Some(path) => {
@@ -38817,6 +38869,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/persistent-reminder-last" => {
+                                    if _ctx.send(UiCommand::QueryPersistentReminderLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-note-last" => {
+                                    if _ctx.send(UiCommand::QuerySessionNoteLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-block-last" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -39882,6 +39949,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/warmup-file-last",
                             "/sticky-last",
                             "/turn-label-last",
+                            "/persistent-reminder-last",
+                            "/session-note-last",
+                            "/plan-block-last",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
