@@ -17323,6 +17323,38 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryPlaybookTriggerAvgWords => {
+                    let n = session.error_playbook.len();
+                    let avg = if n == 0 { 0.0 } else {
+                        session.error_playbook.iter().map(|(t, _)| t.split_whitespace().count() as f64).sum::<f64>() / n as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Avg playbook trigger word count: {avg:.2} ({n} entries)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlaybookActionAvgWords => {
+                    let n = session.error_playbook.len();
+                    let avg = if n == 0 { 0.0 } else {
+                        session.error_playbook.iter().map(|(_, a)| a.split_whitespace().count() as f64).sum::<f64>() / n as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Avg playbook action word count: {avg:.2} ({n} entries)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlaybookAvgEntryWords => {
+                    let n = session.error_playbook.len();
+                    let avg = if n == 0 { 0.0 } else {
+                        session.error_playbook.iter().map(|(t, a)| {
+                            (t.split_whitespace().count() + a.split_whitespace().count()) as f64
+                        }).sum::<f64>() / n as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Avg playbook entry total word count: {avg:.2} ({n} entries)"
+                    )));
+                    continue;
+                }
                 UiCommand::QueryP50WallMs => {
                     let mut v: Vec<u64> = session.turn_wall_ms.iter().copied().collect();
                     v.sort_unstable();
@@ -50396,6 +50428,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/playbook-trigger-avg-words" => {
+                                    if _ctx.send(UiCommand::QueryPlaybookTriggerAvgWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/playbook-action-avg-words" => {
+                                    if _ctx.send(UiCommand::QueryPlaybookActionAvgWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/playbook-avg-entry-words" => {
+                                    if _ctx.send(UiCommand::QueryPlaybookAvgEntryWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/p50-wall-ms" => {
                                     if _ctx.send(UiCommand::QueryP50WallMs).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -52301,6 +52348,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/p50-wall-ms",
                             "/p90-wall-ms",
                             "/p99-wall-ms",
+                            "/playbook-trigger-avg-words",
+                            "/playbook-action-avg-words",
+                            "/playbook-avg-entry-words",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -3027,6 +3027,12 @@ pub enum UiCommand {
     QueryP90WallMs,
     /// 99th-percentile wall-clock ms across logged turns.
     QueryP99WallMs,
+    /// Average word count of trigger strings in error_playbook.
+    QueryPlaybookTriggerAvgWords,
+    /// Average word count of action strings in error_playbook.
+    QueryPlaybookActionAvgWords,
+    /// Average combined word count (trigger + action) per error_playbook entry.
+    QueryPlaybookAvgEntryWords,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
