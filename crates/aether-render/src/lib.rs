@@ -2469,6 +2469,12 @@ pub enum UiCommand {
     QueryPendingReminderTightensCount,
     /// Show the count of pending reminders with EffectHint::Neutral.
     QueryPendingReminderNeutralCount,
+    /// Show the count of pending reminders from Source::ProjectHook.
+    QueryPendingReminderProjectHookCount,
+    /// Show the count of pending reminders from Source::UserHook.
+    QueryPendingReminderUserHookCount,
+    /// Show the count of pending reminders with EffectHint::Ambiguous.
+    QueryPendingReminderAmbiguousCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
