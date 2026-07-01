@@ -12271,6 +12271,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryEnvVarKeyMinLen => {
+                    match session.session_env.keys().min_by_key(|k| k.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Session env: none.".to_string())); }
+                        Some(k) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Shortest env var key: {} chars ('{}')", k.len(), k
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryEnvVarValMinLen => {
+                    match session.session_env.values().min_by_key(|v| v.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Session env: none.".to_string())); }
+                        Some(v) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Shortest env var value: {} chars", v.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPromptMacroValMinLen => {
+                    match session.prompt_macros.values().min_by_key(|v| v.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Prompt macros: none.".to_string())); }
+                        Some(v) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Shortest prompt macro value: {} chars", v.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -41103,6 +41136,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/env-var-key-min-len" => {
+                                    if _ctx.send(UiCommand::QueryEnvVarKeyMinLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/env-var-val-min-len" => {
+                                    if _ctx.send(UiCommand::QueryEnvVarValMinLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/prompt-macro-val-min-len" => {
+                                    if _ctx.send(UiCommand::QueryPromptMacroValMinLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -42306,6 +42354,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/prompt-macro-val-max-len",
                             "/env-var-key-max-len",
                             "/env-var-val-max-len",
+                            "/env-var-key-min-len",
+                            "/env-var-val-min-len",
+                            "/prompt-macro-val-min-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

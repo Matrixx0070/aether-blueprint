@@ -1743,6 +1743,12 @@ pub enum UiCommand {
     QueryEnvVarKeyMaxLen,
     /// Show the longest session env-var value string.
     QueryEnvVarValMaxLen,
+    /// Show the shortest session env-var key string.
+    QueryEnvVarKeyMinLen,
+    /// Show the shortest session env-var value string.
+    QueryEnvVarValMinLen,
+    /// Show the shortest prompt macro value string.
+    QueryPromptMacroValMinLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
