@@ -15780,6 +15780,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryOverlayEnabled => {
+                    let enabled = session.overlay.config.enabled;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Overlay enabled: {enabled}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryOverlayLongConvEveryN => {
+                    let n = session.overlay.config.long_conversation.every_n_turns;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Overlay long_conversation every_n_turns: {n}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryOverlayLongConvCtxRatio => {
+                    let r = session.overlay.config.long_conversation.at_ctx_ratio;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Overlay long_conversation at_ctx_ratio: {r:.3}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -46547,6 +46568,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/overlay-enabled" => {
+                                    if _ctx.send(UiCommand::QueryOverlayEnabled).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/overlay-long-conv-every-n" => {
+                                    if _ctx.send(UiCommand::QueryOverlayLongConvEveryN).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/overlay-long-conv-ctx-ratio" => {
+                                    if _ctx.send(UiCommand::QueryOverlayLongConvCtxRatio).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -48137,6 +48173,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-output-hist-key-total",
                             "/tool-output-hist-delta-min",
                             "/tool-output-hist-delta-avg",
+                            "/overlay-enabled",
+                            "/overlay-long-conv-every-n",
+                            "/overlay-long-conv-ctx-ratio",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

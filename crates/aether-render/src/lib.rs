@@ -2517,6 +2517,12 @@ pub enum UiCommand {
     QueryToolOutputHistDeltaMin,
     /// Show the average absolute length delta between curr and prev in tool_output_history.
     QueryToolOutputHistDeltaAvg,
+    /// Show whether the overlay is enabled (session.overlay.config.enabled).
+    QueryOverlayEnabled,
+    /// Show the long_conversation overlay every_n_turns setting.
+    QueryOverlayLongConvEveryN,
+    /// Show the long_conversation overlay at_ctx_ratio setting.
+    QueryOverlayLongConvCtxRatio,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
