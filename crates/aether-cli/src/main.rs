@@ -11192,6 +11192,47 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryToolOutputHistFirst => {
+                    let mut keys: Vec<_> = session.tool_output_history.keys().collect();
+                    keys.sort();
+                    match keys.first() {
+                        Some(name) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Tool output history[0] (of {}): '{name}'", session.tool_output_history.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Tool output history: empty.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnCostLast => {
+                    match session.turn_cost_log.last() {
+                        Some((turn_idx, tokens_in, tokens_out, cost)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Turn cost[last] (of {}): turn={turn_idx} in={tokens_in} out={tokens_out} cost=${cost:.6}",
+                                session.turn_cost_log.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Turn cost log: empty.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryProgressDoneCount => {
+                    let done = session.progress_items.iter().filter(|(_, d)| *d).count();
+                    let pending = session.progress_items.len() - done;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Progress: {done} done, {pending} pending ({} total).", session.progress_items.len()
+                    )));
+                    continue;
+                }
                 UiCommand::QueryTurnCostFirst => {
                     match session.turn_cost_log.first() {
                         Some((turn_idx, tokens_in, tokens_out, cost)) => {
@@ -38569,6 +38610,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/tool-output-hist-first" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputHistFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-cost-last" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/progress-done-count" => {
+                                    if _ctx.send(UiCommand::QueryProgressDoneCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -39622,6 +39678,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-cost-first",
                             "/pending-reminder-first",
                             "/verifier-rule-first",
+                            "/tool-output-hist-first",
+                            "/turn-cost-last",
+                            "/progress-done-count",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

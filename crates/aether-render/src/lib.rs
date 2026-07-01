@@ -1443,6 +1443,12 @@ pub enum UiCommand {
     QueryPendingReminderFirst,
     /// Show the first verifier gate rule id and description.
     QueryVerifierRuleFirst,
+    /// Show the first tool name from tool_output_history.
+    QueryToolOutputHistFirst,
+    /// Show the last turn cost log entry.
+    QueryTurnCostLast,
+    /// Count done progress items separately (vs total).
+    QueryProgressDoneCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
