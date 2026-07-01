@@ -1,0 +1,13 @@
+[package]
+name = "aether-abi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AetherCode cross-language ABI checker: validates that C headers and Rust FFI bindings agree on struct layout and function signatures."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+regex.workspace = true
+once_cell.workspace = true

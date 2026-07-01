@@ -1,0 +1,13 @@
+[package]
+name = "aether-muttest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AetherCode mutation testing gate: applies source-level mutations and checks whether the test suite kills them."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+regex.workspace = true
+once_cell.workspace = true
