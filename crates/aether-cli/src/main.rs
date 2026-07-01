@@ -17323,6 +17323,36 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryP50OutTokens => {
+                    let mut v: Vec<u64> = session.turn_cost_log.iter().map(|(_, _, o, _)| *o).collect();
+                    v.sort_unstable();
+                    let n = v.len();
+                    let p50 = if n == 0 { 0 } else { v[n / 2] };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "p50 output tokens per entry: {p50} ({n} entries)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryP90OutTokens => {
+                    let mut v: Vec<u64> = session.turn_cost_log.iter().map(|(_, _, o, _)| *o).collect();
+                    v.sort_unstable();
+                    let n = v.len();
+                    let p90 = if n == 0 { 0 } else { v[(n * 90 / 100).min(n - 1)] };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "p90 output tokens per entry: {p90} ({n} entries)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryP99OutTokens => {
+                    let mut v: Vec<u64> = session.turn_cost_log.iter().map(|(_, _, o, _)| *o).collect();
+                    v.sort_unstable();
+                    let n = v.len();
+                    let p99 = if n == 0 { 0 } else { v[(n * 99 / 100).min(n - 1)] };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "p99 output tokens per entry: {p99} ({n} entries)"
+                    )));
+                    continue;
+                }
                 UiCommand::QueryP50InTokens => {
                     let mut v: Vec<u64> = session.turn_cost_log.iter().map(|(_, i, _, _)| *i).collect();
                     v.sort_unstable();
@@ -50595,6 +50625,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/p50-out-tokens" => {
+                                    if _ctx.send(UiCommand::QueryP50OutTokens).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/p90-out-tokens" => {
+                                    if _ctx.send(UiCommand::QueryP90OutTokens).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/p99-out-tokens" => {
+                                    if _ctx.send(UiCommand::QueryP99OutTokens).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/p50-in-tokens" => {
                                     if _ctx.send(UiCommand::QueryP50InTokens).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -52608,6 +52653,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/p50-in-tokens",
                             "/p90-in-tokens",
                             "/p99-in-tokens",
+                            "/p50-out-tokens",
+                            "/p90-out-tokens",
+                            "/p99-out-tokens",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
