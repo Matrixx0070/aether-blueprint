@@ -3093,6 +3093,12 @@ pub enum UiCommand {
     QueryOutTokensStddev,
     /// Minimum ms gap between any two consecutive session_note timestamps.
     QuerySessionNoteMinTsGap,
+    /// Average turn-index gap between consecutive turn labels.
+    QueryTurnLabelIdxAvgGap,
+    /// Maximum turn-index gap between consecutive turn labels.
+    QueryTurnLabelIdxMaxGap,
+    /// Minimum turn-index gap between consecutive turn labels.
+    QueryTurnLabelIdxMinGap,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
