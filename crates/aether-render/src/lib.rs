@@ -2307,6 +2307,12 @@ pub enum UiCommand {
     QueryToolOutputLimitValFirst,
     /// Show the total of all tool_output_limits values.
     QueryToolOutputLimitTotal,
+    /// Show the value limit for the last tool_output_limits entry.
+    QueryToolOutputLimitValLast,
+    /// Show the average of all tool_output_limits values.
+    QueryToolOutputLimitAvgVal,
+    /// Show the maximum of all tool_output_limits values.
+    QueryToolOutputLimitMaxVal,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

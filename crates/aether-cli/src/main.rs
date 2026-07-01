@@ -14949,6 +14949,35 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryToolOutputLimitValLast => {
+                    let val = session.tool_output_limits.values().last().copied().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Tool output limit val last: {val}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryToolOutputLimitAvgVal => {
+                    let n = session.tool_output_limits.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Tool output limit avg val: no limits set.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.tool_output_limits.values().sum();
+                        let avg = total / n;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Tool output limit avg val: {avg}"
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolOutputLimitMaxVal => {
+                    let max = session.tool_output_limits.values().copied().max().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Tool output limit max val: {max}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -45191,6 +45220,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/tool-output-limit-val-last" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputLimitValLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-output-limit-avg-val" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputLimitAvgVal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-output-limit-max-val" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputLimitMaxVal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -46676,6 +46720,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/persistent-reminder-min-len",
                             "/tool-output-limit-val-first",
                             "/tool-output-limit-total",
+                            "/tool-output-limit-val-last",
+                            "/tool-output-limit-avg-val",
+                            "/tool-output-limit-max-val",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
