@@ -2289,6 +2289,12 @@ pub enum UiCommand {
     QueryTurnModelMinLen,
     /// Show the total chars across all model names in turn_models.
     QueryTurnModelTotalChars,
+    /// Show the average length of pending reminder texts.
+    QueryPendingReminderAvgLen,
+    /// Show the count of persistent reminders.
+    QueryPersistentReminderCount,
+    /// Show the total chars across all persistent reminders.
+    QueryPersistentReminderTotal,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
