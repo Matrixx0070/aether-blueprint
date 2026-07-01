@@ -8964,6 +8964,47 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QueryAutoCompactEnabled => {
+                    let enabled = session.auto_compact_on_stuck;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Auto-compact-on-stuck: {}. Use /auto-compact on|off to toggle.",
+                        if enabled { "ENABLED" } else { "disabled" }
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierRulesList => {
+                    let rules = &session.verifier.gate.rules;
+                    if rules.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Verifier: no rules loaded.".to_string()
+                        ));
+                    } else {
+                        let list: Vec<_> = rules.iter()
+                            .map(|r| format!("  [{}] {:?} — {}", r.rule.id, r.rule.severity, r.rule.description.chars().take(60).collect::<String>()))
+                            .collect();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Verifier rules ({}):\n{}", rules.len(), list.join("\n")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanToolBlockTurns(name) => {
+                    match session.plan.block_turns.get(&name) {
+                        Some(turns) => {
+                            let preview: Vec<_> = turns.iter().rev().take(10).collect();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Plan block '{name}': {} total turns; last 10: {:?}",
+                                turns.len(), preview
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Plan block '{name}': not in block_turns map."
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryTokenBudgetWarnFired => {
                     let fired = session.token_budget_warn_fired;
                     let warn_pct = session.token_budget_warn_pct;
@@ -35391,6 +35432,22 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/auto-compact-enabled" => {
+                                    if _ctx.send(UiCommand::QueryAutoCompactEnabled).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-rules-list" => {
+                                    if _ctx.send(UiCommand::QueryVerifierRulesList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd_str if cmd_str.starts_with("/plan-tool-block-turns ") => {
+                                    let name = cmd_str.trim_start_matches("/plan-tool-block-turns ").trim().to_string();
+                                    if _ctx.send(UiCommand::QueryPlanToolBlockTurns(name)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -36266,6 +36323,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/token-budget-warn-fired",
                             "/compaction-status",
                             "/history-tool-use-count",
+                            "/auto-compact-enabled",
+                            "/verifier-rules-list",
+                            "/plan-tool-block-turns ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

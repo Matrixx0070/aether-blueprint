@@ -1137,6 +1137,12 @@ pub enum UiCommand {
     QueryCompactionStatus,
     /// Count total tool_uses entries across all assistant history items.
     QueryHistoryToolUseCount,
+    /// Show whether auto-compact-on-stuck is enabled.
+    QueryAutoCompactEnabled,
+    /// List rule IDs from the verifier gate.
+    QueryVerifierRulesList,
+    /// Show block_turns for a specific plan block type (by name).
+    QueryPlanToolBlockTurns(String),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
