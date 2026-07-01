@@ -15146,6 +15146,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryTokenBudgetHardPctVal => {
+                    let v = session.token_budget_hard_pct;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Token budget hard pct: {v:.1}%"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryAutoContinueCooldownMs => {
+                    let v = session.auto_continue_cooldown_ms;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Auto-continue cooldown: {v}ms"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryLlmFallbackCountVal => {
+                    let v = session.llm_fallback_count;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "LLM fallback count: {v}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -45523,6 +45544,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/token-budget-hard-pct-val" => {
+                                    if _ctx.send(UiCommand::QueryTokenBudgetHardPctVal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/auto-continue-cooldown-ms" => {
+                                    if _ctx.send(UiCommand::QueryAutoContinueCooldownMs).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/llm-fallback-count-val" => {
+                                    if _ctx.send(UiCommand::QueryLlmFallbackCountVal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -47035,6 +47071,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/temperature-val",
                             "/max-tokens-per-turn-val",
                             "/token-budget-warn-pct-val",
+                            "/token-budget-hard-pct-val",
+                            "/auto-continue-cooldown-ms",
+                            "/llm-fallback-count-val",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -2361,6 +2361,12 @@ pub enum UiCommand {
     QueryMaxTokensPerTurnVal,
     /// Show the token budget warn percentage.
     QueryTokenBudgetWarnPctVal,
+    /// Show the token budget hard percentage.
+    QueryTokenBudgetHardPctVal,
+    /// Show the auto-continue cooldown in ms (explicit).
+    QueryAutoContinueCooldownMs,
+    /// Show the cumulative LLM fallback count.
+    QueryLlmFallbackCountVal,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
