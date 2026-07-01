@@ -15429,6 +15429,29 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QuerySavedSnapshotPlanHasGoalCount => {
+                    let count = session.saved_snapshots.values().filter(|(_, plan)| plan.goal.is_some()).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Saved snapshots with a plan goal set: {count}"
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySavedSnapshotPlanGoalTotalChars => {
+                    let total: usize = session.saved_snapshots.values()
+                        .map(|(_, plan)| plan.goal.as_deref().map(|g| g.len()).unwrap_or(0))
+                        .sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Saved snapshots total plan goal chars: {total}"
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySavedSnapshotPlanHasWindowCount => {
+                    let count = session.saved_snapshots.values().filter(|(_, plan)| plan.window.is_some()).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Saved snapshots with a plan window set: {count}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -45986,6 +46009,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/snapshot-plan-has-goal-count" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotPlanHasGoalCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/snapshot-plan-goal-total-chars" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotPlanGoalTotalChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/snapshot-plan-has-window-count" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotPlanHasWindowCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -47534,6 +47572,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/snapshot-plan-text-total-chars",
                             "/snapshot-plan-text-max-len",
                             "/snapshot-plan-text-avg-len",
+                            "/snapshot-plan-has-goal-count",
+                            "/snapshot-plan-goal-total-chars",
+                            "/snapshot-plan-has-window-count",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

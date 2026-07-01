@@ -2433,6 +2433,12 @@ pub enum UiCommand {
     QuerySavedSnapshotPlanTextMaxLen,
     /// Show the average plan text length across all saved snapshots.
     QuerySavedSnapshotPlanTextAvgLen,
+    /// Show the count of saved snapshots whose plan has a goal set.
+    QuerySavedSnapshotPlanHasGoalCount,
+    /// Show the total chars across all saved snapshot plan goals.
+    QuerySavedSnapshotPlanGoalTotalChars,
+    /// Show the count of saved snapshots whose plan has a window set.
+    QuerySavedSnapshotPlanHasWindowCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
