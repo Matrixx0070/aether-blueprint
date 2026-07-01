@@ -12571,6 +12571,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryStickyContextMaxLen => {
+                    match session.sticky_context.iter().max_by_key(|s| s.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Sticky context: none.".to_string())); }
+                        Some(s) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Longest sticky context entry: {} chars", s.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryStickyContextMinLen => {
+                    match session.sticky_context.iter().min_by_key(|s| s.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Sticky context: none.".to_string())); }
+                        Some(s) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Shortest sticky context entry: {} chars", s.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryWarmupFileMaxLen => {
+                    match session.warmup_files.iter().max_by_key(|f| f.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Warmup files: none.".to_string())); }
+                        Some(f) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Longest warmup file path: {} chars ('{}')", f.len(), f
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -41538,6 +41571,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/sticky-context-max-len" => {
+                                    if _ctx.send(UiCommand::QueryStickyContextMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/sticky-context-min-len" => {
+                                    if _ctx.send(UiCommand::QueryStickyContextMinLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/warmup-file-max-len" => {
+                                    if _ctx.send(UiCommand::QueryWarmupFileMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -42768,6 +42816,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/error-playbook-pat-max-len",
                             "/error-playbook-hint-max-len",
                             "/auto-tag-rule-pat-max-len",
+                            "/sticky-context-max-len",
+                            "/sticky-context-min-len",
+                            "/warmup-file-max-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

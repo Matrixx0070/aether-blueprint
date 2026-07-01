@@ -1797,6 +1797,12 @@ pub enum UiCommand {
     QueryErrorPlaybookHintMaxLen,
     /// Show the longest auto-tag rule pattern string.
     QueryAutoTagRulePatMaxLen,
+    /// Show the longest sticky context entry.
+    QueryStickyContextMaxLen,
+    /// Show the shortest sticky context entry.
+    QueryStickyContextMinLen,
+    /// Show the longest warmup file path.
+    QueryWarmupFileMaxLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
