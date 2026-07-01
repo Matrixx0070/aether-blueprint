@@ -999,6 +999,12 @@ pub enum UiCommand {
     QueryToolCallBudgetShow,
     /// Show whether long-conversation digest was injected last assembly.
     QueryLongConvStatus,
+    /// Show whether plan text was included in last assembly's system prompt.
+    QueryPlanIncludedShow,
+    /// Count pending reminders in the queue.
+    QueryPendingRemindersCount,
+    /// Show the turn index at which metrics were last reset.
+    QueryMetricResetTurn,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

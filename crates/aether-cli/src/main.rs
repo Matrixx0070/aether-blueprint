@@ -7700,6 +7700,50 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryPlanIncludedShow => {
+                    match &session.last_assembly_telemetry {
+                        Some(t) => {
+                            let msg = if t.plan_included {
+                                "Plan included: YES — plan text was injected into last system prompt."
+                            } else {
+                                "Plan included: NO — plan was empty or not injected last turn."
+                            };
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(msg.to_string()));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Plan included: unknown (no turns completed yet).".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPendingRemindersCount => {
+                    let n = session.pending_reminders.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Pending reminders: none queued.".to_string()
+                        ));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Pending reminders: {n} queued for next assembly."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryMetricResetTurn => {
+                    if session.metrics_reset_turn == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Metrics reset turn: never reset (all stats from session start).".to_string()
+                        ));
+                    } else {
+                        let turns_since = session.turn_index.saturating_sub(session.metrics_reset_turn);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Metrics last reset at turn {} ({} turns ago).", session.metrics_reset_turn, turns_since
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryD6Status => {
                     match &session.last_assembly_telemetry {
                         Some(t) => {
@@ -33973,6 +34017,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /plan-included-show — show if plan was in last assembly
+                                "/plan-included-show" => {
+                                    if _ctx.send(UiCommand::QueryPlanIncludedShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /pending-reminders-count — count pending reminders
+                                "/pending-reminders-count" => {
+                                    if _ctx.send(UiCommand::QueryPendingRemindersCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /metric-reset-turn — show when metrics were last reset
+                                "/metric-reset-turn" => {
+                                    if _ctx.send(UiCommand::QueryMetricResetTurn).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -34779,6 +34841,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/d6-status",
                             "/tool-call-budget-show",
                             "/long-conv-status",
+                            "/plan-included-show",
+                            "/pending-reminders-count",
+                            "/metric-reset-turn",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
