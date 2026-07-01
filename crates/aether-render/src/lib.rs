@@ -2355,6 +2355,12 @@ pub enum UiCommand {
     QueryCostCapVal,
     /// Show the thinking budget value.
     QueryThinkingBudgetVal,
+    /// Show the temperature setting.
+    QueryTemperatureVal,
+    /// Show the max tokens per turn setting.
+    QueryMaxTokensPerTurnVal,
+    /// Show the token budget warn percentage.
+    QueryTokenBudgetWarnPctVal,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

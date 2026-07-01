@@ -15125,6 +15125,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryTemperatureVal => {
+                    let v = session.config.temperature.unwrap_or(0.0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Temperature: {v:.2}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryMaxTokensPerTurnVal => {
+                    let v = session.config.max_tokens_per_turn;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Max tokens per turn: {v}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTokenBudgetWarnPctVal => {
+                    let v = session.token_budget_warn_pct;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Token budget warn pct: {v:.1}%"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -45487,6 +45508,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/temperature-val" => {
+                                    if _ctx.send(UiCommand::QueryTemperatureVal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/max-tokens-per-turn-val" => {
+                                    if _ctx.send(UiCommand::QueryMaxTokensPerTurnVal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/token-budget-warn-pct-val" => {
+                                    if _ctx.send(UiCommand::QueryTokenBudgetWarnPctVal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -46996,6 +47032,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/cost-ceiling-val",
                             "/cost-cap-val",
                             "/thinking-budget-val",
+                            "/temperature-val",
+                            "/max-tokens-per-turn-val",
+                            "/token-budget-warn-pct-val",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
