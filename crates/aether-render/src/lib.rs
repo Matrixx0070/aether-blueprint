@@ -1113,6 +1113,12 @@ pub enum UiCommand {
     QueryPlanBlockTurnsLen(String),
     /// Show current turn index for this session.
     QueryHistoryTurnCount,
+    /// Show total input tokens used this session.
+    QuerySessionTokenIn,
+    /// Show total output tokens used this session.
+    QuerySessionTokenOut,
+    /// List all verifier findings from last check.
+    QueryVerifierFindingsList,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

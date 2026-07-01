@@ -8964,6 +8964,43 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QuerySessionTokenIn => {
+                    let n = session.usage_total.input_tokens;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session input tokens: {n} total."
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySessionTokenOut => {
+                    let n = session.usage_total.output_tokens;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session output tokens: {n} total."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierFindingsList => {
+                    match &session.last_verification {
+                        Some(v) if !v.findings.is_empty() => {
+                            let lines: Vec<_> = v.findings.iter()
+                                .map(|f| format!("  [{:?}] {} — {:?}", f.severity, f.rule_id, f.action_taken))
+                                .collect();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Verifier findings ({}):\n{}", v.findings.len(), lines.join("\n")
+                            )));
+                        }
+                        Some(_) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Verifier: no findings — all checks passed.".to_string()
+                            ));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Verifier: no result recorded yet.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionCostAlert => {
                     let threshold = session.cost_alert_usd;
                     let fired = session.cost_alert_fired;
@@ -35163,6 +35200,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/session-token-in" => {
+                                    if _ctx.send(UiCommand::QuerySessionTokenIn).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-token-out" => {
+                                    if _ctx.send(UiCommand::QuerySessionTokenOut).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-findings-list" => {
+                                    if _ctx.send(UiCommand::QueryVerifierFindingsList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -36026,6 +36078,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-cost-alert",
                             "/plan-block-turns-len ",
                             "/history-turn-count",
+                            "/session-token-in",
+                            "/session-token-out",
+                            "/verifier-findings-list",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
