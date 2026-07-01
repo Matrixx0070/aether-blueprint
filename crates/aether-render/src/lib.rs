@@ -2829,6 +2829,12 @@ pub enum UiCommand {
     QueryProgressItemPendingChars,
     /// Max plan goal len across all saved snapshots.
     QuerySavedSnapshotPlanGoalMaxLen,
+    /// Min plan goal len across all saved snapshots that have a goal set.
+    QuerySavedSnapshotPlanGoalMinLen,
+    /// Average plan goal len across all saved snapshots that have a goal set.
+    QuerySavedSnapshotPlanGoalAvgLen,
+    /// Count of saved snapshots that have a plan goal set.
+    QuerySavedSnapshotPlanGoalCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

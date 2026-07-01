@@ -17257,6 +17257,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QuerySavedSnapshotPlanGoalMinLen => {
+                    let min = session.saved_snapshots.values()
+                        .filter_map(|(_, plan)| plan.goal.as_ref().map(|g| g.len()))
+                        .min();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match min {
+                        Some(v) => format!("Saved snapshot plan goal min len: {v}"),
+                        None => "Saved snapshots: none with a goal set.".to_string(),
+                    }));
+                    continue;
+                }
+                UiCommand::QuerySavedSnapshotPlanGoalAvgLen => {
+                    let goal_lens: Vec<usize> = session.saved_snapshots.values()
+                        .filter_map(|(_, plan)| plan.goal.as_ref().map(|g| g.len()))
+                        .collect();
+                    let n = goal_lens.len();
+                    let avg = if n == 0 { 0.0 } else {
+                        goal_lens.iter().sum::<usize>() as f64 / n as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Saved snapshot plan goal avg len: {avg:.1} ({n} snapshots with goal)"
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySavedSnapshotPlanGoalCount => {
+                    let count = session.saved_snapshots.values()
+                        .filter(|(_, plan)| plan.goal.is_some())
+                        .count();
+                    let total = session.saved_snapshots.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Saved snapshots with plan goal set: {count}/{total}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -48804,6 +48837,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/saved-snapshot-plan-goal-min-len" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotPlanGoalMinLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/saved-snapshot-plan-goal-avg-len" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotPlanGoalAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/saved-snapshot-plan-goal-count" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotPlanGoalCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -50550,6 +50598,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/progress-item-done-chars",
                             "/progress-item-pending-chars",
                             "/saved-snapshot-plan-goal-max-len",
+                            "/saved-snapshot-plan-goal-min-len",
+                            "/saved-snapshot-plan-goal-avg-len",
+                            "/saved-snapshot-plan-goal-count",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
