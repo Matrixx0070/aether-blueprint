@@ -17323,6 +17323,33 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryNotesPerTurn => {
+                    let turns = session.history.len();
+                    let notes = session.session_notes.len();
+                    let ratio = if turns == 0 { 0.0 } else { notes as f64 / turns as f64 };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Notes per turn: {ratio:.3} ({notes} notes / {turns} history items)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryBookmarksPerTurn => {
+                    let turns = session.history.len();
+                    let bmarks = session.bookmarks.len();
+                    let ratio = if turns == 0 { 0.0 } else { bmarks as f64 / turns as f64 };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Bookmarks per turn: {ratio:.3} ({bmarks} bookmarks / {turns} history items)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryLabelsPerTurn => {
+                    let turns = session.history.len();
+                    let labels = session.turn_labels.len();
+                    let ratio = if turns == 0 { 0.0 } else { labels as f64 / turns as f64 };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Labels per turn: {ratio:.3} ({labels} labels / {turns} history items)"
+                    )));
+                    continue;
+                }
                 UiCommand::QueryLastToolSigSigMinWords => {
                     let min = session.last_tool_signatures.iter()
                         .map(|(_, sig)| sig.split_whitespace().count())
@@ -50157,6 +50184,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/notes-per-turn" => {
+                                    if _ctx.send(UiCommand::QueryNotesPerTurn).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/bookmarks-per-turn" => {
+                                    if _ctx.send(UiCommand::QueryBookmarksPerTurn).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/labels-per-turn" => {
+                                    if _ctx.send(UiCommand::QueryLabelsPerTurn).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -51981,6 +52023,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/last-tool-sig-sig-min-words",
                             "/progress-item-done-word-avg",
                             "/session-var-key-min-words",
+                            "/notes-per-turn",
+                            "/bookmarks-per-turn",
+                            "/labels-per-turn",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

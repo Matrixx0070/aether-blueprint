@@ -2985,6 +2985,12 @@ pub enum UiCommand {
     QueryProgressItemDoneWordAvg,
     /// Minimum word count in any single session_var key.
     QuerySessionVarKeyMinWords,
+    /// Ratio of session notes count to history turn count.
+    QueryNotesPerTurn,
+    /// Ratio of bookmark count to history turn count.
+    QueryBookmarksPerTurn,
+    /// Ratio of turn label count to history turn count.
+    QueryLabelsPerTurn,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
