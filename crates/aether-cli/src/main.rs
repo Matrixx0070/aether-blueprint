@@ -13132,6 +13132,41 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryLastToolSigSigMinLen => {
+                    match session.last_tool_signatures.iter().min_by_key(|(_, sig)| sig.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Last tool signatures: none.".to_string())); }
+                        Some((_, sig)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Shortest tool sig value: {} chars", sig.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanBlockTurnsAvg => {
+                    let n = session.plan.block_turns.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Plan block turns: none.".to_string()));
+                    } else {
+                        let total: usize = session.plan.block_turns.values().map(|v| v.len()).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Avg turns per block type: {} ({} types)", total / n, n
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolErrorCountAvg => {
+                    let n = session.plan.tool_error_counts.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Tool error counts: none.".to_string()));
+                    } else {
+                        let total: usize = session.plan.tool_error_counts.values().sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Avg consecutive errors/tool: {} ({} tools)", total / n, n
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -42354,6 +42389,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/last-tool-sig-sig-min-len" => {
+                                    if _ctx.send(UiCommand::QueryLastToolSigSigMinLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-block-turns-avg" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockTurnsAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-error-count-avg" => {
+                                    if _ctx.send(UiCommand::QueryToolErrorCountAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -43635,6 +43685,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/progress-item-avg-len",
                             "/tool-output-limit-key-avg-len",
                             "/saved-snapshot-key-avg-len",
+                            "/last-tool-sig-sig-min-len",
+                            "/plan-block-turns-avg",
+                            "/tool-error-count-avg",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

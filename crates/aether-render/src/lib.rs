@@ -1899,6 +1899,12 @@ pub enum UiCommand {
     QueryToolOutputLimitKeyAvgLen,
     /// Show the average length of saved snapshot name keys.
     QuerySavedSnapshotKeyAvgLen,
+    /// Show the shortest signature value in last tool signatures.
+    QueryLastToolSigSigMinLen,
+    /// Show the average turns per block type across plan block turns.
+    QueryPlanBlockTurnsAvg,
+    /// Show the average consecutive error count across all tools.
+    QueryToolErrorCountAvg,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
