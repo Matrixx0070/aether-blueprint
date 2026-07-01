@@ -1677,6 +1677,12 @@ pub enum UiCommand {
     QueryToolOutputLimitFirst,
     /// Show the first completed progress item.
     QueryProgressItemsDoneFirst,
+    /// Show count of pending (incomplete) progress items.
+    QueryProgressItemsPendingCount,
+    /// Show the first pending (incomplete) progress item.
+    QueryProgressItemsPendingFirst,
+    /// Show the maximum tool output limit value.
+    QueryToolOutputLimitMax,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

@@ -11940,6 +11940,32 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryProgressItemsPendingCount => {
+                    let pending = session.progress_items.iter().filter(|(_, done)| !*done).count();
+                    let total = session.progress_items.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Progress items pending: {pending}/{total}."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryProgressItemsPendingFirst => {
+                    match session.progress_items.iter().find(|(_, done)| !*done) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Progress items: all complete (or none set).".to_string())); }
+                        Some((text, _)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "First pending progress item: {}", text
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolOutputLimitMax => {
+                    match session.tool_output_limits.values().max() {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Tool output limits: none set.".to_string())); }
+                        Some(lim) => { let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Tool output limit max: {} chars.", lim))); }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -40607,6 +40633,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/progress-items-pending-count" => {
+                                    if _ctx.send(UiCommand::QueryProgressItemsPendingCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/progress-items-pending-first" => {
+                                    if _ctx.send(UiCommand::QueryProgressItemsPendingFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-output-limit-max" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputLimitMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -41777,6 +41818,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/prompt-macro-key-max-len",
                             "/tool-output-limit-first",
                             "/progress-items-done-first",
+                            "/progress-items-pending-count",
+                            "/progress-items-pending-first",
+                            "/tool-output-limit-max",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
