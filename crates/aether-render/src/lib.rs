@@ -1791,6 +1791,12 @@ pub enum UiCommand {
     QueryErrorPlaybookHintMinLen,
     /// Show the shortest auto-tag rule pattern string.
     QueryAutoTagRulePatMinLen,
+    /// Show the longest error playbook pattern string.
+    QueryErrorPlaybookPatMaxLen,
+    /// Show the longest error playbook hint string.
+    QueryErrorPlaybookHintMaxLen,
+    /// Show the longest auto-tag rule pattern string.
+    QueryAutoTagRulePatMaxLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
