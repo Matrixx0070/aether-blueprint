@@ -1281,6 +1281,12 @@ pub enum UiCommand {
     QueryHistoryToolResultLen,
     /// Count of total verifier findings in last verification.
     QueryVerifierFindingCount,
+    /// Show overall tool ok-rate across all plan stats.
+    QueryPlanOkRate,
+    /// Show average session cost per turn (burn rate).
+    QuerySessionCostBurn,
+    /// Show ratio of user chars to assistant chars in history.
+    QueryHistoryRatio,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

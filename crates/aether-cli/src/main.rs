@@ -10572,6 +10572,48 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryPlanOkRate => {
+                    let (ok_sum, err_sum) = session.plan.tool_call_stats.values()
+                        .fold((0usize, 0usize), |(ok, err), (o, e)| (ok + o, err + e));
+                    let total = ok_sum + err_sum;
+                    if total == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Plan ok-rate: no tool calls recorded yet.".to_string()
+                        ));
+                    } else {
+                        let pct = ok_sum as f64 / total as f64 * 100.0;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Plan tool ok-rate: {ok_sum}/{total} ({pct:.1}%)."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionCostBurn => {
+
+                    let turns = session.turn_index.max(1) as f64;
+                    let total_cost: f64 = session.turn_cost_log.iter().map(|(_, _, _, c)| c).sum();
+                    let burn = total_cost / turns;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session cost burn: ${burn:.6}/turn ({} turns, ${total_cost:.6} total).", session.turn_index
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryRatio => {
+                    use aether_core::context::ConversationItem;
+                    let user_len: usize = session.history.iter().map(|item| match item {
+                        ConversationItem::User(s) => s.len(),
+                        _ => 0,
+                    }).sum();
+                    let asst_len: usize = session.history.iter().map(|item| match item {
+                        ConversationItem::Assistant { text, .. } => text.as_deref().map(|s| s.len()).unwrap_or(0),
+                        _ => 0,
+                    }).sum();
+                    let ratio = if asst_len == 0 { f64::INFINITY } else { user_len as f64 / asst_len as f64 };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History ratio user/assistant chars: {user_len}/{asst_len} = {ratio:.2}x."
+                    )));
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -36886,6 +36928,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /plan-ok-rate — overall tool ok-rate across plan stats
+                                "/plan-ok-rate" => {
+                                    if _ctx.send(UiCommand::QueryPlanOkRate).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-cost-burn — average cost per turn
+                                "/session-cost-burn" => {
+                                    if _ctx.send(UiCommand::QuerySessionCostBurn).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-ratio — user chars vs assistant chars ratio
+                                "/history-ratio" => {
+                                    if _ctx.send(UiCommand::QueryHistoryRatio).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -37833,6 +37893,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-output-count-total",
                             "/history-tool-result-len",
                             "/verifier-finding-count",
+                            "/plan-ok-rate",
+                            "/session-cost-burn",
+                            "/history-ratio",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
