@@ -696,6 +696,28 @@ enum SsoCmd {
     /// `token_endpoint`. Writes the new access_token (and the new
     /// refresh_token, when the IdP rotates) to the existing sidecars.
     Refresh,
+    /// FF2: configure mTLS client authentication (RFC 8705) for the
+    /// OIDC token endpoint. Validates that both PEMs parse AND that
+    /// the certificate's public key matches the private key before
+    /// persisting the PATHS (never the bytes) into sso.json's `mtls`
+    /// block. The cert+key are re-read from disk on every token
+    /// POST, so rotate them with an atomic rename (write the new
+    /// pair to temp files, `mv -f` over the configured paths) — the
+    /// next login/refresh picks up the new pair, no re-configure
+    /// needed.
+    ConfigureMtls {
+        /// Path to the client certificate PEM (leaf certificate).
+        #[arg(long, required_unless_present = "remove")]
+        cert: Option<String>,
+        /// Path to the client private key PEM (Ed25519 PKCS#8, RSA
+        /// PKCS#8, or RSA PKCS#1).
+        #[arg(long, required_unless_present = "remove")]
+        key: Option<String>,
+        /// Remove the mtls block — subsequent token POSTs present no
+        /// client certificate.
+        #[arg(long, default_value_t = false)]
+        remove: bool,
+    },
     /// BB6: re-fetch the SAML IdP federation metadata (persisted at
     /// `configure-saml` time) and re-lay out
     /// `~/.aether/saml/idp-certs/`. Without `--watch`, runs once and
@@ -57907,6 +57929,23 @@ struct SsoConfig {
     /// "re-run sso configure" message.
     #[serde(default)]
     userinfo_endpoint: Option<String>,
+    /// FF2: optional mTLS client-auth block (RFC 8705). When present,
+    /// every POST to the token_endpoint presents the client cert.
+    /// `#[serde(default)]` keeps pre-FF2 sso.json files compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mtls: Option<MtlsConfig>,
+}
+
+/// FF2: mTLS client-auth config persisted inside sso.json. PATHS
+/// only — the cert+key bytes are re-read from disk at every token
+/// POST (risk register §EE2 cert-rotation race: operators rotate by
+/// writing the new pair to temp files and atomically renaming over
+/// the configured paths; the next login/refresh picks up the new
+/// pair with no re-configure).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct MtlsConfig {
+    cert_path: String,
+    key_path: String,
 }
 
 fn sso_config_path() -> Result<PathBuf> {
@@ -58024,6 +58063,274 @@ fn load_sso_config() -> Result<Option<SsoConfig>> {
     Ok(Some(cfg))
 }
 
+/// FF2: rewrite sso.json (pretty JSON, 0600). Extracted so
+/// configure-mtls doesn't duplicate the Configure handler's write
+/// ceremony.
+fn save_sso_config(cfg: &SsoConfig) -> Result<()> {
+    let path = sso_config_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let json = serde_json::to_string_pretty(cfg)?;
+    std::fs::write(&path, json).with_context(|| format!("write {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+/// FF2: `aether sso configure-mtls` — validate the cert+key pair and
+/// persist their PATHS into sso.json's `mtls` block, or remove the
+/// block with `--remove`. Validation: cert PEM parses as x509, key
+/// PEM parses as Ed25519/RSA, cert public key == key public key, and
+/// reqwest/rustls accepts the pair as a client Identity.
+fn sso_configure_mtls(cert: Option<&str>, key: Option<&str>, remove: bool) -> Result<()> {
+    let mut cfg = load_sso_config()?.ok_or_else(|| {
+        anyhow!(
+            "no sso.json — run `aether sso configure --issuer <url> \
+             --client-id <id>` first"
+        )
+    })?;
+    let path = sso_config_path()?;
+    if remove {
+        if cfg.mtls.take().is_none() {
+            eprintln!(
+                "[sso configure-mtls] no mtls block in {} (nothing to remove)",
+                path.display()
+            );
+            return Ok(());
+        }
+        save_sso_config(&cfg)?;
+        eprintln!(
+            "[sso configure-mtls] removed mtls block from {} — token POSTs \
+             no longer present a client certificate",
+            path.display()
+        );
+        return Ok(());
+    }
+    let (cert, key) = match (cert, key) {
+        (Some(c), Some(k)) => (c, k),
+        _ => anyhow::bail!("--cert and --key are both required (or use --remove)"),
+    };
+    let cert_path = std::fs::canonicalize(cert)
+        .with_context(|| format!("resolve --cert {cert}"))?;
+    let key_path = std::fs::canonicalize(key)
+        .with_context(|| format!("resolve --key {key}"))?;
+    let pem_bytes = std::fs::read(&cert_path)
+        .with_context(|| format!("read {}", cert_path.display()))?;
+    let (cert_pub, cert_der) = idp_verifying_key_from_pem_cert(&pem_bytes)
+        .with_context(|| format!("parse mTLS client cert {}", cert_path.display()))?;
+    let sp_key = load_sp_signing_key_from_pem(&key_path)?;
+    mtls_cert_key_match(&cert_pub, &sp_key)?;
+    let mtls = MtlsConfig {
+        cert_path: cert_path.display().to_string(),
+        key_path: key_path.display().to_string(),
+    };
+    // Prove reqwest/rustls accepts the pair NOW, not at 3am when the
+    // first refresh fires.
+    let (identity, _) = load_mtls_identity(&mtls)?;
+    let _ = reqwest::Client::builder()
+        .identity(identity)
+        .build()
+        .context("rustls rejected the cert+key pair as a client Identity")?;
+    cfg.mtls = Some(mtls);
+    save_sso_config(&cfg)?;
+    eprintln!("[sso configure-mtls] wrote mtls block to {} (0600)", path.display());
+    eprintln!("  cert_path:  {}", cert_path.display());
+    eprintln!("  key_path:   {}", key_path.display());
+    eprintln!("  x5t#S256:   {}", x5t_s256_fingerprint(&cert_der));
+    eprintln!(
+        "  rotation:   cert+key are re-read on every token POST — rotate \
+         with an atomic rename over these paths"
+    );
+    Ok(())
+}
+
+/// FF2: assert the mTLS certificate's public key matches the private
+/// key. Algorithm cross-pairs (e.g. Ed25519 cert + RSA key) and
+/// Ed448 certs (no Ed448 client-key support) fail closed.
+fn mtls_cert_key_match(cert_pub: &IdpVerifyingKey, key: &SpSigningKey) -> Result<()> {
+    match (cert_pub, key) {
+        (IdpVerifyingKey::Rsa(c), SpSigningKey::Rsa(k)) => {
+            if &k.to_public_key() == c {
+                Ok(())
+            } else {
+                anyhow::bail!(
+                    "certificate public key does NOT match the private key \
+                     (both RSA, different keys) — refusing to persist"
+                )
+            }
+        }
+        (IdpVerifyingKey::Ed25519(c), SpSigningKey::Ed25519(k)) => {
+            if k.verifying_key() == *c {
+                Ok(())
+            } else {
+                anyhow::bail!(
+                    "certificate public key does NOT match the private key \
+                     (both Ed25519, different keys) — refusing to persist"
+                )
+            }
+        }
+        _ => anyhow::bail!(
+            "certificate public-key algorithm does not match the private-key \
+             algorithm (supported client pairs: RSA+RSA, Ed25519+Ed25519) — \
+             refusing to persist"
+        ),
+    }
+}
+
+/// FF3: read the configured cert+key FRESH from disk and build the
+/// reqwest client Identity. Returns the Identity plus the leaf cert
+/// DER (consumed by the FF4 cnf.x5t#S256 check). Errors are loud —
+/// a configured-but-broken mtls block must never silently fall back
+/// to a plain (non-mTLS) client.
+fn load_mtls_identity(mtls: &MtlsConfig) -> Result<(reqwest::Identity, Vec<u8>)> {
+    let cert_pem = std::fs::read(&mtls.cert_path)
+        .with_context(|| format!("read mTLS cert {}", mtls.cert_path))?;
+    let key_pem = std::fs::read(&mtls.key_path)
+        .with_context(|| format!("read mTLS key {}", mtls.key_path))?;
+    let (_, cert_der) = idp_verifying_key_from_pem_cert(&cert_pem)
+        .with_context(|| format!("parse mTLS cert {}", mtls.cert_path))?;
+    // rustls Identity::from_pem wants key + cert chain in one buffer.
+    let mut buf = key_pem;
+    buf.push(b'\n');
+    buf.extend_from_slice(&cert_pem);
+    let identity = reqwest::Identity::from_pem(&buf).with_context(|| {
+        format!(
+            "build client Identity from {} + {} (rustls)",
+            mtls.cert_path, mtls.key_path
+        )
+    })?;
+    Ok((identity, cert_der))
+}
+
+/// FF3: build the reqwest client used for token-endpoint POSTs.
+/// When sso.json carries an `mtls` block, the client presents the
+/// configured cert (RFC 8705) and the leaf cert DER is returned for
+/// the FF4 cnf check; otherwise a plain client + None.
+fn build_sso_http_client(
+    mtls: Option<&MtlsConfig>,
+    timeout_secs: Option<u64>,
+) -> Result<(reqwest::Client, Option<Vec<u8>>)> {
+    let mut builder = reqwest::Client::builder();
+    if let Some(secs) = timeout_secs {
+        builder = builder.timeout(std::time::Duration::from_secs(secs));
+    }
+    let mut leaf_der = None;
+    if let Some(m) = mtls {
+        let (identity, der) = load_mtls_identity(m)?;
+        builder = builder.identity(identity);
+        leaf_der = Some(der);
+        eprintln!(
+            "[sso] presenting mTLS client cert {} (RFC 8705, FF3)",
+            m.cert_path
+        );
+    }
+    let client = builder.build().context("build sso reqwest client")?;
+    Ok((client, leaf_der))
+}
+
+/// FF4: RFC 8705 §3.1 certificate thumbprint — base64url-no-pad
+/// SHA-256 of the cert DER (43 chars).
+fn x5t_s256_fingerprint(cert_der: &[u8]) -> String {
+    use base64::Engine as _;
+    use sha2::Digest;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(sha2::Sha256::digest(cert_der))
+}
+
+/// FF4: outcome of comparing the id_token's `cnf.x5t#S256` claim to
+/// the configured mTLS leaf cert. Pure so the unit tests don't race
+/// on env vars.
+#[derive(Debug, PartialEq)]
+enum CnfCheck {
+    Match,
+    Absent,
+    Mismatch { expected: String, got: String },
+}
+
+fn check_cnf_x5t_s256(payload: &serde_json::Value, leaf_der: &[u8]) -> CnfCheck {
+    let expected = x5t_s256_fingerprint(leaf_der);
+    match payload
+        .get("cnf")
+        .and_then(|c| c.get("x5t#S256"))
+        .and_then(|v| v.as_str())
+    {
+        None => CnfCheck::Absent,
+        Some(got) if got == expected => CnfCheck::Match,
+        Some(got) => CnfCheck::Mismatch {
+            expected,
+            got: got.to_string(),
+        },
+    }
+}
+
+/// FF4: decode a JWT's payload segment (no signature verification —
+/// callers run this AFTER validate_id_token has verified provenance).
+fn decode_jwt_payload_json(jwt: &str) -> Result<serde_json::Value> {
+    use base64::Engine as _;
+    let payload_b64 = jwt
+        .split('.')
+        .nth(1)
+        .ok_or_else(|| anyhow!("JWT has no payload segment"))?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload_b64)
+        .context("base64url-decode JWT payload")?;
+    serde_json::from_slice(&bytes).context("parse JWT payload JSON")
+}
+
+/// FF4: enforce the RFC 8705 §3.1 `cnf.x5t#S256` token binding after
+/// a token exchange that presented a client cert. Default: advisory
+/// (log on absent, WARN on mismatch). `AETHER_OIDC_REQUIRE_CNF_X5T_S256=1`
+/// hard-rejects on absent OR mismatched claim.
+fn enforce_cnf_x5t_s256(id_token: &str, leaf_der: &[u8]) -> Result<()> {
+    let payload = decode_jwt_payload_json(id_token)?;
+    let require = std::env::var("AETHER_OIDC_REQUIRE_CNF_X5T_S256")
+        .ok()
+        .as_deref()
+        == Some("1");
+    match check_cnf_x5t_s256(&payload, leaf_der) {
+        CnfCheck::Match => {
+            eprintln!(
+                "[sso login] cnf.x5t#S256 OK — id_token is bound to the \
+                 presented client cert (RFC 8705, FF4)"
+            );
+            Ok(())
+        }
+        CnfCheck::Absent => {
+            if require {
+                anyhow::bail!(
+                    "AETHER_OIDC_REQUIRE_CNF_X5T_S256=1 but the id_token \
+                     carries no cnf.x5t#S256 claim — refusing to persist"
+                );
+            }
+            eprintln!(
+                "[sso login] note: id_token has no cnf.x5t#S256 claim (issuer \
+                 did not bind the token to the client cert; advisory only — \
+                 set AETHER_OIDC_REQUIRE_CNF_X5T_S256=1 to require it)"
+            );
+            Ok(())
+        }
+        CnfCheck::Mismatch { expected, got } => {
+            if require {
+                anyhow::bail!(
+                    "cnf.x5t#S256 mismatch: id_token is bound to cert \
+                     thumbprint {got}, configured cert is {expected} — \
+                     rejecting (AETHER_OIDC_REQUIRE_CNF_X5T_S256=1)"
+                );
+            }
+            eprintln!(
+                "[sso login] WARN cnf.x5t#S256 mismatch: id_token bound to \
+                 {got}, configured cert is {expected} — set \
+                 AETHER_OIDC_REQUIRE_CNF_X5T_S256=1 to hard-reject"
+            );
+            Ok(())
+        }
+    }
+}
+
 /// Returns true when the on-disk token is present + non-empty. The
 /// authoritative check is operator-side (e.g. introspection at the
 /// issuer); aether keeps the surface intentionally narrow.
@@ -58088,6 +58395,9 @@ async fn sso_cmd(sub: SsoCmd) -> Result<()> {
                 .get("userinfo_endpoint")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
+            // FF2: re-running `sso configure` must not silently drop
+            // an existing mtls block — carry it over.
+            let prior_mtls = load_sso_config().ok().flatten().and_then(|c| c.mtls);
             let cfg = SsoConfig {
                 issuer: issuer_trim,
                 client_id,
@@ -58096,6 +58406,7 @@ async fn sso_cmd(sub: SsoCmd) -> Result<()> {
                 token_endpoint,
                 jwks_uri,
                 userinfo_endpoint,
+                mtls: prior_mtls,
             };
             let path = sso_config_path()?;
             if let Some(parent) = path.parent() {
@@ -58164,6 +58475,9 @@ async fn sso_cmd(sub: SsoCmd) -> Result<()> {
         }
         SsoCmd::Whoami { json, no_refresh } => sso_whoami(json, no_refresh).await,
         SsoCmd::Refresh => sso_refresh().await,
+        SsoCmd::ConfigureMtls { cert, key, remove } => {
+            sso_configure_mtls(cert.as_deref(), key.as_deref(), remove)
+        }
         SsoCmd::RefreshSaml { watch } => sso_refresh_saml(watch).await,
         SsoCmd::Logout => {
             let path = sso_token_path()?;
@@ -58352,7 +58666,9 @@ async fn sso_login() -> Result<()> {
     }
 
     eprintln!("[sso login] exchanging code at {}", cfg.token_endpoint);
-    let client = reqwest::Client::new();
+    // FF3: when sso.json carries an mtls block, the token POST
+    // presents the client cert (cert+key read fresh from disk here).
+    let (client, mtls_leaf_der) = build_sso_http_client(cfg.mtls.as_ref(), None)?;
     let form: Vec<(&str, &str)> = vec![
         ("grant_type", "authorization_code"),
         ("code", &code),
@@ -58432,6 +58748,15 @@ async fn sso_login() -> Result<()> {
                  fall back to legacy warn-and-persist (NOT recommended)."
             );
         }
+    }
+
+    // FF4: RFC 8705 §3.1 token binding — when the token POST
+    // presented a client cert AND an id_token came back, check the
+    // cnf.x5t#S256 claim against the presented leaf cert. Runs AFTER
+    // signature validation (provenance first, binding second) and
+    // BEFORE any sidecar is persisted.
+    if let (Some(jwt), Some(leaf)) = (id_token.as_deref(), mtls_leaf_der.as_deref()) {
+        enforce_cnf_x5t_s256(jwt, leaf)?;
     }
 
     // AA6: persist the access_token as a sidecar at sso.access_token
@@ -58885,11 +59210,11 @@ async fn refresh_oauth_access_token(
     token_endpoint: &str,
     client_id: &str,
     refresh_token: &str,
+    mtls: Option<&MtlsConfig>,
 ) -> Result<TokenResponse> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .context("build refresh reqwest client")?;
+    // FF3: same mTLS path as the login token POST — the refresh grant
+    // presents the configured client cert, read fresh from disk.
+    let (client, _leaf_der) = build_sso_http_client(mtls, Some(10))?;
     let form: Vec<(&str, &str)> = vec![
         ("grant_type", "refresh_token"),
         ("refresh_token", refresh_token),
@@ -58960,6 +59285,7 @@ async fn sso_refresh() -> Result<()> {
         &cfg.token_endpoint,
         &cfg.client_id,
         refresh_token,
+        cfg.mtls.as_ref(),
     )
     .await?;
     write_sso_sidecar(&sso_access_token_path()?, &new_resp.access_token)?;
@@ -59095,6 +59421,7 @@ async fn sso_whoami(json: bool, no_refresh: bool) -> Result<()> {
                                 &cfg.token_endpoint,
                                 &cfg.client_id,
                                 rt_raw.trim(),
+                                cfg.mtls.as_ref(),
                             )
                             .await?;
                             write_sso_sidecar(
@@ -59150,6 +59477,7 @@ async fn sso_whoami(json: bool, no_refresh: bool) -> Result<()> {
                 &cfg.token_endpoint,
                 &cfg.client_id,
                 rt_raw.trim(),
+                cfg.mtls.as_ref(),
             )
             .await?;
             write_sso_sidecar(&sso_access_token_path()?, &new_resp.access_token)?;
@@ -68286,4 +68614,149 @@ BBBB-SECOND-CERT
         let sonnet = estimate_cost_usd("claude-sonnet-4-6", &u);
         assert!((unknown - sonnet).abs() < 0.0001, "unknown model should default to sonnet rate");
     }
+    // ── FF2/FF4 mTLS fixtures ────────────────────────────────────────
+    // Static self-signed pairs generated with openssl (2026-07-01):
+    //   FF_RSA_A_* — matching RSA-2048 cert+key
+    //   FF_RSA_B_KEY — a DIFFERENT RSA-2048 key (mismatch case)
+    //   FF_ED_*    — matching Ed25519 cert+key
+    const FF_RSA_A_CERT: &str = "-----BEGIN CERTIFICATE-----\nMIIDGzCCAgOgAwIBAgIUHaWcDnwUZUqB+M9fwy14K+nGRMswDQYJKoZIhvcNAQEL\nBQAwHTEbMBkGA1UEAwwSYWV0aGVyLW10bHMtdGVzdC1hMB4XDTI2MDcwMTIzMDYz\nN1oXDTM2MDYyODIzMDYzN1owHTEbMBkGA1UEAwwSYWV0aGVyLW10bHMtdGVzdC1h\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAle6XDlLOxJlw0xBz7mIy\nHRdboPp52yfA7qyVu4iILOpWPZqomuE1oX5zmofMX1+YaSGsGcC/9+u9HeJ/6qrB\nhLOXgUQcP0n+61jhLnif4HmY3Oz19l4PZbW+QBPRMAoczC2hDqa3UdHn/7VqcNFj\nro7AXTeFPVHhXt5ccfzJeHXDuAY+cez+dQTh5iZDN9N9cbVvSf0b6g3uSAHXPsNu\nLCSHN3fTSKpLPwxfDGCbTiMHYYjOa9x37AV5NMtKmd1d8TxLALlgOa9nD5LfRFmh\nT8nfS1Z6FnqzxYHRBc6ojaLJPuOvT+L4S+Wo0kemLAraB+w8pYQngrLu2w909r9o\nuQIDAQABo1MwUTAdBgNVHQ4EFgQUdUyt1aoyMe1SIJGfYqytaR63MXowHwYDVR0j\nBBgwFoAUdUyt1aoyMe1SIJGfYqytaR63MXowDwYDVR0TAQH/BAUwAwEB/zANBgkq\nhkiG9w0BAQsFAAOCAQEADMiBsztY1XtLMj91nmAWebTJTk77gXjKetdgJw9npRVr\nA2LyBBlL/WcmT1SD30ZxaqQaf5DtNGf8DS4/2vZ/EVolj/rtz8qg60OddT5HMFWx\nmy/iAXDbnXHaXzv+BYwzYynYkp0wdPcvJ3fPqCE+nobCW/bEeY9QQAIcrKn2TQo6\nqri0HrpuvAs3tAZel+W6pBuhijh6DD/8hJiy2TuuGYH+AB4xVmVcg48E5JO6wTZQ\nclpaQ50ktsjMG7gTCE/8E36dEmVFnr2ZCPuY03PGK6QWUT5d7OAMOXQYHuGAHFIF\nOf+K/Kq876JDGnZ8+4CKmEJsZnm6fVmc8/TkSfvuMA==\n-----END CERTIFICATE-----\n";
+    const FF_RSA_A_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCV7pcOUs7EmXDT\nEHPuYjIdF1ug+nnbJ8DurJW7iIgs6lY9mqia4TWhfnOah8xfX5hpIawZwL/3670d\n4n/qqsGEs5eBRBw/Sf7rWOEueJ/geZjc7PX2Xg9ltb5AE9EwChzMLaEOprdR0ef/\ntWpw0WOujsBdN4U9UeFe3lxx/Ml4dcO4Bj5x7P51BOHmJkM3031xtW9J/RvqDe5I\nAdc+w24sJIc3d9NIqks/DF8MYJtOIwdhiM5r3HfsBXk0y0qZ3V3xPEsAuWA5r2cP\nkt9EWaFPyd9LVnoWerPFgdEFzqiNosk+469P4vhL5ajSR6YsCtoH7DylhCeCsu7b\nD3T2v2i5AgMBAAECggEAA5rueS7Sz72oTbz1Kq/kCFjL0F/BfxxyOlL+UTl328uh\nOf8+a2X7sAfOQBKgnpD6BVokzSQ6QXwCysWL4aDMQTR/0cEJZFizR2W2WXOXVZKa\n80ID6pIJsP6JJfmMA8mUdnDo8OUfnpkraNXMCs0wJk4CsGMhwi8WOh2i768+SXYT\nB207P0NO1qP+g8WfGZowWhafMIYRQggGWOv7Fj9q6UO1x6mYehdlkDe/74P+vizm\n989stY5XVQotl6zw/YSK7wYAJnkXUt4zv8A+MnIDr3xX3rN6WJiztCVyF8CJ1A/Y\n3YoaBKv1MaY5x8o5ibj2rTXlRhUByaAUTBjhR4pkwQKBgQDQe3YD3xHdBkh2yRBd\nWgHeHi/8sHkQLufdNmkKu5rfqfuD2ubK1iTAP/Ky73VKsSuTN7XO8ppAAtb6RY1h\n5VAqirnsjxwrDnQiVZ81cRrqIfh8AYKudiVDc7CQ0pPzOnPqXFBgrtFIZi1zUVt9\n2igxpzangMwgzWZITf4zP+jJ+QKBgQC4GtVIPZoIZ0Us9CqxIrYdbFb2V8NlXeW8\ncPZZGHLfLPTCE97NpqClmWrAEko+shoiO+oFoSwkuHcmcZTqEosjL3MXO/yjnu6S\nxUixnMpCNyJADMqWzD+KYHRFQ8xUxeegyXEU9LGevdS69AmRiOUCYxf9J8KBS6Cb\n4ca7laFEwQKBgE1Pq0juPOKYxOB/2Ti0+wJScXskOhC9RDBtT/Cx91G/6ExSLcnE\nNaaxUB/42qcTIlSakSooHvlj1DLE/hPyhJLyFNZbj5eL6Zcd50dbJR7z8ACUUtC9\ncT4dNbnOzRyibX/YMdpYmbVeZrZf0izObJ9VIdhl08zKPobLnVuF9J6JAoGAOW2N\nWDJ3COYFywcDBiw4uKbh3Yf02HrYvdZS0enxczJXyu5d0rKGbAGWLgHGjRYLVuBv\nmH/1ACNWb3SAqh9MrZYQhY/dt8BM1RWbHmQ1J0CBe49B5pYhv+1kd3K1mz/8h8gu\ncQX/HfBDGmojTfVw0jTM99feMWzA1b8wubTsEEECgYBiZosiptuG3FdlK8pALNkY\nCgfKKZ2OtTvQ4FpWF9EeZFVxVlia4mrE/ZbN3cqCoq7iQMB+7UJ0pxBjby1DTK64\nWTHZMI4Wrwpc4R2ScUIaNbdb/tx79MHBOSSgmRFJ3TrzE/ynLcp28NKjKDe46QfE\n7vfjPxhJUVLZ4Xvn4FSxAA==\n-----END PRIVATE KEY-----\n";
+    const FF_RSA_B_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDNne8B6nS7v6/H\nAZ2ETpl3dDtoHQZsrlcXDqgQsHAwhbuHVaKBjZw+Lz1O1FzDwbjShnSB+fwxfB3I\n3aqqcBVw6MXUVYZgQV9q3wEBFZZ4amMsnflSolHPNM9unpM/SEGmZPpa4YKsZ5Iw\ndBlbbsOQfZV12ADLJMCiRbD6npqPz3OKJ5zEc45KgdZvObBm3z1bKCwMxGvL/wfX\n1MKLcgRQlsPFO4sDyu1NlqN9C74IkcuSX/jjA6zTh1TQkMdibxxeBGWCZ6wtn0K3\niwoiyo4dQYQBiC7EixEzRfO96LhfJ2Wruv+RWqlrDAstehf1jfMky8VqXCRjnON7\nm/62vICzAgMBAAECggEAFoQDXqHWa5LHhFLEdW8H9iE3uiRnhjInHkLAG6e+eUnD\nqcOyWl5v7A1PONkfWV5Wx1Lq4irGN4MAXfUMEcLZTjZnJ2PAJb0y3iiSWxSKmCAK\nQSIBYc+dhsOhLVtXA3h9m+N12MrV/NwQkZa9Chqcdq+R1Mg0+gnJwFtCUIdapIGg\nDNYKLu3GgHVzGcnH3BIJlTG/ZLJ3j2kF/09/G+JDqcUROiTV2wAGXWNcyonum/25\nl3LwpMc4pE2n/KExvIT7VzFTdX5P+8iXRQ+N5BBVoo2ghx7GqKMce8x2RcKtcXkh\n7H7ZGew+b+1R8IOZxz/yCIL6Y9xl6vkJMrWPpz4eEQKBgQD8AUOtlQttnUIZFZwC\nOemWgaUXmDTh8CNAKRBMN9z7Poe2P4m9nHU9omA3VRu4wxSdKjSWeu+qQb0sBsEQ\nSeg+nd/oqI0FmF+QlJ3eDksVoHDncZinDQvGezj5D7ZZPxpqb8zdBPWIa63FM/9h\nuqGgt/HRilszNAE/e+is9oPhEQKBgQDQ4GiLUpSvNrHjS+wQdQ5rpMt9q/trU/aO\nHTC2M5IypSBM4tBkH6f37O4b5caixBhDJNr1ZyxgeaEOCr7rIjQ4Horg8/liCS4b\nj0AuwFJkWs9lVUxEcUj+q2ObKSjt1+tUGzWVHf7qcu+x5/Hz7iGWhkj8Nc1nbOTj\nDuMyMCsFgwKBgQCfPxVLbbIJFKUeQN+TMJGBwG9ZF5/jXuKHuutHns2QHxWXf1NF\ndMdJqYBvtuKLwQsXvgH5TbqBtoUaezIpXuraFt3Voh1rebx6GtAf8JxWEEsIlmpG\ntiHIzTlVei5a+1twAzJMQMP/7zuiMJejZFKaw2KWbX3wP17ChUSleCoiYQKBgFPb\ndD1S9xxs4ff1+B0XUaXHsGaQ0Exjlh2x/Gd5xt0MTC5x9OXti5rOhT2v/xJDldYH\nCtzxAfDtg8pGaCWwQrSxFmJ/sIQ6WUd5OHRMhAeEKbVuDEOCE6MinceiO6tZP0Ix\n9k4aj8gCQtby3sFmvhdXbB/NXdyC7FV4GaCBlBQPAoGBAL6YJl4RjA9SH34AVPBL\n/Qq3w0jMukb0S6XyRO9X0fpft259TswnGKWtBiOA2J152y+ZBoYdSSrleYtjACA4\n4TcQT5v23rk5h6lPEuO6ZzST8akoffjGPGqWRrQOLijepWbI491ny8QQx66rOgF9\nn4Y08CTg9OphXmddc+2xxCjL\n-----END PRIVATE KEY-----\n";
+    const FF_ED_CERT: &str = "-----BEGIN CERTIFICATE-----\nMIIBUTCCAQOgAwIBAgIUderT69cN1ikWgmtDg891gD1EP90wBQYDK2VwMB4xHDAa\nBgNVBAMME2FldGhlci1tdGxzLXRlc3QtZWQwHhcNMjYwNzAxMjMwNjM4WhcNMzYw\nNjI4MjMwNjM4WjAeMRwwGgYDVQQDDBNhZXRoZXItbXRscy10ZXN0LWVkMCowBQYD\nK2VwAyEAf6xUrYJxoRq2aSe9hrv6H6kljT3BtPjfbjJxVSNfst+jUzBRMB0GA1Ud\nDgQWBBSCsydQS7L1yGG0ulYReRjq+Hqb5zAfBgNVHSMEGDAWgBSCsydQS7L1yGG0\nulYReRjq+Hqb5zAPBgNVHRMBAf8EBTADAQH/MAUGAytlcANBADZdYMAKt82yvMJc\nlVkiZ4TDMwlsPNgt8DeC7thj62/dn9jFKTr8f8S6VemYNsLOImTt/+T48Z6rLmFE\nwgBzkgQ=\n-----END CERTIFICATE-----\n";
+    const FF_ED_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIPssDFLuSlUI5Z2DDl71kdmzItycPBNByvTuTiY94oFR\n-----END PRIVATE KEY-----\n";
+
+    fn ff_write_temp(name: &str, contents: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("aether-ff-test-{name}"));
+        std::fs::write(&p, contents).unwrap();
+        p
+    }
+
+    /// FF2: matching RSA cert+key pair passes mtls_cert_key_match.
+    #[test]
+    fn ff2_rsa_cert_key_match_ok() {
+        let (pubk, _der) =
+            idp_verifying_key_from_pem_cert(FF_RSA_A_CERT.as_bytes()).unwrap();
+        let key_path = ff_write_temp("rsa-a.key", FF_RSA_A_KEY);
+        let key = load_sp_signing_key_from_pem(&key_path).unwrap();
+        mtls_cert_key_match(&pubk, &key).expect("matching RSA pair must pass");
+    }
+
+    /// FF2: matching Ed25519 cert+key pair passes mtls_cert_key_match.
+    #[test]
+    fn ff2_ed25519_cert_key_match_ok() {
+        let (pubk, _der) =
+            idp_verifying_key_from_pem_cert(FF_ED_CERT.as_bytes()).unwrap();
+        let key_path = ff_write_temp("ed.key", FF_ED_KEY);
+        let key = load_sp_signing_key_from_pem(&key_path).unwrap();
+        mtls_cert_key_match(&pubk, &key).expect("matching Ed25519 pair must pass");
+    }
+
+    /// FF2: cert A + unrelated key B (both RSA) is rejected loudly.
+    #[test]
+    fn ff2_rsa_cert_key_mismatch_rejected() {
+        let (pubk, _der) =
+            idp_verifying_key_from_pem_cert(FF_RSA_A_CERT.as_bytes()).unwrap();
+        let key_path = ff_write_temp("rsa-b.key", FF_RSA_B_KEY);
+        let key = load_sp_signing_key_from_pem(&key_path).unwrap();
+        let err = mtls_cert_key_match(&pubk, &key).unwrap_err().to_string();
+        assert!(
+            err.contains("does NOT match"),
+            "mismatch error names the problem: {err}"
+        );
+    }
+
+    /// FF2: algorithm cross-pair (Ed25519 cert + RSA key) fails closed.
+    #[test]
+    fn ff2_algorithm_cross_pair_rejected() {
+        let (pubk, _der) =
+            idp_verifying_key_from_pem_cert(FF_ED_CERT.as_bytes()).unwrap();
+        let key_path = ff_write_temp("rsa-a2.key", FF_RSA_A_KEY);
+        let key = load_sp_signing_key_from_pem(&key_path).unwrap();
+        let err = mtls_cert_key_match(&pubk, &key).unwrap_err().to_string();
+        assert!(
+            err.contains("algorithm"),
+            "cross-pair error cites the algorithm mismatch: {err}"
+        );
+    }
+
+    /// FF3: load_mtls_identity builds a reqwest Identity + returns the
+    /// leaf DER, and a client accepts the identity.
+    #[test]
+    fn ff3_identity_loads_and_client_builds() {
+        let cert_path = ff_write_temp("rsa-a-id.crt", FF_RSA_A_CERT);
+        let key_path = ff_write_temp("rsa-a-id.key", FF_RSA_A_KEY);
+        let mtls = MtlsConfig {
+            cert_path: cert_path.display().to_string(),
+            key_path: key_path.display().to_string(),
+        };
+        let (identity, leaf_der) = load_mtls_identity(&mtls).unwrap();
+        assert!(!leaf_der.is_empty(), "leaf DER extracted");
+        reqwest::Client::builder()
+            .identity(identity)
+            .build()
+            .expect("client with mTLS identity builds");
+    }
+
+    /// FF4: x5t#S256 fingerprint is 43-char base64url-no-pad.
+    #[test]
+    fn ff4_fingerprint_shape() {
+        let fp = x5t_s256_fingerprint(b"any-der-bytes");
+        assert_eq!(fp.len(), 43, "SHA-256 → 43 chars base64url-no-pad");
+        assert!(
+            !fp.contains('=') && !fp.contains('+') && !fp.contains('/'),
+            "URL-safe, no padding: {fp}"
+        );
+    }
+
+    /// FF4: claim present + matching → Match.
+    #[test]
+    fn ff4_cnf_claim_match() {
+        let leaf = b"leaf-cert-der";
+        let payload = serde_json::json!({
+            "sub": "alice",
+            "cnf": { "x5t#S256": x5t_s256_fingerprint(leaf) }
+        });
+        assert_eq!(check_cnf_x5t_s256(&payload, leaf), CnfCheck::Match);
+    }
+
+    /// FF4: claim present + wrong fingerprint → Mismatch carrying both.
+    #[test]
+    fn ff4_cnf_claim_mismatch() {
+        let leaf = b"leaf-cert-der";
+        let payload = serde_json::json!({
+            "sub": "alice",
+            "cnf": { "x5t#S256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" }
+        });
+        match check_cnf_x5t_s256(&payload, leaf) {
+            CnfCheck::Mismatch { expected, got } => {
+                assert_eq!(expected, x5t_s256_fingerprint(leaf));
+                assert_eq!(got, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+            }
+            other => panic!("expected Mismatch, got {other:?}"),
+        }
+    }
+
+    /// FF4: no cnf claim → Absent (caller decides advisory vs reject).
+    #[test]
+    fn ff4_cnf_claim_absent() {
+        let payload = serde_json::json!({ "sub": "alice" });
+        assert_eq!(
+            check_cnf_x5t_s256(&payload, b"leaf-cert-der"),
+            CnfCheck::Absent
+        );
+    }
+
+    /// FF4: decode_jwt_payload_json round-trips a hand-built JWT payload.
+    #[test]
+    fn ff4_decode_jwt_payload() {
+        use base64::Engine as _;
+        let payload = serde_json::json!({"sub": "bob", "cnf": {"x5t#S256": "xyz"}});
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&payload).unwrap());
+        let jwt = format!("eyJhbGciOiJub25lIn0.{b64}.sig");
+        let decoded = decode_jwt_payload_json(&jwt).unwrap();
+        assert_eq!(decoded, payload);
+        assert!(decode_jwt_payload_json("no-dots").is_err());
+    }
 }
+
