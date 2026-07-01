@@ -1773,6 +1773,12 @@ pub enum UiCommand {
     QueryToolOutputHistCurrMinLen,
     /// Show the average tool output limit across all configured limits.
     QueryToolOutputLimitAvg,
+    /// Show the average input tokens per turn from the turn cost log.
+    QueryTurnInTokensAvg,
+    /// Show the average output tokens per turn from the turn cost log.
+    QueryTurnOutTokensAvg,
+    /// Show the maximum input tokens in a single turn.
+    QueryTurnInTokensMax,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

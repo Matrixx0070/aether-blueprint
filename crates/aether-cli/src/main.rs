@@ -12437,6 +12437,41 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryTurnInTokensAvg => {
+                    let n = session.turn_cost_log.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Turn cost log: empty.".to_string()));
+                    } else {
+                        let total: u64 = session.turn_cost_log.iter().map(|(_, in_tok, _, _)| in_tok).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Avg input tokens/turn: {} ({} turns)", total / n as u64, n
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnOutTokensAvg => {
+                    let n = session.turn_cost_log.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Turn cost log: empty.".to_string()));
+                    } else {
+                        let total: u64 = session.turn_cost_log.iter().map(|(_, _, out_tok, _)| out_tok).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Avg output tokens/turn: {} ({} turns)", total / n as u64, n
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnInTokensMax => {
+                    match session.turn_cost_log.iter().max_by_key(|(_, in_tok, _, _)| in_tok) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Turn cost log: empty.".to_string())); }
+                        Some((turn, in_tok, _, _)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Max input tokens: {} at turn {}", in_tok, turn
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -41344,6 +41379,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/turn-in-tokens-avg" => {
+                                    if _ctx.send(UiCommand::QueryTurnInTokensAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-out-tokens-avg" => {
+                                    if _ctx.send(UiCommand::QueryTurnOutTokensAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-in-tokens-max" => {
+                                    if _ctx.send(UiCommand::QueryTurnInTokensMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -42562,6 +42612,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-output-hist-prev-min-len",
                             "/tool-output-hist-curr-min-len",
                             "/tool-output-limit-avg",
+                            "/turn-in-tokens-avg",
+                            "/turn-out-tokens-avg",
+                            "/turn-in-tokens-max",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
