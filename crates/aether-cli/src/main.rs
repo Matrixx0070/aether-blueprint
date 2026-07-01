@@ -11192,6 +11192,58 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryAutoTagFirst => {
+                    match session.auto_tag_rules.first() {
+                        Some((pat, tag)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Auto-tag[0] (of {}): pattern='{}' → tag='{}'",
+                                session.auto_tag_rules.len(),
+                                pat.chars().take(60).collect::<String>(),
+                                tag.chars().take(60).collect::<String>()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Auto-tag rules: none defined.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionTagFirst => {
+                    match session.session_tags.first() {
+                        Some(tag) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Session tag[0] (of {}): '{tag}'", session.session_tags.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Session tags: none set.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryAliasFirst => {
+                    let mut pairs: Vec<_> = session.aliases.iter().collect();
+                    pairs.sort_by_key(|(k, _)| k.as_str());
+                    match pairs.first() {
+                        Some((k, v)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Alias[0] (of {}): '{k}' → '{}'",
+                                session.aliases.len(),
+                                v.chars().take(80).collect::<String>()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Aliases: none defined.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryPersistentReminderFirst => {
                     match session.persistent_reminders.first() {
                         Some(r) => {
@@ -38224,6 +38276,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/auto-tag-first" => {
+                                    if _ctx.send(UiCommand::QueryAutoTagFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-tag-first" => {
+                                    if _ctx.send(UiCommand::QuerySessionTagFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/alias-first" => {
+                                    if _ctx.send(UiCommand::QueryAliasFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -39262,6 +39329,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/persistent-reminder-first",
                             "/warmup-file-first",
                             "/sticky-first",
+                            "/auto-tag-first",
+                            "/session-tag-first",
+                            "/alias-first",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

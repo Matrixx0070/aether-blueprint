@@ -1413,6 +1413,12 @@ pub enum UiCommand {
     QueryWarmupFileFirst,
     /// Show the first sticky context entry.
     QueryStickyFirst,
+    /// Show the first auto-tag rule (pattern → tag).
+    QueryAutoTagFirst,
+    /// Show the first session tag.
+    QuerySessionTagFirst,
+    /// Show the first alias (key → value).
+    QueryAliasFirst,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
