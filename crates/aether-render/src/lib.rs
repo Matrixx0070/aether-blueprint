@@ -1875,6 +1875,12 @@ pub enum UiCommand {
     QueryPlanBlockValMax,
     /// Show the plan block type with the lowest recorded count.
     QueryPlanBlockValMin,
+    /// Show the average ok-call count across all plan tool call stats.
+    QueryPlanToolStatOkAvg,
+    /// Show the average error-call count across all plan tool call stats.
+    QueryPlanToolStatErrAvg,
+    /// Show the average block count across all plan block types.
+    QueryPlanBlockValAvg,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

@@ -12988,6 +12988,42 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryPlanToolStatOkAvg => {
+                    let n = session.plan.tool_call_stats.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Plan tool call stats: none.".to_string()));
+                    } else {
+                        let total: usize = session.plan.tool_call_stats.values().map(|(ok, _)| ok).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Avg ok calls/tool: {} ({} tools)", total / n, n
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanToolStatErrAvg => {
+                    let n = session.plan.tool_call_stats.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Plan tool call stats: none.".to_string()));
+                    } else {
+                        let total: usize = session.plan.tool_call_stats.values().map(|(_, err)| err).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Avg err calls/tool: {} ({} tools)", total / n, n
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanBlockValAvg => {
+                    let n = session.plan.block_counts.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Plan block counts: none.".to_string()));
+                    } else {
+                        let total: usize = session.plan.block_counts.values().sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Avg block count: {} ({} types)", total / n, n
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -42150,6 +42186,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/plan-tool-stat-ok-avg" => {
+                                    if _ctx.send(UiCommand::QueryPlanToolStatOkAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-tool-stat-err-avg" => {
+                                    if _ctx.send(UiCommand::QueryPlanToolStatErrAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-block-val-avg" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockValAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -43419,6 +43470,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/auto-tag-rule-tag-min-len",
                             "/plan-block-val-max",
                             "/plan-block-val-min",
+                            "/plan-tool-stat-ok-avg",
+                            "/plan-tool-stat-err-avg",
+                            "/plan-block-val-avg",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
