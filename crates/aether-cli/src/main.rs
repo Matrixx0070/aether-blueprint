@@ -11056,6 +11056,46 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QuerySessionCostAvgTurn => {
+                    let n = session.turn_cost_log.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Session cost avg/turn: no turns with costs recorded yet.".to_string()
+                        ));
+                    } else {
+                        let total: f64 = session.turn_cost_log.iter().map(|(_, _, _, c)| c).sum();
+                        let avg = total / n as f64;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session cost avg/turn: ${avg:.6} ({n} turns, ${total:.6} total)."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryTokenBudgetRemaining => {
+                    let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
+                    let budget = session.token_budget;
+                    if budget == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Token budget: not set (unlimited).".to_string()
+                        ));
+                    } else {
+                        let remaining = budget.saturating_sub(used);
+                        let pct = remaining as f64 / budget as f64 * 100.0;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Token budget remaining: {remaining}/{budget} ({pct:.1}% left)."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanDirtyShow => {
+                    let dirty = session.plan.blocks_recorded > 0;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan dirty: {} ({} blocks recorded total).",
+                        if dirty { "yes" } else { "no" },
+                        session.plan.blocks_recorded
+                    )));
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -37573,6 +37613,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /session-cost-avg-turn — average cost per turn
+                                "/session-cost-avg-turn" => {
+                                    if _ctx.send(UiCommand::QuerySessionCostAvgTurn).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /token-budget-remaining — remaining token budget
+                                "/token-budget-remaining" => {
+                                    if _ctx.send(UiCommand::QueryTokenBudgetRemaining).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /plan-dirty-show — show whether plan is dirty
+                                "/plan-dirty-show" => {
+                                    if _ctx.send(UiCommand::QueryPlanDirtyShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -38553,6 +38611,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/warmup-file-count",
                             "/auto-tag-rule-count",
                             "/plan-block-list-len",
+                            "/session-cost-avg-turn",
+                            "/token-budget-remaining",
+                            "/plan-dirty-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

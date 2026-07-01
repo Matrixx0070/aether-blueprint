@@ -1347,6 +1347,12 @@ pub enum UiCommand {
     QueryAutoTagRuleCount,
     /// Count of distinct tool names in plan block_counts.
     QueryPlanBlockListLen,
+    /// Show average cost per turn from turn cost log.
+    QuerySessionCostAvgTurn,
+    /// Show remaining token budget (budget - used).
+    QueryTokenBudgetRemaining,
+    /// Show whether the plan has been modified (dirty).
+    QueryPlanDirtyShow,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
