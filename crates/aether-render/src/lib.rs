@@ -2247,6 +2247,12 @@ pub enum UiCommand {
     QueryTurnLabelTurnSpan,
     /// Show the text of the first history annotation.
     QueryHistoryAnnotFirstText,
+    /// Show the text of the last history annotation.
+    QueryHistoryAnnotLastText,
+    /// Show the pattern of the first error playbook entry.
+    QueryErrorPlaybookFirstPat,
+    /// Show the pattern of the first auto-tag rule.
+    QueryAutoTagRuleFirstPat,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
