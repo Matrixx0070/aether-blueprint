@@ -2145,6 +2145,12 @@ pub enum UiCommand {
     QueryHistoryAnnotTotalChars,
     /// Show the total chars across all sticky context items.
     QueryStickyContextTotalChars,
+    /// Show the total chars across all warmup file paths.
+    QueryWarmupFileTotalChars,
+    /// Show the total chars across all prompt macro keys and values.
+    QueryPromptMacroTotalChars,
+    /// Show the total chars across all env var keys and values.
+    QueryEnvVarTotalChars,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
