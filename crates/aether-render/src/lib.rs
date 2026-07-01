@@ -2805,6 +2805,12 @@ pub enum UiCommand {
     QueryPlanBlockTurnsUniqueKeys,
     /// Count of unique tool names in plan.tool_error_counts keys.
     QueryPlanToolErrorCountsUniqueKeys,
+    /// Min plan text length across all saved snapshots.
+    QuerySavedSnapshotPlanTextMinLen,
+    /// Fraction of progress items that are done.
+    QueryProgressItemDoneRate,
+    /// Total chars across all error_playbook hint strings.
+    QueryErrorPlaybookHintTotalChars,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

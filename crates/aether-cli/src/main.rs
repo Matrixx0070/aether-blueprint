@@ -17133,6 +17133,36 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QuerySavedSnapshotPlanTextMinLen => {
+                    let min = session.saved_snapshots.values()
+                        .map(|(_, plan)| plan.text.len())
+                        .min();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match min {
+                        Some(v) => format!("Saved snapshot plan text min len: {v}"),
+                        None => "Saved snapshots: none stored. Use /snapshot save <name>.".to_string(),
+                    }));
+                    continue;
+                }
+                UiCommand::QueryProgressItemDoneRate => {
+                    let total = session.progress_items.len();
+                    let done = session.progress_items.iter().filter(|(_, d)| *d).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(if total == 0 {
+                        "Progress items: none. Use /progress-add <item> to add.".to_string()
+                    } else {
+                        format!("Progress item done rate: {done}/{total} ({:.1}%)", done as f64 / total as f64 * 100.0)
+                    }));
+                    continue;
+                }
+                UiCommand::QueryErrorPlaybookHintTotalChars => {
+                    let total: usize = session.error_playbook.iter()
+                        .map(|(_, hint)| hint.len())
+                        .sum();
+                    let n = session.error_playbook.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Error playbook hint total chars: {total} ({n} entries)"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -48620,6 +48650,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/saved-snapshot-plan-text-min-len" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotPlanTextMinLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/progress-item-done-rate" => {
+                                    if _ctx.send(UiCommand::QueryProgressItemDoneRate).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/error-playbook-hint-total-chars" => {
+                                    if _ctx.send(UiCommand::QueryErrorPlaybookHintTotalChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -50354,6 +50399,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-tool-call-stats-unique-keys",
                             "/plan-block-turns-unique-keys",
                             "/plan-tool-error-counts-unique-keys",
+                            "/saved-snapshot-plan-text-min-len",
+                            "/progress-item-done-rate",
+                            "/error-playbook-hint-total-chars",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
