@@ -2565,6 +2565,12 @@ pub enum UiCommand {
     QueryVerifierGateRuleSevHigh,
     /// Count of Critical-severity rules in the verifier gate.
     QueryVerifierGateRuleSevCritical,
+    /// Count of Low-severity rules in the verifier gate.
+    QueryVerifierGateRuleSevLow,
+    /// Count of Medium-severity rules in the verifier gate.
+    QueryVerifierGateRuleSevMedium,
+    /// Count of rules with AppliesWhen::Always in the verifier gate.
+    QueryVerifierGateRuleAppliesAlways,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
