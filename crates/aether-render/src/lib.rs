@@ -1455,6 +1455,12 @@ pub enum UiCommand {
     QueryToolDenyFirst,
     /// Show the last model used across turns.
     QueryTurnModelLast,
+    /// Show the last session tag.
+    QuerySessionTagLast,
+    /// Show the last auto-tag rule (pattern → tag).
+    QueryAutoTagRuleLast,
+    /// Show the last history annotation (index, text).
+    QueryHistoryAnnotLast,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

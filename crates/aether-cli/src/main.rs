@@ -11192,6 +11192,56 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QuerySessionTagLast => {
+                    match session.session_tags.last() {
+                        Some(tag) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Session tag[last] (of {}): '{tag}'", session.session_tags.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Session tags: none set.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryAutoTagRuleLast => {
+                    match session.auto_tag_rules.last() {
+                        Some((pat, tag)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Auto-tag[last] (of {}): pattern='{}' → tag='{}'",
+                                session.auto_tag_rules.len(),
+                                pat.chars().take(60).collect::<String>(),
+                                tag.chars().take(60).collect::<String>()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Auto-tag rules: none defined.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryAnnotLast => {
+                    match session.history_annotations.last() {
+                        Some((hist_idx, note)) => {
+                            let preview = note.chars().take(120).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "History annotation[last] (of {}): history_idx={hist_idx} — {preview}",
+                                session.history_annotations.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "History annotations: none.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryToolAllowFirst => {
                     let mut list = session.tool_allow.clone();
                     list.sort();
@@ -38689,6 +38739,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/session-tag-last" => {
+                                    if _ctx.send(UiCommand::QuerySessionTagLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/auto-tag-rule-last" => {
+                                    if _ctx.send(UiCommand::QueryAutoTagRuleLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-annot-last" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAnnotLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -39748,6 +39813,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-allow-first",
                             "/tool-deny-first",
                             "/turn-model-last",
+                            "/session-tag-last",
+                            "/auto-tag-rule-last",
+                            "/history-annot-last",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
