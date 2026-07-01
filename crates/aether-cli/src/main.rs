@@ -10935,6 +10935,51 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QuerySessionTagAt(idx) => {
+                    match session.session_tags.get(idx) {
+                        Some(tag) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Session tag[{idx}]: '{tag}'"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Session tag[{idx}]: out of range ({} tags).", session.session_tags.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryAliasKeyList => {
+                    if session.aliases.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Aliases: none defined. Use /alias <name> <expansion> to add.".to_string()
+                        ));
+                    } else {
+                        let mut keys: Vec<_> = session.aliases.keys().collect();
+                        keys.sort();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Alias keys ({}): {}", keys.len(), keys.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryBookmarkLabelList => {
+                    if session.bookmarks.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Bookmarks: none. Use /bookmark to add one.".to_string()
+                        ));
+                    } else {
+                        let labels: Vec<_> = session.bookmarks.iter()
+                            .enumerate()
+                            .map(|(i, (_, _, label))| format!("[{i}] '{label}'"))
+                            .collect();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Bookmark labels ({}): {}", session.bookmarks.len(), labels.join(", ")
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -37393,6 +37438,29 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /session-tag-at <index> — show session tag at index
+                                cmd_str if cmd_str.starts_with("/session-tag-at ") => {
+                                    let arg = cmd_str.trim_start_matches("/session-tag-at ").trim();
+                                    if let Ok(idx) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::QuerySessionTagAt(idx)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /session-tag-at <index>".to_string()));
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /alias-key-list — list all alias keys
+                                "/alias-key-list" => {
+                                    if _ctx.send(UiCommand::QueryAliasKeyList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /bookmark-label-list — list all bookmark labels
+                                "/bookmark-label-list" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkLabelList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -38364,6 +38432,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/env-key-list",
                             "/tool-output-key-list",
                             "/macro-key-list",
+                            "/session-tag-at ",
+                            "/alias-key-list",
+                            "/bookmark-label-list",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

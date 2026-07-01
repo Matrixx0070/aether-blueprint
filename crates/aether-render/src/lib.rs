@@ -1329,6 +1329,12 @@ pub enum UiCommand {
     QueryToolOutputKeyList,
     /// List all prompt macro keys.
     QueryMacroKeyList,
+    /// Show session tag at a specific index.
+    QuerySessionTagAt(usize),
+    /// List all alias keys.
+    QueryAliasKeyList,
+    /// List all bookmark labels.
+    QueryBookmarkLabelList,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
