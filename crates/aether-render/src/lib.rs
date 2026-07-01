@@ -2781,6 +2781,12 @@ pub enum UiCommand {
     QueryPlanTextAvgCharsPerWord,
     /// Approximate sentence count in the plan goal text.
     QueryPlanGoalSentenceCount,
+    /// Average chars per word in the plan goal text.
+    QueryPlanGoalAvgCharsPerWord,
+    /// Unique word count in the plan text.
+    QueryPlanTextUniqueWords,
+    /// Unique word count in the plan goal text.
+    QueryPlanGoalUniqueWords,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

@@ -17004,6 +17004,53 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryPlanGoalAvgCharsPerWord => {
+                    match &session.plan.goal {
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Plan goal: not set. Use /plan-goal <text> to set one.".to_string()
+                            ));
+                        }
+                        Some(g) => {
+                            let words: Vec<&str> = g.split_whitespace().collect();
+                            let n = words.len();
+                            let avg = if n == 0 { 0.0 } else {
+                                words.iter().map(|w| w.len() as f64).sum::<f64>() / n as f64
+                            };
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Plan goal avg chars per word: {avg:.1} ({n} words)"
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanTextUniqueWords => {
+                    let unique: std::collections::HashSet<&str> = session.plan.text
+                        .split_whitespace()
+                        .collect();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan text unique words: {}", unique.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlanGoalUniqueWords => {
+                    let count = match &session.plan.goal {
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Plan goal: not set. Use /plan-goal <text> to set one.".to_string()
+                            ));
+                            continue;
+                        }
+                        Some(g) => {
+                            let unique: std::collections::HashSet<&str> = g.split_whitespace().collect();
+                            unique.len()
+                        }
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan goal unique words: {count}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -48431,6 +48478,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/plan-goal-avg-chars-per-word" => {
+                                    if _ctx.send(UiCommand::QueryPlanGoalAvgCharsPerWord).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-text-unique-words" => {
+                                    if _ctx.send(UiCommand::QueryPlanTextUniqueWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-goal-unique-words" => {
+                                    if _ctx.send(UiCommand::QueryPlanGoalUniqueWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -50153,6 +50215,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-text-sentence-count",
                             "/plan-text-avg-chars-per-word",
                             "/plan-goal-sentence-count",
+                            "/plan-goal-avg-chars-per-word",
+                            "/plan-text-unique-words",
+                            "/plan-goal-unique-words",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
