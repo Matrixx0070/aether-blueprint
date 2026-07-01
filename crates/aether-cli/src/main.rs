@@ -15501,6 +15501,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryPostTurnHookSet => {
+                    let set = session.post_turn_hook.is_some();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Post-turn hook set: {set}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPostTurnHookLen => {
+                    let n = session.post_turn_hook.as_deref().map(|s| s.len()).unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Post-turn hook length: {n} chars (0 = unset)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryResponseFormatSet => {
+                    let set = session.response_format.is_some();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Response format set: {set}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -46103,6 +46124,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/post-turn-hook-set" => {
+                                    if _ctx.send(UiCommand::QueryPostTurnHookSet).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/post-turn-hook-len" => {
+                                    if _ctx.send(UiCommand::QueryPostTurnHookLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/response-format-set" => {
+                                    if _ctx.send(UiCommand::QueryResponseFormatSet).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -47660,6 +47696,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/think-aloud-prompt-len",
                             "/response-format-len",
                             "/auto-commit-template-preview",
+                            "/post-turn-hook-set",
+                            "/post-turn-hook-len",
+                            "/response-format-set",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

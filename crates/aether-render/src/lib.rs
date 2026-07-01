@@ -2451,6 +2451,12 @@ pub enum UiCommand {
     QueryResponseFormatLen,
     /// Show the first 80 chars of the auto_commit_template.
     QueryAutoCommitTemplatePreview,
+    /// Show whether post_turn_hook is set (true/false).
+    QueryPostTurnHookSet,
+    /// Show the length of post_turn_hook (0 if unset).
+    QueryPostTurnHookLen,
+    /// Show whether response_format is set (true/false).
+    QueryResponseFormatSet,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
