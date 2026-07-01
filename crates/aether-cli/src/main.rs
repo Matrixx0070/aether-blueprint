@@ -14381,6 +14381,42 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QuerySavedSnapshotAvgItems => {
+                    let n = session.saved_snapshots.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Saved snapshot avg items: no snapshots.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.saved_snapshots.values()
+                            .map(|(items, _)| items.len())
+                            .sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Saved snapshot avg items: {:.1}", total as f64 / n as f64
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QuerySavedSnapshotMaxItems => {
+                    let max = session.saved_snapshots.values()
+                        .map(|(items, _)| items.len())
+                        .max()
+                        .unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Saved snapshot max items: {max}"
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySavedSnapshotMinItems => {
+                    let min = session.saved_snapshots.values()
+                        .map(|(items, _)| items.len())
+                        .min()
+                        .unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Saved snapshot min items: {min}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -44323,6 +44359,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/saved-snapshot-avg-items" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotAvgItems).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/saved-snapshot-max-items" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotMaxItems).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/saved-snapshot-min-items" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotMinItems).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -45748,6 +45799,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/verif-rule-avg-desc-len",
                             "/verif-rule-total-chars",
                             "/saved-snapshot-total-items",
+                            "/saved-snapshot-avg-items",
+                            "/saved-snapshot-max-items",
+                            "/saved-snapshot-min-items",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

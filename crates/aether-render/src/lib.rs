@@ -2187,6 +2187,12 @@ pub enum UiCommand {
     QueryVerifRuleTotalChars,
     /// Show the total conversation items across all saved snapshots.
     QuerySavedSnapshotTotalItems,
+    /// Show the avg items per saved snapshot.
+    QuerySavedSnapshotAvgItems,
+    /// Show the max items in a single saved snapshot.
+    QuerySavedSnapshotMaxItems,
+    /// Show the min items in a single saved snapshot.
+    QuerySavedSnapshotMinItems,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
