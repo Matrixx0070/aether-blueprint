@@ -15041,6 +15041,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryMetricsResetTurn => {
+                    let n = session.metrics_reset_turn;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Metrics reset turn: {n}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryDeduplicateToolCalls => {
+                    let enabled = session.dedup_tool_calls;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Dedup tool calls: {enabled}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryCheckpointEveryTools => {
+                    let n = session.checkpoint_every_tools;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Checkpoint every tools: {n}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -45343,6 +45364,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/metrics-reset-turn" => {
+                                    if _ctx.send(UiCommand::QueryMetricsResetTurn).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/dedup-tool-calls" => {
+                                    if _ctx.send(UiCommand::QueryDeduplicateToolCalls).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/checkpoint-every-tools" => {
+                                    if _ctx.send(UiCommand::QueryCheckpointEveryTools).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -46840,6 +46876,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/fail-fast-errors",
                             "/started-at",
                             "/pause-after-turns",
+                            "/metrics-reset-turn",
+                            "/dedup-tool-calls",
+                            "/checkpoint-every-tools",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

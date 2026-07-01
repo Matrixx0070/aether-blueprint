@@ -2331,6 +2331,12 @@ pub enum UiCommand {
     QueryStartedAt,
     /// Show the pause-after-turns setting.
     QueryPauseAfterTurns,
+    /// Show the metrics-reset-turn index.
+    QueryMetricsResetTurn,
+    /// Show whether dedup-tool-calls is enabled.
+    QueryDeduplicateToolCalls,
+    /// Show the checkpoint-every-tools setting.
+    QueryCheckpointEveryTools,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
