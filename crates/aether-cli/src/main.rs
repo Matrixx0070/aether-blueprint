@@ -11670,6 +11670,33 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryToolAllowLast => {
+                    match session.tool_allow.last() {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Tool allow: no entries.".to_string())); }
+                        Some(t) => { let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Tool allow last (of {}): '{}'", session.tool_allow.len(), t))); }
+                    }
+                    continue;
+                }
+                UiCommand::QuerySavedSnapshotLast => {
+                    match session.saved_snapshots.keys().last() {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Saved snapshots: none.".to_string())); }
+                        Some(name) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Saved snapshot last (of {}): name='{}'",
+                                session.saved_snapshots.len(), name
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanBlockTurnTotal => {
+                    let n = session.plan.block_turns.len();
+                    let total: usize = session.plan.block_turns.values().map(|v| v.len()).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan block turns: {n} block(s) tracked, {total} turn entries total."
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -40202,6 +40229,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/tool-allow-last" => {
+                                    if _ctx.send(UiCommand::QueryToolAllowLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/saved-snapshot-last" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-block-turn-total" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockTurnTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -41345,6 +41387,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/progress-item-last",
                             "/bookmark-last",
                             "/tool-deny-last",
+                            "/tool-allow-last",
+                            "/saved-snapshot-last",
+                            "/plan-block-turn-total",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

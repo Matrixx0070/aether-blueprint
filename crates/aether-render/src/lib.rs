@@ -1623,6 +1623,12 @@ pub enum UiCommand {
     QueryBookmarkLast,
     /// Show the last tool-deny pattern.
     QueryToolDenyLast,
+    /// Show the last tool-allow pattern.
+    QueryToolAllowLast,
+    /// Show the last saved snapshot name.
+    QuerySavedSnapshotLast,
+    /// Show total plan block-turn entry count across all blocks.
+    QueryPlanBlockTurnTotal,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
