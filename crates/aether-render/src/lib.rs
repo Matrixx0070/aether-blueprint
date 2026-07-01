@@ -3021,6 +3021,12 @@ pub enum UiCommand {
     QueryMaxWallMs,
     /// Minimum non-zero wall-clock ms seen in any logged turn.
     QueryMinWallMs,
+    /// Median (p50) wall-clock ms across logged turns.
+    QueryP50WallMs,
+    /// 90th-percentile wall-clock ms across logged turns.
+    QueryP90WallMs,
+    /// 99th-percentile wall-clock ms across logged turns.
+    QueryP99WallMs,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

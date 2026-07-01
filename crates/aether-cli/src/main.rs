@@ -17323,6 +17323,36 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryP50WallMs => {
+                    let mut v: Vec<u64> = session.turn_wall_ms.iter().copied().collect();
+                    v.sort_unstable();
+                    let n = v.len();
+                    let p50 = if n == 0 { 0 } else { v[n / 2] };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "p50 wall-ms: {p50} ms ({n} turns)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryP90WallMs => {
+                    let mut v: Vec<u64> = session.turn_wall_ms.iter().copied().collect();
+                    v.sort_unstable();
+                    let n = v.len();
+                    let p90 = if n == 0 { 0 } else { v[(n * 90 / 100).min(n - 1)] };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "p90 wall-ms: {p90} ms ({n} turns)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryP99WallMs => {
+                    let mut v: Vec<u64> = session.turn_wall_ms.iter().copied().collect();
+                    v.sort_unstable();
+                    let n = v.len();
+                    let p99 = if n == 0 { 0 } else { v[(n * 99 / 100).min(n - 1)] };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "p99 wall-ms: {p99} ms ({n} turns)"
+                    )));
+                    continue;
+                }
                 UiCommand::QueryAvgWallMs => {
                     let n = session.turn_wall_ms.len();
                     let avg = if n == 0 { 0.0 } else {
@@ -50366,6 +50396,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/p50-wall-ms" => {
+                                    if _ctx.send(UiCommand::QueryP50WallMs).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/p90-wall-ms" => {
+                                    if _ctx.send(UiCommand::QueryP90WallMs).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/p99-wall-ms" => {
+                                    if _ctx.send(UiCommand::QueryP99WallMs).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/avg-wall-ms" => {
                                     if _ctx.send(UiCommand::QueryAvgWallMs).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -52253,6 +52298,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/avg-wall-ms",
                             "/max-wall-ms",
                             "/min-wall-ms",
+                            "/p50-wall-ms",
+                            "/p90-wall-ms",
+                            "/p99-wall-ms",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
