@@ -15479,6 +15479,28 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryThinkAloudPromptLen => {
+                    let n = session.think_aloud_prompt.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Think-aloud prompt length: {n} chars"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryResponseFormatLen => {
+                    let n = session.response_format.as_deref().map(|s| s.len()).unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Response format length: {n} chars (0 = unset)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryAutoCommitTemplatePreview => {
+                    let preview: String = session.auto_commit_template.chars().take(80).collect();
+                    let total = session.auto_commit_template.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Auto-commit template preview ({total} chars): {preview}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -46066,6 +46088,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/think-aloud-prompt-len" => {
+                                    if _ctx.send(UiCommand::QueryThinkAloudPromptLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/response-format-len" => {
+                                    if _ctx.send(UiCommand::QueryResponseFormatLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/auto-commit-template-preview" => {
+                                    if _ctx.send(UiCommand::QueryAutoCommitTemplatePreview).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -47620,6 +47657,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/snapshot-plan-tool-errors-sum",
                             "/snapshot-plan-tool-ok-sum",
                             "/snapshot-plan-tool-err-sum",
+                            "/think-aloud-prompt-len",
+                            "/response-format-len",
+                            "/auto-commit-template-preview",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -2445,6 +2445,12 @@ pub enum UiCommand {
     QuerySavedSnapshotPlanToolOkSum,
     /// Show the sum of err counts from tool_call_stats across all saved snapshot plans.
     QuerySavedSnapshotPlanToolErrSum,
+    /// Show the length of the think_aloud_prompt string.
+    QueryThinkAloudPromptLen,
+    /// Show the length of the response_format string (0 if unset).
+    QueryResponseFormatLen,
+    /// Show the first 80 chars of the auto_commit_template.
+    QueryAutoCommitTemplatePreview,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
