@@ -1317,6 +1317,12 @@ pub enum UiCommand {
     QuerySessionUptimeHrs,
     /// Count distinct back-and-forth exchanges in history.
     QueryHistoryTurnDepth,
+    /// Show USD cost per token for this session.
+    QueryCostPerToken,
+    /// Show first sticky context entry preview.
+    QueryStickyCtxPreview,
+    /// List all tool names tracked in plan stats.
+    QueryPlanToolList,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

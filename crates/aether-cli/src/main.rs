@@ -10847,6 +10847,52 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryCostPerToken => {
+                    let total_tokens = session.usage_total.input_tokens + session.usage_total.output_tokens;
+                    let total_cost: f64 = session.turn_cost_log.iter().map(|(_, _, _, c)| c).sum();
+                    if total_tokens == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Cost per token: no tokens used yet.".to_string()
+                        ));
+                    } else {
+                        let per_tok = total_cost / total_tokens as f64;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Cost per token: ${per_tok:.8} ({total_tokens} tokens, ${total_cost:.6} total)."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryStickyCtxPreview => {
+                    match session.sticky_context.first() {
+                        Some(entry) => {
+                            let preview = entry.chars().take(100).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Sticky context[0] preview: {preview}{}",
+                                if entry.len() > 100 { "…" } else { "" }
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Sticky context: empty. Use /sticky-add <text> to add.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanToolList => {
+                    if session.plan.tool_call_stats.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Plan tool list: no tools recorded yet.".to_string()
+                        ));
+                    } else {
+                        let mut names: Vec<_> = session.plan.tool_call_stats.keys().collect();
+                        names.sort();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Plan tools ({}): {}", names.len(), names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -37269,6 +37315,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /cost-per-token — USD per token for this session
+                                "/cost-per-token" => {
+                                    if _ctx.send(UiCommand::QueryCostPerToken).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /sticky-ctx-preview — first sticky context entry preview
+                                "/sticky-ctx-preview" => {
+                                    if _ctx.send(UiCommand::QueryStickyCtxPreview).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /plan-tool-list — list all tool names in plan stats
+                                "/plan-tool-list" => {
+                                    if _ctx.send(UiCommand::QueryPlanToolList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -38234,6 +38298,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-tool-call-total",
                             "/session-uptime-hrs",
                             "/history-turn-depth",
+                            "/cost-per-token",
+                            "/sticky-ctx-preview",
+                            "/plan-tool-list",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
