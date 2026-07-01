@@ -1941,6 +1941,12 @@ pub enum UiCommand {
     QueryTurnCostLogMaxInTokens,
     /// Show the minimum input tokens in a single turn from the turn cost log.
     QueryTurnCostLogMinInTokens,
+    /// Show the maximum output tokens in a single turn from the turn cost log.
+    QueryTurnCostLogMaxOutTokens,
+    /// Show the minimum output tokens in a single turn from the turn cost log.
+    QueryTurnCostLogMinOutTokens,
+    /// Show the turn index of the first entry in the turn cost log.
+    QueryTurnCostLogFirstTurnIdx,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

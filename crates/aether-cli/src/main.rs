@@ -13336,6 +13336,30 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryTurnCostLogMaxOutTokens => {
+                    let max = session.turn_cost_log.iter().map(|(_, _, out_tok, _)| *out_tok).max();
+                    match max {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Turn cost log max out tokens: no turns logged.".to_string())); }
+                        Some(v) => { let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Max output tokens in single turn: {}", v))); }
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnCostLogMinOutTokens => {
+                    let min = session.turn_cost_log.iter().map(|(_, _, out_tok, _)| *out_tok).min();
+                    match min {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Turn cost log min out tokens: no turns logged.".to_string())); }
+                        Some(v) => { let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Min output tokens in single turn: {}", v))); }
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnCostLogFirstTurnIdx => {
+                    let first = session.turn_cost_log.first().map(|(idx, _, _, _)| *idx);
+                    match first {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Turn cost log first turn idx: no turns logged.".to_string())); }
+                        Some(v) => { let _ = etx_for_driver.send(UiEvent::SystemNote(format!("First turn index in cost log: {}", v))); }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -42663,6 +42687,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/turn-cost-log-max-out-tokens" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogMaxOutTokens).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-cost-log-min-out-tokens" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogMinOutTokens).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-cost-log-first-turn-idx" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogFirstTurnIdx).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -43965,6 +44004,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-cost-log-min-cost",
                             "/turn-cost-log-max-in-tokens",
                             "/turn-cost-log-min-in-tokens",
+                            "/turn-cost-log-max-out-tokens",
+                            "/turn-cost-log-min-out-tokens",
+                            "/turn-cost-log-first-turn-idx",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
