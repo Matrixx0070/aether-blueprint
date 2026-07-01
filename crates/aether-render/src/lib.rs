@@ -2193,6 +2193,12 @@ pub enum UiCommand {
     QuerySavedSnapshotMaxItems,
     /// Show the min items in a single saved snapshot.
     QuerySavedSnapshotMinItems,
+    /// Show the name of the first block in plan.block_turns.
+    QueryPlanBlockTurnsFirst,
+    /// Show the name of the first block in plan.block_counts.
+    QueryPlanBlockCountFirst,
+    /// Show the name of the first tool in plan.tool_call_stats.
+    QueryPlanToolStatFirst,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
