@@ -1671,6 +1671,12 @@ pub enum UiCommand {
     QueryEnvKeyMaxLen,
     /// Show max length of any alias name.
     QueryAliasKeyMaxLen,
+    /// Show max length of any prompt macro key.
+    QueryPromptMacroKeyMaxLen,
+    /// Show the first tool output limit entry.
+    QueryToolOutputLimitFirst,
+    /// Show the first completed progress item.
+    QueryProgressItemsDoneFirst,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

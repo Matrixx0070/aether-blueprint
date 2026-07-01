@@ -11910,6 +11910,36 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryPromptMacroKeyMaxLen => {
+                    match session.prompt_macros.keys().max_by_key(|k| k.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Prompt macro key max len: no macros defined.".to_string())); }
+                        Some(k) => { let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Prompt macro key max len: {} chars.", k.len()))); }
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolOutputLimitFirst => {
+                    match session.tool_output_limits.iter().next() {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Tool output limits: none set.".to_string())); }
+                        Some((tool, limit)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Tool output limit[0] (of {}): tool='{}' limit={} chars",
+                                session.tool_output_limits.len(), tool, limit
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryProgressItemsDoneFirst => {
+                    match session.progress_items.iter().find(|(_, done)| *done) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Progress items: none completed.".to_string())); }
+                        Some((text, _)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "First completed progress item: {}", text
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -40562,6 +40592,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/prompt-macro-key-max-len" => {
+                                    if _ctx.send(UiCommand::QueryPromptMacroKeyMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-output-limit-first" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputLimitFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/progress-items-done-first" => {
+                                    if _ctx.send(UiCommand::QueryProgressItemsDoneFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -41729,6 +41774,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-var-key-max-len",
                             "/env-key-max-len",
                             "/alias-key-max-len",
+                            "/prompt-macro-key-max-len",
+                            "/tool-output-limit-first",
+                            "/progress-items-done-first",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
