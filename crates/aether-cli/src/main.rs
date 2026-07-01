@@ -14637,6 +14637,43 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryBookmarkTurnSpan => {
+                    if session.bookmarks.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Bookmark turn span: no bookmarks.".to_string()
+                        ));
+                    } else {
+                        let min = session.bookmarks.iter().map(|(idx, _, _)| *idx).min().unwrap_or(0);
+                        let max = session.bookmarks.iter().map(|(idx, _, _)| *idx).max().unwrap_or(0);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Bookmark turn span: {}", max.saturating_sub(min)
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnLabelTurnSpan => {
+                    if session.turn_labels.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn label turn span: no labels.".to_string()
+                        ));
+                    } else {
+                        let min = session.turn_labels.iter().map(|(i, _)| *i).min().unwrap_or(0);
+                        let max = session.turn_labels.iter().map(|(i, _)| *i).max().unwrap_or(0);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn label turn span: {}", max.saturating_sub(min)
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryAnnotFirstText => {
+                    let text = session.history_annotations.first()
+                        .map(|(_, t)| t.as_str())
+                        .unwrap_or("none");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History annot first text: {text}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -44714,6 +44751,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/bookmark-turn-span" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkTurnSpan).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-label-turn-span" => {
+                                    if _ctx.send(UiCommand::QueryTurnLabelTurnSpan).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-annot-first-text" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAnnotFirstText).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -46166,6 +46218,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-cost-log-turn-span",
                             "/plan-tool-error-counts-max",
                             "/history-annot-turn-span",
+                            "/bookmark-turn-span",
+                            "/turn-label-turn-span",
+                            "/history-annot-first-text",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

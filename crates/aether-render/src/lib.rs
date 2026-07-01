@@ -2241,6 +2241,12 @@ pub enum UiCommand {
     QueryPlanToolErrorCountsMax,
     /// Show the turn span (max−min) across history_annotations.
     QueryHistoryAnnotTurnSpan,
+    /// Show the turn span (max−min) across bookmarks.
+    QueryBookmarkTurnSpan,
+    /// Show the turn span (max−min) across turn_labels.
+    QueryTurnLabelTurnSpan,
+    /// Show the text of the first history annotation.
+    QueryHistoryAnnotFirstText,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
