@@ -2481,6 +2481,12 @@ pub enum UiCommand {
     QueryPendingReminderEvidenceAvg,
     /// Show the total chars across all classifier_evidence strings in pending reminders.
     QueryPendingReminderEvidenceTotalChars,
+    /// Show the count of pending reminders with ReminderKind::HookOutput.
+    QueryPendingReminderHookOutputCount,
+    /// Show the count of pending reminders with ReminderKind::SystemWarning.
+    QueryPendingReminderSystemWarningCount,
+    /// Show the count of pending reminders with ReminderKind::ExternalState.
+    QueryPendingReminderExternalStateCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
