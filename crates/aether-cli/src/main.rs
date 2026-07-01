@@ -14253,6 +14253,29 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryAutoTagRuleTotalChars => {
+                    let total: usize = session.auto_tag_rules.iter()
+                        .map(|(pat, tag)| pat.len() + tag.len())
+                        .sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Auto-tag rule total chars: {total}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTaskQueueTotalChars => {
+                    let total: usize = session.task_queue.iter().map(|s| s.len()).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Task queue total chars: {total}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryToolDenyTotalChars => {
+                    let total: usize = session.tool_deny.iter().map(|s| s.len()).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Tool deny total chars: {total}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -44120,6 +44143,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/auto-tag-rule-total-chars" => {
+                                    if _ctx.send(UiCommand::QueryAutoTagRuleTotalChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/task-queue-total-chars" => {
+                                    if _ctx.send(UiCommand::QueryTaskQueueTotalChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-deny-total-chars" => {
+                                    if _ctx.send(UiCommand::QueryToolDenyTotalChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -45530,6 +45568,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-var-total-chars",
                             "/alias-total-chars",
                             "/error-playbook-total-chars",
+                            "/auto-tag-rule-total-chars",
+                            "/task-queue-total-chars",
+                            "/tool-deny-total-chars",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

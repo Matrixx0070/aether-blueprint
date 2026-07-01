@@ -2157,6 +2157,12 @@ pub enum UiCommand {
     QueryAliasTotalChars,
     /// Show the total chars across all error playbook patterns and hints.
     QueryErrorPlaybookTotalChars,
+    /// Show the total chars across all auto-tag rule patterns and tags.
+    QueryAutoTagRuleTotalChars,
+    /// Show the total chars across all task queue items.
+    QueryTaskQueueTotalChars,
+    /// Show the total chars across all tool deny entries.
+    QueryToolDenyTotalChars,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
