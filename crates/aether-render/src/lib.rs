@@ -1419,6 +1419,12 @@ pub enum UiCommand {
     QuerySessionTagFirst,
     /// Show the first alias (key → value).
     QueryAliasFirst,
+    /// Show the first session variable (key → value).
+    QuerySessionVarFirst,
+    /// Show the first prompt macro (name → preview).
+    QueryPromptMacroFirst,
+    /// Show the first session env variable (key → value).
+    QueryEnvFirst,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

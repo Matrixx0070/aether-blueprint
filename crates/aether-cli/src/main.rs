@@ -11192,6 +11192,63 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QuerySessionVarFirst => {
+                    let mut pairs: Vec<_> = session.session_vars.iter().collect();
+                    pairs.sort_by_key(|(k, _)| k.as_str());
+                    match pairs.first() {
+                        Some((k, v)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Session var[0] (of {}): ${k}='{}'",
+                                session.session_vars.len(),
+                                v.chars().take(80).collect::<String>()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Session vars: none defined.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPromptMacroFirst => {
+                    let mut pairs: Vec<_> = session.prompt_macros.iter().collect();
+                    pairs.sort_by_key(|(k, _)| k.as_str());
+                    match pairs.first() {
+                        Some((k, v)) => {
+                            let preview = v.chars().take(80).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Prompt macro[0] (of {}): '{k}' → '{preview}'",
+                                session.prompt_macros.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Prompt macros: none defined.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryEnvFirst => {
+                    let mut pairs: Vec<_> = session.session_env.iter().collect();
+                    pairs.sort_by_key(|(k, _)| k.as_str());
+                    match pairs.first() {
+                        Some((k, v)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Session env[0] (of {}): {k}='{}'",
+                                session.session_env.len(),
+                                v.chars().take(80).collect::<String>()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Session env: no variables set.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryAutoTagFirst => {
                     match session.auto_tag_rules.first() {
                         Some((pat, tag)) => {
@@ -38291,6 +38348,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/session-var-first" => {
+                                    if _ctx.send(UiCommand::QuerySessionVarFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/prompt-macro-first" => {
+                                    if _ctx.send(UiCommand::QueryPromptMacroFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/env-first" => {
+                                    if _ctx.send(UiCommand::QueryEnvFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -39332,6 +39404,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/auto-tag-first",
                             "/session-tag-first",
                             "/alias-first",
+                            "/session-var-first",
+                            "/prompt-macro-first",
+                            "/env-first",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
