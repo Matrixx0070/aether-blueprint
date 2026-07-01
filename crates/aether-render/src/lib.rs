@@ -2079,6 +2079,12 @@ pub enum UiCommand {
     QueryToolOutputHistMaxCurrLen,
     /// Show the min prev-output length in tool output history.
     QueryToolOutputHistMinPrevLen,
+    /// Show the min curr-output length in tool output history.
+    QueryToolOutputHistMinCurrLen,
+    /// Show the max key length in session_env.
+    QueryEnvVarMaxKeyLen,
+    /// Show the min key length in session_env.
+    QueryEnvVarMinKeyLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
