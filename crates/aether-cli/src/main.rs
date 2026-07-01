@@ -26,7 +26,7 @@ use aether_llm::{
     LlmProvider, Message, MessagesRequest,
 };
 use aether_overlay::{Fable5Overlay, OverlayConfig};
-use aether_selfcheck::{Action, AppliesWhen, Gate, Rule, Severity};
+use aether_selfcheck::{Action, AppliesWhen, Detector, Gate, Rule, Severity};
 use aether_tools::{builtin::register_builtins, ToolRegistry};
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
@@ -16015,6 +16015,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let count = session.verifier.gate.rules.iter().filter(|r| r.rule.applies_when == AppliesWhen::NotCiteTagsPresent).count();
                     let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
                         "Verifier gate NotCiteTagsPresent-applies rules: {count}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierGateAppliesNoExtLookup => {
+                    let count = session.verifier.gate.rules.iter().filter(|r| r.rule.applies_when == AppliesWhen::NoRecentExternalLookup).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate NoRecentExternalLookup-applies rules: {count}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierGateAppliesNoCreative => {
+                    let count = session.verifier.gate.rules.iter().filter(|r| r.rule.applies_when == AppliesWhen::NotCreativeWritingContext).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate NotCreativeWritingContext-applies rules: {count}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierGateDetectorPhrase => {
+                    let count = session.verifier.gate.rules.iter().filter(|r| matches!(r.rule.detector, Detector::PhraseMatch { .. })).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate PhraseMatch detector rules: {count}"
                     )));
                     continue;
                 }
@@ -46950,6 +46971,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/verifier-gate-applies-no-ext-lookup" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateAppliesNoExtLookup).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-gate-applies-no-creative" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateAppliesNoCreative).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-gate-detector-phrase" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateDetectorPhrase).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -48573,6 +48609,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/verifier-gate-applies-not-mem-query",
                             "/verifier-gate-applies-cite-tags",
                             "/verifier-gate-applies-no-cite-tags",
+                            "/verifier-gate-applies-no-ext-lookup",
+                            "/verifier-gate-applies-no-creative",
+                            "/verifier-gate-detector-phrase",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

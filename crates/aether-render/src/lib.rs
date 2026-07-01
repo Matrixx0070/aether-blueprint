@@ -2583,6 +2583,12 @@ pub enum UiCommand {
     QueryVerifierGateAppliesCiteTags,
     /// Count of rules with AppliesWhen::NotCiteTagsPresent in the verifier gate.
     QueryVerifierGateAppliesNoCiteTags,
+    /// Count of rules with AppliesWhen::NoRecentExternalLookup in the verifier gate.
+    QueryVerifierGateAppliesNoExtLookup,
+    /// Count of rules with AppliesWhen::NotCreativeWritingContext in the verifier gate.
+    QueryVerifierGateAppliesNoCreative,
+    /// Count of rules using the PhraseMatch detector in the verifier gate.
+    QueryVerifierGateDetectorPhrase,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
