@@ -1479,6 +1479,12 @@ pub enum UiCommand {
     QueryToolSigLast,
     /// Show the last alias (key → value) alphabetically.
     QueryAliasLast,
+    /// Show the last session variable (key → value) alphabetically.
+    QuerySessionVarLast,
+    /// Show the last prompt macro (name → preview) alphabetically.
+    QueryPromptMacroLast,
+    /// Show the last session env variable (key → value) alphabetically.
+    QueryEnvLast,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
