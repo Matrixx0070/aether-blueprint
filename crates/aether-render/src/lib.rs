@@ -2625,6 +2625,12 @@ pub enum UiCommand {
     QueryTurnWallP95,
     /// Count of User-role items in the session history.
     QueryHistoryUserTurns,
+    /// Count of Assistant-role items in the session history.
+    QueryHistoryAsstTurns,
+    /// Count of ToolResults items in the session history.
+    QueryHistoryToolResults,
+    /// Count of Assistant items with non-empty tool_uses in the session history.
+    QueryHistoryAsstToolUse,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
