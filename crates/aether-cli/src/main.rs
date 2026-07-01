@@ -17323,6 +17323,36 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryP50CostEntry => {
+                    let mut costs: Vec<f64> = session.turn_cost_log.iter().map(|(_, _, _, c)| *c).collect();
+                    costs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    let n = costs.len();
+                    let p50 = if n == 0 { 0.0 } else { costs[n / 2] };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "p50 cost per entry: ${p50:.6} ({n} entries)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryP90CostEntry => {
+                    let mut costs: Vec<f64> = session.turn_cost_log.iter().map(|(_, _, _, c)| *c).collect();
+                    costs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    let n = costs.len();
+                    let p90 = if n == 0 { 0.0 } else { costs[(n * 90 / 100).min(n - 1)] };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "p90 cost per entry: ${p90:.6} ({n} entries)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryP99CostEntry => {
+                    let mut costs: Vec<f64> = session.turn_cost_log.iter().map(|(_, _, _, c)| *c).collect();
+                    costs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    let n = costs.len();
+                    let p99 = if n == 0 { 0.0 } else { costs[(n * 99 / 100).min(n - 1)] };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "p99 cost per entry: ${p99:.6} ({n} entries)"
+                    )));
+                    continue;
+                }
                 UiCommand::QueryHistoryUserMinWords => {
                     let min = session.history.iter()
                         .filter_map(|item| if let ConversationItem::User(s) = item {
@@ -50535,6 +50565,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/p50-cost-entry" => {
+                                    if _ctx.send(UiCommand::QueryP50CostEntry).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/p90-cost-entry" => {
+                                    if _ctx.send(UiCommand::QueryP90CostEntry).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/p99-cost-entry" => {
+                                    if _ctx.send(UiCommand::QueryP99CostEntry).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-user-min-words" => {
                                     if _ctx.send(UiCommand::QueryHistoryUserMinWords).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -52512,6 +52557,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-user-min-words",
                             "/history-asst-min-words",
                             "/history-word-ratio",
+                            "/p50-cost-entry",
+                            "/p90-cost-entry",
+                            "/p99-cost-entry",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

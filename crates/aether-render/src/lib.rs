@@ -3051,6 +3051,12 @@ pub enum UiCommand {
     QueryHistoryAsstMinWords,
     /// Ratio of total user words to total assistant words in history.
     QueryHistoryWordRatio,
+    /// Median (p50) cost per cost-log entry.
+    QueryP50CostEntry,
+    /// 90th-percentile cost per cost-log entry.
+    QueryP90CostEntry,
+    /// 99th-percentile cost per cost-log entry.
+    QueryP99CostEntry,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
