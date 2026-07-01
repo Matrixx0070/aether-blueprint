@@ -1,0 +1,11 @@
+[package]
+name = "aether-invariant"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AetherCode invariant miner: observes program values across multiple runs and infers likely invariants (Daikon-style: x > 0, y == 2*x, z in {0,1}, etc.)."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true

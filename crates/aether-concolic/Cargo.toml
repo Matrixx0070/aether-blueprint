@@ -1,0 +1,13 @@
+[package]
+name = "aether-concolic"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AetherCode concolic unit test replay: extracts concrete inputs from existing tests, records path constraints, and generates new inputs that flip branch conditions to explore uncovered paths."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+regex.workspace = true
+once_cell.workspace = true
