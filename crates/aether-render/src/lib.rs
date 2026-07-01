@@ -2823,6 +2823,12 @@ pub enum UiCommand {
     QueryLastToolSigSigTotalChars,
     /// Average combined length (name+sig) per last_tool_signatures entry.
     QueryLastToolSigAvgTotalLen,
+    /// Total chars across done progress item text strings.
+    QueryProgressItemDoneChars,
+    /// Total chars across pending progress item text strings.
+    QueryProgressItemPendingChars,
+    /// Max plan goal len across all saved snapshots.
+    QuerySavedSnapshotPlanGoalMaxLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

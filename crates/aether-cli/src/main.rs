@@ -17225,6 +17225,38 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryProgressItemDoneChars => {
+                    let total: usize = session.progress_items.iter()
+                        .filter(|(_, done)| *done)
+                        .map(|(text, _)| text.len())
+                        .sum();
+                    let n = session.progress_items.iter().filter(|(_, d)| *d).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Progress items done total chars: {total} ({n} done items)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryProgressItemPendingChars => {
+                    let total: usize = session.progress_items.iter()
+                        .filter(|(_, done)| !done)
+                        .map(|(text, _)| text.len())
+                        .sum();
+                    let n = session.progress_items.iter().filter(|(_, d)| !d).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Progress items pending total chars: {total} ({n} pending items)"
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySavedSnapshotPlanGoalMaxLen => {
+                    let max = session.saved_snapshots.values()
+                        .filter_map(|(_, plan)| plan.goal.as_ref().map(|g| g.len()))
+                        .max();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match max {
+                        Some(v) => format!("Saved snapshot plan goal max len: {v}"),
+                        None => "Saved snapshots: none with a goal set.".to_string(),
+                    }));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -48757,6 +48789,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/progress-item-done-chars" => {
+                                    if _ctx.send(UiCommand::QueryProgressItemDoneChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/progress-item-pending-chars" => {
+                                    if _ctx.send(UiCommand::QueryProgressItemPendingChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/saved-snapshot-plan-goal-max-len" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotPlanGoalMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -50500,6 +50547,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/last-tool-sig-name-total-chars",
                             "/last-tool-sig-sig-total-chars",
                             "/last-tool-sig-avg-total-len",
+                            "/progress-item-done-chars",
+                            "/progress-item-pending-chars",
+                            "/saved-snapshot-plan-goal-max-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
