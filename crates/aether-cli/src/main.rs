@@ -11192,6 +11192,54 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryScopeGuardText => {
+                    match &session.scope_guard {
+                        Some(pattern) => {
+                            let preview = pattern.chars().take(160).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Scope guard: {preview}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Scope guard: not set.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryAgentPersonaText => {
+                    match &session.agent_persona {
+                        Some(persona) => {
+                            let preview = persona.chars().take(160).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Agent persona: {preview}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Agent persona: not set.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryRequestPrefixText => {
+                    match &session.request_prefix {
+                        Some(prefix) => {
+                            let preview = prefix.chars().take(160).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Request prefix: {preview}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Request prefix: not set.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryProgressItemsDone => {
                     let total = session.progress_items.len();
                     let done = session.progress_items.iter().filter(|(_, d)| *d).count();
@@ -37939,6 +37987,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/scope-guard-text" => {
+                                    if _ctx.send(UiCommand::QueryScopeGuardText).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/agent-persona-text" => {
+                                    if _ctx.send(UiCommand::QueryAgentPersonaText).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/request-prefix-text" => {
+                                    if _ctx.send(UiCommand::QueryRequestPrefixText).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 cmd_str if cmd_str.starts_with("/history-annotation-at ") => {
                                     let rest = cmd_str.trim_start_matches("/history-annotation-at ").trim();
                                     if let Ok(idx) = rest.parse::<usize>() {
@@ -38947,6 +39010,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/progress-items-done",
                             "/task-queue-next",
                             "/focus-mode-text",
+                            "/scope-guard-text",
+                            "/agent-persona-text",
+                            "/request-prefix-text",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

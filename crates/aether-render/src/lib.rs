@@ -1383,6 +1383,12 @@ pub enum UiCommand {
     QueryTaskQueueNext,
     /// Show the focus_mode text if set.
     QueryFocusModeText,
+    /// Show the scope guard pattern if set.
+    QueryScopeGuardText,
+    /// Show the agent persona if set.
+    QueryAgentPersonaText,
+    /// Show the request prefix if set.
+    QueryRequestPrefixText,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
