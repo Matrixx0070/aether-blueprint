@@ -17323,6 +17323,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QuerySessionVarKeyWordTotal => {
+                    let total: usize = session.session_vars.keys()
+                        .map(|k| k.split_whitespace().count())
+                        .sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session var key word total: {total} (across {} vars)",
+                        session.session_vars.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySessionVarKeyAvgWords => {
+                    let n = session.session_vars.len();
+                    let avg = if n == 0 { 0.0 } else {
+                        let total: usize = session.session_vars.keys()
+                            .map(|k| k.split_whitespace().count())
+                            .sum();
+                        total as f64 / n as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session var key avg words: {avg:.1} ({n} vars)"
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySessionVarKeyMaxWords => {
+                    let max = session.session_vars.keys()
+                        .map(|k| k.split_whitespace().count())
+                        .max();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match max {
+                        Some(v) => format!("Session var key max words: {v}"),
+                        None => "Session vars: none defined.".to_string(),
+                    }));
+                    continue;
+                }
                 UiCommand::QueryProgressItemDoneWordTotal => {
                     let total: usize = session.progress_items.iter()
                         .filter(|(_, done)| *done)
@@ -49138,6 +49171,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/session-var-key-word-total" => {
+                                    if _ctx.send(UiCommand::QuerySessionVarKeyWordTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-var-key-avg-words" => {
+                                    if _ctx.send(UiCommand::QuerySessionVarKeyAvgWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-var-key-max-words" => {
+                                    if _ctx.send(UiCommand::QuerySessionVarKeyMaxWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -50905,6 +50953,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/progress-item-done-word-total",
                             "/progress-item-pending-word-total",
                             "/progress-item-word-total",
+                            "/session-var-key-word-total",
+                            "/session-var-key-avg-words",
+                            "/session-var-key-max-words",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -2871,6 +2871,12 @@ pub enum UiCommand {
     QueryProgressItemPendingWordTotal,
     /// Total word count across all progress items (done + pending).
     QueryProgressItemWordTotal,
+    /// Total word count across all session_var keys.
+    QuerySessionVarKeyWordTotal,
+    /// Average words per session_var key.
+    QuerySessionVarKeyAvgWords,
+    /// Max words in any single session_var key.
+    QuerySessionVarKeyMaxWords,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
