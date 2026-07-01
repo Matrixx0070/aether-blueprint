@@ -1203,6 +1203,12 @@ pub enum UiCommand {
     QuerySnapshotPlanGoal(String),
     /// Show count of error-result items in history.
     QueryHistoryErrorResultCount,
+    /// Show configured token budget warn percentage.
+    QueryTokenBudgetWarnPct,
+    /// Show a 100-char preview of the current plan goal.
+    QueryPlanGoalPreview,
+    /// Show history length from a named snapshot.
+    QuerySavedSnapshotAt(String),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

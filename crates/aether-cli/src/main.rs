@@ -8964,6 +8964,56 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QueryTokenBudgetWarnPct => {
+                    let warn = session.token_budget_warn_pct;
+                    let hard = session.token_budget_hard_pct;
+                    let fired = session.token_budget_warn_fired;
+                    if warn == 0.0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Token budget warn%: not configured. Use /token-budget-warn <pct>.".to_string()
+                        ));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Token budget: warn at {warn:.0}% (fired={fired}), hard-stop at {hard:.0}%."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanGoalPreview => {
+                    match &session.plan.goal {
+                        Some(g) => {
+                            let preview = g.chars().take(100).collect::<String>();
+                            let more = if g.chars().count() > 100 { "…" } else { "" };
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Plan goal preview: {preview}{more}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Plan goal: not set.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QuerySavedSnapshotAt(name) => {
+                    match session.saved_snapshots.get(&name) {
+                        Some((history, plan)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Snapshot '{name}': {} history items, plan text {} chars, goal: {}",
+                                history.len(),
+                                plan.text.len(),
+                                plan.goal.as_deref().unwrap_or("(none)")
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Snapshot '{name}': not found. Use /saved-snapshot-list to see all."
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryPendingReminderList => {
                     let reminders = &session.pending_reminders;
                     if reminders.is_empty() {
@@ -36112,6 +36162,22 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/token-budget-warn-pct" => {
+                                    if _ctx.send(UiCommand::QueryTokenBudgetWarnPct).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-goal-preview" => {
+                                    if _ctx.send(UiCommand::QueryPlanGoalPreview).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd_str if cmd_str.starts_with("/saved-snapshot-at ") => {
+                                    let name = cmd_str.trim_start_matches("/saved-snapshot-at ").trim().to_string();
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotAt(name)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -37020,6 +37086,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/pending-reminder-list",
                             "/snapshot-plan-goal ",
                             "/history-error-result-count",
+                            "/token-budget-warn-pct",
+                            "/plan-goal-preview",
+                            "/saved-snapshot-at ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
