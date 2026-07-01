@@ -2055,6 +2055,12 @@ pub enum UiCommand {
     QueryPlanGoalVal,
     /// Show the last error tool from the plan.
     QueryPlanLastErrorTool,
+    /// Show whether plan text is non-empty.
+    QueryPlanTextSet,
+    /// Show the turn reminder interval value.
+    QueryTurnReminderEveryVal,
+    /// Show the count of plan blocks recorded.
+    QueryPlanBlocksRecordedVal,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
