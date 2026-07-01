@@ -2379,6 +2379,12 @@ pub enum UiCommand {
     QueryPlanToolStatFirstOk,
     /// Show the ok count for the last plan tool stat entry.
     QueryPlanToolStatLastOk,
+    /// Show the error count for the first plan tool stat entry.
+    QueryPlanToolStatFirstErr,
+    /// Show the error count for the last plan tool stat entry.
+    QueryPlanToolStatLastErr,
+    /// Show the block count for the last plan block count entry.
+    QueryPlanBlockCountLast,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
