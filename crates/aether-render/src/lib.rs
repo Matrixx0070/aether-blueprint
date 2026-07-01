@@ -3081,6 +3081,12 @@ pub enum UiCommand {
     QueryCostLogTurnIdxAvgGap,
     /// Maximum turn-index gap between consecutive cost-log entries.
     QueryCostLogTurnIdxMaxGap,
+    /// Minimum turn-index gap between consecutive cost-log entries.
+    QueryCostLogTurnIdxMinGap,
+    /// Standard deviation of wall-ms values across logged turns.
+    QueryWallMsStddev,
+    /// Standard deviation of cost values across cost-log entries.
+    QueryCostStddev,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

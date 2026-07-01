@@ -17323,6 +17323,56 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryCostLogTurnIdxMinGap => {
+                    let indices: Vec<usize> = session.turn_cost_log.iter().map(|(t, _, _, _)| *t).collect();
+                    let n = indices.len();
+                    if n < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Cost-log turn idx min gap: N/A ({n} entries — need ≥2)"
+                        )));
+                    } else {
+                        let mut sorted = indices.clone();
+                        sorted.sort_unstable();
+                        let min_gap = sorted.windows(2).map(|w| w[1].saturating_sub(w[0])).min().unwrap_or(0);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Cost-log turn idx min gap: {min_gap} ({n} entries)"
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryWallMsStddev => {
+                    let n = session.turn_wall_ms.len();
+                    if n < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Wall-ms stddev: N/A ({n} turns — need ≥2)"
+                        )));
+                    } else {
+                        let mean = session.turn_wall_ms.iter().sum::<u64>() as f64 / n as f64;
+                        let var = session.turn_wall_ms.iter().map(|&v| { let d = v as f64 - mean; d * d }).sum::<f64>() / n as f64;
+                        let stddev = var.sqrt();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Wall-ms stddev: {stddev:.1} ms (mean={mean:.1} ms, {n} turns)"
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryCostStddev => {
+                    let costs: Vec<f64> = session.turn_cost_log.iter().map(|(_, _, _, c)| *c).collect();
+                    let n = costs.len();
+                    if n < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Cost stddev: N/A ({n} entries — need ≥2)"
+                        )));
+                    } else {
+                        let mean = costs.iter().sum::<f64>() / n as f64;
+                        let var = costs.iter().map(|&c| { let d = c - mean; d * d }).sum::<f64>() / n as f64;
+                        let stddev = var.sqrt();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Cost stddev: ${stddev:.6} (mean=${mean:.6}, {n} entries)"
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryWallMsTotal => {
                     let total: u64 = session.turn_wall_ms.iter().sum();
                     let n = session.turn_wall_ms.len();
@@ -50717,6 +50767,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/cost-log-turn-idx-min-gap" => {
+                                    if _ctx.send(UiCommand::QueryCostLogTurnIdxMinGap).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/wall-ms-stddev" => {
+                                    if _ctx.send(UiCommand::QueryWallMsStddev).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/cost-stddev" => {
+                                    if _ctx.send(UiCommand::QueryCostStddev).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/wall-ms-total" => {
                                     if _ctx.send(UiCommand::QueryWallMsTotal).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -52784,6 +52849,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/wall-ms-total",
                             "/cost-log-turn-idx-avg-gap",
                             "/cost-log-turn-idx-max-gap",
+                            "/cost-log-turn-idx-min-gap",
+                            "/wall-ms-stddev",
+                            "/cost-stddev",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
