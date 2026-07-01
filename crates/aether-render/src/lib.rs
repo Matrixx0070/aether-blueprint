@@ -1917,6 +1917,12 @@ pub enum UiCommand {
     QuerySessionUptimeHours,
     /// Show the total cost summed from the turn cost log.
     QueryTurnCostLogTotalCost,
+    /// Show the total input tokens summed from the turn cost log.
+    QueryTurnCostLogInTokensTotal,
+    /// Show the total output tokens summed from the turn cost log.
+    QueryTurnCostLogOutTokensTotal,
+    /// Show the average cost per turn from the turn cost log.
+    QueryTurnCostLogCostAvg,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

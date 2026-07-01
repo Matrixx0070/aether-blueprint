@@ -13217,6 +13217,34 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryTurnCostLogInTokensTotal => {
+                    let total: u64 = session.turn_cost_log.iter().map(|(_, in_tok, _, _)| in_tok).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Total input tokens from turn log: {}", total
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTurnCostLogOutTokensTotal => {
+                    let total: u64 = session.turn_cost_log.iter().map(|(_, _, out_tok, _)| out_tok).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Total output tokens from turn log: {}", total
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTurnCostLogCostAvg => {
+                    let n = session.turn_cost_log.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn cost log avg cost: no turns logged.".to_string()
+                        ));
+                    } else {
+                        let total: f64 = session.turn_cost_log.iter().map(|(_, _, _, cost)| cost).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Avg cost per turn: ${:.6}", total / n as f64
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -42484,6 +42512,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/turn-cost-log-in-tokens-total" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogInTokensTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-cost-log-out-tokens-total" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogOutTokensTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-cost-log-cost-avg" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogCostAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -43774,6 +43817,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-uptime-mins",
                             "/session-uptime-hours",
                             "/turn-cost-log-total-cost",
+                            "/turn-cost-log-in-tokens-total",
+                            "/turn-cost-log-out-tokens-total",
+                            "/turn-cost-log-cost-avg",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
