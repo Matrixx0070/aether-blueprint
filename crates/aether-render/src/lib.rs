@@ -2553,6 +2553,12 @@ pub enum UiCommand {
     QueryVerifierGateRewriteCount,
     /// Show the total chars across all rule IDs in the verifier gate.
     QueryVerifierGateRuleIdTotalChars,
+    /// Average description length across all verifier gate rules.
+    QueryVerifierGateRuleDescAvgLen,
+    /// Average compiled_regexes count per verifier gate rule.
+    QueryVerifierGateRegexAvgPerRule,
+    /// Average rule ID length across all verifier gate rules.
+    QueryVerifierGateRuleIdAvgLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

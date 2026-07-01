@@ -15907,6 +15907,33 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryVerifierGateRuleDescAvgLen => {
+                    let rules = &session.verifier.gate.rules;
+                    let n = rules.len();
+                    let avg = if n == 0 { 0 } else { rules.iter().map(|r| r.rule.description.len()).sum::<usize>() / n };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate avg rule description length: {avg}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierGateRegexAvgPerRule => {
+                    let rules = &session.verifier.gate.rules;
+                    let n = rules.len();
+                    let avg = if n == 0 { 0 } else { rules.iter().map(|r| r.compiled_regexes.len()).sum::<usize>() / n };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate avg regexes per rule: {avg}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierGateRuleIdAvgLen => {
+                    let rules = &session.verifier.gate.rules;
+                    let n = rules.len();
+                    let avg = if n == 0 { 0 } else { rules.iter().map(|r| r.rule.id.len()).sum::<usize>() / n };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate avg rule ID length: {avg}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -46764,6 +46791,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/verifier-gate-rule-desc-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateRuleDescAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-gate-regex-avg-per-rule" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateRegexAvgPerRule).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-gate-rule-id-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateRuleIdAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -48372,6 +48414,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/verifier-gate-warn-count",
                             "/verifier-gate-rewrite-count",
                             "/verifier-gate-rule-id-total-chars",
+                            "/verifier-gate-rule-desc-avg-len",
+                            "/verifier-gate-regex-avg-per-rule",
+                            "/verifier-gate-rule-id-avg-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
