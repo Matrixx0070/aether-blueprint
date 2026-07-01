@@ -15020,6 +15020,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryFailFastErrors => {
+                    let n = session.fail_fast_errors;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Fail-fast errors: {n}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryStartedAt => {
+                    let ts = session.started_at;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session started at: {ts}ms epoch"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPauseAfterTurns => {
+                    let n = session.pause_after_turns;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Pause after turns: {n}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -45307,6 +45328,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/fail-fast-errors" => {
+                                    if _ctx.send(UiCommand::QueryFailFastErrors).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/started-at" => {
+                                    if _ctx.send(UiCommand::QueryStartedAt).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/pause-after-turns" => {
+                                    if _ctx.send(UiCommand::QueryPauseAfterTurns).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -46801,6 +46837,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/saved-snapshot-key-total-chars",
                             "/usage-total-cache-read",
                             "/usage-total-cache-create",
+                            "/fail-fast-errors",
+                            "/started-at",
+                            "/pause-after-turns",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

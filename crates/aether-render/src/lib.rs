@@ -2325,6 +2325,12 @@ pub enum UiCommand {
     QueryUsageTotalCacheRead,
     /// Show the cumulative cache creation input tokens.
     QueryUsageTotalCacheCreate,
+    /// Show the fail-fast error threshold count.
+    QueryFailFastErrors,
+    /// Show the session start time (epoch ms).
+    QueryStartedAt,
+    /// Show the pause-after-turns setting.
+    QueryPauseAfterTurns,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
