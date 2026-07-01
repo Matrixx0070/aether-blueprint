@@ -1935,6 +1935,12 @@ pub enum UiCommand {
     QueryAssemblyPlanIncluded,
     /// Show the maximum cost in a single turn from the turn cost log.
     QueryTurnCostLogMaxCost,
+    /// Show the minimum cost in a single turn from the turn cost log.
+    QueryTurnCostLogMinCost,
+    /// Show the maximum input tokens in a single turn from the turn cost log.
+    QueryTurnCostLogMaxInTokens,
+    /// Show the minimum input tokens in a single turn from the turn cost log.
+    QueryTurnCostLogMinInTokens,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

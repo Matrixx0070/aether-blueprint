@@ -13307,6 +13307,35 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryTurnCostLogMinCost => {
+                    let min = session.turn_cost_log.iter().map(|(_, _, _, cost)| *cost).fold(f64::INFINITY, f64::min);
+                    if min == f64::INFINITY {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn cost log min cost: no turns logged.".to_string()
+                        ));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Min cost in single turn: ${:.6}", min
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnCostLogMaxInTokens => {
+                    let max = session.turn_cost_log.iter().map(|(_, in_tok, _, _)| *in_tok).max();
+                    match max {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Turn cost log max in tokens: no turns logged.".to_string())); }
+                        Some(v) => { let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Max input tokens in single turn: {}", v))); }
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnCostLogMinInTokens => {
+                    let min = session.turn_cost_log.iter().map(|(_, in_tok, _, _)| *in_tok).min();
+                    match min {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Turn cost log min in tokens: no turns logged.".to_string())); }
+                        Some(v) => { let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Min input tokens in single turn: {}", v))); }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -42619,6 +42648,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/turn-cost-log-min-cost" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogMinCost).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-cost-log-max-in-tokens" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogMaxInTokens).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-cost-log-min-in-tokens" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogMinInTokens).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -43918,6 +43962,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/assembly-reminders-dropped",
                             "/assembly-plan-included",
                             "/turn-cost-log-max-cost",
+                            "/turn-cost-log-min-cost",
+                            "/turn-cost-log-max-in-tokens",
+                            "/turn-cost-log-min-in-tokens",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
