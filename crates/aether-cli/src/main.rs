@@ -14498,6 +14498,33 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryTurnLabelLastIdx => {
+                    let idx = session.turn_labels.last()
+                        .map(|(i, _)| *i)
+                        .unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Turn label last idx: {idx}"
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySessionVarKeyLast => {
+                    let key = session.session_vars.keys().last()
+                        .map(|k| k.as_str())
+                        .unwrap_or("none");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session var key last: {key}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryAliasKeyLast => {
+                    let key = session.aliases.keys().last()
+                        .map(|k| k.as_str())
+                        .unwrap_or("none");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Alias key last: {key}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -44500,6 +44527,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/turn-label-last-idx" => {
+                                    if _ctx.send(UiCommand::QueryTurnLabelLastIdx).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-var-key-last" => {
+                                    if _ctx.send(UiCommand::QuerySessionVarKeyLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/alias-key-last" => {
+                                    if _ctx.send(UiCommand::QueryAliasKeyLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -45937,6 +45979,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-output-limit-key-first",
                             "/prompt-macro-key-first",
                             "/turn-label-first-idx",
+                            "/turn-label-last-idx",
+                            "/session-var-key-last",
+                            "/alias-key-last",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -2211,6 +2211,12 @@ pub enum UiCommand {
     QueryPromptMacroKeyFirst,
     /// Show the turn index of the first turn label.
     QueryTurnLabelFirstIdx,
+    /// Show the turn index of the last turn label.
+    QueryTurnLabelLastIdx,
+    /// Show the last key in session_vars.
+    QuerySessionVarKeyLast,
+    /// Show the last key in aliases.
+    QueryAliasKeyLast,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
