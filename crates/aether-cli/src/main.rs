@@ -7700,6 +7700,52 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryToolOutputLimitShow(name) => {
+                    match session.tool_output_limits.get(&name) {
+                        Some(limit) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Tool output limit for {name:?}: {limit} chars."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Tool {name:?}: no output limit set (unlimited). Use /tool-output-limit {name} <n> to cap."
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnWallLast => {
+                    match session.turn_wall_ms.last() {
+                        Some(&ms) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Last turn wall time: {ms}ms. Total tracked turns: {}.",
+                                session.turn_wall_ms.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Turn wall times: no turns completed yet.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionVarGet(key) => {
+                    match session.session_vars.get(&key) {
+                        Some(val) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Session var {key:?} = {val:?}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Session var {key:?}: not set. Use /set-var {key} <value> to define."
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryTokenBudgetFired => {
                     if session.token_budget_warn_pct <= 0.0 {
                         let _ = etx_for_driver.send(UiEvent::SystemNote(
@@ -34171,6 +34217,34 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /tool-output-limit-show <name> — show tool output char limit
+                                cmd_str if cmd_str.starts_with("/tool-output-limit-show ") => {
+                                    let name = cmd_str.trim_start_matches("/tool-output-limit-show ").trim().to_string();
+                                    if name.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /tool-output-limit-show <tool-name>".to_string()));
+                                    } else if _ctx.send(UiCommand::QueryToolOutputLimitShow(name)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /turn-wall-last — show most recent turn wall-clock time
+                                "/turn-wall-last" => {
+                                    if _ctx.send(UiCommand::QueryTurnWallLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-var-get <key> — get a single session variable
+                                cmd_str if cmd_str.starts_with("/session-var-get ") => {
+                                    let key = cmd_str.trim_start_matches("/session-var-get ").trim().to_string();
+                                    if key.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /session-var-get <key>".to_string()));
+                                    } else if _ctx.send(UiCommand::QuerySessionVarGet(key)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -34986,6 +35060,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/token-budget-fired",
                             "/snapshot-keys",
                             "/progress-items-list",
+                            "/tool-output-limit-show ",
+                            "/turn-wall-last",
+                            "/session-var-get ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -1017,6 +1017,12 @@ pub enum UiCommand {
     QuerySnapshotKeys,
     /// List all progress items with their completion status.
     QueryProgressItemsList,
+    /// Show tool output character limit for a named tool.
+    QueryToolOutputLimitShow(String),
+    /// Show the wall-clock time of the most recent turn.
+    QueryTurnWallLast,
+    /// Get a single session variable by key.
+    QuerySessionVarGet(String),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
