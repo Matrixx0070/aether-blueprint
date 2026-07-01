@@ -2949,6 +2949,12 @@ pub enum UiCommand {
     QueryProgressItemMaxWords,
     /// Minimum word count in any single progress item.
     QueryProgressItemMinWords,
+    /// Total word count across all error_playbook patterns.
+    QueryErrorPlaybookPatWordTotal,
+    /// Average word count per error_playbook pattern.
+    QueryErrorPlaybookPatAvgWords,
+    /// Maximum word count in any single error_playbook pattern.
+    QueryErrorPlaybookPatMaxWords,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

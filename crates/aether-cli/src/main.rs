@@ -17323,6 +17323,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryErrorPlaybookPatWordTotal => {
+                    let total: usize = session.error_playbook.iter()
+                        .map(|(pat, _)| pat.split_whitespace().count())
+                        .sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Error playbook pattern word total: {total} (across {} entries)",
+                        session.error_playbook.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QueryErrorPlaybookPatAvgWords => {
+                    let n = session.error_playbook.len();
+                    let avg = if n == 0 { 0.0 } else {
+                        let total: usize = session.error_playbook.iter()
+                            .map(|(pat, _)| pat.split_whitespace().count())
+                            .sum();
+                        total as f64 / n as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Error playbook pattern avg words: {avg:.1} ({n} entries)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryErrorPlaybookPatMaxWords => {
+                    let max = session.error_playbook.iter()
+                        .map(|(pat, _)| pat.split_whitespace().count())
+                        .max();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match max {
+                        Some(v) => format!("Error playbook pattern max words: {v}"),
+                        None => "Error playbook: no entries.".to_string(),
+                    }));
+                    continue;
+                }
                 UiCommand::QueryProgressItemAvgWords => {
                     let n = session.progress_items.len();
                     let avg = if n == 0 { 0.0 } else {
@@ -49872,6 +49905,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/error-playbook-pat-word-total" => {
+                                    if _ctx.send(UiCommand::QueryErrorPlaybookPatWordTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/error-playbook-pat-avg-words" => {
+                                    if _ctx.send(UiCommand::QueryErrorPlaybookPatAvgWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/error-playbook-pat-max-words" => {
+                                    if _ctx.send(UiCommand::QueryErrorPlaybookPatMaxWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -51678,6 +51726,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/progress-item-avg-words",
                             "/progress-item-max-words",
                             "/progress-item-min-words",
+                            "/error-playbook-pat-word-total",
+                            "/error-playbook-pat-avg-words",
+                            "/error-playbook-pat-max-words",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
