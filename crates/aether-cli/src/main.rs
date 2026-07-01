@@ -17323,6 +17323,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryHistoryUserWordTotal => {
+                    let user_n = session.history.iter().filter(|item| matches!(item, ConversationItem::User(_))).count();
+                    let total: usize = session.history.iter()
+                        .filter_map(|item| if let ConversationItem::User(s) = item { Some(s) } else { None })
+                        .map(|s| s.split_whitespace().count())
+                        .sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "User turns word total: {total} words across {user_n} turns"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryAsstWordTotal => {
+                    let asst_n = session.history.iter().filter(|item| matches!(item, ConversationItem::Assistant { .. })).count();
+                    let total: usize = session.history.iter()
+                        .filter_map(|item| if let ConversationItem::Assistant { text: Some(t), .. } = item { Some(t) } else { None })
+                        .map(|t| t.split_whitespace().count())
+                        .sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Assistant turns word total: {total} words across {asst_n} turns"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryUserAvgWords => {
+                    let user_words: Vec<usize> = session.history.iter()
+                        .filter_map(|item| if let ConversationItem::User(s) = item { Some(s.split_whitespace().count()) } else { None })
+                        .collect();
+                    let n = user_words.len();
+                    let avg = if n == 0 { 0.0 } else { user_words.iter().sum::<usize>() as f64 / n as f64 };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Avg words per user turn: {avg:.1} ({n} user turns)"
+                    )));
+                    continue;
+                }
                 UiCommand::QueryPlaybookTriggerAvgWords => {
                     let n = session.error_playbook.len();
                     let avg = if n == 0 { 0.0 } else {
@@ -50428,6 +50461,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/history-user-word-total" => {
+                                    if _ctx.send(UiCommand::QueryHistoryUserWordTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-asst-word-total" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAsstWordTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-user-avg-words" => {
+                                    if _ctx.send(UiCommand::QueryHistoryUserAvgWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/playbook-trigger-avg-words" => {
                                     if _ctx.send(UiCommand::QueryPlaybookTriggerAvgWords).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -52351,6 +52399,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/playbook-trigger-avg-words",
                             "/playbook-action-avg-words",
                             "/playbook-avg-entry-words",
+                            "/history-user-word-total",
+                            "/history-asst-word-total",
+                            "/history-user-avg-words",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

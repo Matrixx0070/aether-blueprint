@@ -3033,6 +3033,12 @@ pub enum UiCommand {
     QueryPlaybookActionAvgWords,
     /// Average combined word count (trigger + action) per error_playbook entry.
     QueryPlaybookAvgEntryWords,
+    /// Total word count across all user-role history turns.
+    QueryHistoryUserWordTotal,
+    /// Total word count across all assistant-role history turns.
+    QueryHistoryAsstWordTotal,
+    /// Average word count per user-role history turn.
+    QueryHistoryUserAvgWords,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
