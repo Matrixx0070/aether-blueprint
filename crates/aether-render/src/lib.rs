@@ -2967,6 +2967,12 @@ pub enum UiCommand {
     QueryLastToolSigSigAvgWords,
     /// Maximum word count in any single last_tool_signature sig value.
     QueryLastToolSigSigMaxWords,
+    /// Minimum word count in any single turn label.
+    QueryTurnLabelMinWords,
+    /// Minimum word count in any single auto_tag_rule pattern.
+    QueryAutoTagRulePatMinWords,
+    /// Minimum word count in any single error_playbook hint.
+    QueryErrorPlaybookHintMinWords,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
