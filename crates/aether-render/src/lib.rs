@@ -2523,6 +2523,12 @@ pub enum UiCommand {
     QueryOverlayLongConvEveryN,
     /// Show the long_conversation overlay at_ctx_ratio setting.
     QueryOverlayLongConvCtxRatio,
+    /// Show whether overlay section D1 is enabled.
+    QueryOverlaySectionD1,
+    /// Show whether overlay section D2 is enabled.
+    QueryOverlaySectionD2,
+    /// Show whether overlay section D7 is enabled.
+    QueryOverlaySectionD7,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
