@@ -2277,6 +2277,12 @@ pub enum UiCommand {
     QueryTurnWallP90,
     /// Show the average timestamp of session notes.
     QuerySessionNoteTsAvg,
+    /// Show the 75th-percentile turn wall time.
+    QueryTurnWallP75,
+    /// Show the average length of model names in turn_models.
+    QueryTurnModelAvgLen,
+    /// Show the turn-index span covered by session notes.
+    QuerySessionNoteSpan,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
