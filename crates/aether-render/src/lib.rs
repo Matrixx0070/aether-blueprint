@@ -2103,6 +2103,12 @@ pub enum UiCommand {
     QueryTaskQueueCount,
     /// Show the session uptime in days.
     QuerySessionUptimeDays,
+    /// Show the avg turns per block in plan.block_turns.
+    QueryPlanBlockTurnsAvgLen,
+    /// Show the count of tool output history entries.
+    QueryToolOutputHistCount,
+    /// Show the count of findings from last verification.
+    QueryVerifFindingCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
