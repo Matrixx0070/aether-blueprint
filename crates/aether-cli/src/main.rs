@@ -12769,6 +12769,35 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryProgressItemMinLen => {
+                    match session.progress_items.iter().min_by_key(|(text, _)| text.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Progress items: none.".to_string())); }
+                        Some((text, done)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Shortest progress item: {} chars (done={})", text.len(), done
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QuerySavedSnapshotCount => {
+                    let n = session.saved_snapshots.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Saved snapshots: {}", n
+                    )));
+                    continue;
+                }
+                UiCommand::QueryToolErrorCountMax => {
+                    match session.plan.tool_error_counts.iter().max_by_key(|(_, &v)| v) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Tool error counts: none.".to_string())); }
+                        Some((tool, count)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Most consecutive errors: '{}' with {}", tool, count
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -41826,6 +41855,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/progress-item-min-len" => {
+                                    if _ctx.send(UiCommand::QueryProgressItemMinLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/saved-snapshot-count" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-error-count-max" => {
+                                    if _ctx.send(UiCommand::QueryToolErrorCountMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -43074,6 +43118,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-block-key-min-len",
                             "/plan-tool-stat-key-min-len",
                             "/progress-item-max-len",
+                            "/progress-item-min-len",
+                            "/saved-snapshot-count",
+                            "/tool-error-count-max",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

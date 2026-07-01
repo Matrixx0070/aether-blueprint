@@ -1833,6 +1833,12 @@ pub enum UiCommand {
     QueryPlanToolStatKeyMinLen,
     /// Show the longest progress item text.
     QueryProgressItemMaxLen,
+    /// Show the shortest progress item text.
+    QueryProgressItemMinLen,
+    /// Show the count of saved snapshots.
+    QuerySavedSnapshotCount,
+    /// Show the tool with the highest consecutive error count.
+    QueryToolErrorCountMax,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
