@@ -1731,6 +1731,12 @@ pub enum UiCommand {
     QueryToolCallErrMax,
     /// Show the count of defined prompt macros.
     QueryPromptMacroCount,
+    /// Show the count of session environment variables.
+    QueryEnvVarCount,
+    /// Show the count of sticky context entries.
+    QueryStickyContextCount,
+    /// Show the total count of progress items.
+    QueryProgressItemsCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
