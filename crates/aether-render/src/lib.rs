@@ -1989,6 +1989,12 @@ pub enum UiCommand {
     QueryPlanToolStatMaxErr,
     /// Show the average turns per block from plan.block_turns.
     QueryPlanBlockAvgTurns,
+    /// Show the total turns summed across all plan block_turns.
+    QueryPlanBlockTotalTurns,
+    /// Show the total consecutive tool error count summed across plan.tool_error_counts.
+    QueryPlanToolErrorCountTotal,
+    /// Show the current retry count from session.
+    QueryRetryCountCurrent,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
