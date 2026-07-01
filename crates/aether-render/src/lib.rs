@@ -1287,6 +1287,12 @@ pub enum UiCommand {
     QuerySessionCostBurn,
     /// Show ratio of user chars to assistant chars in history.
     QueryHistoryRatio,
+    /// Show tool with highest ok count in plan stats.
+    QueryPlanToolOkTop,
+    /// Show average message length across all history items.
+    QueryHistoryItemAvgLen,
+    /// Show most recent session note.
+    QuerySessionNoteLatest,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

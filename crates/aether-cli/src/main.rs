@@ -10614,6 +10614,59 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryPlanToolOkTop => {
+                    let best = session.plan.tool_call_stats.iter()
+                        .max_by_key(|(_, (ok, _))| *ok);
+                    match best {
+                        Some((name, (ok, err))) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Plan top ok tool: '{name}' with {ok} ok / {err} err calls."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Plan tool ok-top: no tool stats yet.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryItemAvgLen => {
+                    use aether_core::context::ConversationItem;
+                    let n = session.history.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "History avg item length: history is empty.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.history.iter().map(|item| match item {
+                            ConversationItem::User(s) => s.len(),
+                            ConversationItem::Assistant { text, .. } => text.as_deref().map(|s| s.len()).unwrap_or(0),
+                            ConversationItem::ToolResults(r) => r.iter().map(|x| x.content.len()).sum(),
+                        }).sum();
+                        let avg = total / n;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "History avg item length: {avg} chars ({n} items, {total} total)."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionNoteLatest => {
+                    match session.session_notes.last() {
+                        Some((text, ts)) => {
+                            let preview = text.chars().take(160).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Latest session note (ts={ts}): {preview}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Session notes: none recorded yet.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -36946,6 +36999,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /plan-tool-ok-top — show tool with highest ok count
+                                "/plan-tool-ok-top" => {
+                                    if _ctx.send(UiCommand::QueryPlanToolOkTop).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-item-avg-len — average message length
+                                "/history-item-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryHistoryItemAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-note-latest — most recent session note
+                                "/session-note-latest" => {
+                                    if _ctx.send(UiCommand::QuerySessionNoteLatest).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -37896,6 +37967,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-ok-rate",
                             "/session-cost-burn",
                             "/history-ratio",
+                            "/plan-tool-ok-top",
+                            "/history-item-avg-len",
+                            "/session-note-latest",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
