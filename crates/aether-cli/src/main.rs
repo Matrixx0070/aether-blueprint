@@ -17323,6 +17323,35 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QuerySessionVarValueMaxWords => {
+                    let max = session.session_vars.values()
+                        .map(|v| v.split_whitespace().count())
+                        .max();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match max {
+                        Some(v) => format!("Session var value max words: {v}"),
+                        None => "Session vars: none defined.".to_string(),
+                    }));
+                    continue;
+                }
+                UiCommand::QuerySessionVarValueMinWords => {
+                    let min = session.session_vars.values()
+                        .map(|v| v.split_whitespace().count())
+                        .min();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match min {
+                        Some(v) => format!("Session var value min words: {v}"),
+                        None => "Session vars: none defined.".to_string(),
+                    }));
+                    continue;
+                }
+                UiCommand::QuerySessionVarValueNonEmptyCount => {
+                    let count = session.session_vars.values()
+                        .filter(|v| !v.trim().is_empty())
+                        .count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session vars with non-empty value: {count}/{}", session.session_vars.len()
+                    )));
+                    continue;
+                }
                 UiCommand::QueryTurnCostLogOutDiffAvg => {
                     let outs: Vec<u64> = session.turn_cost_log.iter().map(|(_, _, o, _)| *o).collect();
                     if outs.len() < 2 {
@@ -49780,6 +49809,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/session-var-value-max-words" => {
+                                    if _ctx.send(UiCommand::QuerySessionVarValueMaxWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-var-value-min-words" => {
+                                    if _ctx.send(UiCommand::QuerySessionVarValueMinWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-var-value-non-empty-count" => {
+                                    if _ctx.send(UiCommand::QuerySessionVarValueNonEmptyCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -51580,6 +51624,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-cost-log-out-diff-avg",
                             "/turn-cost-log-out-diff-max",
                             "/turn-cost-log-out-diff-min",
+                            "/session-var-value-max-words",
+                            "/session-var-value-min-words",
+                            "/session-var-value-non-empty-count",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

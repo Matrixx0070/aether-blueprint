@@ -2937,6 +2937,12 @@ pub enum UiCommand {
     QueryTurnCostLogOutDiffMax,
     /// Minimum absolute output-token difference between consecutive turn_cost_log entries.
     QueryTurnCostLogOutDiffMin,
+    /// Maximum word count in any single session_var value.
+    QuerySessionVarValueMaxWords,
+    /// Minimum word count in any single session_var value.
+    QuerySessionVarValueMinWords,
+    /// Count of session_vars whose value contains at least one word.
+    QuerySessionVarValueNonEmptyCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
