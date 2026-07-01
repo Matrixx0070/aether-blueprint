@@ -11096,6 +11096,63 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryHistoryAssistantPreview => {
+                    use aether_core::context::ConversationItem;
+                    let latest = session.history.iter().rev().find_map(|item| {
+                        if let ConversationItem::Assistant { text, .. } = item {
+                            text.as_deref()
+                        } else {
+                            None
+                        }
+                    });
+                    match latest {
+                        Some(text) => {
+                            let preview = text.chars().take(200).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Latest assistant text: {preview}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "History: no assistant text messages yet.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanGoalSet => {
+                    match &session.plan.goal {
+                        Some(goal) => {
+                            let preview = goal.chars().take(120).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Plan goal: set — '{preview}'"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Plan goal: not set. Use /plan-goal <text> to set one.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionEnvPreview => {
+                    let first = session.session_env.iter()
+                        .min_by_key(|(k, _)| k.as_str());
+                    match first {
+                        Some((k, v)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Session env first entry: '{k}'='{v}' ({} total keys).", session.session_env.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Session env: empty.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -37631,6 +37688,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /history-assistant-preview — preview most recent assistant text
+                                "/history-assistant-preview" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAssistantPreview).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /plan-goal-set — whether plan has a goal set
+                                "/plan-goal-set" => {
+                                    if _ctx.send(UiCommand::QueryPlanGoalSet).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-env-preview — show first key=value in session env
+                                "/session-env-preview" => {
+                                    if _ctx.send(UiCommand::QuerySessionEnvPreview).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -38614,6 +38689,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-cost-avg-turn",
                             "/token-budget-remaining",
                             "/plan-dirty-show",
+                            "/history-assistant-preview",
+                            "/plan-goal-set",
+                            "/session-env-preview",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

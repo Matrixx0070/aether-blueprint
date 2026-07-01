@@ -1353,6 +1353,12 @@ pub enum UiCommand {
     QueryTokenBudgetRemaining,
     /// Show whether the plan has been modified (dirty).
     QueryPlanDirtyShow,
+    /// Preview the most recent assistant text from history.
+    QueryHistoryAssistantPreview,
+    /// Show whether the plan has a goal set.
+    QueryPlanGoalSet,
+    /// Show first key=value pair in session env.
+    QuerySessionEnvPreview,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
