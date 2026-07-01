@@ -17323,6 +17323,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryAutoTagRulePatWordTotal => {
+                    let total: usize = session.auto_tag_rules.iter()
+                        .map(|(pat, _)| pat.split_whitespace().count())
+                        .sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Auto-tag rule pattern word total: {total} (across {} rules)",
+                        session.auto_tag_rules.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QueryAutoTagRulePatAvgWords => {
+                    let n = session.auto_tag_rules.len();
+                    let avg = if n == 0 { 0.0 } else {
+                        let total: usize = session.auto_tag_rules.iter()
+                            .map(|(pat, _)| pat.split_whitespace().count())
+                            .sum();
+                        total as f64 / n as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Auto-tag rule pattern avg words: {avg:.1} ({n} rules)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryAutoTagRulePatMaxWords => {
+                    let max = session.auto_tag_rules.iter()
+                        .map(|(pat, _)| pat.split_whitespace().count())
+                        .max();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match max {
+                        Some(v) => format!("Auto-tag rule pattern max words: {v}"),
+                        None => "Auto-tag rules: none defined.".to_string(),
+                    }));
+                    continue;
+                }
                 UiCommand::QueryTurnLabelWordTotal => {
                     let total: usize = session.turn_labels.iter()
                         .map(|(_, lbl)| lbl.split_whitespace().count())
@@ -48947,6 +48980,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/auto-tag-rule-pat-word-total" => {
+                                    if _ctx.send(UiCommand::QueryAutoTagRulePatWordTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/auto-tag-rule-pat-avg-words" => {
+                                    if _ctx.send(UiCommand::QueryAutoTagRulePatAvgWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/auto-tag-rule-pat-max-words" => {
+                                    if _ctx.send(UiCommand::QueryAutoTagRulePatMaxWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -50702,6 +50750,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-label-word-total",
                             "/turn-label-avg-words",
                             "/turn-label-max-words",
+                            "/auto-tag-rule-pat-word-total",
+                            "/auto-tag-rule-pat-avg-words",
+                            "/auto-tag-rule-pat-max-words",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

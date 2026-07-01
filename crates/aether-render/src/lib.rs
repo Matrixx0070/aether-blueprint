@@ -2847,6 +2847,12 @@ pub enum UiCommand {
     QueryTurnLabelAvgWords,
     /// Maximum number of words in any single turn label.
     QueryTurnLabelMaxWords,
+    /// Total word count across all auto_tag_rule patterns.
+    QueryAutoTagRulePatWordTotal,
+    /// Average words per auto_tag_rule pattern.
+    QueryAutoTagRulePatAvgWords,
+    /// Max words in any single auto_tag_rule pattern.
+    QueryAutoTagRulePatMaxWords,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
