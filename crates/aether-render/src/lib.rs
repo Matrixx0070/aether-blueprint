@@ -1605,6 +1605,12 @@ pub enum UiCommand {
     QueryToolOutputHistoryCount,
     /// Show the first history annotation.
     QueryHistoryAnnotFirst,
+    /// Show the first saved snapshot name.
+    QuerySavedSnapshotFirst,
+    /// Show the first progress item.
+    QueryProgressItemFirst,
+    /// Show the first bookmark.
+    QueryBookmarkFirst,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

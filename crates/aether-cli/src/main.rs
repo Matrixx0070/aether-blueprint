@@ -11568,6 +11568,43 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QuerySavedSnapshotFirst => {
+                    match session.saved_snapshots.keys().next() {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Saved snapshots: none.".to_string())); }
+                        Some(name) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Saved snapshot[0] (of {}): name='{}'",
+                                session.saved_snapshots.len(), name
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryProgressItemFirst => {
+                    match session.progress_items.first() {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Progress items: none.".to_string())); }
+                        Some((text, done)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Progress item[0] (of {}): [{}] {}",
+                                session.progress_items.len(),
+                                if *done { "x" } else { " " }, text
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryBookmarkFirst => {
+                    match session.bookmarks.first() {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Bookmarks: none.".to_string())); }
+                        Some((turn, hist_len, label)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Bookmark[0] (of {}): turn={} hist_len={} label='{}'",
+                                session.bookmarks.len(), turn, hist_len, label
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -40055,6 +40092,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/saved-snapshot-first" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/progress-item-first" => {
+                                    if _ctx.send(UiCommand::QueryProgressItemFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/bookmark-first" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -41189,6 +41241,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/error-playbook-first",
                             "/tool-output-history-count",
                             "/history-annotation-first",
+                            "/saved-snapshot-first",
+                            "/progress-item-first",
+                            "/bookmark-first",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
