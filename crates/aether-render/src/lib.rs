@@ -3009,6 +3009,12 @@ pub enum UiCommand {
     QuerySnapshotsPerTurn,
     /// Ratio of turn_cost_log entries to history turn count.
     QueryCostLogPerTurn,
+    /// Average input tokens per cost-log entry.
+    QueryAvgInTokens,
+    /// Average output tokens per cost-log entry.
+    QueryAvgOutTokens,
+    /// Average cost (USD) per cost-log entry.
+    QueryAvgCostEntry,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

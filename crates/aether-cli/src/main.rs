@@ -17323,6 +17323,36 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryAvgInTokens => {
+                    let entries = session.turn_cost_log.len();
+                    let avg = if entries == 0 { 0.0 } else {
+                        session.turn_cost_log.iter().map(|(_, i, _, _)| *i as f64).sum::<f64>() / entries as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Avg input tokens per cost-log entry: {avg:.1} ({entries} entries)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryAvgOutTokens => {
+                    let entries = session.turn_cost_log.len();
+                    let avg = if entries == 0 { 0.0 } else {
+                        session.turn_cost_log.iter().map(|(_, _, o, _)| *o as f64).sum::<f64>() / entries as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Avg output tokens per cost-log entry: {avg:.1} ({entries} entries)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryAvgCostEntry => {
+                    let entries = session.turn_cost_log.len();
+                    let avg = if entries == 0 { 0.0 } else {
+                        session.turn_cost_log.iter().map(|(_, _, _, c)| *c).sum::<f64>() / entries as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Avg cost per cost-log entry: ${avg:.6} ({entries} entries)"
+                    )));
+                    continue;
+                }
                 UiCommand::QueryAutoTagsPerTurn => {
                     let turns = session.history.len();
                     let rules = session.auto_tag_rules.len();
@@ -50310,6 +50340,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/avg-in-tokens" => {
+                                    if _ctx.send(UiCommand::QueryAvgInTokens).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/avg-out-tokens" => {
+                                    if _ctx.send(UiCommand::QueryAvgOutTokens).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/avg-cost-entry" => {
+                                    if _ctx.send(UiCommand::QueryAvgCostEntry).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/auto-tags-per-turn" => {
                                     if _ctx.send(UiCommand::QueryAutoTagsPerTurn).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -52158,6 +52203,12 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tags-per-turn",
                             "/sigs-per-turn",
                             "/progress-per-turn",
+                            "/auto-tags-per-turn",
+                            "/snapshots-per-turn",
+                            "/cost-log-per-turn",
+                            "/avg-in-tokens",
+                            "/avg-out-tokens",
+                            "/avg-cost-entry",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
