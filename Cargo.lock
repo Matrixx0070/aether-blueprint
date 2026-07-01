@@ -36,6 +36,7 @@ dependencies = [
  "aether-selfcheck",
  "aether-skill",
  "aether-store",
+ "aether-threat-intel",
  "aether-tools",
  "anyhow",
  "async-trait",

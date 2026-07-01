@@ -18,6 +18,7 @@ serde_json.workspace = true
 serde_yaml.workspace = true
 async-trait.workspace = true
 aether-core.workspace = true
+aether-threat-intel.workspace = true
 aether-llm.workspace = true
 aether-overlay.workspace = true
 aether-perm.workspace = true
