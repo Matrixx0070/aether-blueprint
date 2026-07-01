@@ -1461,6 +1461,12 @@ pub enum UiCommand {
     QueryAutoTagRuleLast,
     /// Show the last history annotation (index, text).
     QueryHistoryAnnotLast,
+    /// Show the last warmup file path.
+    QueryWarmupFileLast,
+    /// Show the last sticky context entry.
+    QueryStickyLast,
+    /// Show the last turn label (turn_index, text).
+    QueryTurnLabelLast,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

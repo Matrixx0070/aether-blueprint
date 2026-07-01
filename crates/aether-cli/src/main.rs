@@ -11192,6 +11192,54 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryWarmupFileLast => {
+                    match session.warmup_files.last() {
+                        Some(path) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Warmup file[last] (of {}): {path}", session.warmup_files.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Warmup files: none configured.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryStickyLast => {
+                    match session.sticky_context.last() {
+                        Some(snippet) => {
+                            let preview = snippet.chars().take(160).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Sticky context[last] (of {}): {preview}", session.sticky_context.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Sticky context: none set.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnLabelLast => {
+                    match session.turn_labels.last() {
+                        Some((turn_idx, label)) => {
+                            let preview = label.chars().take(100).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Turn label[last] (of {}): turn={turn_idx} '{preview}'",
+                                session.turn_labels.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Turn labels: none set.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionTagLast => {
                     match session.session_tags.last() {
                         Some(tag) => {
@@ -38754,6 +38802,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/warmup-file-last" => {
+                                    if _ctx.send(UiCommand::QueryWarmupFileLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/sticky-last" => {
+                                    if _ctx.send(UiCommand::QueryStickyLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-label-last" => {
+                                    if _ctx.send(UiCommand::QueryTurnLabelLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -39816,6 +39879,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-tag-last",
                             "/auto-tag-rule-last",
                             "/history-annot-last",
+                            "/warmup-file-last",
+                            "/sticky-last",
+                            "/turn-label-last",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
