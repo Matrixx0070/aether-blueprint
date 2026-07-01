@@ -1503,6 +1503,12 @@ pub enum UiCommand {
     QueryPlanToolOkSum,
     /// Show sum of all turn wall-clock times in ms.
     QueryTurnWallSum,
+    /// Show total error tool calls across all plan stats.
+    QueryPlanToolErrSum,
+    /// Show average turn wall-clock time across all turns.
+    QueryTurnWallAvgAll,
+    /// Show the maximum single-turn cost in the log.
+    QueryTurnCostMaxAll,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

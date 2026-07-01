@@ -11192,6 +11192,44 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryPlanToolErrSum => {
+                    let total_err: usize = session.plan.tool_call_stats.values().map(|(_, err)| *err).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan tool error calls (total): {total_err} across {} tracked tools.",
+                        session.plan.tool_call_stats.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTurnWallAvgAll => {
+                    let n = session.turn_wall_ms.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn wall avg: no turns recorded yet.".to_string()
+                        ));
+                    } else {
+                        let total: u64 = session.turn_wall_ms.iter().sum();
+                        let avg = total / n as u64;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn wall avg: {avg}ms/turn across {n} turns."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnCostMaxAll => {
+                    let max = session.turn_cost_log.iter()
+                        .map(|(_, _, _, c)| *c)
+                        .fold(f64::NEG_INFINITY, f64::max);
+                    if max == f64::NEG_INFINITY {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn cost max: no turns logged yet.".to_string()
+                        ));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn cost max: ${max:.6} (most expensive single turn)."
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryPlanBlockMin => {
                     let best = session.plan.block_counts.iter()
                         .min_by_key(|(_, v)| *v);
@@ -39195,6 +39233,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/plan-tool-err-sum" => {
+                                    if _ctx.send(UiCommand::QueryPlanToolErrSum).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-wall-avg-all" => {
+                                    if _ctx.send(UiCommand::QueryTurnWallAvgAll).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-cost-max-all" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostMaxAll).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -40278,6 +40331,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-block-min",
                             "/plan-tool-ok-sum",
                             "/turn-wall-sum",
+                            "/plan-tool-err-sum",
+                            "/turn-wall-avg-all",
+                            "/turn-cost-max-all",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
