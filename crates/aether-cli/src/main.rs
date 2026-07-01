@@ -15585,6 +15585,35 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryPendingReminderEvidenceMax => {
+                    let max = session.pending_reminders.iter().map(|r| r.classifier_evidence.len()).max().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Pending reminders max classifier_evidence count: {max}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPendingReminderEvidenceAvg => {
+                    let n = session.pending_reminders.len();
+                    let avg = if n == 0 {
+                        0
+                    } else {
+                        session.pending_reminders.iter().map(|r| r.classifier_evidence.len()).sum::<usize>() / n
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Pending reminders avg classifier_evidence count: {avg} (over {n} reminders)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPendingReminderEvidenceTotalChars => {
+                    let total: usize = session.pending_reminders.iter()
+                        .flat_map(|r| r.classifier_evidence.iter())
+                        .map(|s| s.len())
+                        .sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Pending reminders total classifier_evidence chars: {total}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -46247,6 +46276,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/pending-reminder-evidence-max" => {
+                                    if _ctx.send(UiCommand::QueryPendingReminderEvidenceMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/pending-reminder-evidence-avg" => {
+                                    if _ctx.send(UiCommand::QueryPendingReminderEvidenceAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/pending-reminder-evidence-chars" => {
+                                    if _ctx.send(UiCommand::QueryPendingReminderEvidenceTotalChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -47816,6 +47860,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/pending-reminder-project-hook-count",
                             "/pending-reminder-user-hook-count",
                             "/pending-reminder-ambiguous-count",
+                            "/pending-reminder-evidence-max",
+                            "/pending-reminder-evidence-avg",
+                            "/pending-reminder-evidence-chars",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -2475,6 +2475,12 @@ pub enum UiCommand {
     QueryPendingReminderUserHookCount,
     /// Show the count of pending reminders with EffectHint::Ambiguous.
     QueryPendingReminderAmbiguousCount,
+    /// Show the max classifier_evidence count across all pending reminders.
+    QueryPendingReminderEvidenceMax,
+    /// Show the average classifier_evidence count across all pending reminders.
+    QueryPendingReminderEvidenceAvg,
+    /// Show the total chars across all classifier_evidence strings in pending reminders.
+    QueryPendingReminderEvidenceTotalChars,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
