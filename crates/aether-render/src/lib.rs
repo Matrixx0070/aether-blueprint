@@ -2367,6 +2367,12 @@ pub enum UiCommand {
     QueryAutoContinueCooldownMs,
     /// Show the cumulative LLM fallback count.
     QueryLlmFallbackCountVal,
+    /// Show the last verification finding id.
+    QueryVerifFindingLastId,
+    /// Show the first blocked-reason rule_id from last verification.
+    QueryVerifBlockedFirst,
+    /// Show the last plan tool stat key.
+    QueryPlanToolStatLast,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
