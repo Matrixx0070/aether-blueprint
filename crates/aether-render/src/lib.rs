@@ -1035,6 +1035,12 @@ pub enum UiCommand {
     QueryMacroGet(String),
     /// Get a specific session environment variable by key.
     QueryEnvGet(String),
+    /// Get a specific sticky-context entry by index.
+    QueryStickyGet(usize),
+    /// Get a specific warmup file path by index.
+    QueryWarmupGet(usize),
+    /// Show a concise plan health summary.
+    QueryPlanSummary,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

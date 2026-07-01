@@ -7700,6 +7700,50 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryStickyGet(idx) => {
+                    match session.sticky_context.get(idx) {
+                        Some(entry) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Sticky [{idx}]: {entry}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Sticky index {idx}: out of range ({} entries).", session.sticky_context.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryWarmupGet(idx) => {
+                    match session.warmup_files.get(idx) {
+                        Some(path) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Warmup [{idx}]: {path}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Warmup index {idx}: out of range ({} files).", session.warmup_files.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanSummary => {
+                    let goal = session.plan.goal.as_deref().unwrap_or("(none)");
+                    let total_cost: f64 = session.turn_cost_log.iter().map(|(_, _, _, c)| c).sum();
+                    let errors: usize = session.plan.tool_error_counts.values().sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan summary:\n  Goal: {goal}\n  Turns: {}, Cost: ${total_cost:.4}\n  Blocks recorded: {}, Rules: {}\n  Tool errors (consecutive): {}\n  Compacted: {}",
+                        session.turn_index,
+                        session.plan.blocks_recorded,
+                        session.plan.block_counts.len(),
+                        errors,
+                        if session.compaction_happened { "yes" } else { "no" }
+                    )));
+                    continue;
+                }
                 UiCommand::QueryPlanBlockTurns(rule) => {
                     match session.plan.block_turns.get(&rule) {
                         Some(turns) if !turns.is_empty() => {
@@ -34404,6 +34448,34 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /sticky-get <idx> — get sticky context entry by index
+                                cmd_str if cmd_str.starts_with("/sticky-get ") => {
+                                    let arg = cmd_str.trim_start_matches("/sticky-get ").trim();
+                                    if let Ok(idx) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::QueryStickyGet(idx)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /sticky-get <index>".to_string()));
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /warmup-get <idx> — get warmup file path by index
+                                cmd_str if cmd_str.starts_with("/warmup-get ") => {
+                                    let arg = cmd_str.trim_start_matches("/warmup-get ").trim();
+                                    if let Ok(idx) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::QueryWarmupGet(idx)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /warmup-get <index>".to_string()));
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /plan-summary — show concise plan health summary
+                                "/plan-summary" => {
+                                    if _ctx.send(UiCommand::QueryPlanSummary).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -35228,6 +35300,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-block-turns ",
                             "/macro-get ",
                             "/env-get ",
+                            "/sticky-get ",
+                            "/warmup-get ",
+                            "/plan-summary",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
