@@ -11192,6 +11192,51 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QuerySessionVarValueAvgLen => {
+                    let n = session.session_vars.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Session var value avg len: no vars defined.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.session_vars.values().map(|v| v.len()).sum();
+                        let avg = total / n;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session var value avg len: {avg} chars/value across {n} vars."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryEnvValueAvgLen => {
+                    let n = session.session_env.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Session env value avg len: no env vars set.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.session_env.values().map(|v| v.len()).sum();
+                        let avg = total / n;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session env value avg len: {avg} chars/value across {n} vars."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryPromptMacroAvgLen => {
+                    let n = session.prompt_macros.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Prompt macro avg len: no macros defined.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.prompt_macros.values().map(|v| v.len()).sum();
+                        let avg = total / n;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Prompt macro avg len: {avg} chars/macro across {n} macros."
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryHistoryAnnotAvgLen => {
                     let n = session.history_annotations.len();
                     if n == 0 {
@@ -39439,6 +39484,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/session-var-value-avg-len" => {
+                                    if _ctx.send(UiCommand::QuerySessionVarValueAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/env-value-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryEnvValueAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/prompt-macro-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryPromptMacroAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -40534,6 +40594,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-annot-avg-len",
                             "/sticky-avg-len",
                             "/alias-value-avg-len",
+                            "/session-var-value-avg-len",
+                            "/env-value-avg-len",
+                            "/prompt-macro-avg-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

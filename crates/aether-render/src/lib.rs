@@ -1527,6 +1527,12 @@ pub enum UiCommand {
     QueryStickyAvgLen,
     /// Show average length of alias values.
     QueryAliasValueAvgLen,
+    /// Show average length of session variable values.
+    QuerySessionVarValueAvgLen,
+    /// Show average length of session env variable values.
+    QueryEnvValueAvgLen,
+    /// Show average length of prompt macro texts.
+    QueryPromptMacroAvgLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
