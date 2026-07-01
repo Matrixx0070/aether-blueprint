@@ -8964,6 +8964,50 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QueryToolCallsThisTurn => {
+                    let used = session.tool_call_budget;
+                    let max = session.config.max_tool_calls_per_turn;
+                    let remaining = max.saturating_sub(used);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Tool calls this turn: {used}/{max} ({remaining} remaining)."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryFirstTool => {
+                    let found = session.history.iter().find_map(|item| {
+                        if let aether_core::context::ConversationItem::Assistant { tool_uses, .. } = item {
+                            if !tool_uses.is_empty() {
+                                let t = &tool_uses[0];
+                                return Some(format!("First tool: '{}' (id={})", t.name, t.id));
+                            }
+                        }
+                        None
+                    });
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(
+                        found.unwrap_or_else(|| "No tool calls in history yet.".to_string())
+                    ));
+                    continue;
+                }
+                UiCommand::QueryPlanRecentBlocks => {
+                    let turns = &session.plan.block_turns;
+                    if turns.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Plan block_turns: no blocks recorded yet.".to_string()
+                        ));
+                    } else {
+                        let mut latest: Vec<_> = turns.iter()
+                            .filter_map(|(k, v)| v.last().map(|&t| (t, k.as_str())))
+                            .collect();
+                        latest.sort_by(|a, b| b.0.cmp(&a.0));
+                        let preview: Vec<_> = latest.iter().take(5)
+                            .map(|(t, k)| format!("  turn={t} — {k}"))
+                            .collect();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Most recent plan blocks:\n{}", preview.join("\n")
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryTurnCostMax => {
                     match session.turn_cost_log.iter().max_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal)) {
                         Some((idx, inp, out, cost)) => {
@@ -36231,6 +36275,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/tool-calls-this-turn" => {
+                                    if _ctx.send(UiCommand::QueryToolCallsThisTurn).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-first-tool" => {
+                                    if _ctx.send(UiCommand::QueryHistoryFirstTool).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-recent-blocks" => {
+                                    if _ctx.send(UiCommand::QueryPlanRecentBlocks).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -37145,6 +37204,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-cost-max",
                             "/turn-cost-min",
                             "/plan-age-turns",
+                            "/tool-calls-this-turn",
+                            "/history-first-tool",
+                            "/plan-recent-blocks",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

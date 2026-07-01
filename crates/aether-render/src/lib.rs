@@ -1215,6 +1215,12 @@ pub enum UiCommand {
     QueryTurnCostMin,
     /// Show the plan blocks_recorded count as a proxy for plan age.
     QueryPlanAgeTurns,
+    /// Show how many tool calls have been made this turn.
+    QueryToolCallsThisTurn,
+    /// Show the first tool use in conversation history.
+    QueryHistoryFirstTool,
+    /// Show the 5 most recently recorded plan block types.
+    QueryPlanRecentBlocks,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
