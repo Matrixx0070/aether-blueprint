@@ -10368,6 +10368,46 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryPlanBlockCountTotal => {
+                    let total: usize = session.plan.block_counts.values().sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan block counts total: {total} across {} tools.", session.plan.block_counts.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPromptMacroAt(idx) => {
+                    let mut pairs: Vec<_> = session.prompt_macros.iter().collect();
+                    pairs.sort_by_key(|(k, _)| k.as_str());
+                    match pairs.get(idx) {
+                        Some((k, v)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Prompt macro[{idx}]: '{}' → '{}'",
+                                k, v.chars().take(120).collect::<String>()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Prompt macro[{idx}]: out of range ({} macros).", session.prompt_macros.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryWarmupFileAt(idx) => {
+                    match session.warmup_files.get(idx) {
+                        Some(path) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Warmup file[{idx}]: {path}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Warmup file[{idx}]: out of range ({} files).", session.warmup_files.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -36564,6 +36604,34 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /plan-block-count-total — sum of all plan block counts
+                                "/plan-block-count-total" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockCountTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /prompt-macro-at <index> — show prompt macro at sorted index
+                                cmd_str if cmd_str.starts_with("/prompt-macro-at ") => {
+                                    let arg = cmd_str.trim_start_matches("/prompt-macro-at ").trim();
+                                    if let Ok(idx) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::QueryPromptMacroAt(idx)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /prompt-macro-at <index>".to_string()));
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /warmup-file-at <index> — show warmup file at index
+                                cmd_str if cmd_str.starts_with("/warmup-file-at ") => {
+                                    let arg = cmd_str.trim_start_matches("/warmup-file-at ").trim();
+                                    if let Ok(idx) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::QueryWarmupFileAt(idx)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /warmup-file-at <index>".to_string()));
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -37493,6 +37561,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/error-playbook-at ",
                             "/persistent-reminder-at ",
                             "/session-var-at ",
+                            "/plan-block-count-total",
+                            "/prompt-macro-at ",
+                            "/warmup-file-at ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

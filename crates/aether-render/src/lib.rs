@@ -1245,6 +1245,12 @@ pub enum UiCommand {
     QueryPersistentReminderAt(usize),
     /// Show session variable entry at index.
     QuerySessionVarAt(usize),
+    /// Show sum of all plan block counts.
+    QueryPlanBlockCountTotal,
+    /// Show prompt macro at a given sorted index.
+    QueryPromptMacroAt(usize),
+    /// Show warmup file path at a given index.
+    QueryWarmupFileAt(usize),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
