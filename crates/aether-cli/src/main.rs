@@ -15822,6 +15822,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryOverlaySectionD3 => {
+                    let v = session.overlay.config.sections.d3;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Overlay section D3 enabled: {v}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryOverlaySectionD4 => {
+                    let v = session.overlay.config.sections.d4;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Overlay section D4 enabled: {v}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryOverlaySectionD5 => {
+                    let v = session.overlay.config.sections.d5;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Overlay section D5 enabled: {v}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -46619,6 +46640,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/overlay-section-d3" => {
+                                    if _ctx.send(UiCommand::QueryOverlaySectionD3).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/overlay-section-d4" => {
+                                    if _ctx.send(UiCommand::QueryOverlaySectionD4).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/overlay-section-d5" => {
+                                    if _ctx.send(UiCommand::QueryOverlaySectionD5).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -48215,6 +48251,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/overlay-section-d1",
                             "/overlay-section-d2",
                             "/overlay-section-d7",
+                            "/overlay-section-d3",
+                            "/overlay-section-d4",
+                            "/overlay-section-d5",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

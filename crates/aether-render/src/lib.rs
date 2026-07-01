@@ -2529,6 +2529,12 @@ pub enum UiCommand {
     QueryOverlaySectionD2,
     /// Show whether overlay section D7 is enabled.
     QueryOverlaySectionD7,
+    /// Show whether overlay section D3 is enabled.
+    QueryOverlaySectionD3,
+    /// Show whether overlay section D4 is enabled.
+    QueryOverlaySectionD4,
+    /// Show whether overlay section D5 is enabled.
+    QueryOverlaySectionD5,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
