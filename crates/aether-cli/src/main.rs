@@ -16747,6 +16747,33 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryTurnLabelTurnAvg => {
+                    let n = session.turn_labels.len();
+                    let avg = if n == 0 { 0.0 } else {
+                        session.turn_labels.iter().map(|(ti, _)| *ti).sum::<usize>() as f64 / n as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Turn label turn_index avg: {avg:.1} ({n} labels)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTurnLabelTurnTotal => {
+                    let total: usize = session.turn_labels.iter().map(|(ti, _)| ti).sum();
+                    let n = session.turn_labels.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Turn label turn_index total: {total} ({n} labels)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTurnLabelDensity => {
+                    let label_count = session.turn_labels.len();
+                    let total_turns = session.turn_wall_ms.len().max(1);
+                    let density = label_count as f64 / total_turns as f64;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Turn label density: {density:.3} labels/turn ({label_count} labels / {total_turns} turns)"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -48054,6 +48081,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/turn-label-turn-avg" => {
+                                    if _ctx.send(UiCommand::QueryTurnLabelTurnAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-label-turn-total" => {
+                                    if _ctx.send(UiCommand::QueryTurnLabelTurnTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-label-density" => {
+                                    if _ctx.send(UiCommand::QueryTurnLabelDensity).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -49752,6 +49794,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-cost-log-min-total-tokens",
                             "/turn-cost-log-cost-per-token",
                             "/turn-cost-log-in-out-ratio",
+                            "/turn-label-turn-avg",
+                            "/turn-label-turn-total",
+                            "/turn-label-density",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -2733,6 +2733,12 @@ pub enum UiCommand {
     QueryTurnCostLogCostPerToken,
     /// Ratio of input tokens to output tokens across all logged turns.
     QueryTurnCostLogInOutRatio,
+    /// Average turn_index across all turn labels.
+    QueryTurnLabelTurnAvg,
+    /// Sum of all turn indices for turn labels.
+    QueryTurnLabelTurnTotal,
+    /// Turn-label density: label count divided by total session turns.
+    QueryTurnLabelDensity,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
