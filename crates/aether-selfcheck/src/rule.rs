@@ -61,6 +61,24 @@ pub enum Detector {
         #[serde(default)]
         config: serde_yaml::Value,
     },
+    /// LLM-native probe — asks a yes/no question against the assistant message.
+    /// Fires (hit) when verdict == "yes" && confidence >= threshold.
+    /// The sync Gate::check pass skips these; call probe::run_probes separately.
+    LlmProbe {
+        question: String,
+        #[serde(default = "default_probe_model")]
+        model: String,
+        #[serde(default = "default_probe_threshold")]
+        threshold: f32,
+    },
+}
+
+fn default_probe_model() -> String {
+    "claude-haiku-4-5-20251001".to_string()
+}
+
+fn default_probe_threshold() -> f32 {
+    0.7
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

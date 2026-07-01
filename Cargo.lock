@@ -137,8 +137,11 @@ version = "0.35.0"
 dependencies = [
  "aether-tools",
  "async-trait",
+ "chrono",
+ "hex",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -225,10 +228,14 @@ dependencies = [
 name = "aether-selfcheck"
 version = "0.35.0"
 dependencies = [
+ "anyhow",
  "once_cell",
  "regex",
+ "reqwest",
  "serde",
+ "serde_json",
  "serde_yaml",
+ "tokio",
 ]
 
 [[package]]

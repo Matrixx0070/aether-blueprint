@@ -230,21 +230,20 @@ fn rule_05_one_per_source_passes() {
 // ============================================================
 
 #[test]
-fn rule_06_stanza_blocks() {
+fn rule_06_stanza_warns_on_long_poem() {
+    // Rule v3: min_consecutive_short_lines=20, max_words_per_line=5, action=warn.
     let gate = load_gate();
     let ctx = SessionContext::default();
-    let body = "\
-Twinkle twinkle little star
-How I wonder what you are
-Up above the world so high
-Like a diamond in the sky
-Twinkle twinkle little star
-";
-    match gate.check(body, &ctx) {
-        Outcome::Blocked { reasons, .. } => {
-            assert!(reasons.iter().any(|f| f.rule_id == "lyrics_and_poems"));
+    // 20 short lines (≤5 words each) to trigger the builtin.
+    let body = "Twinkle little star\n".repeat(20);
+    match gate.check(&body, &ctx) {
+        Outcome::Pass { log, .. } => {
+            assert!(
+                has_rule(&log, "lyrics_and_poems"),
+                "expected lyrics_and_poems warn, got log: {log:?}"
+            );
         }
-        Outcome::Pass { .. } => panic!("stanza must block"),
+        Outcome::Blocked { .. } => panic!("rule is warn, not block"),
     }
 }
 

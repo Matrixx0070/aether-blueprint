@@ -18,11 +18,13 @@
 pub mod detector;
 pub mod gate;
 pub mod loader;
+pub mod probe;
 pub mod rule;
 pub mod session;
 
 pub use gate::{ActionTaken, Finding, Gate, Outcome};
 pub use loader::{bundled_rules, load_dir, load_rule_file, load_rule_str};
+pub use probe::run_probes;
 pub use rule::{
     Action, AppliesWhen, Detector, Remediation, RemediationStrategy, Rule, Severity,
 };

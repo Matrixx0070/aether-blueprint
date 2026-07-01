@@ -8,6 +8,11 @@
 //! Future: episodic / semantic / procedural backends + hybrid retrieval
 //! land here once a vector backend is chosen (likely lancedb).
 
+pub mod antipattern;
+pub use antipattern::{
+    extract_from_git, load_antipatterns, match_antipatterns, store_antipatterns, AntiPattern,
+};
+
 use aether_tools::{Tool, ToolError};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

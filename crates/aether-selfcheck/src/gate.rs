@@ -166,6 +166,9 @@ impl Gate {
             } => detector::phrase_match(body, patterns, *case_sensitive),
             Detector::Regex { .. } => detector::regex_match(body, &cr.compiled_regexes),
             Detector::Builtin { name, config } => run_builtin(name, body, config, session),
+            // LlmProbe requires an async call; skipped in the sync pass.
+            // Use probe::run_probes after Gate::check to evaluate these rules.
+            Detector::LlmProbe { .. } => Vec::new(),
         }
     }
 }
