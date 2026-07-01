@@ -14,6 +14,16 @@
 //! holds the most-recent session id for `--continue`.
 
 use aether_threat_intel;
+use aether_crypto_audit;
+use aether_supply_chain;
+use aether_malware;
+use aether_container;
+use aether_reveng;
+use aether_incident;
+use aether_zk;
+use aether_threat_model;
+use aether_redteam;
+use aether_nsd;
 use aether_core::context::ConversationItem;
 use aether_core::{agent_turn, agent_turn_streamed, Session, SessionConfig, TurnOutcome};
 use aether_core::planner::Plan;
@@ -372,6 +382,29 @@ enum Cmd {
     /// Scan a container image for malware and known-vulnerable layers.
     ScanContainer {
         image: String,
+        /// Emit JSON output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Static weak-cryptography audit: MD5, SHA-1, DES, RC4, AES-ECB, hardcoded secrets.
+    CryptoAudit {
+        /// File or directory to scan.
+        path: PathBuf,
+        /// File extensions to scan (default: rs,py,js,go,java,kt,ts).
+        #[arg(long, default_value = "rs,py,js,go,java,kt,ts")]
+        ext: String,
+        /// Emit JSON output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Supply-chain monitor: Cargo.lock yanked-version + CVE + typosquatting checks.
+    SupplyChain {
+        /// Path to Cargo.lock (default: ./Cargo.lock).
+        #[arg(long, default_value = "Cargo.lock")]
+        lockfile: PathBuf,
+        /// Watch mode: re-check every N seconds.
+        #[arg(long)]
+        watch: Option<u64>,
         /// Emit JSON output.
         #[arg(long)]
         json: bool,
@@ -979,75 +1012,258 @@ async fn main() -> Result<()> {
         Some(Cmd::RevEng { file }) => {
             println!("[TIER 16] Reverse Engineering & Binary Analysis");
             if let Some(path) = file {
-                println!("  Analyzing: {}", path);
-                println!("  Format: ELF");
-                println!("  Functions: (scanning...)");
-                println!("  Strings: (extracting...)");
+                println!("Analyzing: {}", path);
+                match aether_reveng::analyze_binary(&path) {
+                    Ok(report) => {
+                        println!("  Format       : {} ({}-bit {})", report.format, report.bitness, report.architecture);
+                        println!("  Entry Point  : {}", report.entry_point);
+                        println!("  Sections     : {}", report.sections.len());
+                        println!("  Functions    : {} exported, {} total", report.exports.len(), report.functions.len());
+                        println!("  Imports      : {}", report.imports.join(", "));
+                        println!("  Strings      : {} extracted", report.strings.len());
+                        println!("  Security:");
+                        println!("    NX bit     : {}", if report.security_features.nx_bit { "ENABLED" } else { "DISABLED ⚠" });
+                        println!("    PIE        : {}", if report.security_features.pie { "ENABLED" } else { "DISABLED" });
+                        println!("    RELRO      : {}", report.security_features.relro);
+                        println!("    Stack Guard: {}", if report.security_features.stack_canary { "ENABLED" } else { "NONE ⚠" });
+                        println!("    Stripped   : {}", report.security_features.stripped);
+                        if !report.suspicious_imports.is_empty() {
+                            println!("  ⚠  Suspicious Imports:");
+                            for s in &report.suspicious_imports {
+                                println!("       {s}");
+                            }
+                        }
+                        if !report.disassembly_snippet.is_empty() {
+                            println!("  Disassembly (entry):");
+                            for line in report.disassembly_snippet.iter().take(8) {
+                                println!("    {line}");
+                            }
+                        }
+                    }
+                    Err(e) => eprintln!("  Error: {e}"),
+                }
+            } else {
+                println!("  Usage: aether rev-eng --file <binary>");
             }
             return Ok(());
         }
         Some(Cmd::Incident { alert }) => {
-            println!("[TIER 17] Incident Response Automation");
-            if let Some(id) = alert {
-                println!("  Alert ID: {}", id);
-                println!("  Severity: High");
-                println!("  Triage Status: In Progress");
-                println!("  Remediation: Automated response initiated");
+            use aether_incident::{IncidentAlert, IncidentType};
+            println!("[TIER 17] Incident Response Automation (NIST 800-61r2)");
+            let alert_id = alert.unwrap_or_else(|| "IR-AUTO".to_string());
+            let alert_obj = IncidentAlert {
+                alert_id: alert_id.clone(),
+                severity: "Auto-detected".to_string(),
+                description: format!("Automated triage for alert {}", alert_id),
+                affected_systems: vec!["current-host".to_string()],
+                indicators: vec![],
+                incident_type: IncidentType::Unknown,
+            };
+            match aether_incident::triage_alert(&alert_obj) {
+                Ok(report) => {
+                    println!("  Alert ID     : {}", report.alert_id);
+                    println!("  NIST Phase   : {}", report.nist_phase);
+                    println!("  Severity     : {:?}", report.severity);
+                    println!("  Triage Score : {:.2}", report.triage_score);
+                    println!("  Susp. Procs  : {} found", report.forensic_processes.len());
+                    for p in report.forensic_processes.iter().take(5) {
+                        println!("    PID {:6}: {} — {}", p.pid, p.name, &p.cmdline[..p.cmdline.len().min(60)]);
+                    }
+                    println!("  Network Conns: {}", report.network_connections.len());
+                    println!("  Playbook:");
+                    for step in &report.playbook_steps {
+                        println!("    {step}");
+                    }
+                    println!("  Recommendations:");
+                    for rec in &report.recommendations {
+                        println!("    • {rec}");
+                    }
+                }
+                Err(e) => eprintln!("  Error: {e}"),
             }
             return Ok(());
         }
         Some(Cmd::ZkProof { generate, verify }) => {
-            println!("[TIER 18] Zero-Knowledge Proofs");
+            use aether_zk::{AuditChain, build_merkle_tree, generate_inclusion_proof, verify_inclusion_proof};
+            println!("[TIER 18] Cryptographic Audit Proofs (SHA-256 Merkle + Commitments)");
             if generate {
-                println!("  Generating ZK-SNARK proof...");
+                // Build a sample Merkle tree of audit events
+                let events: Vec<&[u8]> = vec![
+                    b"audit:login:user=admin:2026-07-01",
+                    b"audit:access:resource=secrets:2026-07-01",
+                    b"audit:write:file=/etc/hosts:2026-07-01",
+                    b"audit:logout:user=admin:2026-07-01",
+                ];
+                match build_merkle_tree(&events) {
+                    Ok(tree) => {
+                        println!("  Merkle root  : {}", tree.root);
+                        println!("  Leaves       : {}", tree.leaves.len());
+                        let proof = generate_inclusion_proof(&tree, 0).unwrap();
+                        let valid = verify_inclusion_proof(&proof);
+                        println!("  Proof(leaf 0): {} path nodes, valid={}", proof.path.len(), valid);
+                    }
+                    Err(e) => eprintln!("  Error: {e}"),
+                }
+                // Build tamper-evident audit chain
+                let mut chain = AuditChain::new();
+                chain.append(b"session-start");
+                chain.append(b"command-executed");
+                chain.append(b"session-end");
+                let integrity = chain.verify_integrity();
+                println!("  AuditChain   : {} entries, integrity={}", chain.entries.len(), integrity);
+                println!("  Last hash    : {}", chain.entries.last().map(|e| &e.chain_hash[..16]).unwrap_or(""));
             }
             if verify {
-                println!("  Verifying proof... OK");
+                println!("  Proof verification: Use generate first to create a proof, then verify it.");
+                println!("  All inclusion proofs are self-verifying — no external oracle required.");
             }
             return Ok(());
         }
         Some(Cmd::Cryptanalysis { algorithm }) => {
-            println!("[TIER 19] Cryptanalysis");
+            use aether_crypto_audit::scan_code;
+            println!("[TIER 19] Cryptanalysis & Weak Crypto Detection");
             if let Some(algo) = algorithm {
-                println!("  Analyzing: {}", algo);
-                println!("  Known vulnerabilities: None detected");
-                println!("  Recommendation: Use standard curves");
+                // Scan a snippet containing the algorithm
+                let test_code = format!("use {};", algo);
+                let report = scan_code(&test_code, "input");
+                if report.is_clean() {
+                    println!("  Algorithm    : {}", algo);
+                    println!("  Status       : No known vulnerabilities detected in scan");
+                    println!("  Note         : Use 'aether crypto-audit <path>' to scan a file/dir");
+                } else {
+                    for f in &report.findings {
+                        println!("  FINDING [{:?}] {} — {}", f.severity, f.algorithm, f.recommendation);
+                        println!("    CWE: {} | {}", f.cwe, f.snippet);
+                    }
+                }
+            } else {
+                println!("  Usage: aether cryptanalysis --algorithm MD5");
+                println!("         aether crypto-audit ./src  (full directory scan)");
             }
             return Ok(());
         }
         Some(Cmd::Container { container_id }) => {
             println!("[TIER 20] Container Escape Detection");
             if let Some(id) = container_id {
-                println!("  Scanning: {}", id);
-                println!("  Isolation Level: Good");
-                println!("  Potential Vectors: cgroup escape, seccomp bypass");
+                match aether_container::scan_image(&id) {
+                    Ok(report) => {
+                        println!("  Image        : {}", report.image);
+                        println!("  OS           : {} / {}", report.os, report.architecture);
+                        println!("  Layers       : {}", report.layers.len());
+                        println!("  Risk Score   : {:.2}", report.risk_score);
+                        println!("  Verdict      : {}", report.verdict);
+                        println!("  Privileged   : {}", report.privileged);
+                        println!("  Root User    : {}", report.root_user);
+                        println!("  Seccomp      : {}", report.seccomp_profile);
+                        println!("  RELRO        : {}", report.apparmor_profile);
+                        println!("  Escape Vectors ({}):", report.escape_vectors.len());
+                        for v in &report.escape_vectors {
+                            println!("    [{:?}] {} — {}", v.risk, v.name, v.detail);
+                        }
+                    }
+                    Err(e) => {
+                        println!("  Docker inspect failed: {e}");
+                        println!("  Ensure image is pulled: docker pull {}", id);
+                    }
+                }
+            } else {
+                println!("  Usage: aether container --container-id alpine:latest");
             }
             return Ok(());
         }
         Some(Cmd::Malware { hash }) => {
             println!("[TIER 21] Malware Analysis");
             if let Some(h) = hash {
-                println!("  Hash: {}", h);
-                println!("  Family: (scanning...)");
-                println!("  Behaviors: (analyzing...)");
+                // hash is a file path here per existing Cmd definition
+                let path = std::path::Path::new(&h);
+                if path.exists() {
+                    match aether_malware::analyze_file(path) {
+                        Ok(report) => {
+                            println!("  File         : {}", report.file_path);
+                            println!("  Format       : {} ({} bytes)", report.file_format, report.file_size);
+                            println!("  SHA-256      : {}", report.sha256);
+                            println!("  Threat Score : {:.2}", report.threat_score);
+                            println!("  Verdict      : {}", report.verdict);
+                            if !report.yara_matches.is_empty() {
+                                println!("  YARA Matches : {}", report.yara_matches.join(", "));
+                            }
+                            if !report.suspicious_strings.is_empty() {
+                                println!("  Suspicious Strings ({}):", report.suspicious_strings.len());
+                                for s in report.suspicious_strings.iter().take(5) {
+                                    println!("    {s}");
+                                }
+                            }
+                        }
+                        Err(e) => eprintln!("  Error: {e}"),
+                    }
+                } else {
+                    println!("  Hash/path: {}", h);
+                    println!("  Note: Pass a file path for full analysis, or use 'aether malware-check' for hash lookup");
+                }
             }
             return Ok(());
         }
         Some(Cmd::ThreatModelAuto { asset }) => {
-            println!("[TIER 22] Automated Threat Modeling");
+            println!("[TIER 22] Automated Threat Modeling (STRIDE + PASTA)");
             if let Some(a) = asset {
-                println!("  Asset: {}", a);
-                println!("  Model: STRIDE");
-                println!("  Threats: Spoofing, Tampering, Repudiation, DoS, Elevation");
+                match aether_threat_model::generate_threat_model(&a) {
+                    Ok(model) => {
+                        println!("  Asset        : {}", model.asset);
+                        println!("  Model        : {}", model.model_type);
+                        println!("  Risk Level   : {} (score: {:.2})", model.risk_level, model.total_risk_score);
+                        println!("  DFD Summary  :");
+                        for line in model.dfd_summary.lines() {
+                            println!("    {line}");
+                        }
+                        println!("  STRIDE Threats ({}):", model.threats.len());
+                        for threat in &model.threats {
+                            println!("    [{}] {} (risk: {:.2})", threat.id, threat.title, threat.risk_score);
+                            println!("      TTPs: {} | CWE: {}", threat.mitre_ttps.join(", "), threat.cwe);
+                            println!("      Top mitigation: {}", threat.mitigations.first().unwrap_or(&"N/A".to_string()));
+                        }
+                        let pasta = aether_threat_model::run_pasta(&a);
+                        println!("  PASTA Phases ({}):", pasta.len());
+                        for phase in &pasta {
+                            println!("    Phase {}: {}", phase.phase, phase.name);
+                        }
+                    }
+                    Err(e) => eprintln!("  Error: {e}"),
+                }
+            } else {
+                println!("  Usage: aether threat-model-auto --asset payment-service");
             }
             return Ok(());
         }
         Some(Cmd::RedTeam { launch }) => {
-            println!("[TIER 23] Red Team Automation");
+            println!("[TIER 23] Red Team Automation (MITRE ATT&CK)");
+            let db = aether_redteam::mitre_techniques();
+            println!("  ATT&CK DB    : {} techniques loaded", db.len());
             if launch {
-                println!("  Campaign: Initialized");
-                println!("  Techniques: Fuzzing, Exploit Generation, Evasion");
-                println!("  Status: Ready");
+                match aether_redteam::plan_campaign("exfiltrate sensitive data", "enterprise target") {
+                    Ok(campaign) => {
+                        println!("  Campaign ID  : {}", campaign.campaign_id);
+                        println!("  Objective    : {}", campaign.objective);
+                        println!("  Kill Chain ({} steps):", campaign.kill_chain.len());
+                        for step in &campaign.kill_chain {
+                            println!("    [{}] {} — Tools: {}", step.technique_id, step.phase, step.tooling);
+                            println!("         Detection likelihood: {:.0}%", step.detection_likelihood * 100.0);
+                        }
+                        println!("  Avg Detection: {:.0}%", campaign.estimated_detection_rate * 100.0);
+                        println!("  OPSEC Level  : {}", campaign.opsec_level);
+                        println!("  Purple Team Gaps:");
+                        for gap in &campaign.purple_team_gaps {
+                            println!("    • {gap}");
+                        }
+                    }
+                    Err(e) => eprintln!("  Error: {e}"),
+                }
+            } else {
+                println!("  Usage: aether red-team --launch");
+                println!("  Techniques by tactic:");
+                for tactic in &[aether_redteam::Tactic::InitialAccess, aether_redteam::Tactic::Execution, aether_redteam::Tactic::Impact] {
+                    let ts = aether_redteam::get_techniques_for_tactic(tactic);
+                    println!("    {:?}: {} techniques", tactic, ts.len());
+                }
             }
             return Ok(());
         }
@@ -1057,16 +1273,39 @@ async fn main() -> Result<()> {
                 println!("  Node: {}", id);
                 println!("  Peers: (connecting...)");
                 println!("  Analysis State: Ready");
+                println!("  Note: Federated analysis uses local scan + aether supply-chain watch mode");
             }
             return Ok(());
         }
         Some(Cmd::NationState { attribute }) => {
-            println!("[TIER 25] Nation-State Defense Toolkit");
+            println!("[TIER 25] Nation-State Defense & APT Attribution");
+            let db = aether_threat_intel::apt::get_apt_database();
+            println!("  APT Database : {} groups", db.len());
             if attribute {
-                let db = aether_threat_intel::apt::get_apt_database();
-                println!("  APT attribution database: {} groups loaded", db.len());
-                println!("  Likely Actor: Insufficient indicators for definitive attribution");
-                println!("  Confidence: <0.50 (needs IOC correlation)");
+                println!("  Enter indicators (C2 IPs, malware names, TTPs) — running demo attribution:");
+                let demo_indicators = vec![
+                    "SUNBURST malware detected in update mechanism".to_string(),
+                    "C2 to avsvmcloud.com".to_string(),
+                    "T1195 supply chain compromise TTP".to_string(),
+                ];
+                match aether_nsd::attribute_attack(&demo_indicators) {
+                    Ok(report) => {
+                        println!("  Likely Actor : {}", report.likely_actor.as_deref().unwrap_or("Unknown"));
+                        println!("  Actor Type   : {:?}", report.actor_type);
+                        println!("  Nation-State : {}", report.nation_state.as_deref().unwrap_or("N/A"));
+                        println!("  Confidence   : {:.0}%", report.confidence * 100.0);
+                        println!("  Reasoning    : {}", report.reasoning);
+                        println!("  Matched IOCs ({}):", report.matched_indicators.len());
+                        for ioc in &report.matched_indicators {
+                            println!("    [{}] {} (+{:.0}%)", ioc.indicator_type, ioc.indicator, ioc.confidence_contribution * 100.0);
+                        }
+                        println!("  Defenses:");
+                        for rec in &report.defensive_recommendations {
+                            println!("    • {rec}");
+                        }
+                    }
+                    Err(e) => eprintln!("  Error: {e}"),
+                }
             }
             return Ok(());
         }
@@ -1198,6 +1437,84 @@ async fn main() -> Result<()> {
                 Err(_) => {
                     println!("  Docker not available on this host");
                     println!("  Install Docker or use 'aether threat-intel' for hash-based checks");
+                }
+            }
+            return Ok(());
+        }
+        Some(Cmd::CryptoAudit { path, ext, json }) => {
+            println!("[TIER 19+] Weak Cryptography Static Audit");
+            let extensions: Vec<&str> = ext.split(',').map(|s| s.trim()).collect();
+            let p = std::path::Path::new(&path);
+            if p.is_file() {
+                match aether_crypto_audit::scan_file(p) {
+                    Ok(report) => {
+                        if json {
+                            println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+                        } else {
+                            println!("  File     : {}", report.file);
+                            println!("  Findings : {}", report.findings.len());
+                            println!("  Critical : {}", report.critical_count());
+                            for f in &report.findings {
+                                println!("  [{:?}] L{} C{} — {} ({}) — {}",
+                                    f.severity, f.line, f.column, f.algorithm, f.cwe, f.recommendation);
+                                println!("    ▶ {}", f.snippet);
+                            }
+                            if report.is_clean() { println!("  ✓ No cryptographic issues found"); }
+                        }
+                    }
+                    Err(e) => eprintln!("  Error: {e}"),
+                }
+            } else if p.is_dir() {
+                match aether_crypto_audit::scan_directory(p, &extensions) {
+                    Ok(reports) => {
+                        let total_findings: usize = reports.iter().map(|r| r.findings.len()).sum();
+                        let critical: usize = reports.iter().map(|r| r.critical_count()).sum();
+                        if json {
+                            println!("{}", serde_json::to_string_pretty(&reports).unwrap_or_default());
+                        } else {
+                            println!("  Files scanned with findings: {}", reports.len());
+                            println!("  Total findings: {} ({} critical)", total_findings, critical);
+                            for report in &reports {
+                                println!("\n  File: {}", report.file);
+                                for f in &report.findings {
+                                    println!("    [{:?}] L{} — {} — {}", f.severity, f.line, f.algorithm, f.recommendation);
+                                }
+                            }
+                            if reports.is_empty() { println!("  ✓ No cryptographic issues found in {} extension files", ext); }
+                        }
+                    }
+                    Err(e) => eprintln!("  Error: {e}"),
+                }
+            } else {
+                eprintln!("  Path not found: {}", path.display());
+            }
+            return Ok(());
+        }
+        Some(Cmd::SupplyChain { lockfile, watch, json }) => {
+            println!("[TIER 25] Supply-Chain Security Monitor");
+            if let Some(interval) = watch {
+                println!("  Watch mode: checking {} every {}s...", lockfile.display(), interval);
+                aether_supply_chain::watch_lockfile(&lockfile, interval, |finding| {
+                    println!("  [{}] {:?} {} v{} — {}",
+                        chrono::Local::now().format("%H:%M:%S"),
+                        finding.severity, finding.crate_name, finding.version, finding.detail);
+                }).await?;
+            } else {
+                match aether_supply_chain::scan_lockfile(&lockfile).await {
+                    Ok(report) => {
+                        if json {
+                            println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+                        } else {
+                            println!("  Lockfile : {}", lockfile.display());
+                            println!("  Scanned  : {} crates", report.crates_scanned);
+                            println!("  Findings : {} ({} critical)", report.findings.len(), report.critical_count());
+                            for f in &report.findings {
+                                println!("  [{:?}] {} v{} — {} — {}", f.severity, f.crate_name, f.version, f.kind, f.detail);
+                            }
+                            if report.is_clean() { println!("  ✓ No supply-chain issues found"); }
+                        }
+                    }
+                    Err(e) => eprintln!("  Error scanning {}: {e}", lockfile.display()),
                 }
             }
             return Ok(());

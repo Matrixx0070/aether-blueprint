@@ -23,21 +23,31 @@ dependencies = [
 name = "aether-cli"
 version = "0.35.0"
 dependencies = [
+ "aether-container",
  "aether-core",
+ "aether-crypto-audit",
+ "aether-incident",
  "aether-llm",
+ "aether-malware",
  "aether-mcp",
  "aether-mem",
+ "aether-nsd",
  "aether-overlay",
  "aether-perm",
  "aether-plugin",
  "aether-plugin-wasm",
+ "aether-redteam",
  "aether-render",
+ "aether-reveng",
  "aether-sec",
  "aether-selfcheck",
  "aether-skill",
  "aether-store",
+ "aether-supply-chain",
  "aether-threat-intel",
+ "aether-threat-model",
  "aether-tools",
+ "aether-zk",
  "anyhow",
  "async-trait",
  "axum",
@@ -89,9 +99,13 @@ name = "aether-container"
 version = "0.35.0"
 dependencies = [
  "anyhow",
+ "hex",
+ "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -127,6 +141,17 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "aether-crypto-audit"
+version = "0.35.0"
+dependencies = [
+ "anyhow",
+ "once_cell",
+ "regex",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -237,8 +262,10 @@ name = "aether-malware"
 version = "0.35.0"
 dependencies = [
  "anyhow",
+ "hex",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.18",
 ]
 
@@ -438,6 +465,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-supply-chain"
+version = "0.35.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "aether-symexec"
 version = "0.35.0"
 dependencies = [
@@ -495,8 +534,10 @@ name = "aether-zk"
 version = "0.35.0"
 dependencies = [
  "anyhow",
+ "hex",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.18",
 ]
 

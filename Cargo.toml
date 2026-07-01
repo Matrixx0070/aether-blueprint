@@ -78,8 +78,18 @@ aether-concolic    = { path = "crates/aether-concolic",    version = "0.35.0" }
 aether-invariant   = { path = "crates/aether-invariant",   version = "0.35.0" }
 aether-shuttle     = { path = "crates/aether-shuttle",     version = "0.35.0" }
 aether-lockgraph   = { path = "crates/aether-lockgraph",   version = "0.35.0" }
-aether-threat-intel = { path = "crates/aether-threat-intel", version = "0.35.0" }
-aether-hwsec       = { path = "crates/aether-hwsec",       version = "0.35.0" }
+aether-threat-intel  = { path = "crates/aether-threat-intel",  version = "0.35.0" }
+aether-hwsec         = { path = "crates/aether-hwsec",         version = "0.35.0" }
+aether-crypto-audit  = { path = "crates/aether-crypto-audit",  version = "0.35.0" }
+aether-supply-chain  = { path = "crates/aether-supply-chain",  version = "0.35.0" }
+aether-malware       = { path = "crates/aether-malware",       version = "0.35.0" }
+aether-container     = { path = "crates/aether-container",     version = "0.35.0" }
+aether-reveng        = { path = "crates/aether-reveng",        version = "0.35.0" }
+aether-incident      = { path = "crates/aether-incident",      version = "0.35.0" }
+aether-zk            = { path = "crates/aether-zk",            version = "0.35.0" }
+aether-threat-model  = { path = "crates/aether-threat-model",  version = "0.35.0" }
+aether-redteam       = { path = "crates/aether-redteam",       version = "0.35.0" }
+aether-nsd           = { path = "crates/aether-nsd",           version = "0.35.0" }
 
 [profile.release]
 lto = "thin"
