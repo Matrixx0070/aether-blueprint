@@ -13382,6 +13382,34 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryToolOutputLimitKeyMaxLen => {
+                    let max = session.tool_output_limits.keys().map(|k| k.len()).max().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Tool output limit key max len: {}", max
+                    )));
+                    continue;
+                }
+                UiCommand::QueryToolOutputLimitKeyMinLen => {
+                    let min = session.tool_output_limits.keys().map(|k| k.len()).min().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Tool output limit key min len: {}", min
+                    )));
+                    continue;
+                }
+                UiCommand::QueryLastToolSigAvgNameLen => {
+                    let n = session.last_tool_signatures.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Last tool sig avg name len: no signatures.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.last_tool_signatures.iter().map(|(name, _)| name.len()).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Last tool sig avg name len: {:.1}", total as f64 / n as f64
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -42739,6 +42767,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/tool-output-limit-key-max-len" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputLimitKeyMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-output-limit-key-min-len" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputLimitKeyMinLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/last-tool-sig-avg-name-len" => {
+                                    if _ctx.send(UiCommand::QueryLastToolSigAvgNameLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -44047,6 +44090,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-cost-log-last-turn-idx",
                             "/progress-item-done-count",
                             "/progress-item-pending-count",
+                            "/tool-output-limit-key-max-len",
+                            "/tool-output-limit-key-min-len",
+                            "/last-tool-sig-avg-name-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

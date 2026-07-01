@@ -1953,6 +1953,12 @@ pub enum UiCommand {
     QueryProgressItemDoneCount,
     /// Show the count of pending (not done) progress items.
     QueryProgressItemPendingCount,
+    /// Show the maximum key length in tool output limits map.
+    QueryToolOutputLimitKeyMaxLen,
+    /// Show the minimum key length in tool output limits map.
+    QueryToolOutputLimitKeyMinLen,
+    /// Show the average name length of last tool signatures.
+    QueryLastToolSigAvgNameLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
