@@ -17193,6 +17193,38 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryLastToolSigNameTotalChars => {
+                    let total: usize = session.last_tool_signatures.iter()
+                        .map(|(name, _)| name.len())
+                        .sum();
+                    let n = session.last_tool_signatures.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Last tool sig name total chars: {total} ({n} sigs)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryLastToolSigSigTotalChars => {
+                    let total: usize = session.last_tool_signatures.iter()
+                        .map(|(_, sig)| sig.len())
+                        .sum();
+                    let n = session.last_tool_signatures.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Last tool sig value total chars: {total} ({n} sigs)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryLastToolSigAvgTotalLen => {
+                    let n = session.last_tool_signatures.len();
+                    let avg = if n == 0 { 0.0 } else {
+                        session.last_tool_signatures.iter()
+                            .map(|(name, sig)| (name.len() + sig.len()) as f64)
+                            .sum::<f64>() / n as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Last tool sig avg combined len (name+sig): {avg:.1} ({n} sigs)"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -48710,6 +48742,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/last-tool-sig-name-total-chars" => {
+                                    if _ctx.send(UiCommand::QueryLastToolSigNameTotalChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/last-tool-sig-sig-total-chars" => {
+                                    if _ctx.send(UiCommand::QueryLastToolSigSigTotalChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/last-tool-sig-avg-total-len" => {
+                                    if _ctx.send(UiCommand::QueryLastToolSigAvgTotalLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -50450,6 +50497,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/error-playbook-pat-total-chars",
                             "/auto-tag-rule-pat-total-chars",
                             "/auto-tag-rule-tag-total-chars",
+                            "/last-tool-sig-name-total-chars",
+                            "/last-tool-sig-sig-total-chars",
+                            "/last-tool-sig-avg-total-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

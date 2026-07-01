@@ -2817,6 +2817,12 @@ pub enum UiCommand {
     QueryAutoTagRulePatTotalChars,
     /// Total chars across all auto_tag_rules tag fields.
     QueryAutoTagRuleTagTotalChars,
+    /// Total chars across all last_tool_signatures name fields.
+    QueryLastToolSigNameTotalChars,
+    /// Total chars across all last_tool_signatures signature (value) fields.
+    QueryLastToolSigSigTotalChars,
+    /// Average combined length (name+sig) per last_tool_signatures entry.
+    QueryLastToolSigAvgTotalLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
