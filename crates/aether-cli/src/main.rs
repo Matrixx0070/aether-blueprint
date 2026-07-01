@@ -15104,6 +15104,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryCostCeilingVal => {
+                    let v = session.cost_ceiling_usd;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Cost ceiling: ${v:.4}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryCostCapVal => {
+                    let v = session.cost_cap_usd;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Cost cap: ${v:.4}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryThinkingBudgetVal => {
+                    let v = session.config.thinking_budget.unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Thinking budget: {v} tokens"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -45451,6 +45472,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/cost-ceiling-val" => {
+                                    if _ctx.send(UiCommand::QueryCostCeilingVal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/cost-cap-val" => {
+                                    if _ctx.send(UiCommand::QueryCostCapVal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/thinking-budget-val" => {
+                                    if _ctx.send(UiCommand::QueryThinkingBudgetVal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -46957,6 +46993,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/auto-bookmark-every-val",
                             "/compaction-pct",
                             "/history-size-warn-bytes",
+                            "/cost-ceiling-val",
+                            "/cost-cap-val",
+                            "/thinking-budget-val",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

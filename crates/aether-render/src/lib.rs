@@ -2349,6 +2349,12 @@ pub enum UiCommand {
     QueryCompactionPct,
     /// Show the history size warning threshold in bytes.
     QueryHistorySizeWarnBytes,
+    /// Show the cost ceiling in USD.
+    QueryCostCeilingVal,
+    /// Show the cost cap in USD.
+    QueryCostCapVal,
+    /// Show the thinking budget value.
+    QueryThinkingBudgetVal,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
