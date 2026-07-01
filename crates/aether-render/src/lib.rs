@@ -2631,6 +2631,12 @@ pub enum UiCommand {
     QueryHistoryToolResults,
     /// Count of Assistant items with non-empty tool_uses in the session history.
     QueryHistoryAsstToolUse,
+    /// Total chars across all User items in the session history.
+    QueryHistoryUserTotalChars,
+    /// Total chars across all Assistant text items in the session history.
+    QueryHistoryAsstTotalChars,
+    /// Total tool_use count across all Assistant items in the session history.
+    QueryHistoryToolUseTotal,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
