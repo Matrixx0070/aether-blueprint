@@ -8964,6 +8964,46 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QueryTokenBudgetPct => {
+                    let budget = session.token_budget;
+                    let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
+                    if budget == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Token budget: not set ({used} tokens used so far). Use /token-budget <n> to set."
+                        )));
+                    } else {
+                        let pct = (used as f64 / budget as f64) * 100.0;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Token budget: {used}/{budget} used ({pct:.1}%)."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryItemCount => {
+                    let total = session.history.len();
+                    let user_n = session.history.iter().filter(|i| matches!(i, aether_core::context::ConversationItem::User(_))).count();
+                    let asst_n = session.history.iter().filter(|i| matches!(i, aether_core::context::ConversationItem::Assistant { .. })).count();
+                    let tool_n = session.history.iter().filter(|i| matches!(i, aether_core::context::ConversationItem::ToolResults(_))).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History: {total} items ({user_n} user, {asst_n} assistant, {tool_n} tool-result)."
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySessionEnvGet(key) => {
+                    match session.session_env.get(&key) {
+                        Some(val) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Session env '{key}' = '{val}'"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Session env '{key}': not set."
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryAssemblyD1 => {
                     match &session.last_assembly_telemetry {
                         Some(t) => {
@@ -35288,6 +35328,22 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/token-budget-pct" => {
+                                    if _ctx.send(UiCommand::QueryTokenBudgetPct).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-item-count" => {
+                                    if _ctx.send(UiCommand::QueryHistoryItemCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd_str if cmd_str.starts_with("/session-env-get ") => {
+                                    let key = cmd_str.trim_start_matches("/session-env-get ").trim().to_string();
+                                    if _ctx.send(UiCommand::QuerySessionEnvGet(key)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -36157,6 +36213,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/assembly-d1",
                             "/reminder-dropped",
                             "/plan-tool-err-top",
+                            "/token-budget-pct",
+                            "/history-item-count",
+                            "/session-env-get ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

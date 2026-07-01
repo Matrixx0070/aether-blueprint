@@ -1125,6 +1125,12 @@ pub enum UiCommand {
     QueryReminderDropped,
     /// Show top tools by error count from plan stats.
     QueryPlanToolErrTop,
+    /// Show token budget used as a percentage of configured limit.
+    QueryTokenBudgetPct,
+    /// Show total count of all history items (user+assistant+tool results).
+    QueryHistoryItemCount,
+    /// Get a specific session env variable by name.
+    QuerySessionEnvGet(String),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
