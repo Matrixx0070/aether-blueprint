@@ -12089,6 +12089,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryBookmarkTurnMin => {
+                    match session.bookmarks.iter().min_by_key(|(turn, _, _)| *turn) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Bookmarks: none.".to_string())); }
+                        Some((turn, _, lbl)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Bookmark min turn: {} label='{}'", turn, lbl
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryAnnotMaxLen => {
+                    match session.history_annotations.iter().max_by_key(|(_, text)| text.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("History annotations: none.".to_string())); }
+                        Some((turn, text)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Longest history annotation: {} chars at turn {}", text.len(), turn
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnLabelMaxLen => {
+                    match session.turn_labels.iter().max_by_key(|(_, lbl)| lbl.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Turn labels: none.".to_string())); }
+                        Some((turn, lbl)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Longest turn label: {} chars at turn {} ('{}')", lbl.len(), turn, lbl
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -40831,6 +40864,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/bookmark-turn-min" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkTurnMin).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-annot-max-len" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAnnotMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-label-max-len" => {
+                                    if _ctx.send(UiCommand::QueryTurnLabelMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -42016,6 +42064,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/bookmark-turn-max",
                             "/history-annot-turn-min",
                             "/turn-label-turn-min",
+                            "/bookmark-turn-min",
+                            "/history-annot-max-len",
+                            "/turn-label-max-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
