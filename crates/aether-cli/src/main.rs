@@ -17323,6 +17323,45 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryHistoryUserMinWords => {
+                    let min = session.history.iter()
+                        .filter_map(|item| if let ConversationItem::User(s) = item {
+                            Some(s.split_whitespace().count())
+                        } else { None })
+                        .min().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Min words in any user turn: {min}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryAsstMinWords => {
+                    let min = session.history.iter()
+                        .filter_map(|item| if let ConversationItem::Assistant { text: Some(t), .. } = item {
+                            Some(t.split_whitespace().count())
+                        } else { None })
+                        .min().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Min words in any assistant turn: {min}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryWordRatio => {
+                    let user_words: usize = session.history.iter()
+                        .filter_map(|item| if let ConversationItem::User(s) = item {
+                            Some(s.split_whitespace().count())
+                        } else { None })
+                        .sum();
+                    let asst_words: usize = session.history.iter()
+                        .filter_map(|item| if let ConversationItem::Assistant { text: Some(t), .. } = item {
+                            Some(t.split_whitespace().count())
+                        } else { None })
+                        .sum();
+                    let ratio = if asst_words == 0 { 0.0 } else { user_words as f64 / asst_words as f64 };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "User:asst word ratio: {ratio:.3} ({user_words} user / {asst_words} asst)"
+                    )));
+                    continue;
+                }
                 UiCommand::QueryHistoryAsstAvgWords => {
                     let asst_words: Vec<usize> = session.history.iter()
                         .filter_map(|item| if let ConversationItem::Assistant { text: Some(t), .. } = item {
@@ -50496,6 +50535,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/history-user-min-words" => {
+                                    if _ctx.send(UiCommand::QueryHistoryUserMinWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-asst-min-words" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAsstMinWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-word-ratio" => {
+                                    if _ctx.send(UiCommand::QueryHistoryWordRatio).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-asst-avg-words" => {
                                     if _ctx.send(UiCommand::QueryHistoryAsstAvgWords).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -52455,6 +52509,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-asst-avg-words",
                             "/history-asst-max-words",
                             "/history-user-max-words",
+                            "/history-user-min-words",
+                            "/history-asst-min-words",
+                            "/history-word-ratio",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
