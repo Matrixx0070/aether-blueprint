@@ -2205,6 +2205,12 @@ pub enum UiCommand {
     QuerySessionVarKeyFirst,
     /// Show the first key in aliases.
     QueryAliasKeyFirst,
+    /// Show the first key in tool_output_limits.
+    QueryToolOutputLimitKeyFirst,
+    /// Show the first key in prompt_macros.
+    QueryPromptMacroKeyFirst,
+    /// Show the turn index of the first turn label.
+    QueryTurnLabelFirstIdx,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
