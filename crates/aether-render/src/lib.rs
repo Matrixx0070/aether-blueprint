@@ -1785,6 +1785,12 @@ pub enum UiCommand {
     QueryTurnInTokensMin,
     /// Show the minimum output tokens in a single turn.
     QueryTurnOutTokensMin,
+    /// Show the shortest error playbook pattern string.
+    QueryErrorPlaybookPatMinLen,
+    /// Show the shortest error playbook hint string.
+    QueryErrorPlaybookHintMinLen,
+    /// Show the shortest auto-tag rule pattern string.
+    QueryAutoTagRulePatMinLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

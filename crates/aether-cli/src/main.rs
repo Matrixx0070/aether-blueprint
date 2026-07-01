@@ -12505,6 +12505,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryErrorPlaybookPatMinLen => {
+                    match session.error_playbook.iter().min_by_key(|(pat, _)| pat.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Error playbook: empty.".to_string())); }
+                        Some((pat, _)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Shortest error playbook pattern: {} chars", pat.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryErrorPlaybookHintMinLen => {
+                    match session.error_playbook.iter().min_by_key(|(_, hint)| hint.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Error playbook: empty.".to_string())); }
+                        Some((_, hint)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Shortest error playbook hint: {} chars", hint.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryAutoTagRulePatMinLen => {
+                    match session.auto_tag_rules.iter().min_by_key(|(pat, _)| pat.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Auto-tag rules: none.".to_string())); }
+                        Some((pat, _)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Shortest auto-tag rule pattern: {} chars", pat.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -41442,6 +41475,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/error-playbook-pat-min-len" => {
+                                    if _ctx.send(UiCommand::QueryErrorPlaybookPatMinLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/error-playbook-hint-min-len" => {
+                                    if _ctx.send(UiCommand::QueryErrorPlaybookHintMinLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/auto-tag-rule-pat-min-len" => {
+                                    if _ctx.send(UiCommand::QueryAutoTagRulePatMinLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -42666,6 +42714,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-out-tokens-max",
                             "/turn-in-tokens-min",
                             "/turn-out-tokens-min",
+                            "/error-playbook-pat-min-len",
+                            "/error-playbook-hint-min-len",
+                            "/auto-tag-rule-pat-min-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
