@@ -8964,6 +8964,44 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QueryTurnCostMax => {
+                    match session.turn_cost_log.iter().max_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal)) {
+                        Some((idx, inp, out, cost)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Most expensive turn: #{idx} — ${cost:.6} ({inp} in + {out} out tokens)."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Turn cost max: no turns recorded yet.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnCostMin => {
+                    match session.turn_cost_log.iter().min_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal)) {
+                        Some((idx, inp, out, cost)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Cheapest turn: #{idx} — ${cost:.6} ({inp} in + {out} out tokens)."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Turn cost min: no turns recorded yet.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanAgeTurns => {
+                    let recorded = session.plan.blocks_recorded;
+                    let current = session.turn_index;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan age: {recorded} block-turns recorded; current turn={current}."
+                    )));
+                    continue;
+                }
                 UiCommand::QueryTokenBudgetWarnPct => {
                     let warn = session.token_budget_warn_pct;
                     let hard = session.token_budget_hard_pct;
@@ -36178,6 +36216,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/turn-cost-max" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-cost-min" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostMin).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-age-turns" => {
+                                    if _ctx.send(UiCommand::QueryPlanAgeTurns).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -37089,6 +37142,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/token-budget-warn-pct",
                             "/plan-goal-preview",
                             "/saved-snapshot-at ",
+                            "/turn-cost-max",
+                            "/turn-cost-min",
+                            "/plan-age-turns",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

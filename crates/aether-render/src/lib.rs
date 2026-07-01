@@ -1209,6 +1209,12 @@ pub enum UiCommand {
     QueryPlanGoalPreview,
     /// Show history length from a named snapshot.
     QuerySavedSnapshotAt(String),
+    /// Show the most expensive turn from the cost log.
+    QueryTurnCostMax,
+    /// Show the cheapest turn from the cost log.
+    QueryTurnCostMin,
+    /// Show the plan blocks_recorded count as a proxy for plan age.
+    QueryPlanAgeTurns,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
