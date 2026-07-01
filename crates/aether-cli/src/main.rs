@@ -14347,6 +14347,40 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryVerifRuleAvgDescLen => {
+                    let n = session.verifier.gate.rules.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Verif rule avg desc len: no rules.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.verifier.gate.rules.iter()
+                            .map(|r| r.rule.description.len())
+                            .sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Verif rule avg desc len: {:.1}", total as f64 / n as f64
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryVerifRuleTotalChars => {
+                    let total: usize = session.verifier.gate.rules.iter()
+                        .map(|r| r.rule.id.len() + r.rule.description.len())
+                        .sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verif rule total chars: {total}"
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySavedSnapshotTotalItems => {
+                    let total: usize = session.saved_snapshots.values()
+                        .map(|(items, _)| items.len())
+                        .sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Saved snapshot total items: {total}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -44274,6 +44308,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/verif-rule-avg-desc-len" => {
+                                    if _ctx.send(UiCommand::QueryVerifRuleAvgDescLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verif-rule-total-chars" => {
+                                    if _ctx.send(UiCommand::QueryVerifRuleTotalChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/saved-snapshot-total-items" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotTotalItems).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -45696,6 +45745,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/verif-rule-first-id",
                             "/verif-rule-last-id",
                             "/tool-output-hist-total-chars",
+                            "/verif-rule-avg-desc-len",
+                            "/verif-rule-total-chars",
+                            "/saved-snapshot-total-items",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

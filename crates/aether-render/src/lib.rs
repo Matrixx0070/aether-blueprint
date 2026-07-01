@@ -2181,6 +2181,12 @@ pub enum UiCommand {
     QueryVerifRuleLastId,
     /// Show the total chars in all tool output history (keys + prev + curr).
     QueryToolOutputHistTotalChars,
+    /// Show the avg description length of verifier gate rules.
+    QueryVerifRuleAvgDescLen,
+    /// Show the total chars across all verifier rule IDs and descriptions.
+    QueryVerifRuleTotalChars,
+    /// Show the total conversation items across all saved snapshots.
+    QuerySavedSnapshotTotalItems,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
