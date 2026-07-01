@@ -1431,6 +1431,12 @@ pub enum UiCommand {
     QuerySessionNoteFirst,
     /// Show the first plan block name from block_counts.
     QueryPlanBlockFirst,
+    /// Show the first saved snapshot name.
+    QuerySnapshotFirst,
+    /// Show the first tool signature from last_tool_signatures.
+    QueryToolSigFirst,
+    /// Show the first verifier finding from last_verification.
+    QueryVerifierFindingFirst,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

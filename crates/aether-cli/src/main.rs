@@ -11192,6 +11192,65 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QuerySnapshotFirst => {
+                    let mut keys: Vec<_> = session.saved_snapshots.keys().collect();
+                    keys.sort();
+                    match keys.first() {
+                        Some(name) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Snapshot[0] (of {}): '{name}'", session.saved_snapshots.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Saved snapshots: none.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolSigFirst => {
+                    match session.last_tool_signatures.first() {
+                        Some((name, args)) => {
+                            let args_prev = args.chars().take(80).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Tool sig[0] (of {}): '{name}' args={args_prev}",
+                                session.last_tool_signatures.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Tool signatures: none from last batch.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryVerifierFindingFirst => {
+                    match &session.last_verification {
+                        Some(v) => {
+                            match v.findings.first() {
+                                Some(f) => {
+                                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                        "Verifier finding[0] (of {}): rule='{}' severity={:?}",
+                                        v.findings.len(), f.rule_id, f.severity
+                                    )));
+                                }
+                                None => {
+                                    let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                        "Verifier: last run had no findings.".to_string()
+                                    ));
+                                }
+                            }
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Verifier: no run yet this session.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryTurnLabelFirst => {
                     match session.turn_labels.first() {
                         Some((turn_idx, label)) => {
@@ -38430,6 +38489,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/snapshot-first" => {
+                                    if _ctx.send(UiCommand::QuerySnapshotFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-sig-first" => {
+                                    if _ctx.send(UiCommand::QueryToolSigFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-finding-first" => {
+                                    if _ctx.send(UiCommand::QueryVerifierFindingFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -39477,6 +39551,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-label-first",
                             "/session-note-first",
                             "/plan-block-first",
+                            "/snapshot-first",
+                            "/tool-sig-first",
+                            "/verifier-finding-first",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
