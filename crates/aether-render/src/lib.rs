@@ -1575,6 +1575,12 @@ pub enum UiCommand {
     QueryVerifierRuleCount,
     /// Show average length of error playbook patterns.
     QueryErrorPlaybookPatAvgLen,
+    /// Show count of entries in the turn cost log.
+    QueryTurnCostLogLen,
+    /// Show length of last error tool name.
+    QueryLastErrorToolLen,
+    /// Show count of completed progress items.
+    QueryProgressItemsDoneCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
