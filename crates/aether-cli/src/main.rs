@@ -17323,6 +17323,38 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryTurnLabelWordTotal => {
+                    let total: usize = session.turn_labels.iter()
+                        .map(|(_, lbl)| lbl.split_whitespace().count())
+                        .sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Turn label word total: {total} (across {} labels)", session.turn_labels.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTurnLabelAvgWords => {
+                    let n = session.turn_labels.len();
+                    let avg = if n == 0 { 0.0 } else {
+                        let total: usize = session.turn_labels.iter()
+                            .map(|(_, lbl)| lbl.split_whitespace().count())
+                            .sum();
+                        total as f64 / n as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Turn label avg words: {avg:.1} ({n} labels)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTurnLabelMaxWords => {
+                    let max = session.turn_labels.iter()
+                        .map(|(_, lbl)| lbl.split_whitespace().count())
+                        .max();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match max {
+                        Some(v) => format!("Turn label max words: {v}"),
+                        None => "Turn labels: none recorded.".to_string(),
+                    }));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -48900,6 +48932,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/turn-label-word-total" => {
+                                    if _ctx.send(UiCommand::QueryTurnLabelWordTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-label-avg-words" => {
+                                    if _ctx.send(UiCommand::QueryTurnLabelAvgWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-label-max-words" => {
+                                    if _ctx.send(UiCommand::QueryTurnLabelMaxWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -50652,6 +50699,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/saved-snapshot-plan-window-avg",
                             "/saved-snapshot-plan-window-max",
                             "/saved-snapshot-plan-window-min",
+                            "/turn-label-word-total",
+                            "/turn-label-avg-words",
+                            "/turn-label-max-words",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

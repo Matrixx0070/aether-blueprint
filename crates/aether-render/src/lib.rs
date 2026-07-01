@@ -2841,6 +2841,12 @@ pub enum UiCommand {
     QuerySavedSnapshotPlanWindowMax,
     /// Min plan window value across all saved snapshots.
     QuerySavedSnapshotPlanWindowMin,
+    /// Total word count across all turn labels.
+    QueryTurnLabelWordTotal,
+    /// Average number of words per turn label.
+    QueryTurnLabelAvgWords,
+    /// Maximum number of words in any single turn label.
+    QueryTurnLabelMaxWords,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
