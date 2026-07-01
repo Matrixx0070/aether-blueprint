@@ -2637,6 +2637,12 @@ pub enum UiCommand {
     QueryHistoryAsstTotalChars,
     /// Total tool_use count across all Assistant items in the session history.
     QueryHistoryToolUseTotal,
+    /// Average chars per User turn in the session history.
+    QueryHistoryUserAvgChars,
+    /// Average chars per Assistant text turn in the session history.
+    QueryHistoryAsstAvgChars,
+    /// Average tool_uses per Assistant turn in the session history.
+    QueryHistoryToolUseAvg,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
