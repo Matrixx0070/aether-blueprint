@@ -8964,6 +8964,45 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QueryLlmFallbackCount => {
+                    let n = session.llm_fallback_count;
+                    let model = session.llm_fallback_model.as_deref().unwrap_or("none");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "LLM fallbacks: {n} this session (fallback model: {model})."
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySystemSuffixLen => {
+                    match &session.config.system_suffix {
+                        Some(s) if !s.is_empty() => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "System suffix: {} bytes / {} chars.",
+                                s.len(),
+                                s.chars().count()
+                            )));
+                        }
+                        _ => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "System suffix: not set.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryAssistantLast => {
+                    let found = session.history.iter().rev().find_map(|item| {
+                        if let aether_core::context::ConversationItem::Assistant { text, .. } = item {
+                            text.as_deref().map(|s| s.chars().take(200).collect::<String>())
+                        } else {
+                            None
+                        }
+                    });
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(
+                        found.map(|m| format!("Last assistant message: {m}"))
+                            .unwrap_or_else(|| "No assistant messages in history.".to_string())
+                    ));
+                    continue;
+                }
                 UiCommand::QueryPlanToolTotalCalls(name) => {
                     match session.plan.tool_call_stats.get(&name) {
                         Some((ok, err)) => {
@@ -34889,6 +34928,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/llm-fallback-count" => {
+                                    if _ctx.send(UiCommand::QueryLlmFallbackCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/system-suffix-len" => {
+                                    if _ctx.send(UiCommand::QuerySystemSuffixLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-assistant-last" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAssistantLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -35737,6 +35791,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-tool-total-calls ",
                             "/last-turn-cost",
                             "/history-user-last",
+                            "/llm-fallback-count",
+                            "/system-suffix-len",
+                            "/history-assistant-last",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

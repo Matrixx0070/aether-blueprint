@@ -1083,6 +1083,12 @@ pub enum UiCommand {
     QueryLastTurnCost,
     /// Show the last user message in history.
     QueryHistoryUserLast,
+    /// Show total LLM fallback count for this session.
+    QueryLlmFallbackCount,
+    /// Show the byte length of the current system suffix.
+    QuerySystemSuffixLen,
+    /// Show the last assistant message text in history.
+    QueryHistoryAssistantLast,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
