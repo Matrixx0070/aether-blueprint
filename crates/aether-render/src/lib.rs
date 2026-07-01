@@ -2007,6 +2007,12 @@ pub enum UiCommand {
     QueryUsageTotalIn,
     /// Show the total output token usage for the session.
     QueryUsageTotalOut,
+    /// Show whether auto-compact-on-stuck is enabled.
+    QueryAutoCompactOnStuck,
+    /// Show the LLM fallback model name if set.
+    QueryLlmFallbackModelName,
+    /// Show whether cost alert has fired.
+    QueryCostAlertFiredStatus,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

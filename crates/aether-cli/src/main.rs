@@ -13644,6 +13644,25 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryAutoCompactOnStuck => {
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Auto compact on stuck: {}", session.auto_compact_on_stuck
+                    )));
+                    continue;
+                }
+                UiCommand::QueryLlmFallbackModelName => {
+                    let name = session.llm_fallback_model.as_deref().unwrap_or("(not set)");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "LLM fallback model: {}", name
+                    )));
+                    continue;
+                }
+                UiCommand::QueryCostAlertFiredStatus => {
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Cost alert fired: {}", session.cost_alert_fired
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -43136,6 +43155,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/auto-compact-on-stuck" => {
+                                    if _ctx.send(UiCommand::QueryAutoCompactOnStuck).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/llm-fallback-model-name" => {
+                                    if _ctx.send(UiCommand::QueryLlmFallbackModelName).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/cost-alert-fired-status" => {
+                                    if _ctx.send(UiCommand::QueryCostAlertFiredStatus).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -44471,6 +44505,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/cost-alert-usd",
                             "/usage-total-in",
                             "/usage-total-out",
+                            "/auto-compact-on-stuck",
+                            "/llm-fallback-model-name",
+                            "/cost-alert-fired-status",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
