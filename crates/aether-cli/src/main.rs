@@ -17323,6 +17323,49 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QuerySessionNoteGapAvg => {
+                    let ts: Vec<u64> = session.session_notes.iter().map(|(_, ts)| *ts).collect();
+                    if ts.len() < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Session note gap avg: need at least 2 notes.".to_string()
+                        ));
+                    } else {
+                        let gaps: Vec<u64> = ts.windows(2).map(|w| w[1].saturating_sub(w[0])).collect();
+                        let avg = gaps.iter().sum::<u64>() as f64 / gaps.len() as f64;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session note gap avg: {avg:.0}ms ({} gaps across {} notes)", gaps.len(), ts.len()
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionNoteGapMax => {
+                    let ts: Vec<u64> = session.session_notes.iter().map(|(_, ts)| *ts).collect();
+                    if ts.len() < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Session note gap max: need at least 2 notes.".to_string()
+                        ));
+                    } else {
+                        let max_gap = ts.windows(2).map(|w| w[1].saturating_sub(w[0])).max().unwrap_or(0);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session note gap max: {max_gap}ms"
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionNoteGapMin => {
+                    let ts: Vec<u64> = session.session_notes.iter().map(|(_, ts)| *ts).collect();
+                    if ts.len() < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Session note gap min: need at least 2 notes.".to_string()
+                        ));
+                    } else {
+                        let min_gap = ts.windows(2).map(|w| w[1].saturating_sub(w[0])).min().unwrap_or(0);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session note gap min: {min_gap}ms"
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryBookmarkLabelWordTotal => {
                     let total: usize = session.bookmarks.iter()
                         .map(|(_, _, lbl)| lbl.split_whitespace().count())
@@ -49234,6 +49277,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/session-note-gap-avg" => {
+                                    if _ctx.send(UiCommand::QuerySessionNoteGapAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-note-gap-max" => {
+                                    if _ctx.send(UiCommand::QuerySessionNoteGapMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-note-gap-min" => {
+                                    if _ctx.send(UiCommand::QuerySessionNoteGapMin).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -51007,6 +51065,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/bookmark-label-word-total",
                             "/bookmark-label-avg-words",
                             "/bookmark-label-max-words",
+                            "/session-note-gap-avg",
+                            "/session-note-gap-max",
+                            "/session-note-gap-min",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

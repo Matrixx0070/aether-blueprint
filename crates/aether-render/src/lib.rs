@@ -2883,6 +2883,12 @@ pub enum UiCommand {
     QueryBookmarkLabelAvgWords,
     /// Max words in any single bookmark label.
     QueryBookmarkLabelMaxWords,
+    /// Average millisecond gap between consecutive session notes.
+    QuerySessionNoteGapAvg,
+    /// Maximum millisecond gap between any two consecutive session notes.
+    QuerySessionNoteGapMax,
+    /// Minimum millisecond gap between any two consecutive session notes.
+    QuerySessionNoteGapMin,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
