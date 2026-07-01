@@ -11192,6 +11192,46 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryProgressItemsDone => {
+                    let total = session.progress_items.len();
+                    let done = session.progress_items.iter().filter(|(_, d)| *d).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Progress items: {done}/{total} done."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTaskQueueNext => {
+                    match session.task_queue.front() {
+                        Some(task) => {
+                            let preview = task.chars().take(120).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Task queue next ({} total): {preview}", session.task_queue.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Task queue: empty.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryFocusModeText => {
+                    match &session.focus_mode {
+                        Some(topic) => {
+                            let preview = topic.chars().take(160).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Focus mode: {preview}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Focus mode: not set.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryTurnReminderEveryShow => {
                     if session.turn_reminder_every == 0 {
                         let _ = etx_for_driver.send(UiEvent::SystemNote(
@@ -37884,6 +37924,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/progress-items-done" => {
+                                    if _ctx.send(UiCommand::QueryProgressItemsDone).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/task-queue-next" => {
+                                    if _ctx.send(UiCommand::QueryTaskQueueNext).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/focus-mode-text" => {
+                                    if _ctx.send(UiCommand::QueryFocusModeText).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 cmd_str if cmd_str.starts_with("/history-annotation-at ") => {
                                     let rest = cmd_str.trim_start_matches("/history-annotation-at ").trim();
                                     if let Ok(idx) = rest.parse::<usize>() {
@@ -38889,6 +38944,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-reminder-every-show",
                             "/retry-on-error-show",
                             "/history-annotation-at ",
+                            "/progress-items-done",
+                            "/task-queue-next",
+                            "/focus-mode-text",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

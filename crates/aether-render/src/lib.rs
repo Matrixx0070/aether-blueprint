@@ -1377,6 +1377,12 @@ pub enum UiCommand {
     QueryRetryOnErrorShow,
     /// Show history annotation at a specific index.
     QueryHistoryAnnotationAt(usize),
+    /// Show count of done vs total progress items.
+    QueryProgressItemsDone,
+    /// Show the next queued task (peek without removing).
+    QueryTaskQueueNext,
+    /// Show the focus_mode text if set.
+    QueryFocusModeText,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
