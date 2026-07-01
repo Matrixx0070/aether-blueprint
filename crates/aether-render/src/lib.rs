@@ -2703,6 +2703,12 @@ pub enum UiCommand {
     QueryHistoryToolUseNameMinLen,
     /// Average length of tool-use IDs in conversation history.
     QueryHistoryToolUseIdAvgLen,
+    /// Max length of any tool-use ID in conversation history.
+    QueryHistoryToolUseIdMaxLen,
+    /// Min length of any tool-use ID in conversation history.
+    QueryHistoryToolUseIdMinLen,
+    /// Total chars across tool_use_id fields in all tool results.
+    QueryHistoryToolResultIdTotalChars,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
