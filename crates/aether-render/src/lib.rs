@@ -1569,6 +1569,12 @@ pub enum UiCommand {
     QueryAutoCommitTemplateLen,
     /// Show average length of tool-allow patterns.
     QueryToolAllowAvgLen,
+    /// Show count of tool output limits set.
+    QueryToolOutputLimitCount,
+    /// Show count of verifier rules.
+    QueryVerifierRuleCount,
+    /// Show average length of error playbook patterns.
+    QueryErrorPlaybookPatAvgLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
