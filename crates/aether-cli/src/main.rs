@@ -13438,6 +13438,48 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryErrorPlaybookAvgPatLen => {
+                    let n = session.error_playbook.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Error playbook avg pat len: no entries.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.error_playbook.iter().map(|(pat, _)| pat.len()).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Error playbook avg pat len: {:.1}", total as f64 / n as f64
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryErrorPlaybookAvgHintLen => {
+                    let n = session.error_playbook.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Error playbook avg hint len: no entries.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.error_playbook.iter().map(|(_, hint)| hint.len()).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Error playbook avg hint len: {:.1}", total as f64 / n as f64
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryAutoTagRuleAvgPatLen => {
+                    let n = session.auto_tag_rules.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Auto-tag rule avg pat len: no rules.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.auto_tag_rules.iter().map(|(pat, _)| pat.len()).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Auto-tag rule avg pat len: {:.1}", total as f64 / n as f64
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -42825,6 +42867,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/error-playbook-avg-pat-len" => {
+                                    if _ctx.send(UiCommand::QueryErrorPlaybookAvgPatLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/error-playbook-avg-hint-len" => {
+                                    if _ctx.send(UiCommand::QueryErrorPlaybookAvgHintLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/auto-tag-rule-avg-pat-len" => {
+                                    if _ctx.send(UiCommand::QueryAutoTagRuleAvgPatLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -44139,6 +44196,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/last-tool-sig-avg-sig-len",
                             "/last-tool-sig-min-name-len",
                             "/last-tool-sig-max-name-len",
+                            "/error-playbook-avg-pat-len",
+                            "/error-playbook-avg-hint-len",
+                            "/auto-tag-rule-avg-pat-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -1965,6 +1965,12 @@ pub enum UiCommand {
     QueryLastToolSigMinNameLen,
     /// Show the maximum name length among last tool signatures.
     QueryLastToolSigMaxNameLen,
+    /// Show the average pattern length in the error playbook.
+    QueryErrorPlaybookAvgPatLen,
+    /// Show the average hint length in the error playbook.
+    QueryErrorPlaybookAvgHintLen,
+    /// Show the average pattern length in auto-tag rules.
+    QueryAutoTagRuleAvgPatLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
