@@ -2109,6 +2109,12 @@ pub enum UiCommand {
     QueryToolOutputHistCount,
     /// Show the count of findings from last verification.
     QueryVerifFindingCount,
+    /// Show the count of blocked reasons from last verification.
+    QueryVerifBlockedReasonCount,
+    /// Show the count of rules in the verifier gate.
+    QueryVerifRuleCount,
+    /// Show the total turns across all plan block_turns entries.
+    QueryPlanBlockTurnsTotal,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

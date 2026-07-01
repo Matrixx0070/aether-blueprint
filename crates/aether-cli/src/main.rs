@@ -14044,6 +14044,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryVerifBlockedReasonCount => {
+                    let n = session.last_verification.as_ref().map(|v| v.blocked_reasons.len()).unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verif blocked reason count: {n}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifRuleCount => {
+                    let n = session.verifier.gate.rules.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verif rule count: {n}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlanBlockTurnsTotal => {
+                    let total: usize = session.plan.block_turns.values().map(|v| v.len()).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan block turns total: {total}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -43791,6 +43812,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/verif-blocked-reason-count" => {
+                                    if _ctx.send(UiCommand::QueryVerifBlockedReasonCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verif-rule-count" => {
+                                    if _ctx.send(UiCommand::QueryVerifRuleCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-block-turns-total" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockTurnsTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -45177,6 +45213,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-block-turns-avg-len",
                             "/tool-output-hist-count",
                             "/verif-finding-count",
+                            "/verif-blocked-reason-count",
+                            "/verif-rule-count",
+                            "/plan-block-turns-total",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
