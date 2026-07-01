@@ -13024,6 +13024,42 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QuerySessionEnvAvgValLen => {
+                    let n = session.session_env.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Session env: none.".to_string()));
+                    } else {
+                        let total: usize = session.session_env.values().map(|v| v.len()).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Avg env var value length: {} chars ({} vars)", total / n, n
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionEnvAvgKeyLen => {
+                    let n = session.session_env.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Session env: none.".to_string()));
+                    } else {
+                        let total: usize = session.session_env.keys().map(|k| k.len()).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Avg env var key length: {} chars ({} vars)", total / n, n
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolOutputHistAvgLen => {
+                    let n = session.tool_output_history.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Tool output history: none.".to_string()));
+                    } else {
+                        let total: usize = session.tool_output_history.values().map(|(_, curr)| curr.len()).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Avg tool current output length: {} chars ({} tools)", total / n, n
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -42201,6 +42237,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/session-env-avg-val-len" => {
+                                    if _ctx.send(UiCommand::QuerySessionEnvAvgValLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-env-avg-key-len" => {
+                                    if _ctx.send(UiCommand::QuerySessionEnvAvgKeyLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-output-hist-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputHistAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -43473,6 +43524,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-tool-stat-ok-avg",
                             "/plan-tool-stat-err-avg",
                             "/plan-block-val-avg",
+                            "/session-env-avg-val-len",
+                            "/session-env-avg-key-len",
+                            "/tool-output-hist-avg-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

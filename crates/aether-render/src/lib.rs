@@ -1881,6 +1881,12 @@ pub enum UiCommand {
     QueryPlanToolStatErrAvg,
     /// Show the average block count across all plan block types.
     QueryPlanBlockValAvg,
+    /// Show the average session env-var value length.
+    QuerySessionEnvAvgValLen,
+    /// Show the average session env-var key length.
+    QuerySessionEnvAvgKeyLen,
+    /// Show the average tool output history entry length (curr output).
+    QueryToolOutputHistAvgLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
