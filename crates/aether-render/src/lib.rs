@@ -1425,6 +1425,12 @@ pub enum UiCommand {
     QueryPromptMacroFirst,
     /// Show the first session env variable (key → value).
     QueryEnvFirst,
+    /// Show the first turn label (turn_index, text).
+    QueryTurnLabelFirst,
+    /// Show the first session note text.
+    QuerySessionNoteFirst,
+    /// Show the first plan block name from block_counts.
+    QueryPlanBlockFirst,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

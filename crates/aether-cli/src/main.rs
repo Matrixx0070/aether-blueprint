@@ -11192,6 +11192,58 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryTurnLabelFirst => {
+                    match session.turn_labels.first() {
+                        Some((turn_idx, label)) => {
+                            let preview = label.chars().take(100).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Turn label[0] (of {}): turn={turn_idx} '{preview}'",
+                                session.turn_labels.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Turn labels: none set.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionNoteFirst => {
+                    match session.session_notes.first() {
+                        Some((text, ts)) => {
+                            let preview = text.chars().take(120).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Session note[0] (of {}, ts={ts}): {preview}",
+                                session.session_notes.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Session notes: none.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanBlockFirst => {
+                    let mut blocks: Vec<_> = session.plan.block_counts.iter().collect();
+                    blocks.sort_by_key(|(k, _)| k.as_str());
+                    match blocks.first() {
+                        Some((name, count)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Plan block[0] (of {}): '{name}' count={count}",
+                                session.plan.block_counts.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Plan block counts: none recorded.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarFirst => {
                     let mut pairs: Vec<_> = session.session_vars.iter().collect();
                     pairs.sort_by_key(|(k, _)| k.as_str());
@@ -38363,6 +38415,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/turn-label-first" => {
+                                    if _ctx.send(UiCommand::QueryTurnLabelFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-note-first" => {
+                                    if _ctx.send(UiCommand::QuerySessionNoteFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-block-first" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -39407,6 +39474,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-var-first",
                             "/prompt-macro-first",
                             "/env-first",
+                            "/turn-label-first",
+                            "/session-note-first",
+                            "/plan-block-first",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
