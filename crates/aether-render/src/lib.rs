@@ -1407,6 +1407,12 @@ pub enum UiCommand {
     QueryPlaybookAtShow(usize),
     /// Show the total count of queued tasks.
     QueryTaskQueueLen,
+    /// Show the first persistent reminder text.
+    QueryPersistentReminderFirst,
+    /// Show the first warmup file path.
+    QueryWarmupFileFirst,
+    /// Show the first sticky context entry.
+    QueryStickyFirst,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

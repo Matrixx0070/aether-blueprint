@@ -11192,6 +11192,53 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryPersistentReminderFirst => {
+                    match session.persistent_reminders.first() {
+                        Some(r) => {
+                            let preview = r.chars().take(160).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Persistent reminder[0] (of {}): {preview}", session.persistent_reminders.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Persistent reminders: none set.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryWarmupFileFirst => {
+                    match session.warmup_files.first() {
+                        Some(path) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Warmup file[0] (of {}): {path}", session.warmup_files.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Warmup files: none configured.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryStickyFirst => {
+                    match session.sticky_context.first() {
+                        Some(snippet) => {
+                            let preview = snippet.chars().take(160).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Sticky context[0] (of {}): {preview}", session.sticky_context.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Sticky context: none set.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryToolOutputLimitAt(tool) => {
                     match session.tool_output_limits.get(&tool) {
                         Some(limit) => {
@@ -38162,6 +38209,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/persistent-reminder-first" => {
+                                    if _ctx.send(UiCommand::QueryPersistentReminderFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/warmup-file-first" => {
+                                    if _ctx.send(UiCommand::QueryWarmupFileFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/sticky-first" => {
+                                    if _ctx.send(UiCommand::QueryStickyFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -39197,6 +39259,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-output-limit-at ",
                             "/playbook-at-show ",
                             "/task-queue-len",
+                            "/persistent-reminder-first",
+                            "/warmup-file-first",
+                            "/sticky-first",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
