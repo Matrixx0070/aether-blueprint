@@ -1563,6 +1563,12 @@ pub enum UiCommand {
     QueryFocusModeLen,
     /// Show length of smart pause pattern.
     QuerySmartPausePatLen,
+    /// Show the first item in the task queue.
+    QueryTaskQueueFirst,
+    /// Show length of auto-commit template.
+    QueryAutoCommitTemplateLen,
+    /// Show average length of tool-allow patterns.
+    QueryToolAllowAvgLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
