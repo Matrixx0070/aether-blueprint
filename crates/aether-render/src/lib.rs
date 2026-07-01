@@ -1905,6 +1905,12 @@ pub enum UiCommand {
     QueryPlanBlockTurnsAvg,
     /// Show the average consecutive error count across all tools.
     QueryToolErrorCountAvg,
+    /// Show the count of entries in the turn cost log.
+    QueryTurnCostLogCount,
+    /// Show the count of distinct tools in the error counts map.
+    QueryToolErrorCountCount,
+    /// Show the count of distinct plan block types.
+    QueryPlanBlockTypeCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
