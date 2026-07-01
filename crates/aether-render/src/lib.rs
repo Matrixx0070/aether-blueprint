@@ -1299,6 +1299,12 @@ pub enum UiCommand {
     QueryBookmarkLatest,
     /// Show ratio of tool calls to user messages in history.
     QueryHistoryToolUseRate,
+    /// Show tool with highest consecutive error count.
+    QueryToolErrRateTop,
+    /// Show session var with lexicographically last key.
+    QuerySessionVarTop,
+    /// Show the latest user message text from history.
+    QueryHistoryUserLatest,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

@@ -10711,6 +10711,59 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryToolErrRateTop => {
+                    let best = session.plan.tool_error_counts.iter().max_by_key(|(_, &c)| c);
+                    match best {
+                        Some((name, count)) if *count > 0 => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Top error tool: '{name}' with {count} consecutive error(s)."
+                            )));
+                        }
+                        _ => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Tool error rate top: no tools with errors currently.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionVarTop => {
+                    let best = session.session_vars.keys().max_by(|a, b| a.cmp(b));
+                    match best {
+                        Some(k) => {
+                            let v = session.session_vars.get(k).map(|s| s.as_str()).unwrap_or("");
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Session var (last key): '{k}' = '{v}'"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Session vars: none set.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryUserLatest => {
+                    use aether_core::context::ConversationItem;
+                    let latest = session.history.iter().rev().find_map(|item| {
+                        if let ConversationItem::User(s) = item { Some(s.as_str()) } else { None }
+                    });
+                    match latest {
+                        Some(text) => {
+                            let preview = text.chars().take(200).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Latest user message: {preview}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "History: no user messages yet.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -37079,6 +37132,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /tool-err-rate-top — tool with highest consecutive error count
+                                "/tool-err-rate-top" => {
+                                    if _ctx.send(UiCommand::QueryToolErrRateTop).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-var-top — session var with last key alphabetically
+                                "/session-var-top" => {
+                                    if _ctx.send(UiCommand::QuerySessionVarTop).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-user-latest — last user message in history
+                                "/history-user-latest" => {
+                                    if _ctx.send(UiCommand::QueryHistoryUserLatest).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -38035,6 +38106,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-block-top",
                             "/bookmark-latest",
                             "/history-tool-use-rate",
+                            "/tool-err-rate-top",
+                            "/session-var-top",
+                            "/history-user-latest",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
