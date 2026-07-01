@@ -2961,6 +2961,12 @@ pub enum UiCommand {
     QueryAutoTagRuleTagAvgWords,
     /// Maximum word count in any single auto_tag_rule tag.
     QueryAutoTagRuleTagMaxWords,
+    /// Total word count across all last_tool_signature sig values.
+    QueryLastToolSigSigWordTotal,
+    /// Average word count per last_tool_signature sig value.
+    QueryLastToolSigSigAvgWords,
+    /// Maximum word count in any single last_tool_signature sig value.
+    QueryLastToolSigSigMaxWords,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

@@ -17323,6 +17323,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryLastToolSigSigWordTotal => {
+                    let total: usize = session.last_tool_signatures.iter()
+                        .map(|(_, sig)| sig.split_whitespace().count())
+                        .sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Last tool sig sig word total: {total} (across {} sigs)",
+                        session.last_tool_signatures.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QueryLastToolSigSigAvgWords => {
+                    let n = session.last_tool_signatures.len();
+                    let avg = if n == 0 { 0.0 } else {
+                        let total: usize = session.last_tool_signatures.iter()
+                            .map(|(_, sig)| sig.split_whitespace().count())
+                            .sum();
+                        total as f64 / n as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Last tool sig sig avg words: {avg:.1} ({n} sigs)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryLastToolSigSigMaxWords => {
+                    let max = session.last_tool_signatures.iter()
+                        .map(|(_, sig)| sig.split_whitespace().count())
+                        .max();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match max {
+                        Some(v) => format!("Last tool sig sig max words: {v}"),
+                        None => "Last tool sigs: none recorded.".to_string(),
+                    }));
+                    continue;
+                }
                 UiCommand::QueryAutoTagRuleTagWordTotal => {
                     let total: usize = session.auto_tag_rules.iter()
                         .map(|(_, tag)| tag.split_whitespace().count())
@@ -49968,6 +50001,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/last-tool-sig-sig-word-total" => {
+                                    if _ctx.send(UiCommand::QueryLastToolSigSigWordTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/last-tool-sig-sig-avg-words" => {
+                                    if _ctx.send(UiCommand::QueryLastToolSigSigAvgWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/last-tool-sig-sig-max-words" => {
+                                    if _ctx.send(UiCommand::QueryLastToolSigSigMaxWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -51780,6 +51828,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/auto-tag-rule-tag-word-total",
                             "/auto-tag-rule-tag-avg-words",
                             "/auto-tag-rule-tag-max-words",
+                            "/last-tool-sig-sig-word-total",
+                            "/last-tool-sig-sig-avg-words",
+                            "/last-tool-sig-sig-max-words",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
