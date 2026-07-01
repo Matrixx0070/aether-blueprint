@@ -1167,6 +1167,12 @@ pub enum UiCommand {
     QueryPlanWindowTurns,
     /// Show configured max tool calls per turn.
     QueryToolBudgetMax,
+    /// Show last LLM call latency in milliseconds.
+    QueryLlmMsLast,
+    /// Show total character count of all sticky context entries.
+    QueryStickyContextLen,
+    /// Show tool uses at a specific history index.
+    QueryHistoryToolUseAt(usize),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

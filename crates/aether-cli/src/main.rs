@@ -8964,6 +8964,52 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QueryLlmMsLast => {
+                    let ms = session.llm_ms_last;
+                    let total = session.llm_ms_total;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Last LLM call: {ms}ms. Session total LLM time: {total}ms ({:.1}s).",
+                        total as f64 / 1000.0
+                    )));
+                    continue;
+                }
+                UiCommand::QueryStickyContextLen => {
+                    let total_chars: usize = session.sticky_context.iter().map(|s| s.len()).sum();
+                    let n = session.sticky_context.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Sticky context: {n} entries, {total_chars} total chars."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryToolUseAt(idx) => {
+                    match session.history.get(idx) {
+                        Some(aether_core::context::ConversationItem::Assistant { tool_uses, .. }) => {
+                            if tool_uses.is_empty() {
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                    "History[{idx}] Assistant: no tool_uses."
+                                )));
+                            } else {
+                                let lines: Vec<_> = tool_uses.iter()
+                                    .map(|t| format!("  {} (id={})", t.name, t.id))
+                                    .collect();
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                    "History[{idx}] tool_uses ({}):\n{}", tool_uses.len(), lines.join("\n")
+                                )));
+                            }
+                        }
+                        Some(_) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "History[{idx}]: not an Assistant item."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "History[{idx}]: out of range ({} items).", session.history.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryHistorySearchText(term) => {
                     let lower_term = term.to_lowercase();
                     let matches: Vec<_> = session.history.iter().enumerate().filter_map(|(idx, item)| {
@@ -35712,6 +35758,26 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/llm-ms-last" => {
+                                    if _ctx.send(UiCommand::QueryLlmMsLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/sticky-context-len" => {
+                                    if _ctx.send(UiCommand::QueryStickyContextLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd_str if cmd_str.starts_with("/history-tool-use-at ") => {
+                                    let arg = cmd_str.trim_start_matches("/history-tool-use-at ").trim();
+                                    if let Ok(idx) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::QueryHistoryToolUseAt(idx)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /history-tool-use-at <index>".to_string()));
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -36602,6 +36668,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-search-text ",
                             "/plan-window-turns",
                             "/tool-budget-max",
+                            "/llm-ms-last",
+                            "/sticky-context-len",
+                            "/history-tool-use-at ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
