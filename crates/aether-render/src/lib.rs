@@ -2013,6 +2013,12 @@ pub enum UiCommand {
     QueryLlmFallbackModelName,
     /// Show whether cost alert has fired.
     QueryCostAlertFiredStatus,
+    /// Show whether compaction has happened this session.
+    QueryCompactionHappenedStatus,
+    /// Show whether token budget warn has fired.
+    QueryTokenBudgetWarnFiredStatus,
+    /// Show whether context 60pct warning has fired.
+    QueryContextWarnedStatus,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

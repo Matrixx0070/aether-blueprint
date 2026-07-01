@@ -13663,6 +13663,24 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryCompactionHappenedStatus => {
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Compaction happened: {}", session.compaction_happened
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTokenBudgetWarnFiredStatus => {
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Token budget warn fired: {}", session.token_budget_warn_fired
+                    )));
+                    continue;
+                }
+                UiCommand::QueryContextWarnedStatus => {
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Context 60pct warned: {}", session.context_warned_60pct
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -43170,6 +43188,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/compaction-happened-status" => {
+                                    if _ctx.send(UiCommand::QueryCompactionHappenedStatus).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/token-budget-warn-fired-status" => {
+                                    if _ctx.send(UiCommand::QueryTokenBudgetWarnFiredStatus).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/context-warned-status" => {
+                                    if _ctx.send(UiCommand::QueryContextWarnedStatus).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -44508,6 +44541,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/auto-compact-on-stuck",
                             "/llm-fallback-model-name",
                             "/cost-alert-fired-status",
+                            "/compaction-happened-status",
+                            "/token-budget-warn-fired-status",
+                            "/context-warned-status",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
