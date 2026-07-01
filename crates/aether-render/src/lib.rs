@@ -1269,6 +1269,12 @@ pub enum UiCommand {
     QueryPlanRecentErrors,
     /// List all auto-tag rules.
     QueryAutoTagRuleList,
+    /// List all tools with non-zero error counts in the plan.
+    QueryPlanToolErrList,
+    /// List all session tags.
+    QuerySessionTagList,
+    /// Show total char count of all assistant text in history.
+    QueryHistoryAssistantLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
