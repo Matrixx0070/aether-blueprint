@@ -17323,6 +17323,36 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryP50InTokens => {
+                    let mut v: Vec<u64> = session.turn_cost_log.iter().map(|(_, i, _, _)| *i).collect();
+                    v.sort_unstable();
+                    let n = v.len();
+                    let p50 = if n == 0 { 0 } else { v[n / 2] };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "p50 input tokens per entry: {p50} ({n} entries)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryP90InTokens => {
+                    let mut v: Vec<u64> = session.turn_cost_log.iter().map(|(_, i, _, _)| *i).collect();
+                    v.sort_unstable();
+                    let n = v.len();
+                    let p90 = if n == 0 { 0 } else { v[(n * 90 / 100).min(n - 1)] };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "p90 input tokens per entry: {p90} ({n} entries)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryP99InTokens => {
+                    let mut v: Vec<u64> = session.turn_cost_log.iter().map(|(_, i, _, _)| *i).collect();
+                    v.sort_unstable();
+                    let n = v.len();
+                    let p99 = if n == 0 { 0 } else { v[(n * 99 / 100).min(n - 1)] };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "p99 input tokens per entry: {p99} ({n} entries)"
+                    )));
+                    continue;
+                }
                 UiCommand::QueryP50CostEntry => {
                     let mut costs: Vec<f64> = session.turn_cost_log.iter().map(|(_, _, _, c)| *c).collect();
                     costs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -50565,6 +50595,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/p50-in-tokens" => {
+                                    if _ctx.send(UiCommand::QueryP50InTokens).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/p90-in-tokens" => {
+                                    if _ctx.send(UiCommand::QueryP90InTokens).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/p99-in-tokens" => {
+                                    if _ctx.send(UiCommand::QueryP99InTokens).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/p50-cost-entry" => {
                                     if _ctx.send(UiCommand::QueryP50CostEntry).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -52560,6 +52605,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/p50-cost-entry",
                             "/p90-cost-entry",
                             "/p99-cost-entry",
+                            "/p50-in-tokens",
+                            "/p90-in-tokens",
+                            "/p99-in-tokens",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

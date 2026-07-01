@@ -3057,6 +3057,12 @@ pub enum UiCommand {
     QueryP90CostEntry,
     /// 99th-percentile cost per cost-log entry.
     QueryP99CostEntry,
+    /// Median (p50) input tokens per cost-log entry.
+    QueryP50InTokens,
+    /// 90th-percentile input tokens per cost-log entry.
+    QueryP90InTokens,
+    /// 99th-percentile input tokens per cost-log entry.
+    QueryP99InTokens,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
