@@ -10535,6 +10535,43 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryToolOutputCountTotal => {
+                    let n = session.tool_output_history.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Tool output history: {n} tool(s) tracked for diff."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryToolResultLen => {
+                    use aether_core::context::ConversationItem;
+                    let total: usize = session.history.iter().map(|item| match item {
+                        ConversationItem::ToolResults(results) => {
+                            results.iter().map(|r| r.content.len()).sum::<usize>()
+                        }
+                        _ => 0,
+                    }).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Total tool result chars in history: {total}."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierFindingCount => {
+                    match &session.last_verification {
+                        Some(v) => {
+                            let total = v.findings.len();
+                            let blocked = v.blocked_reasons.len();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Verifier last run: {total} finding(s), {blocked} blocking."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Verifier: no verification run yet this session.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -36831,6 +36868,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /tool-output-count-total — count tools tracked in tool-output history
+                                "/tool-output-count-total" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputCountTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-tool-result-len — total chars in tool results
+                                "/history-tool-result-len" => {
+                                    if _ctx.send(UiCommand::QueryHistoryToolResultLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /verifier-finding-count — count total verifier findings
+                                "/verifier-finding-count" => {
+                                    if _ctx.send(UiCommand::QueryVerifierFindingCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -37775,6 +37830,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-tool-err-list",
                             "/session-tag-list",
                             "/history-assistant-len",
+                            "/tool-output-count-total",
+                            "/history-tool-result-len",
+                            "/verifier-finding-count",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

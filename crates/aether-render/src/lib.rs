@@ -1275,6 +1275,12 @@ pub enum UiCommand {
     QuerySessionTagList,
     /// Show total char count of all assistant text in history.
     QueryHistoryAssistantLen,
+    /// Count of tools tracked in tool-output history.
+    QueryToolOutputCountTotal,
+    /// Total char count of all tool results in history.
+    QueryHistoryToolResultLen,
+    /// Count of total verifier findings in last verification.
+    QueryVerifierFindingCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
