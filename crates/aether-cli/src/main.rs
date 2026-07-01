@@ -10667,6 +10667,50 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryPlanBlockTop => {
+                    let best = session.plan.block_counts.iter().max_by_key(|(_, &c)| c);
+                    match best {
+                        Some((name, count)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Plan top blocked tool: '{name}' with {count} block(s)."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Plan block counts: none recorded yet.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryBookmarkLatest => {
+                    match session.bookmarks.last() {
+                        Some((turn, hlen, label)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Latest bookmark: turn={turn} hist_len={hlen} label='{label}'"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Bookmarks: none yet. Use /bookmark to add one.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryToolUseRate => {
+                    use aether_core::context::ConversationItem;
+                    let user_msgs = session.history.iter().filter(|i| matches!(i, ConversationItem::User(_))).count();
+                    let tool_uses: usize = session.history.iter().map(|item| match item {
+                        ConversationItem::Assistant { tool_uses, .. } => tool_uses.len(),
+                        _ => 0,
+                    }).sum();
+                    let rate = if user_msgs == 0 { 0.0 } else { tool_uses as f64 / user_msgs as f64 };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History tool-use rate: {tool_uses} tool calls / {user_msgs} user turns = {rate:.2} calls/turn."
+                    )));
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -37017,6 +37061,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /plan-block-top — tool with highest total block count
+                                "/plan-block-top" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockTop).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /bookmark-latest — most recently added bookmark
+                                "/bookmark-latest" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkLatest).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-tool-use-rate — tool calls per user message ratio
+                                "/history-tool-use-rate" => {
+                                    if _ctx.send(UiCommand::QueryHistoryToolUseRate).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -37970,6 +38032,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-tool-ok-top",
                             "/history-item-avg-len",
                             "/session-note-latest",
+                            "/plan-block-top",
+                            "/bookmark-latest",
+                            "/history-tool-use-rate",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -1293,6 +1293,12 @@ pub enum UiCommand {
     QueryHistoryItemAvgLen,
     /// Show most recent session note.
     QuerySessionNoteLatest,
+    /// Show tool with highest total block count in plan.
+    QueryPlanBlockTop,
+    /// Show most recently added bookmark.
+    QueryBookmarkLatest,
+    /// Show ratio of tool calls to user messages in history.
+    QueryHistoryToolUseRate,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
