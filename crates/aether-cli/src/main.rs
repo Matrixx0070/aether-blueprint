@@ -8964,6 +8964,38 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QueryTokenBudgetWarnFired => {
+                    let fired = session.token_budget_warn_fired;
+                    let warn_pct = session.token_budget_warn_pct;
+                    let hard_pct = session.token_budget_hard_pct;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Token budget warn: fired={fired}, warn_pct={warn_pct:.0}%, hard_pct={hard_pct:.0}%."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryCompactionStatus => {
+                    let happened = session.compaction_happened;
+                    let threshold = session.compaction_threshold_pct;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Compaction: happened_this_turn={happened}, threshold={:.0}%{}.",
+                        threshold * 100.0,
+                        if threshold == 0.0 { " (default)" } else { "" }
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryToolUseCount => {
+                    let total: usize = session.history.iter().map(|item| {
+                        if let aether_core::context::ConversationItem::Assistant { tool_uses, .. } = item {
+                            tool_uses.len()
+                        } else {
+                            0
+                        }
+                    }).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Total tool_use entries in history: {total}."
+                    )));
+                    continue;
+                }
                 UiCommand::QueryTokenBudgetPct => {
                     let budget = session.token_budget;
                     let used = session.usage_total.input_tokens + session.usage_total.output_tokens;
@@ -35344,6 +35376,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/token-budget-warn-fired" => {
+                                    if _ctx.send(UiCommand::QueryTokenBudgetWarnFired).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/compaction-status" => {
+                                    if _ctx.send(UiCommand::QueryCompactionStatus).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-tool-use-count" => {
+                                    if _ctx.send(UiCommand::QueryHistoryToolUseCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -36216,6 +36263,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/token-budget-pct",
                             "/history-item-count",
                             "/session-env-get ",
+                            "/token-budget-warn-fired",
+                            "/compaction-status",
+                            "/history-tool-use-count",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

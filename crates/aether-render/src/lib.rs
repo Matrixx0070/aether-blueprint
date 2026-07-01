@@ -1131,6 +1131,12 @@ pub enum UiCommand {
     QueryHistoryItemCount,
     /// Get a specific session env variable by name.
     QuerySessionEnvGet(String),
+    /// Show whether token budget warn has fired this session.
+    QueryTokenBudgetWarnFired,
+    /// Show compaction status (happened flag + threshold).
+    QueryCompactionStatus,
+    /// Count total tool_uses entries across all assistant history items.
+    QueryHistoryToolUseCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
