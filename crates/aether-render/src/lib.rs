@@ -1161,6 +1161,12 @@ pub enum UiCommand {
     QuerySessionCostTotal,
     /// Show configured token budget hard-stop percentage.
     QueryTokenBudgetHardPct,
+    /// Search history for messages containing a substring.
+    QueryHistorySearchText(String),
+    /// Show which turns are included in the current plan window.
+    QueryPlanWindowTurns,
+    /// Show configured max tool calls per turn.
+    QueryToolBudgetMax,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

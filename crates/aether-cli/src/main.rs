@@ -8964,6 +8964,57 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QueryHistorySearchText(term) => {
+                    let lower_term = term.to_lowercase();
+                    let matches: Vec<_> = session.history.iter().enumerate().filter_map(|(idx, item)| {
+                        let text = match item {
+                            aether_core::context::ConversationItem::User(s) => s.clone(),
+                            aether_core::context::ConversationItem::Assistant { text, .. } => text.as_deref().unwrap_or("").to_string(),
+                            _ => return None,
+                        };
+                        if text.to_lowercase().contains(&lower_term) {
+                            Some(format!("  [{idx}] {}", text.chars().take(80).collect::<String>()))
+                        } else {
+                            None
+                        }
+                    }).take(10).collect();
+                    if matches.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "History search '{term}': no matches found."
+                        )));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "History search '{term}' — {} match(es):\n{}", matches.len(), matches.join("\n")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanWindowTurns => {
+                    match session.plan.window {
+                        Some(w) => {
+                            let current = session.turn_index;
+                            let start = if current >= w { current - w } else { 0 };
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Plan window: {w} turns — currently including turns {start}..{current}."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Plan window: unlimited (all {} turns included). Use /plan-window <n> to limit.",
+                                session.turn_index
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolBudgetMax => {
+                    let max = session.config.max_tool_calls_per_turn;
+                    let used = session.tool_call_budget;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Max tool calls/turn: {max} (used this turn: {used}). Use /max-tool-calls <n> to change."
+                    )));
+                    continue;
+                }
                 UiCommand::QueryPlanLastErrorText => {
                     match &session.plan.last_error_text {
                         Some(text) => {
@@ -35645,6 +35696,22 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                cmd_str if cmd_str.starts_with("/history-search-text ") => {
+                                    let term = cmd_str.trim_start_matches("/history-search-text ").trim().to_string();
+                                    if _ctx.send(UiCommand::QueryHistorySearchText(term)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-window-turns" => {
+                                    if _ctx.send(UiCommand::QueryPlanWindowTurns).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-budget-max" => {
+                                    if _ctx.send(UiCommand::QueryToolBudgetMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -36532,6 +36599,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-last-error-text",
                             "/session-cost-total",
                             "/token-budget-hard-pct",
+                            "/history-search-text ",
+                            "/plan-window-turns",
+                            "/tool-budget-max",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
