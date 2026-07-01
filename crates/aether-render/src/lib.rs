@@ -1803,6 +1803,12 @@ pub enum UiCommand {
     QueryStickyContextMinLen,
     /// Show the longest warmup file path.
     QueryWarmupFileMaxLen,
+    /// Show the shortest warmup file path.
+    QueryWarmupFileMinLen,
+    /// Show the longest session tag string.
+    QuerySessionTagMaxLen,
+    /// Show the shortest session tag string.
+    QuerySessionTagMinLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

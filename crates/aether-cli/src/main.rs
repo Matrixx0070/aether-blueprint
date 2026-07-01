@@ -12604,6 +12604,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryWarmupFileMinLen => {
+                    match session.warmup_files.iter().min_by_key(|f| f.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Warmup files: none.".to_string())); }
+                        Some(f) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Shortest warmup file path: {} chars ('{}')", f.len(), f
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionTagMaxLen => {
+                    match session.session_tags.iter().max_by_key(|t| t.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Session tags: none.".to_string())); }
+                        Some(t) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Longest session tag: {} chars ('{}')", t.len(), t
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionTagMinLen => {
+                    match session.session_tags.iter().min_by_key(|t| t.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Session tags: none.".to_string())); }
+                        Some(t) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Shortest session tag: {} chars ('{}')", t.len(), t
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -41586,6 +41619,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/warmup-file-min-len" => {
+                                    if _ctx.send(UiCommand::QueryWarmupFileMinLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-tag-max-len" => {
+                                    if _ctx.send(UiCommand::QuerySessionTagMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-tag-min-len" => {
+                                    if _ctx.send(UiCommand::QuerySessionTagMinLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -42819,6 +42867,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/sticky-context-max-len",
                             "/sticky-context-min-len",
                             "/warmup-file-max-len",
+                            "/warmup-file-min-len",
+                            "/session-tag-max-len",
+                            "/session-tag-min-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
