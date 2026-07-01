@@ -1551,6 +1551,12 @@ pub enum UiCommand {
     QueryErrorPlaybookHintAvgLen,
     /// Show average length of tool-deny patterns.
     QueryToolDenyAvgLen,
+    /// Show length of scope guard text.
+    QueryScopeGuardLen,
+    /// Show length of agent persona text.
+    QueryAgentPersonaLen,
+    /// Show length of request prefix text.
+    QueryRequestPrefixLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

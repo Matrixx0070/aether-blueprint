@@ -11327,6 +11327,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryScopeGuardLen => {
+                    match &session.scope_guard {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Scope guard: not set.".to_string())); }
+                        Some(s) => { let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Scope guard length: {} chars.", s.len()))); }
+                    }
+                    continue;
+                }
+                UiCommand::QueryAgentPersonaLen => {
+                    match &session.agent_persona {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Agent persona: not set.".to_string())); }
+                        Some(s) => { let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Agent persona length: {} chars.", s.len()))); }
+                    }
+                    continue;
+                }
+                UiCommand::QueryRequestPrefixLen => {
+                    match &session.request_prefix {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Request prefix: not set.".to_string())); }
+                        Some(s) => { let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Request prefix length: {} chars.", s.len()))); }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -39679,6 +39700,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/scope-guard-len" => {
+                                    if _ctx.send(UiCommand::QueryScopeGuardLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/agent-persona-len" => {
+                                    if _ctx.send(UiCommand::QueryAgentPersonaLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/request-prefix-len" => {
+                                    if _ctx.send(UiCommand::QueryRequestPrefixLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -40786,6 +40822,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/sticky-context-avg-len",
                             "/error-playbook-hint-avg-len",
                             "/tool-deny-avg-len",
+                            "/scope-guard-len",
+                            "/agent-persona-len",
+                            "/request-prefix-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
