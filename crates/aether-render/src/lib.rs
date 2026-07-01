@@ -1887,6 +1887,12 @@ pub enum UiCommand {
     QuerySessionEnvAvgKeyLen,
     /// Show the average tool output history entry length (curr output).
     QueryToolOutputHistAvgLen,
+    /// Show the average length of task queue entries.
+    QueryTaskQueueAvgLen,
+    /// Show the average length of alias keys.
+    QueryAliasKeyAvgLen,
+    /// Show the average length of alias values.
+    QueryAliasValAvgLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

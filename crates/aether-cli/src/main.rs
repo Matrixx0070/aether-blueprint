@@ -13060,6 +13060,42 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryTaskQueueAvgLen => {
+                    let n = session.task_queue.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Task queue: empty.".to_string()));
+                    } else {
+                        let total: usize = session.task_queue.iter().map(|t| t.len()).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Avg queued task length: {} chars ({} tasks)", total / n, n
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryAliasKeyAvgLen => {
+                    let n = session.aliases.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Aliases: none.".to_string()));
+                    } else {
+                        let total: usize = session.aliases.keys().map(|k| k.len()).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Avg alias key length: {} chars ({} aliases)", total / n, n
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryAliasValAvgLen => {
+                    let n = session.aliases.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Aliases: none.".to_string()));
+                    } else {
+                        let total: usize = session.aliases.values().map(|v| v.len()).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Avg alias value length: {} chars ({} aliases)", total / n, n
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -42252,6 +42288,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/task-queue-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryTaskQueueAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/alias-key-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryAliasKeyAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/alias-val-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryAliasValAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -43527,6 +43578,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-env-avg-val-len",
                             "/session-env-avg-key-len",
                             "/tool-output-hist-avg-len",
+                            "/task-queue-avg-len",
+                            "/alias-key-avg-len",
+                            "/alias-val-avg-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
