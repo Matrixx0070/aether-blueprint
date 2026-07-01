@@ -16929,6 +16929,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryPlanGoalLines => {
+                    let lines = match &session.plan.goal {
+                        Some(g) => g.lines().count(),
+                        None => 0,
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(if session.plan.goal.is_some() {
+                        format!("Plan goal line count: {lines}")
+                    } else {
+                        "Plan goal: not set. Use /plan-goal <text> to set one.".to_string()
+                    }));
+                    continue;
+                }
+                UiCommand::QueryPlanTextAvgWordsPerLine => {
+                    let lines: Vec<&str> = session.plan.text.lines().collect();
+                    let non_empty: Vec<&&str> = lines.iter().filter(|l| !l.trim().is_empty()).collect();
+                    let avg = if non_empty.is_empty() { 0.0 } else {
+                        non_empty.iter().map(|l| l.split_whitespace().count() as f64).sum::<f64>() / non_empty.len() as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan text avg words per line: {avg:.1} ({} non-empty lines)", non_empty.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlanTextParaCount => {
+                    let paras = session.plan.text
+                        .split("\n\n")
+                        .filter(|p| !p.trim().is_empty())
+                        .count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan text paragraph count: {paras}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -48326,6 +48359,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/plan-goal-lines" => {
+                                    if _ctx.send(UiCommand::QueryPlanGoalLines).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-text-avg-words-per-line" => {
+                                    if _ctx.send(UiCommand::QueryPlanTextAvgWordsPerLine).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-text-para-count" => {
+                                    if _ctx.send(UiCommand::QueryPlanTextParaCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -50042,6 +50090,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-tag-max-words",
                             "/session-tag-min-words",
                             "/plan-text-words",
+                            "/plan-goal-lines",
+                            "/plan-text-avg-words-per-line",
+                            "/plan-text-para-count",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

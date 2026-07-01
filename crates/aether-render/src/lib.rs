@@ -2769,6 +2769,12 @@ pub enum UiCommand {
     QuerySessionTagMinWords,
     /// Word count of the current plan text.
     QueryPlanTextWords,
+    /// Line count of the current plan goal text.
+    QueryPlanGoalLines,
+    /// Average words per line in the plan text.
+    QueryPlanTextAvgWordsPerLine,
+    /// Number of non-empty paragraphs in the plan text.
+    QueryPlanTextParaCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
