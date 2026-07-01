@@ -2955,6 +2955,12 @@ pub enum UiCommand {
     QueryErrorPlaybookPatAvgWords,
     /// Maximum word count in any single error_playbook pattern.
     QueryErrorPlaybookPatMaxWords,
+    /// Total word count across all auto_tag_rule tags.
+    QueryAutoTagRuleTagWordTotal,
+    /// Average word count per auto_tag_rule tag.
+    QueryAutoTagRuleTagAvgWords,
+    /// Maximum word count in any single auto_tag_rule tag.
+    QueryAutoTagRuleTagMaxWords,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
