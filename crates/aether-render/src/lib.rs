@@ -2679,6 +2679,12 @@ pub enum UiCommand {
     QueryPlanBlockCountsMax,
     /// Total chars across tool names in plan.tool_call_stats keys.
     QueryPlanToolStatsKeysTotalChars,
+    /// Average value in plan.block_counts.
+    QueryPlanBlockCountsAvg,
+    /// Count of distinct tool names in plan.tool_call_stats.
+    QueryPlanToolStatsKeysCount,
+    /// Total chars across all keys in plan.block_counts.
+    QueryPlanBlockCountsKeysTotalChars,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
