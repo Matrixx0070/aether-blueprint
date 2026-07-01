@@ -12155,6 +12155,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryTurnLabelMinLen => {
+                    match session.turn_labels.iter().min_by_key(|(_, lbl)| lbl.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Turn labels: none.".to_string())); }
+                        Some((turn, lbl)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Shortest turn label: {} chars at turn {} ('{}')", lbl.len(), turn, lbl
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryBookmarkLabelMinLen => {
+                    match session.bookmarks.iter().min_by_key(|(_, _, lbl)| lbl.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Bookmarks: none.".to_string())); }
+                        Some((turn, _, lbl)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Shortest bookmark label: {} chars at turn {} ('{}')", lbl.len(), turn, lbl
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionNoteTextMinLen => {
+                    match session.session_notes.iter().min_by_key(|(text, _)| text.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Session notes: none.".to_string())); }
+                        Some((text, _ts)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Shortest session note: {} chars", text.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -40927,6 +40960,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/turn-label-min-len" => {
+                                    if _ctx.send(UiCommand::QueryTurnLabelMinLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/bookmark-label-min-len" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkLabelMinLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-note-text-min-len" => {
+                                    if _ctx.send(UiCommand::QuerySessionNoteTextMinLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -42118,6 +42166,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/bookmark-label-max-len",
                             "/session-note-text-max-len",
                             "/history-annot-min-len",
+                            "/turn-label-min-len",
+                            "/bookmark-label-min-len",
+                            "/session-note-text-min-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
