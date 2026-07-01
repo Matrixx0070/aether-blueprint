@@ -1539,6 +1539,12 @@ pub enum UiCommand {
     QueryAutoTagPatAvgLen,
     /// Show average length of bookmark labels.
     QueryBookmarkLabelAvgLen,
+    /// Show average length of turn labels.
+    QueryTurnLabelAvgLen,
+    /// Show average length of warmup file paths.
+    QueryWarmupFileAvgLen,
+    /// Show average length of session tags.
+    QuerySessionTagAvgLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
