@@ -2547,6 +2547,12 @@ pub enum UiCommand {
     QueryVerifierGateRegexTotal,
     /// Show the count of Block-action rules in the verifier gate.
     QueryVerifierGateBlockCount,
+    /// Show the count of Warn-action rules in the verifier gate.
+    QueryVerifierGateWarnCount,
+    /// Show the count of Rewrite-action rules in the verifier gate.
+    QueryVerifierGateRewriteCount,
+    /// Show the total chars across all rule IDs in the verifier gate.
+    QueryVerifierGateRuleIdTotalChars,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

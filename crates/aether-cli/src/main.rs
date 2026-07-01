@@ -15886,6 +15886,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryVerifierGateWarnCount => {
+                    let count = session.verifier.gate.rules.iter().filter(|r| r.rule.action == Action::Warn).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate Warn-action rules: {count}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierGateRewriteCount => {
+                    let count = session.verifier.gate.rules.iter().filter(|r| r.rule.action == Action::Rewrite).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate Rewrite-action rules: {count}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierGateRuleIdTotalChars => {
+                    let total: usize = session.verifier.gate.rules.iter().map(|r| r.rule.id.len()).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate total rule ID chars: {total}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -46728,6 +46749,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/verifier-gate-warn-count" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateWarnCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-gate-rewrite-count" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateRewriteCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-gate-rule-id-total-chars" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateRuleIdTotalChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -48333,6 +48369,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/verifier-gate-rule-count",
                             "/verifier-gate-regex-total",
                             "/verifier-gate-block-count",
+                            "/verifier-gate-warn-count",
+                            "/verifier-gate-rewrite-count",
+                            "/verifier-gate-rule-id-total-chars",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
