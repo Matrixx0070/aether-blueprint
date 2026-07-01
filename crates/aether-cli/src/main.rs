@@ -15976,6 +15976,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryVerifierGateAppliesMemActive => {
+                    let count = session.verifier.gate.rules.iter().filter(|r| r.rule.applies_when == AppliesWhen::MemoryActive).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate MemoryActive-applies rules: {count}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierGateAppliesDistress => {
+                    let count = session.verifier.gate.rules.iter().filter(|r| r.rule.applies_when == AppliesWhen::DistressFlagged).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate DistressFlagged-applies rules: {count}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierGateAppliesNoCurse => {
+                    let count = session.verifier.gate.rules.iter().filter(|r| r.rule.applies_when == AppliesWhen::UserDidNotCurse).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate UserDidNotCurse-applies rules: {count}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -46878,6 +46899,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/verifier-gate-applies-mem-active" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateAppliesMemActive).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-gate-applies-distress" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateAppliesDistress).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-gate-applies-no-curse" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateAppliesNoCurse).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -48495,6 +48531,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/verifier-gate-rule-sev-low",
                             "/verifier-gate-rule-sev-medium",
                             "/verifier-gate-rule-applies-always",
+                            "/verifier-gate-applies-mem-active",
+                            "/verifier-gate-applies-distress",
+                            "/verifier-gate-applies-no-curse",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

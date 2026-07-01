@@ -2571,6 +2571,12 @@ pub enum UiCommand {
     QueryVerifierGateRuleSevMedium,
     /// Count of rules with AppliesWhen::Always in the verifier gate.
     QueryVerifierGateRuleAppliesAlways,
+    /// Count of rules with AppliesWhen::MemoryActive in the verifier gate.
+    QueryVerifierGateAppliesMemActive,
+    /// Count of rules with AppliesWhen::DistressFlagged in the verifier gate.
+    QueryVerifierGateAppliesDistress,
+    /// Count of rules with AppliesWhen::UserDidNotCurse in the verifier gate.
+    QueryVerifierGateAppliesNoCurse,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
