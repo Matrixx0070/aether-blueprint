@@ -1611,6 +1611,12 @@ pub enum UiCommand {
     QueryProgressItemFirst,
     /// Show the first bookmark.
     QueryBookmarkFirst,
+    /// Show the last item in the task queue.
+    QueryTaskQueueLast,
+    /// Show the last sticky context entry.
+    QueryStickyContextLast,
+    /// Show the last error playbook entry.
+    QueryErrorPlaybookLast,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

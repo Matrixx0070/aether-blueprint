@@ -11605,6 +11605,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryTaskQueueLast => {
+                    match session.task_queue.back() {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Task queue: empty.".to_string())); }
+                        Some(t) => { let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Task queue back (of {}): {}", session.task_queue.len(), t))); }
+                    }
+                    continue;
+                }
+                UiCommand::QueryStickyContextLast => {
+                    match session.sticky_context.last() {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Sticky context: none set.".to_string())); }
+                        Some(s) => {
+                            let preview = s.chars().take(80).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Sticky context last (of {}): {}{}",
+                                session.sticky_context.len(), preview,
+                                if s.len() > 80 { "…" } else { "" }
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryErrorPlaybookLast => {
+                    match session.error_playbook.last() {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Error playbook: no entries.".to_string())); }
+                        Some((pat, hint)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Error playbook last (of {}): pattern='{}' hint='{}'",
+                                session.error_playbook.len(), pat, hint
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -40107,6 +40140,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/task-queue-last" => {
+                                    if _ctx.send(UiCommand::QueryTaskQueueLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/sticky-context-last" => {
+                                    if _ctx.send(UiCommand::QueryStickyContextLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/error-playbook-last" => {
+                                    if _ctx.send(UiCommand::QueryErrorPlaybookLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -41244,6 +41292,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/saved-snapshot-first",
                             "/progress-item-first",
                             "/bookmark-first",
+                            "/task-queue-last",
+                            "/sticky-context-last",
+                            "/error-playbook-last",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
