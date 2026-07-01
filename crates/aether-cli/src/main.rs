@@ -10818,6 +10818,35 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryPlanToolCallTotal => {
+                    let total: usize = session.plan.tool_call_stats.values()
+                        .map(|(ok, err)| ok + err)
+                        .sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan total tool calls (ok+err): {total} across {} tools.", session.plan.tool_call_stats.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySessionUptimeHrs => {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let secs = now.saturating_sub(session.started_at);
+                    let hrs = secs as f64 / 3600.0;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session uptime: {hrs:.2} hours ({secs}s)."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryTurnDepth => {
+                    use aether_core::context::ConversationItem;
+                    let user_turns = session.history.iter().filter(|i| matches!(i, ConversationItem::User(_))).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History turn depth: {user_turns} user turn(s) ({} total items).", session.history.len()
+                    )));
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -37222,6 +37251,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /plan-tool-call-total — total tool calls across all plan stats
+                                "/plan-tool-call-total" => {
+                                    if _ctx.send(UiCommand::QueryPlanToolCallTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-uptime-hrs — session uptime in hours
+                                "/session-uptime-hrs" => {
+                                    if _ctx.send(UiCommand::QuerySessionUptimeHrs).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-turn-depth — count of user turns in history
+                                "/history-turn-depth" => {
+                                    if _ctx.send(UiCommand::QueryHistoryTurnDepth).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -38184,6 +38231,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-error-rate",
                             "/verifier-rule-top",
                             "/snapshot-name-list",
+                            "/plan-tool-call-total",
+                            "/session-uptime-hrs",
+                            "/history-turn-depth",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

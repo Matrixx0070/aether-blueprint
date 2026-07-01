@@ -1311,6 +1311,12 @@ pub enum UiCommand {
     QueryVerifierRuleTop,
     /// List names of all saved snapshots.
     QuerySnapshotNameList,
+    /// Show total tool calls (ok + err) across all plan stats.
+    QueryPlanToolCallTotal,
+    /// Show session uptime in hours.
+    QuerySessionUptimeHrs,
+    /// Count distinct back-and-forth exchanges in history.
+    QueryHistoryTurnDepth,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
