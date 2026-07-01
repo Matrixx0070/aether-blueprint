@@ -3015,6 +3015,12 @@ pub enum UiCommand {
     QueryAvgOutTokens,
     /// Average cost (USD) per cost-log entry.
     QueryAvgCostEntry,
+    /// Average wall-clock ms across all logged turns.
+    QueryAvgWallMs,
+    /// Maximum wall-clock ms seen in any logged turn.
+    QueryMaxWallMs,
+    /// Minimum non-zero wall-clock ms seen in any logged turn.
+    QueryMinWallMs,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

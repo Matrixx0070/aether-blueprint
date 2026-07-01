@@ -17323,6 +17323,32 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryAvgWallMs => {
+                    let n = session.turn_wall_ms.len();
+                    let avg = if n == 0 { 0.0 } else {
+                        session.turn_wall_ms.iter().sum::<u64>() as f64 / n as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Avg wall-ms per turn: {avg:.1} ms ({n} turns)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryMaxWallMs => {
+                    let max = session.turn_wall_ms.iter().copied().max().unwrap_or(0);
+                    let n = session.turn_wall_ms.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Max wall-ms turn: {max} ms ({n} turns logged)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryMinWallMs => {
+                    let min = session.turn_wall_ms.iter().copied().filter(|&v| v > 0).min().unwrap_or(0);
+                    let n = session.turn_wall_ms.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Min non-zero wall-ms turn: {min} ms ({n} turns logged)"
+                    )));
+                    continue;
+                }
                 UiCommand::QueryAvgInTokens => {
                     let entries = session.turn_cost_log.len();
                     let avg = if entries == 0 { 0.0 } else {
@@ -50340,6 +50366,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/avg-wall-ms" => {
+                                    if _ctx.send(UiCommand::QueryAvgWallMs).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/max-wall-ms" => {
+                                    if _ctx.send(UiCommand::QueryMaxWallMs).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/min-wall-ms" => {
+                                    if _ctx.send(UiCommand::QueryMinWallMs).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/avg-in-tokens" => {
                                     if _ctx.send(UiCommand::QueryAvgInTokens).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -52209,6 +52250,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/avg-in-tokens",
                             "/avg-out-tokens",
                             "/avg-cost-entry",
+                            "/avg-wall-ms",
+                            "/max-wall-ms",
+                            "/min-wall-ms",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
