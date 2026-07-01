@@ -11481,6 +11481,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryCompactionThresholdPct => {
+                    let pct = session.compaction_threshold_pct;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Compaction threshold: {pct:.1}% of context window."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryRetryThresholdShow => {
+                    let t = session.retry_on_error_threshold;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Retry-on-error threshold: {t} consecutive error(s) before retry."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryRetryMaxShow => {
+                    let m = session.retry_on_error_max;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Retry-on-error max: {m} retry attempt(s) allowed."
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -39923,6 +39944,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/compaction-threshold-pct" => {
+                                    if _ctx.send(UiCommand::QueryCompactionThresholdPct).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/retry-threshold-show" => {
+                                    if _ctx.send(UiCommand::QueryRetryThresholdShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/retry-max-show" => {
+                                    if _ctx.send(UiCommand::QueryRetryMaxShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -41048,6 +41084,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-error-count-total",
                             "/assembly-telemetry-show",
                             "/session-uptime-secs",
+                            "/compaction-threshold-pct",
+                            "/retry-threshold-show",
+                            "/retry-max-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

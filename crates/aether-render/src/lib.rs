@@ -1587,6 +1587,12 @@ pub enum UiCommand {
     QueryAssemblyTelemetryShow,
     /// Show session uptime in seconds.
     QuerySessionUptimeSecs,
+    /// Show the compaction threshold percentage.
+    QueryCompactionThresholdPct,
+    /// Show the retry-on-error threshold.
+    QueryRetryThresholdShow,
+    /// Show the retry-on-error max count.
+    QueryRetryMaxShow,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
