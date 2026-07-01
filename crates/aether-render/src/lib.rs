@@ -1959,6 +1959,12 @@ pub enum UiCommand {
     QueryToolOutputLimitKeyMinLen,
     /// Show the average name length of last tool signatures.
     QueryLastToolSigAvgNameLen,
+    /// Show the average signature string length of last tool signatures.
+    QueryLastToolSigAvgSigLen,
+    /// Show the minimum name length among last tool signatures.
+    QueryLastToolSigMinNameLen,
+    /// Show the maximum name length among last tool signatures.
+    QueryLastToolSigMaxNameLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
