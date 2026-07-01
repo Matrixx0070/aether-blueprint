@@ -1653,6 +1653,12 @@ pub enum UiCommand {
     QueryEnvKeyAvgLen,
     /// Show average length of alias names.
     QueryAliasAvgLen,
+    /// Show average length of prompt macro keys.
+    QueryPromptMacroKeyAvgLen,
+    /// Show average length of session var keys.
+    QuerySessionVarKeyAvgLen,
+    /// Show max length of any env var value.
+    QueryEnvValueMaxLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

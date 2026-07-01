@@ -11835,6 +11835,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryPromptMacroKeyAvgLen => {
+                    let n = session.prompt_macros.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Prompt macro key avg len: no macros defined.".to_string()));
+                    } else {
+                        let total: usize = session.prompt_macros.keys().map(|k| k.len()).sum();
+                        let avg = total / n;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Prompt macro key avg len: {avg} chars/key across {n} macros."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionVarKeyAvgLen => {
+                    let n = session.session_vars.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Session var key avg len: no vars defined.".to_string()));
+                    } else {
+                        let total: usize = session.session_vars.keys().map(|k| k.len()).sum();
+                        let avg = total / n;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session var key avg len: {avg} chars/key across {n} vars."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryEnvValueMaxLen => {
+                    match session.session_env.values().max_by_key(|v| v.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Env value max len: no vars set.".to_string())); }
+                        Some(v) => { let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Env value max len: {} chars.", v.len()))); }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -40442,6 +40475,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/prompt-macro-key-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryPromptMacroKeyAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-var-key-avg-len" => {
+                                    if _ctx.send(UiCommand::QuerySessionVarKeyAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/env-value-max-len" => {
+                                    if _ctx.send(UiCommand::QueryEnvValueMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -41600,6 +41648,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/cost-per-turn-min",
                             "/env-key-avg-len",
                             "/alias-avg-len",
+                            "/prompt-macro-key-avg-len",
+                            "/session-var-key-avg-len",
+                            "/env-value-max-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
