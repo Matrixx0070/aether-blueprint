@@ -11192,6 +11192,48 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryTurnCostSum => {
+                    let total: f64 = session.turn_cost_log.iter().map(|(_, _, _, c)| c).sum();
+                    let n = session.turn_cost_log.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Turn cost sum: ${total:.6} across {n} logged turns."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryToolOutputHistLast => {
+                    let mut keys: Vec<_> = session.tool_output_history.keys().collect();
+                    keys.sort();
+                    match keys.last() {
+                        Some(name) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Tool output history[last] (of {}): '{name}'", session.tool_output_history.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Tool output history: empty.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPendingReminderLast => {
+                    match session.pending_reminders.last() {
+                        Some(r) => {
+                            let preview = r.body.chars().take(120).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Pending reminder[last] (of {}): {preview}",
+                                session.pending_reminders.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Pending reminders: none.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarLast => {
                     let mut pairs: Vec<_> = session.session_vars.iter().collect();
                     pairs.sort_by_key(|(k, _)| k.as_str());
@@ -39024,6 +39066,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/turn-cost-sum" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostSum).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-output-hist-last" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputHistLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/pending-reminder-last" => {
+                                    if _ctx.send(UiCommand::QueryPendingReminderLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -40098,6 +40155,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-var-last",
                             "/prompt-macro-last",
                             "/env-last",
+                            "/turn-cost-sum",
+                            "/tool-output-hist-last",
+                            "/pending-reminder-last",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

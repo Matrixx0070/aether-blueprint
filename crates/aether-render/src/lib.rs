@@ -1485,6 +1485,12 @@ pub enum UiCommand {
     QueryPromptMacroLast,
     /// Show the last session env variable (key → value) alphabetically.
     QueryEnvLast,
+    /// Show sum of all turn costs in the log.
+    QueryTurnCostSum,
+    /// Show the last tool name from tool_output_history (alphabetically).
+    QueryToolOutputHistLast,
+    /// Show the last pending reminder body.
+    QueryPendingReminderLast,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
