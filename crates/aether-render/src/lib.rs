@@ -2595,6 +2595,12 @@ pub enum UiCommand {
     QueryVerifierGateDetectorBuiltin,
     /// Count of rules with a Some(remediation) in the verifier gate.
     QueryVerifierGateRuleHasRemediation,
+    /// Count of rules with RemediationStrategy::Strip.
+    QueryVerifierGateRemediationStrip,
+    /// Count of rules with RemediationStrategy::Redact.
+    QueryVerifierGateRemediationRedact,
+    /// Count of rules with RemediationStrategy::Annotate.
+    QueryVerifierGateRemediationAnnotate,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

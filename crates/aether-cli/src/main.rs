@@ -26,7 +26,7 @@ use aether_llm::{
     LlmProvider, Message, MessagesRequest,
 };
 use aether_overlay::{Fable5Overlay, OverlayConfig};
-use aether_selfcheck::{Action, AppliesWhen, Detector, Gate, Rule, Severity};
+use aether_selfcheck::{Action, AppliesWhen, Detector, Gate, RemediationStrategy, Rule, Severity};
 use aether_tools::{builtin::register_builtins, ToolRegistry};
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
@@ -16057,6 +16057,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let count = session.verifier.gate.rules.iter().filter(|r| r.rule.remediation.is_some()).count();
                     let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
                         "Verifier gate rules with remediation: {count}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierGateRemediationStrip => {
+                    let count = session.verifier.gate.rules.iter().filter(|r| r.rule.remediation.as_ref().map(|rem| rem.strategy == RemediationStrategy::Strip).unwrap_or(false)).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate Strip-remediation rules: {count}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierGateRemediationRedact => {
+                    let count = session.verifier.gate.rules.iter().filter(|r| r.rule.remediation.as_ref().map(|rem| rem.strategy == RemediationStrategy::Redact).unwrap_or(false)).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate Redact-remediation rules: {count}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierGateRemediationAnnotate => {
+                    let count = session.verifier.gate.rules.iter().filter(|r| r.rule.remediation.as_ref().map(|rem| rem.strategy == RemediationStrategy::Annotate).unwrap_or(false)).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate Annotate-remediation rules: {count}"
                     )));
                     continue;
                 }
@@ -47022,6 +47043,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/verifier-gate-remediation-strip" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateRemediationStrip).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-gate-remediation-redact" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateRemediationRedact).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-gate-remediation-annotate" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateRemediationAnnotate).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -48651,6 +48687,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/verifier-gate-detector-regex",
                             "/verifier-gate-detector-builtin",
                             "/verifier-gate-rule-has-remediation",
+                            "/verifier-gate-remediation-strip",
+                            "/verifier-gate-remediation-redact",
+                            "/verifier-gate-remediation-annotate",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
