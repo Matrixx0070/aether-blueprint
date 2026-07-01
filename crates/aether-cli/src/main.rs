@@ -24,6 +24,11 @@ use aether_zk;
 use aether_threat_model;
 use aether_redteam;
 use aether_nsd;
+use aether_secrets;
+use aether_sbom;
+use aether_harden;
+use aether_tls;
+use aether_dast;
 use aether_core::context::ConversationItem;
 use aether_core::{agent_turn, agent_turn_streamed, Session, SessionConfig, TurnOutcome};
 use aether_core::planner::Plan;
@@ -405,6 +410,63 @@ enum Cmd {
         /// Watch mode: re-check every N seconds.
         #[arg(long)]
         watch: Option<u64>,
+        /// Emit JSON output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Secret scanner: detect API keys, tokens, private keys in files and git history.
+    SecretsScan {
+        /// Path to scan (file or directory).
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+        /// Also scan git history (git log -p).
+        #[arg(long)]
+        git: bool,
+        /// Emit JSON output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// SBOM generator: produce CycloneDX 1.4 or SPDX 2.3 from Cargo.lock.
+    Sbom {
+        /// Path to Cargo.lock.
+        #[arg(long, default_value = "Cargo.lock")]
+        lockfile: PathBuf,
+        /// Project name for the SBOM document.
+        #[arg(long, default_value = "my-project")]
+        project: String,
+        /// Output format: cyclonedx or spdx.
+        #[arg(long, default_value = "cyclonedx")]
+        format: String,
+        /// Output file path (default: stdout).
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    /// CIS benchmark system hardener: live sysctl, SSH, SUID, world-writable, PAM audit.
+    Harden {
+        /// Emit JSON output.
+        #[arg(long)]
+        json: bool,
+        /// Show only failures.
+        #[arg(long)]
+        failures_only: bool,
+    },
+    /// TLS auditor: real handshake → cert expiry, weak ciphers, HSTS, chain validation.
+    TlsAudit {
+        /// Hostname to audit.
+        #[arg(long)]
+        host: String,
+        /// Port (default: 443).
+        #[arg(long, default_value_t = 443)]
+        port: u16,
+        /// Emit JSON output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// DAST HTTP scanner: CORS, CSP, clickjacking, info disclosure, cookie flags.
+    Dast {
+        /// URL to scan.
+        #[arg(long)]
+        url: String,
         /// Emit JSON output.
         #[arg(long)]
         json: bool,
@@ -1519,6 +1581,176 @@ async fn main() -> Result<()> {
             }
             return Ok(());
         }
+
+        Some(Cmd::SecretsScan { path, git, json }) => {
+            println!("[TIER 26] Secret Scanner");
+            // Collect all findings into a unified list
+            let mut all_findings: Vec<aether_secrets::SecretFinding> = Vec::new();
+            if git {
+                println!("  Scanning git history of {}...", path.display());
+                match aether_secrets::scan_git_history(&path, 500) {
+                    Ok(report) => all_findings.extend(report.findings),
+                    Err(e) => eprintln!("  Git scan error: {e}"),
+                }
+            }
+            if path.is_file() {
+                let mut seen = std::collections::HashSet::new();
+                match aether_secrets::scan_file(&path, &mut seen) {
+                    Ok(findings) => all_findings.extend(findings),
+                    Err(e) => eprintln!("  File scan error: {e}"),
+                }
+            } else {
+                match aether_secrets::scan_directory(&path) {
+                    Ok(report) => all_findings.extend(report.findings),
+                    Err(e) => eprintln!("  Directory scan error: {e}"),
+                }
+            }
+            if json {
+                println!("{}", serde_json::to_string_pretty(&all_findings).unwrap_or_default());
+            } else {
+                println!("  Path     : {}", path.display());
+                println!("  Findings : {}", all_findings.len());
+                for f in &all_findings {
+                    println!("  [{}] {} — {} ({}:{})",
+                        f.rule_id, f.rule_name,
+                        aether_secrets::redact(&f.snippet),
+                        f.source, f.line);
+                }
+                if all_findings.is_empty() { println!("  ✓ No secrets found"); }
+            }
+            return Ok(());
+        }
+
+        Some(Cmd::Sbom { lockfile, project, format, output }) => {
+            println!("[TIER 27] SBOM Generator");
+            let content = match format.to_lowercase().as_str() {
+                "spdx" => {
+                    match aether_sbom::generate_spdx(&lockfile, &project) {
+                        Ok(s) => s,
+                        Err(e) => { eprintln!("  Error: {e}"); return Ok(()); }
+                    }
+                }
+                _ => {
+                    match aether_sbom::generate_cyclonedx(&lockfile, &project) {
+                        Ok((sbom, cdx_json)) => {
+                            let report = aether_sbom::check_ntia_compliance(&sbom);
+                            println!("  Components : {}", sbom.components.len());
+                            println!("  NTIA       : {}", if report.compliant { "compliant" } else { "NON-COMPLIANT" });
+                            if !report.missing.is_empty() {
+                                println!("  Missing    : {}", report.missing.join(", "));
+                            }
+                            serde_json::to_string_pretty(&cdx_json).unwrap_or_default()
+                        }
+                        Err(e) => { eprintln!("  Error: {e}"); return Ok(()); }
+                    }
+                }
+            };
+            match output {
+                Some(ref p) => { std::fs::write(p, &content)?; println!("  Written to : {}", p.display()); }
+                None => println!("{}", content),
+            }
+            return Ok(());
+        }
+
+        Some(Cmd::Harden { json, failures_only }) => {
+            println!("[TIER 28] CIS Benchmark System Hardener");
+            match aether_harden::run_audit() {
+                Err(e) => eprintln!("  Audit error: {e}"),
+                Ok(report) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+                    } else {
+                        println!("  Host   : {}", report.hostname);
+                        println!("  Score  : {:.1}% ({} pass / {} fail / {} warn)",
+                            report.score_pct, report.pass_count, report.fail_count, report.warn_count);
+                        for ctrl in &report.controls {
+                            if failures_only && ctrl.status == aether_harden::HardenStatus::Pass { continue; }
+                            println!("  [{}] [{}] {} — got '{}', want '{}'",
+                                ctrl.status, ctrl.cis_id, ctrl.title,
+                                ctrl.current_value, ctrl.expected_value);
+                            if ctrl.status != aether_harden::HardenStatus::Pass {
+                                println!("       Fix: {}", ctrl.remediation);
+                            }
+                        }
+                        if !report.suid_binaries.is_empty() {
+                            println!("  SUID binaries ({}):", report.suid_binaries.len());
+                            for b in report.suid_binaries.iter().take(20) { println!("    {}", b); }
+                        }
+                        if !report.world_writable.is_empty() {
+                            println!("  World-writable files ({}):", report.world_writable.len());
+                            for f in report.world_writable.iter().take(20) { println!("    {}", f); }
+                        }
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        Some(Cmd::TlsAudit { host, port, json }) => {
+            println!("[TIER 29] TLS Certificate Auditor");
+            println!("  Connecting to {}:{}...", host, port);
+            match aether_tls::audit(&host, port) {
+                Err(e) => eprintln!("  TLS audit error: {e}"),
+                Ok(report) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+                    } else {
+                        println!("  Host     : {}:{}", report.host, report.port);
+                        println!("  Protocol : {}", report.negotiated_protocol);
+                        println!("  Cipher   : {}", report.negotiated_cipher);
+                        println!("  Grade    : {}", report.grade);
+                        println!("  HSTS     : {}", if report.hsts_present { "present" } else { "MISSING" });
+                        if let Some(ref cert) = report.certificate {
+                            println!("  Subject  : {}", cert.subject);
+                            println!("  Issuer   : {}", cert.issuer);
+                            println!("  Expires  : {} ({} days)", cert.not_after, cert.days_until_expiry);
+                            println!("  Key      : {} {:?} bits", cert.key_type, cert.key_bits);
+                            println!("  SigAlg   : {}", cert.signature_algorithm);
+                            if !cert.sans.is_empty() {
+                                println!("  SANs     : {}", cert.sans.join(", "));
+                            }
+                        }
+                        println!("  Findings : {}", report.findings.len());
+                        for f in &report.findings {
+                            println!("  [{}] {} — {}", f.severity, f.title, f.detail);
+                            if let Some(ref cve) = f.cve { println!("           CVE: {}", cve); }
+                        }
+                        if report.findings.is_empty() { println!("  ✓ No TLS issues found"); }
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        Some(Cmd::Dast { url, json }) => {
+            println!("[TIER 30] DAST HTTP Security Scanner");
+            println!("  Scanning {}...", url);
+            match aether_dast::scan(&url) {
+                Err(e) => eprintln!("  DAST scan error: {e}"),
+                Ok(report) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+                    } else {
+                        println!("  URL      : {}", report.url);
+                        println!("  Status   : {}", report.status_code);
+                        println!("  Grade    : {}", report.grade);
+                        println!("  CORS     : {}", report.cors_policy);
+                        println!("  CSP      : {}", if report.csp_policy == "not-present" { "MISSING" } else { "present" });
+                        println!("  Present  : {}", report.headers_present.join(", "));
+                        println!("  Missing  : {}", report.headers_missing.join(", "));
+                        println!("  Findings : {}", report.findings.len());
+                        for f in &report.findings {
+                            println!("  [{}] {} — {}", f.severity, f.title, f.detail);
+                            println!("       {} | {}", f.owasp, f.cwe.as_deref().unwrap_or(""));
+                            println!("       Fix: {}", f.remediation);
+                        }
+                        if report.findings.is_empty() { println!("  ✓ No security header issues found"); }
+                    }
+                }
+            }
+            return Ok(());
+        }
+
         None => {}
     }
 

@@ -26,6 +26,8 @@ dependencies = [
  "aether-container",
  "aether-core",
  "aether-crypto-audit",
+ "aether-dast",
+ "aether-harden",
  "aether-incident",
  "aether-llm",
  "aether-malware",
@@ -39,13 +41,16 @@ dependencies = [
  "aether-redteam",
  "aether-render",
  "aether-reveng",
+ "aether-sbom",
  "aether-sec",
+ "aether-secrets",
  "aether-selfcheck",
  "aether-skill",
  "aether-store",
  "aether-supply-chain",
  "aether-threat-intel",
  "aether-threat-model",
+ "aether-tls",
  "aether-tools",
  "aether-zk",
  "anyhow",
@@ -155,6 +160,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-dast"
+version = "0.35.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "aether-difffuzz"
 version = "0.35.0"
 dependencies = [
@@ -181,6 +195,15 @@ dependencies = [
  "glob",
  "once_cell",
  "regex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "aether-harden"
+version = "0.35.0"
+dependencies = [
+ "anyhow",
  "serde",
  "serde_json",
 ]
@@ -405,6 +428,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-sbom"
+version = "0.35.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "aether-sec"
 version = "0.35.0"
 dependencies = [
@@ -416,6 +451,19 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "aether-secrets"
+version = "0.35.0"
+dependencies = [
+ "anyhow",
+ "hex",
+ "once_cell",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -510,6 +558,16 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "aether-tls"
+version = "0.35.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

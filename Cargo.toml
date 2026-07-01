@@ -90,6 +90,11 @@ aether-zk            = { path = "crates/aether-zk",            version = "0.35.0
 aether-threat-model  = { path = "crates/aether-threat-model",  version = "0.35.0" }
 aether-redteam       = { path = "crates/aether-redteam",       version = "0.35.0" }
 aether-nsd           = { path = "crates/aether-nsd",           version = "0.35.0" }
+aether-secrets       = { path = "crates/aether-secrets",       version = "0.35.0" }
+aether-sbom          = { path = "crates/aether-sbom",          version = "0.35.0" }
+aether-harden        = { path = "crates/aether-harden",        version = "0.35.0" }
+aether-tls           = { path = "crates/aether-tls",           version = "0.35.0" }
+aether-dast          = { path = "crates/aether-dast",          version = "0.35.0" }
 
 [profile.release]
 lto = "thin"
