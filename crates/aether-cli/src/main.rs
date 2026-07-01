@@ -13096,6 +13096,42 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryProgressItemAvgLen => {
+                    let n = session.progress_items.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Progress items: none.".to_string()));
+                    } else {
+                        let total: usize = session.progress_items.iter().map(|(text, _)| text.len()).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Avg progress item length: {} chars ({} items)", total / n, n
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolOutputLimitKeyAvgLen => {
+                    let n = session.tool_output_limits.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Tool output limits: none.".to_string()));
+                    } else {
+                        let total: usize = session.tool_output_limits.keys().map(|k| k.len()).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Avg tool limit key length: {} chars ({} tools)", total / n, n
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QuerySavedSnapshotKeyAvgLen => {
+                    let n = session.saved_snapshots.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Saved snapshots: none.".to_string()));
+                    } else {
+                        let total: usize = session.saved_snapshots.keys().map(|k| k.len()).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Avg snapshot key length: {} chars ({} snapshots)", total / n, n
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -42303,6 +42339,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/progress-item-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryProgressItemAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-output-limit-key-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputLimitKeyAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/saved-snapshot-key-avg-len" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotKeyAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -43581,6 +43632,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/task-queue-avg-len",
                             "/alias-key-avg-len",
                             "/alias-val-avg-len",
+                            "/progress-item-avg-len",
+                            "/tool-output-limit-key-avg-len",
+                            "/saved-snapshot-key-avg-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

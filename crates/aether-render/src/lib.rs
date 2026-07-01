@@ -1893,6 +1893,12 @@ pub enum UiCommand {
     QueryAliasKeyAvgLen,
     /// Show the average length of alias values.
     QueryAliasValAvgLen,
+    /// Show the average length of progress item text strings.
+    QueryProgressItemAvgLen,
+    /// Show the average length of tool names in tool output limits.
+    QueryToolOutputLimitKeyAvgLen,
+    /// Show the average length of saved snapshot name keys.
+    QuerySavedSnapshotKeyAvgLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
