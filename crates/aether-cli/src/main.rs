@@ -8964,6 +8964,41 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QueryPlanStepCount => {
+                    let total: usize = session.plan.block_counts.values().sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan steps: {total} total across {} block type(s); {} turns recorded.",
+                        session.plan.block_counts.len(),
+                        session.plan.blocks_recorded
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierBlockedCount => {
+                    match &session.last_verification {
+                        Some(v) => {
+                            let n = v.blocked_reasons.len();
+                            let total = v.findings.len();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Verifier: {n} blocker(s) out of {total} total finding(s). Blocked: {}",
+                                if v.is_blocked() { "YES" } else { "NO" }
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Verifier: no verification result yet.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolCallBudgetUsed => {
+                    let used = session.tool_call_budget;
+                    let max = session.config.max_tool_calls_per_turn;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Tool-call budget this turn: {used}/{max} used."
+                    )));
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -34617,6 +34652,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/plan-step-count" => {
+                                    if _ctx.send(UiCommand::QueryPlanStepCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-blocked-count" => {
+                                    if _ctx.send(UiCommand::QueryVerifierBlockedCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-call-budget-used" => {
+                                    if _ctx.send(UiCommand::QueryToolCallBudgetUsed).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -35450,6 +35500,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-error-rate ",
                             "/session-age",
                             "/history-last-tool",
+                            "/plan-step-count",
+                            "/verifier-blocked-count",
+                            "/tool-call-budget-used",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

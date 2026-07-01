@@ -1053,6 +1053,12 @@ pub enum UiCommand {
     QuerySessionAge,
     /// Show the last tool call found in conversation history.
     QueryHistoryLastTool,
+    /// Count total plan steps (block entries) recorded.
+    QueryPlanStepCount,
+    /// Count how many verifier findings are blockers.
+    QueryVerifierBlockedCount,
+    /// Show tool-call budget usage (used / max).
+    QueryToolCallBudgetUsed,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
