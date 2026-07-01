@@ -1341,6 +1341,12 @@ pub enum UiCommand {
     QueryTurnWallMin,
     /// Preview the most recent tool result from history.
     QueryHistoryResultPreview,
+    /// Count of warmup files configured.
+    QueryWarmupFileCount,
+    /// Count of auto-tag rules defined.
+    QueryAutoTagRuleCount,
+    /// Count of distinct tool names in plan block_counts.
+    QueryPlanBlockListLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

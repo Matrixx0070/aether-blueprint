@@ -11035,6 +11035,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryWarmupFileCount => {
+                    let n = session.warmup_files.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Warmup files: {n} configured. Use /warmup-file-at <i> to inspect."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryAutoTagRuleCount => {
+                    let n = session.auto_tag_rules.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Auto-tag rules: {n} defined. Use /auto-tag-rule-at <i> to inspect."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlanBlockListLen => {
+                    let n = session.plan.block_counts.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan blocked tool count: {n} distinct tools have been blocked."
+                    )));
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -37534,6 +37555,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /warmup-file-count — count warmup files configured
+                                "/warmup-file-count" => {
+                                    if _ctx.send(UiCommand::QueryWarmupFileCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /auto-tag-rule-count — count auto-tag rules defined
+                                "/auto-tag-rule-count" => {
+                                    if _ctx.send(UiCommand::QueryAutoTagRuleCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /plan-block-list-len — count distinct tools in plan block counts
+                                "/plan-block-list-len" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockListLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -38511,6 +38550,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-wall-max",
                             "/turn-wall-min",
                             "/history-result-preview",
+                            "/warmup-file-count",
+                            "/auto-tag-rule-count",
+                            "/plan-block-list-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
