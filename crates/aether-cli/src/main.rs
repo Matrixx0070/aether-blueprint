@@ -17323,6 +17323,33 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryAutoTagsPerTurn => {
+                    let turns = session.history.len();
+                    let rules = session.auto_tag_rules.len();
+                    let ratio = if turns == 0 { 0.0 } else { rules as f64 / turns as f64 };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Auto-tag rules per turn: {ratio:.3} ({rules} rules / {turns} history items)"
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySnapshotsPerTurn => {
+                    let turns = session.history.len();
+                    let snaps = session.saved_snapshots.len();
+                    let ratio = if turns == 0 { 0.0 } else { snaps as f64 / turns as f64 };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Saved snapshots per turn: {ratio:.3} ({snaps} snapshots / {turns} history items)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryCostLogPerTurn => {
+                    let turns = session.history.len();
+                    let logs = session.turn_cost_log.len();
+                    let ratio = if turns == 0 { 0.0 } else { logs as f64 / turns as f64 };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Cost log entries per turn: {ratio:.3} ({logs} entries / {turns} history items)"
+                    )));
+                    continue;
+                }
                 UiCommand::QueryTagsPerTurn => {
                     let turns = session.history.len();
                     let tags = session.session_tags.len();
@@ -50280,6 +50307,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                 }
                                 "/progress-per-turn" => {
                                     if _ctx.send(UiCommand::QueryProgressPerTurn).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/auto-tags-per-turn" => {
+                                    if _ctx.send(UiCommand::QueryAutoTagsPerTurn).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/snapshots-per-turn" => {
+                                    if _ctx.send(UiCommand::QuerySnapshotsPerTurn).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/cost-log-per-turn" => {
+                                    if _ctx.send(UiCommand::QueryCostLogPerTurn).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }

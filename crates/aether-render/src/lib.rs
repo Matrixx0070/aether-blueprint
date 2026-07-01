@@ -3003,6 +3003,12 @@ pub enum UiCommand {
     QuerySigsPerTurn,
     /// Ratio of progress_items count to history turn count.
     QueryProgressPerTurn,
+    /// Ratio of auto_tag_rules count to history turn count.
+    QueryAutoTagsPerTurn,
+    /// Ratio of saved_snapshots count to history turn count.
+    QuerySnapshotsPerTurn,
+    /// Ratio of turn_cost_log entries to history turn count.
+    QueryCostLogPerTurn,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
