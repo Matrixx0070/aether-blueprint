@@ -2613,6 +2613,12 @@ pub enum UiCommand {
     QueryVerifierGatePhrasePatternAvg,
     /// Average patterns per Regex detector rule.
     QueryVerifierGateRegexPatternAvg,
+    /// 99th-percentile turn wall time in milliseconds.
+    QueryTurnWallP99,
+    /// Sum of all turn wall times in milliseconds.
+    QueryTurnWallTotal,
+    /// Max LLM-only latency across the session in milliseconds.
+    QueryLlmMsMax,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
