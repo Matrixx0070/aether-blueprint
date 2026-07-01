@@ -12736,6 +12736,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryPlanBlockKeyMinLen => {
+                    match session.plan.block_counts.keys().min_by_key(|k| k.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Plan block counts: none.".to_string())); }
+                        Some(k) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Shortest plan block key: {} chars ('{}')", k.len(), k
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanToolStatKeyMinLen => {
+                    match session.plan.tool_call_stats.keys().min_by_key(|k| k.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Plan tool call stats: none.".to_string())); }
+                        Some(k) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Shortest plan tool stat key: {} chars ('{}')", k.len(), k
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryProgressItemMaxLen => {
+                    match session.progress_items.iter().max_by_key(|(text, _)| text.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Progress items: none.".to_string())); }
+                        Some((text, done)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Longest progress item: {} chars (done={})", text.len(), done
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -41778,6 +41811,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/plan-block-key-min-len" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockKeyMinLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-tool-stat-key-min-len" => {
+                                    if _ctx.send(UiCommand::QueryPlanToolStatKeyMinLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/progress-item-max-len" => {
+                                    if _ctx.send(UiCommand::QueryProgressItemMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -43023,6 +43071,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-output-hist-key-min-len",
                             "/plan-block-key-max-len",
                             "/plan-tool-stat-key-max-len",
+                            "/plan-block-key-min-len",
+                            "/plan-tool-stat-key-min-len",
+                            "/progress-item-max-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

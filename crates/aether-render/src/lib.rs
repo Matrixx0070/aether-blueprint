@@ -1827,6 +1827,12 @@ pub enum UiCommand {
     QueryPlanBlockKeyMaxLen,
     /// Show the longest tool name key in plan tool call stats.
     QueryPlanToolStatKeyMaxLen,
+    /// Show the shortest block type key in plan block counts.
+    QueryPlanBlockKeyMinLen,
+    /// Show the shortest tool name key in plan tool call stats.
+    QueryPlanToolStatKeyMinLen,
+    /// Show the longest progress item text.
+    QueryProgressItemMaxLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
