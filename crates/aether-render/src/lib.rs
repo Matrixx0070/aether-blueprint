@@ -1065,6 +1065,12 @@ pub enum UiCommand {
     QueryRemindersAdmitted,
     /// Show last verifier result summary message.
     QueryVerifierMessage,
+    /// Show whether the plan is currently marked dirty.
+    QueryPlanDirty,
+    /// Show estimated total byte size of conversation history.
+    QueryHistoryByteSize,
+    /// Show average cost per turn for this session.
+    QuerySessionCostPerTurn,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

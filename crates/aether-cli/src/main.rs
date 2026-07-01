@@ -8964,6 +8964,48 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QueryPlanDirty => {
+                    let dirty = session.plan.is_dirty();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan dirty: {} (plan will{} be rebuilt on next turn).",
+                        dirty,
+                        if dirty { "" } else { " not" }
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryByteSize => {
+                    let bytes: usize = session.history.iter().map(|item| {
+                        match item {
+                            aether_core::context::ConversationItem::User(s) => s.len(),
+                            aether_core::context::ConversationItem::Assistant { text, .. } => text.as_deref().map(|s| s.len()).unwrap_or(0),
+                            aether_core::context::ConversationItem::ToolResults(results) => {
+                                results.iter().map(|r| r.content.len()).sum()
+                            }
+                        }
+                    }).sum();
+                    let kb = bytes / 1024;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History size: ~{kb} KB ({bytes} bytes) across {} items.",
+                        session.history.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySessionCostPerTurn => {
+                    let log = &session.turn_cost_log;
+                    if log.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Cost per turn: no turns recorded yet.".to_string()
+                        ));
+                    } else {
+                        let total_cost: f64 = log.iter().map(|(_, _, _, cost)| cost).sum();
+                        let avg = total_cost / log.len() as f64;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Avg cost/turn: ${avg:.6} over {} turns (total ${total_cost:.4}).",
+                            log.len()
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryPlanToolOkCount(name) => {
                     match session.plan.tool_call_stats.get(&name) {
                         Some((ok, err)) => {
@@ -34730,6 +34772,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/plan-dirty" => {
+                                    if _ctx.send(UiCommand::QueryPlanDirty).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-byte-size" => {
+                                    if _ctx.send(UiCommand::QueryHistoryByteSize).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-cost-per-turn" => {
+                                    if _ctx.send(UiCommand::QuerySessionCostPerTurn).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -35569,6 +35626,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-tool-ok-count ",
                             "/reminders-admitted",
                             "/verifier-message",
+                            "/plan-dirty",
+                            "/history-byte-size",
+                            "/session-cost-per-turn",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
