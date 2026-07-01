@@ -17323,6 +17323,55 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryTurnWallDiffAvg => {
+                    let ms = &session.turn_wall_ms;
+                    if ms.len() < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn wall diff avg: need at least 2 turns.".to_string()
+                        ));
+                    } else {
+                        let diffs: Vec<u64> = ms.windows(2)
+                            .map(|w| if w[1] > w[0] { w[1] - w[0] } else { w[0] - w[1] })
+                            .collect();
+                        let avg = diffs.iter().sum::<u64>() as f64 / diffs.len() as f64;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn wall consecutive diff avg: {avg:.1}ms ({} diffs)", diffs.len()
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnWallDiffMax => {
+                    let ms = &session.turn_wall_ms;
+                    if ms.len() < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn wall diff max: need at least 2 turns.".to_string()
+                        ));
+                    } else {
+                        let max_diff = ms.windows(2)
+                            .map(|w| if w[1] > w[0] { w[1] - w[0] } else { w[0] - w[1] })
+                            .max().unwrap_or(0);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn wall consecutive diff max: {max_diff}ms"
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnWallDiffMin => {
+                    let ms = &session.turn_wall_ms;
+                    if ms.len() < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn wall diff min: need at least 2 turns.".to_string()
+                        ));
+                    } else {
+                        let min_diff = ms.windows(2)
+                            .map(|w| if w[1] > w[0] { w[1] - w[0] } else { w[0] - w[1] })
+                            .min().unwrap_or(0);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn wall consecutive diff min: {min_diff}ms"
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryTurnCostLogGapAvg => {
                     let turns: Vec<usize> = session.turn_cost_log.iter().map(|(t, _, _, _)| *t).collect();
                     if turns.len() < 2 {
@@ -49524,6 +49573,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/turn-wall-diff-avg" => {
+                                    if _ctx.send(UiCommand::QueryTurnWallDiffAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-wall-diff-max" => {
+                                    if _ctx.send(UiCommand::QueryTurnWallDiffMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-wall-diff-min" => {
+                                    if _ctx.send(UiCommand::QueryTurnWallDiffMin).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -51312,6 +51376,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-cost-log-gap-avg",
                             "/turn-cost-log-gap-max",
                             "/turn-cost-log-gap-min",
+                            "/turn-wall-diff-avg",
+                            "/turn-wall-diff-max",
+                            "/turn-wall-diff-min",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
