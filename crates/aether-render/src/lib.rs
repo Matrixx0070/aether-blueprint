@@ -2139,6 +2139,12 @@ pub enum UiCommand {
     QueryBookmarkMinTurnIdx,
     /// Show the rule_id of the first finding from last verification.
     QueryVerifFindingFirstId,
+    /// Show the total chars across all session notes.
+    QuerySessionNoteTotalChars,
+    /// Show the total chars across all history annotations.
+    QueryHistoryAnnotTotalChars,
+    /// Show the total chars across all sticky context items.
+    QueryStickyContextTotalChars,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
