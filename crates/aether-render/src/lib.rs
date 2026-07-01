@@ -2235,6 +2235,12 @@ pub enum UiCommand {
     QueryPlanToolStatTotalOk,
     /// Show the total err calls across all plan.tool_call_stats.
     QueryPlanToolStatTotalErr,
+    /// Show the turn span (max−min) in turn_cost_log.
+    QueryTurnCostLogTurnSpan,
+    /// Show the max consecutive error count across all plan.tool_error_counts.
+    QueryPlanToolErrorCountsMax,
+    /// Show the turn span (max−min) across history_annotations.
+    QueryHistoryAnnotTurnSpan,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
