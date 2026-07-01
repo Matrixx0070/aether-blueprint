@@ -1509,6 +1509,12 @@ pub enum UiCommand {
     QueryTurnWallAvgAll,
     /// Show the maximum single-turn cost in the log.
     QueryTurnCostMaxAll,
+    /// Show the minimum single-turn cost in the log.
+    QueryTurnCostMinAll,
+    /// Show the maximum single-turn wall-clock time.
+    QueryTurnWallMaxAll,
+    /// Show the last verifier finding from last_verification.
+    QueryVerifierFindingLast,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
