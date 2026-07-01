@@ -2049,6 +2049,12 @@ pub enum UiCommand {
     QueryPlanWindowSet,
     /// Show the plan window value.
     QueryPlanWindowVal,
+    /// Show the auto commit template value.
+    QueryAutoCommitTemplateVal,
+    /// Show the plan goal value.
+    QueryPlanGoalVal,
+    /// Show the last error tool from the plan.
+    QueryPlanLastErrorTool,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

@@ -13784,6 +13784,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryAutoCommitTemplateVal => {
+                    let val = if session.auto_commit_template.is_empty() { "(empty)" } else { &session.auto_commit_template };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Auto commit template: {}", val
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlanGoalVal => {
+                    let val = session.plan.goal.as_deref().unwrap_or("(not set)");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan goal: {}", val
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlanLastErrorTool => {
+                    let val = session.plan.last_error_tool.as_deref().unwrap_or("(none)");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan last error tool: {}", val
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -43381,6 +43402,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/auto-commit-template-val" => {
+                                    if _ctx.send(UiCommand::QueryAutoCommitTemplateVal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-goal-val" => {
+                                    if _ctx.send(UiCommand::QueryPlanGoalVal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-last-error-tool" => {
+                                    if _ctx.send(UiCommand::QueryPlanLastErrorTool).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -44737,6 +44773,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/auto-commit-template-set",
                             "/plan-window-set",
                             "/plan-window-val",
+                            "/auto-commit-template-val",
+                            "/plan-goal-val",
+                            "/plan-last-error-tool",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
