@@ -1047,6 +1047,12 @@ pub enum UiCommand {
     QueryVerifierRulesCount,
     /// Show top 5 tools by total call count.
     QueryToolStatsTop,
+    /// Show error rate for a specific tool by name.
+    QueryToolErrorRate(String),
+    /// Show elapsed time since session start.
+    QuerySessionAge,
+    /// Show the last tool call found in conversation history.
+    QueryHistoryLastTool,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

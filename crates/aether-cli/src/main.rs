@@ -8917,6 +8917,53 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryToolErrorRate(name) => {
+                    match session.plan.tool_call_stats.get(&name) {
+                        Some((ok, err)) => {
+                            let total = ok + err;
+                            let rate = if total == 0 { 0.0 } else { (*err as f64 / total as f64) * 100.0 };
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Tool '{name}': {total} calls, {ok} ok, {err} err — error rate {rate:.1}%"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Tool '{name}': no call stats recorded."
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionAge => {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let elapsed = now.saturating_sub(session.started_at);
+                    let h = elapsed / 3600;
+                    let m = (elapsed % 3600) / 60;
+                    let s = elapsed % 60;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session age: {h}h {m}m {s}s (started at unix {}).", session.started_at
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryLastTool => {
+                    let found = session.history.iter().rev().find_map(|item| {
+                        if let aether_core::context::ConversationItem::Assistant { tool_uses, .. } = item {
+                            if !tool_uses.is_empty() {
+                                let t = &tool_uses[tool_uses.len() - 1];
+                                let preview = t.input.to_string().chars().take(80).collect::<String>();
+                                return Some(format!("Last tool: '{}' input preview: {}", t.name, preview));
+                            }
+                        }
+                        None
+                    });
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(
+                        found.unwrap_or_else(|| "No tool calls found in history.".to_string())
+                    ));
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -34554,6 +34601,22 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                cmd_str if cmd_str.starts_with("/tool-error-rate ") => {
+                                    let name = cmd_str.trim_start_matches("/tool-error-rate ").trim().to_string();
+                                    if _ctx.send(UiCommand::QueryToolErrorRate(name)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-age" => {
+                                    if _ctx.send(UiCommand::QuerySessionAge).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-last-tool" => {
+                                    if _ctx.send(UiCommand::QueryHistoryLastTool).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -35384,6 +35447,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-item-show ",
                             "/verifier-rules-count",
                             "/tool-stats-top",
+                            "/tool-error-rate ",
+                            "/session-age",
+                            "/history-last-tool",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
