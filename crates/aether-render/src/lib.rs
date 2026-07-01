@@ -1119,6 +1119,12 @@ pub enum UiCommand {
     QuerySessionTokenOut,
     /// List all verifier findings from last check.
     QueryVerifierFindingsList,
+    /// Show whether D1 (deep context injection) was active in last assembly.
+    QueryAssemblyD1,
+    /// Show reminders dropped count from last assembly telemetry.
+    QueryReminderDropped,
+    /// Show top tools by error count from plan stats.
+    QueryPlanToolErrTop,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

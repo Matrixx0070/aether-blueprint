@@ -8964,6 +8964,64 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QueryAssemblyD1 => {
+                    match &session.last_assembly_telemetry {
+                        Some(t) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Assembly D1 (deep context): {} in last assembly.",
+                                if t.d1_active { "ACTIVE" } else { "inactive" }
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "No assembly telemetry yet.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryReminderDropped => {
+                    match &session.last_assembly_telemetry {
+                        Some(t) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Reminders dropped: {} (admitted: {}) in last assembly.",
+                                t.reminders_dropped, t.reminders_admitted
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "No assembly telemetry yet.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanToolErrTop => {
+                    let stats = &session.plan.tool_call_stats;
+                    if stats.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Plan tool error stats: none recorded.".to_string()
+                        ));
+                    } else {
+                        let mut entries: Vec<_> = stats.iter()
+                            .filter(|(_, (_, err))| *err > 0)
+                            .map(|(name, (ok, err))| (name, err, ok + err))
+                            .collect();
+                        entries.sort_by(|a, b| b.1.cmp(a.1));
+                        if entries.is_empty() {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Plan tool errors: no errors recorded for any tool.".to_string()
+                            ));
+                        } else {
+                            let mut lines = vec!["Top tools by error count:".to_string()];
+                            for (name, err, total) in entries.iter().take(5) {
+                                lines.push(format!("  {name}: {err} errors / {total} total"));
+                            }
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(lines.join("\n")));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionTokenIn => {
                     let n = session.usage_total.input_tokens;
                     let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
@@ -35215,6 +35273,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/assembly-d1" => {
+                                    if _ctx.send(UiCommand::QueryAssemblyD1).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/reminder-dropped" => {
+                                    if _ctx.send(UiCommand::QueryReminderDropped).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-tool-err-top" => {
+                                    if _ctx.send(UiCommand::QueryPlanToolErrTop).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -36081,6 +36154,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-token-in",
                             "/session-token-out",
                             "/verifier-findings-list",
+                            "/assembly-d1",
+                            "/reminder-dropped",
+                            "/plan-tool-err-top",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
