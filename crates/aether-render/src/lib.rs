@@ -2217,6 +2217,12 @@ pub enum UiCommand {
     QuerySessionVarKeyLast,
     /// Show the last key in aliases.
     QueryAliasKeyLast,
+    /// Show the last key in tool_output_limits.
+    QueryToolOutputLimitKeyLast,
+    /// Show the last key in prompt_macros.
+    QueryPromptMacroKeyLast,
+    /// Show the last key in session_env.
+    QueryEnvVarKeyLast,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

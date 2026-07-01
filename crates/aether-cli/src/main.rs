@@ -14525,6 +14525,33 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryToolOutputLimitKeyLast => {
+                    let key = session.tool_output_limits.keys().last()
+                        .map(|k| k.as_str())
+                        .unwrap_or("none");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Tool output limit key last: {key}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPromptMacroKeyLast => {
+                    let key = session.prompt_macros.keys().last()
+                        .map(|k| k.as_str())
+                        .unwrap_or("none");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Prompt macro key last: {key}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryEnvVarKeyLast => {
+                    let key = session.session_env.keys().last()
+                        .map(|k| k.as_str())
+                        .unwrap_or("none");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Env var key last: {key}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -44542,6 +44569,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/tool-output-limit-key-last" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputLimitKeyLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/prompt-macro-key-last" => {
+                                    if _ctx.send(UiCommand::QueryPromptMacroKeyLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/env-var-key-last" => {
+                                    if _ctx.send(UiCommand::QueryEnvVarKeyLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -45982,6 +46024,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-label-last-idx",
                             "/session-var-key-last",
                             "/alias-key-last",
+                            "/tool-output-limit-key-last",
+                            "/prompt-macro-key-last",
+                            "/env-var-key-last",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
