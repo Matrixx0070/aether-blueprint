@@ -7700,6 +7700,57 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryAliasGet(name) => {
+                    match session.aliases.get(&name) {
+                        Some(expansion) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Alias /{name} → {expansion:?}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Alias {name:?}: not defined. Use /alias {name} <expansion> to create."
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryNoteLatest => {
+                    match session.session_notes.last() {
+                        Some((text, ts)) => {
+                            let preview = if text.len() > 200 {
+                                format!("{}… ({} chars)", &text[..200], text.len())
+                            } else {
+                                text.clone()
+                            };
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Latest note (ts {ts}):\n{preview}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Session notes: no notes yet. Use /note <text> to save one.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolOutputLimitsList => {
+                    if session.tool_output_limits.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Tool output limits: none set (all tools unlimited).".to_string()
+                        ));
+                    } else {
+                        let mut entries: Vec<_> = session.tool_output_limits.iter().collect();
+                        entries.sort_by_key(|(k, _)| k.as_str());
+                        let mut lines = vec![format!("Tool output limits ({} tools):", entries.len())];
+                        for (name, limit) in &entries {
+                            lines.push(format!("  {name}: {limit} chars"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(lines.join("\n")));
+                    }
+                    continue;
+                }
                 UiCommand::QueryToolOutputLimitShow(name) => {
                     match session.tool_output_limits.get(&name) {
                         Some(limit) => {
@@ -34245,6 +34296,29 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /alias-get <name> — get expansion of a named alias
+                                cmd_str if cmd_str.starts_with("/alias-get ") => {
+                                    let name = cmd_str.trim_start_matches("/alias-get ").trim().to_string();
+                                    if name.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /alias-get <name>".to_string()));
+                                    } else if _ctx.send(UiCommand::QueryAliasGet(name)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /note-latest — show the most recent session note
+                                "/note-latest" => {
+                                    if _ctx.send(UiCommand::QueryNoteLatest).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tool-output-limits-list — list all tool output char limits
+                                "/tool-output-limits-list" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputLimitsList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -35063,6 +35137,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-output-limit-show ",
                             "/turn-wall-last",
                             "/session-var-get ",
+                            "/alias-get ",
+                            "/note-latest",
+                            "/tool-output-limits-list",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

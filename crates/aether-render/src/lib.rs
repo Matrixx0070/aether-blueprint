@@ -1023,6 +1023,12 @@ pub enum UiCommand {
     QueryTurnWallLast,
     /// Get a single session variable by key.
     QuerySessionVarGet(String),
+    /// Get the expansion of a named session alias.
+    QueryAliasGet(String),
+    /// Show the most recent session note.
+    QueryNoteLatest,
+    /// List all tool output char limits.
+    QueryToolOutputLimitsList,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
