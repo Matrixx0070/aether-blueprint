@@ -14444,6 +14444,33 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryEnvVarKeyFirst => {
+                    let key = session.session_env.keys().next()
+                        .map(|k| k.as_str())
+                        .unwrap_or("none");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Env var key first: {key}"
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySessionVarKeyFirst => {
+                    let key = session.session_vars.keys().next()
+                        .map(|k| k.as_str())
+                        .unwrap_or("none");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session var key first: {key}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryAliasKeyFirst => {
+                    let key = session.aliases.keys().next()
+                        .map(|k| k.as_str())
+                        .unwrap_or("none");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Alias key first: {key}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -44416,6 +44443,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/env-var-key-first" => {
+                                    if _ctx.send(UiCommand::QueryEnvVarKeyFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-var-key-first" => {
+                                    if _ctx.send(UiCommand::QuerySessionVarKeyFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/alias-key-first" => {
+                                    if _ctx.send(UiCommand::QueryAliasKeyFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -45847,6 +45889,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-block-turns-first",
                             "/plan-block-count-first",
                             "/plan-tool-stat-first",
+                            "/env-var-key-first",
+                            "/session-var-key-first",
+                            "/alias-key-first",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -2199,6 +2199,12 @@ pub enum UiCommand {
     QueryPlanBlockCountFirst,
     /// Show the name of the first tool in plan.tool_call_stats.
     QueryPlanToolStatFirst,
+    /// Show the first key in session_env.
+    QueryEnvVarKeyFirst,
+    /// Show the first key in session_vars.
+    QuerySessionVarKeyFirst,
+    /// Show the first key in aliases.
+    QueryAliasKeyFirst,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
