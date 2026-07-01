@@ -1779,6 +1779,12 @@ pub enum UiCommand {
     QueryTurnOutTokensAvg,
     /// Show the maximum input tokens in a single turn.
     QueryTurnInTokensMax,
+    /// Show the maximum output tokens in a single turn.
+    QueryTurnOutTokensMax,
+    /// Show the minimum input tokens in a single turn.
+    QueryTurnInTokensMin,
+    /// Show the minimum output tokens in a single turn.
+    QueryTurnOutTokensMin,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
