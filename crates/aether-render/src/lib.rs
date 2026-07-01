@@ -2151,6 +2151,12 @@ pub enum UiCommand {
     QueryPromptMacroTotalChars,
     /// Show the total chars across all env var keys and values.
     QueryEnvVarTotalChars,
+    /// Show the total chars across all session var keys and values.
+    QuerySessionVarTotalChars,
+    /// Show the total chars across all alias keys and values.
+    QueryAliasTotalChars,
+    /// Show the total chars across all error playbook patterns and hints.
+    QueryErrorPlaybookTotalChars,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
