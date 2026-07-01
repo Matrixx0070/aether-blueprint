@@ -2403,6 +2403,12 @@ pub enum UiCommand {
     QueryTurnCostLogFirstOut,
     /// Show the output tokens for the last turn in turn_cost_log.
     QueryTurnCostLogLastOut,
+    /// Show the total ConversationItem count across all saved snapshots.
+    QuerySavedSnapshotValueItemsTotal,
+    /// Show the average ConversationItem count per saved snapshot.
+    QuerySavedSnapshotValueItemsAvg,
+    /// Show the maximum ConversationItem count in any single saved snapshot.
+    QuerySavedSnapshotValueItemsMax,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
