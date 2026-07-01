@@ -1923,6 +1923,12 @@ pub enum UiCommand {
     QueryTurnCostLogOutTokensTotal,
     /// Show the average cost per turn from the turn cost log.
     QueryTurnCostLogCostAvg,
+    /// Show the average input tokens per turn from the turn cost log.
+    QueryTurnCostLogInTokensAvg,
+    /// Show the average output tokens per turn from the turn cost log.
+    QueryTurnCostLogOutTokensAvg,
+    /// Show the reminders_admitted count from the last assembly telemetry.
+    QueryAssemblyRemindersAdmitted,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

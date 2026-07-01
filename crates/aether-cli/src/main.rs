@@ -13245,6 +13245,41 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryTurnCostLogInTokensAvg => {
+                    let n = session.turn_cost_log.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn cost log avg input tokens: no turns logged.".to_string()
+                        ));
+                    } else {
+                        let total: u64 = session.turn_cost_log.iter().map(|(_, in_tok, _, _)| in_tok).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Avg input tokens per turn: {:.1}", total as f64 / n as f64
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnCostLogOutTokensAvg => {
+                    let n = session.turn_cost_log.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn cost log avg output tokens: no turns logged.".to_string()
+                        ));
+                    } else {
+                        let total: u64 = session.turn_cost_log.iter().map(|(_, _, out_tok, _)| out_tok).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Avg output tokens per turn: {:.1}", total as f64 / n as f64
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryAssemblyRemindersAdmitted => {
+                    let count = session.last_assembly_telemetry.as_ref().map(|t| t.reminders_admitted).unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Assembly reminders admitted: {}", count
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -42527,6 +42562,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/turn-cost-log-in-tokens-avg" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogInTokensAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-cost-log-out-tokens-avg" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogOutTokensAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/assembly-reminders-admitted" => {
+                                    if _ctx.send(UiCommand::QueryAssemblyRemindersAdmitted).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -43820,6 +43870,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-cost-log-in-tokens-total",
                             "/turn-cost-log-out-tokens-total",
                             "/turn-cost-log-cost-avg",
+                            "/turn-cost-log-in-tokens-avg",
+                            "/turn-cost-log-out-tokens-avg",
+                            "/assembly-reminders-admitted",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
