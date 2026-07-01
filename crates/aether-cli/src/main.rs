@@ -16462,6 +16462,47 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryHistoryUserMinChars => {
+                    use aether_core::context::ConversationItem::User;
+                    let min = session.history.iter()
+                        .filter_map(|item| if let User(text) = item { Some(text.len()) } else { None })
+                        .min();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match min {
+                        Some(v) => format!("History user min chars: {v}"),
+                        None => "History user min chars: no user turns".to_string(),
+                    }));
+                    continue;
+                }
+                UiCommand::QueryHistoryAsstMinChars => {
+                    use aether_core::context::ConversationItem::Assistant;
+                    let min = session.history.iter()
+                        .filter_map(|item| {
+                            if let Assistant { text: Some(t), .. } = item { Some(t.len()) } else { None }
+                        })
+                        .min();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match min {
+                        Some(v) => format!("History asst min chars: {v}"),
+                        None => "History asst min chars: no assistant text turns".to_string(),
+                    }));
+                    continue;
+                }
+                UiCommand::QueryHistoryToolResultMinChars => {
+                    use aether_core::context::ConversationItem::ToolResults;
+                    let min = session.history.iter()
+                        .filter_map(|item| {
+                            if let ToolResults(results) = item {
+                                results.iter().map(|r| r.content.len()).min()
+                            } else {
+                                None
+                            }
+                        })
+                        .min();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match min {
+                        Some(v) => format!("History tool result min chars: {v}"),
+                        None => "History tool result min chars: no tool results".to_string(),
+                    }));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -47649,6 +47690,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/history-user-min-chars" => {
+                                    if _ctx.send(UiCommand::QueryHistoryUserMinChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-asst-min-chars" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAsstMinChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-tool-result-min-chars" => {
+                                    if _ctx.send(UiCommand::QueryHistoryToolResultMinChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -49323,6 +49379,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-block-counts-avg",
                             "/plan-tool-stats-keys-count",
                             "/plan-block-counts-keys-total-chars",
+                            "/history-user-min-chars",
+                            "/history-asst-min-chars",
+                            "/history-tool-result-min-chars",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -2685,6 +2685,12 @@ pub enum UiCommand {
     QueryPlanToolStatsKeysCount,
     /// Total chars across all keys in plan.block_counts.
     QueryPlanBlockCountsKeysTotalChars,
+    /// Min chars among user turn messages in conversation history.
+    QueryHistoryUserMinChars,
+    /// Min chars among assistant turn messages in conversation history.
+    QueryHistoryAsstMinChars,
+    /// Min content chars among tool results in conversation history.
+    QueryHistoryToolResultMinChars,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
