@@ -13480,6 +13480,36 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryAutoTagRuleAvgTagLen => {
+                    let n = session.auto_tag_rules.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Auto-tag rule avg tag len: no rules.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.auto_tag_rules.iter().map(|(_, tag)| tag.len()).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Auto-tag rule avg tag len: {:.1}", total as f64 / n as f64
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryEnvVarFirst => {
+                    let first = session.session_env.keys().next().cloned();
+                    match first {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Env var first: no env vars set.".to_string())); }
+                        Some(k) => { let _ = etx_for_driver.send(UiEvent::SystemNote(format!("First env var key: {}", k))); }
+                    }
+                    continue;
+                }
+                UiCommand::QueryEnvVarLast => {
+                    let last = session.session_env.keys().last().cloned();
+                    match last {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Env var last: no env vars set.".to_string())); }
+                        Some(k) => { let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Last env var key: {}", k))); }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -42882,6 +42912,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/auto-tag-rule-avg-tag-len" => {
+                                    if _ctx.send(UiCommand::QueryAutoTagRuleAvgTagLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/env-var-first" => {
+                                    if _ctx.send(UiCommand::QueryEnvVarFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/env-var-last" => {
+                                    if _ctx.send(UiCommand::QueryEnvVarLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -44199,6 +44244,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/error-playbook-avg-pat-len",
                             "/error-playbook-avg-hint-len",
                             "/auto-tag-rule-avg-pat-len",
+                            "/auto-tag-rule-avg-tag-len",
+                            "/env-var-first",
+                            "/env-var-last",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

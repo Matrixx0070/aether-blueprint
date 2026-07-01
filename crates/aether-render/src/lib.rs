@@ -1971,6 +1971,12 @@ pub enum UiCommand {
     QueryErrorPlaybookAvgHintLen,
     /// Show the average pattern length in auto-tag rules.
     QueryAutoTagRuleAvgPatLen,
+    /// Show the average tag length in auto-tag rules.
+    QueryAutoTagRuleAvgTagLen,
+    /// Show the first key in session_env.
+    QueryEnvVarFirst,
+    /// Show the last key in session_env.
+    QueryEnvVarLast,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
