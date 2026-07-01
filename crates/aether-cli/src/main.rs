@@ -26,7 +26,7 @@ use aether_llm::{
     LlmProvider, Message, MessagesRequest,
 };
 use aether_overlay::{Fable5Overlay, OverlayConfig};
-use aether_selfcheck::{Action, Gate, Rule};
+use aether_selfcheck::{Action, Gate, Rule, Severity};
 use aether_tools::{builtin::register_builtins, ToolRegistry};
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
@@ -15931,6 +15931,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let avg = if n == 0 { 0 } else { rules.iter().map(|r| r.rule.id.len()).sum::<usize>() / n };
                     let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
                         "Verifier gate avg rule ID length: {avg}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierGateRuleDescTotalChars => {
+                    let total: usize = session.verifier.gate.rules.iter().map(|r| r.rule.description.len()).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate total rule description chars: {total}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierGateRuleSevHigh => {
+                    let count = session.verifier.gate.rules.iter().filter(|r| r.rule.severity == Severity::High).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate High-severity rules: {count}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierGateRuleSevCritical => {
+                    let count = session.verifier.gate.rules.iter().filter(|r| r.rule.severity == Severity::Critical).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate Critical-severity rules: {count}"
                     )));
                     continue;
                 }
@@ -46806,6 +46827,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/verifier-gate-rule-desc-total-chars" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateRuleDescTotalChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-gate-rule-sev-high" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateRuleSevHigh).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-gate-rule-sev-critical" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateRuleSevCritical).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -48417,6 +48453,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/verifier-gate-rule-desc-avg-len",
                             "/verifier-gate-regex-avg-per-rule",
                             "/verifier-gate-rule-id-avg-len",
+                            "/verifier-gate-rule-desc-total-chars",
+                            "/verifier-gate-rule-sev-high",
+                            "/verifier-gate-rule-sev-critical",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
