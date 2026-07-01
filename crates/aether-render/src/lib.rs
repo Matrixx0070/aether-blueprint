@@ -3087,6 +3087,12 @@ pub enum UiCommand {
     QueryWallMsStddev,
     /// Standard deviation of cost values across cost-log entries.
     QueryCostStddev,
+    /// Standard deviation of input tokens across cost-log entries.
+    QueryInTokensStddev,
+    /// Standard deviation of output tokens across cost-log entries.
+    QueryOutTokensStddev,
+    /// Minimum ms gap between any two consecutive session_note timestamps.
+    QuerySessionNoteMinTsGap,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
