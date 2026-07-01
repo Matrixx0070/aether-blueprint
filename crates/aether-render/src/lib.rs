@@ -2499,6 +2499,12 @@ pub enum UiCommand {
     QueryPendingReminderLongConvCount,
     /// Show the count of pending reminders with ReminderKind::SessionStart.
     QueryPendingReminderSessionStartCount,
+    /// Show the total chars in all current tool outputs in tool_output_history.
+    QueryToolOutputHistCurrTotalChars,
+    /// Show the total chars in all previous tool outputs in tool_output_history.
+    QueryToolOutputHistPrevTotalChars,
+    /// Show the average current output length in tool_output_history.
+    QueryToolOutputHistCurrAvgLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
