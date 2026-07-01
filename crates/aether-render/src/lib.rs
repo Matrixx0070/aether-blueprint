@@ -1713,6 +1713,12 @@ pub enum UiCommand {
     QueryHistoryAnnotMaxLen,
     /// Show the longest single turn label text.
     QueryTurnLabelMaxLen,
+    /// Show the longest bookmark label string.
+    QueryBookmarkLabelMaxLen,
+    /// Show the longest session note text.
+    QuerySessionNoteTextMaxLen,
+    /// Show the shortest history annotation text.
+    QueryHistoryAnnotMinLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
