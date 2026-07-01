@@ -2319,6 +2319,12 @@ pub enum UiCommand {
     QuerySavedSnapshotKeyFirst,
     /// Show the last key in saved_snapshots.
     QuerySavedSnapshotKeyLast,
+    /// Show the total chars across all saved_snapshot keys.
+    QuerySavedSnapshotKeyTotalChars,
+    /// Show the cumulative cache read input tokens.
+    QueryUsageTotalCacheRead,
+    /// Show the cumulative cache creation input tokens.
+    QueryUsageTotalCacheCreate,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

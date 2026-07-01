@@ -14999,6 +14999,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QuerySavedSnapshotKeyTotalChars => {
+                    let total: usize = session.saved_snapshots.keys().map(|k| k.len()).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Saved snapshot key total chars: {total}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryUsageTotalCacheRead => {
+                    let n = session.usage_total.cache_read_input_tokens;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Usage total cache read tokens: {n}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryUsageTotalCacheCreate => {
+                    let n = session.usage_total.cache_creation_input_tokens;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Usage total cache create tokens: {n}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -45271,6 +45292,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/saved-snapshot-key-total-chars" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotKeyTotalChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/usage-total-cache-read" => {
+                                    if _ctx.send(UiCommand::QueryUsageTotalCacheRead).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/usage-total-cache-create" => {
+                                    if _ctx.send(UiCommand::QueryUsageTotalCacheCreate).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -46762,6 +46798,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-output-limit-min-val",
                             "/saved-snapshot-key-first",
                             "/saved-snapshot-key-last",
+                            "/saved-snapshot-key-total-chars",
+                            "/usage-total-cache-read",
+                            "/usage-total-cache-create",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
