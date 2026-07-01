@@ -2487,6 +2487,12 @@ pub enum UiCommand {
     QueryPendingReminderSystemWarningCount,
     /// Show the count of pending reminders with ReminderKind::ExternalState.
     QueryPendingReminderExternalStateCount,
+    /// Show the count of pending reminders with ReminderKind::Image.
+    QueryPendingReminderImageCount,
+    /// Show the count of pending reminders with ReminderKind::CyberWarning.
+    QueryPendingReminderCyberWarningCount,
+    /// Show the count of pending reminders with ReminderKind::RetrievalHit.
+    QueryPendingReminderRetrievalHitCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

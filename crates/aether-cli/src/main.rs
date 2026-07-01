@@ -15635,6 +15635,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryPendingReminderImageCount => {
+                    let count = session.pending_reminders.iter().filter(|r| r.kind == ReminderKind::Image).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Pending reminders with ReminderKind::Image: {count}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPendingReminderCyberWarningCount => {
+                    let count = session.pending_reminders.iter().filter(|r| r.kind == ReminderKind::CyberWarning).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Pending reminders with ReminderKind::CyberWarning: {count}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPendingReminderRetrievalHitCount => {
+                    let count = session.pending_reminders.iter().filter(|r| r.kind == ReminderKind::RetrievalHit).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Pending reminders with ReminderKind::RetrievalHit: {count}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -46327,6 +46348,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/pending-reminder-image-count" => {
+                                    if _ctx.send(UiCommand::QueryPendingReminderImageCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/pending-reminder-cyber-warning-count" => {
+                                    if _ctx.send(UiCommand::QueryPendingReminderCyberWarningCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/pending-reminder-retrieval-hit-count" => {
+                                    if _ctx.send(UiCommand::QueryPendingReminderRetrievalHitCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -47902,6 +47938,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/pending-reminder-hook-output-count",
                             "/pending-reminder-system-warning-count",
                             "/pending-reminder-external-state-count",
+                            "/pending-reminder-image-count",
+                            "/pending-reminder-cyber-warning-count",
+                            "/pending-reminder-retrieval-hit-count",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
