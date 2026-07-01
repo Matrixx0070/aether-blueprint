@@ -13955,6 +13955,67 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryEnvVarAvgValLen => {
+                    let n = session.session_env.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Env var avg val len: no env vars set.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.session_env.values().map(|v| v.len()).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Env var avg val len: {:.1}", total as f64 / n as f64
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanBlockCountAvg => {
+                    let n = session.plan.block_counts.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Plan block count avg: no block counts.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.plan.block_counts.values().sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Plan block count avg: {:.1}", total as f64 / n as f64
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanBlockCountMax => {
+                    let max = session.plan.block_counts.values().copied().max().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan block count max: {}", max
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlanBlockCountMin => {
+                    let min = session.plan.block_counts.values().copied().min().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan block count min: {}", min
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTaskQueueCount => {
+                    let n = session.task_queue.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Task queue count: {n}"
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySessionUptimeDays => {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let secs = now.saturating_sub(session.started_at);
+                    let days = secs / 86400;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session uptime: {days} day(s)"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -43657,6 +43718,36 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/env-var-avg-val-len" => {
+                                    if _ctx.send(UiCommand::QueryEnvVarAvgValLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-block-count-avg" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockCountAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-block-count-max" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockCountMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-block-count-min" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockCountMin).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/task-queue-count" => {
+                                    if _ctx.send(UiCommand::QueryTaskQueueCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-uptime-days" => {
+                                    if _ctx.send(UiCommand::QuerySessionUptimeDays).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -45034,6 +45125,12 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/env-var-max-val-len",
                             "/env-var-min-val-len",
                             "/env-var-avg-key-len",
+                            "/env-var-avg-val-len",
+                            "/plan-block-count-avg",
+                            "/plan-block-count-max",
+                            "/plan-block-count-min",
+                            "/task-queue-count",
+                            "/session-uptime-days",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -2091,6 +2091,18 @@ pub enum UiCommand {
     QueryEnvVarMinValLen,
     /// Show the avg key length in session_env.
     QueryEnvVarAvgKeyLen,
+    /// Show the avg value length in session_env.
+    QueryEnvVarAvgValLen,
+    /// Show the average value in plan.block_counts.
+    QueryPlanBlockCountAvg,
+    /// Show the max value in plan.block_counts.
+    QueryPlanBlockCountMax,
+    /// Show the min value in plan.block_counts.
+    QueryPlanBlockCountMin,
+    /// Show the count of items in task_queue.
+    QueryTaskQueueCount,
+    /// Show the session uptime in days.
+    QuerySessionUptimeDays,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
