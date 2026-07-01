@@ -14907,6 +14907,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryPendingReminderMaxLen => {
+                    let max = session.pending_reminders.iter().map(|r| r.body.len()).max().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Pending reminder max len: {max} chars"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPendingReminderMinLen => {
+                    let min = session.pending_reminders.iter().map(|r| r.body.len()).min().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Pending reminder min len: {min} chars"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPersistentReminderMaxLen => {
+                    let max = session.persistent_reminders.iter().map(|r| r.len()).max().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Persistent reminder max len: {max} chars"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -45119,6 +45140,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/pending-reminder-max-len" => {
+                                    if _ctx.send(UiCommand::QueryPendingReminderMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/pending-reminder-min-len" => {
+                                    if _ctx.send(UiCommand::QueryPendingReminderMinLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/persistent-reminder-max-len" => {
+                                    if _ctx.send(UiCommand::QueryPersistentReminderMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -46598,6 +46634,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/pending-reminder-avg-len",
                             "/persistent-reminder-count",
                             "/persistent-reminder-total",
+                            "/pending-reminder-max-len",
+                            "/pending-reminder-min-len",
+                            "/persistent-reminder-max-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -2295,6 +2295,12 @@ pub enum UiCommand {
     QueryPersistentReminderCount,
     /// Show the total chars across all persistent reminders.
     QueryPersistentReminderTotal,
+    /// Show the max body length of pending reminders.
+    QueryPendingReminderMaxLen,
+    /// Show the min body length of pending reminders.
+    QueryPendingReminderMinLen,
+    /// Show the max length of persistent reminders.
+    QueryPersistentReminderMaxLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
