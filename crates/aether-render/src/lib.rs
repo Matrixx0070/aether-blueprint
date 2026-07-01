@@ -1155,6 +1155,12 @@ pub enum UiCommand {
     QueryHistoryPreviewAt(usize),
     /// Show consecutive error counts per tool from plan.
     QueryPlanConsecErrors,
+    /// Show the full text of the last plan error.
+    QueryPlanLastErrorText,
+    /// Show total session cost (sum of all turn costs).
+    QuerySessionCostTotal,
+    /// Show configured token budget hard-stop percentage.
+    QueryTokenBudgetHardPct,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

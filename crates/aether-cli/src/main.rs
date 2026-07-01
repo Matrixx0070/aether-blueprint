@@ -8964,6 +8964,44 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QueryPlanLastErrorText => {
+                    match &session.plan.last_error_text {
+                        Some(text) => {
+                            let preview = text.chars().take(300).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Last plan error text ({} chars):\n{}", text.len(), preview
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Plan: no error text recorded.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionCostTotal => {
+                    let total: f64 = session.turn_cost_log.iter().map(|(_, _, _, c)| c).sum();
+                    let turns = session.turn_cost_log.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session cost total: ${total:.6} over {turns} turn(s)."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTokenBudgetHardPct => {
+                    let hard = session.token_budget_hard_pct;
+                    let warn = session.token_budget_warn_pct;
+                    if hard == 0.0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Token budget hard stop: not set (warn: {warn:.0}%). Use /token-budget-hard <pct> to configure."
+                        )));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Token budget: hard stop at {hard:.0}%, warn at {warn:.0}%."
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionUptime => {
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
@@ -35592,6 +35630,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/plan-last-error-text" => {
+                                    if _ctx.send(UiCommand::QueryPlanLastErrorText).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-cost-total" => {
+                                    if _ctx.send(UiCommand::QuerySessionCostTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/token-budget-hard-pct" => {
+                                    if _ctx.send(UiCommand::QueryTokenBudgetHardPct).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -36476,6 +36529,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-uptime",
                             "/history-preview-at ",
                             "/plan-consec-errors",
+                            "/plan-last-error-text",
+                            "/session-cost-total",
+                            "/token-budget-hard-pct",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
