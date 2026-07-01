@@ -2901,6 +2901,12 @@ pub enum UiCommand {
     QueryBookmarkTurnGapMax,
     /// Minimum turn-index gap between any two consecutive bookmarks.
     QueryBookmarkTurnGapMin,
+    /// Average turn-index gap between consecutive turn labels.
+    QueryTurnLabelGapAvg,
+    /// Maximum turn-index gap between any two consecutive turn labels.
+    QueryTurnLabelGapMax,
+    /// Minimum turn-index gap between any two consecutive turn labels.
+    QueryTurnLabelGapMin,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
