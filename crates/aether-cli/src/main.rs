@@ -11192,6 +11192,49 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryTurnReminderEveryShow => {
+                    if session.turn_reminder_every == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn reminder: OFF (0). Use /remind-every <N> to enable.".to_string()
+                        ));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn reminder: every {} turns (goal re-injected as reminder).", session.turn_reminder_every
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryRetryOnErrorShow => {
+                    let threshold = session.retry_on_error_threshold;
+                    let max = session.retry_on_error_max;
+                    let count = session.retry_on_error_count;
+                    if threshold == 0 || max == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Retry-on-error: OFF. Use /retry-on-error <threshold> <max> to enable.".to_string()
+                        ));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Retry-on-error: threshold={threshold} errors, max={max} retries/turn. Current count: {count}."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryAnnotationAt(idx) => {
+                    match session.history_annotations.get(idx) {
+                        Some((hist_idx, note)) => {
+                            let preview = note.chars().take(120).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Annotation[{idx}]: history_idx={hist_idx} — {preview}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Annotation[{idx}]: out of range ({} annotations).", session.history_annotations.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryVerifierBlockedShow => {
                     match &session.last_verification {
                         Some(v) => {
@@ -37831,6 +37874,26 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/turn-reminder-every-show" => {
+                                    if _ctx.send(UiCommand::QueryTurnReminderEveryShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/retry-on-error-show" => {
+                                    if _ctx.send(UiCommand::QueryRetryOnErrorShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd_str if cmd_str.starts_with("/history-annotation-at ") => {
+                                    let rest = cmd_str.trim_start_matches("/history-annotation-at ").trim();
+                                    if let Ok(idx) = rest.parse::<usize>() {
+                                        if _ctx.send(UiCommand::QueryHistoryAnnotationAt(idx)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /history-annotation-at <index>".to_string()));
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -38820,6 +38883,12 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias-at ",
                             "/session-var-count-total",
                             "/turn-wall-p50",
+                            "/verifier-blocked-show",
+                            "/plan-tool-err-at ",
+                            "/session-intent-preview",
+                            "/turn-reminder-every-show",
+                            "/retry-on-error-show",
+                            "/history-annotation-at ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

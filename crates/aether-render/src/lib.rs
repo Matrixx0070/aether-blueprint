@@ -1371,6 +1371,12 @@ pub enum UiCommand {
     QueryPlanToolErrAt(String),
     /// Show session intent if set.
     QuerySessionIntentPreview,
+    /// Show turn-reminder-every setting (0 = off).
+    QueryTurnReminderEveryShow,
+    /// Show retry-on-error threshold, max, and current count.
+    QueryRetryOnErrorShow,
+    /// Show history annotation at a specific index.
+    QueryHistoryAnnotationAt(usize),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
