@@ -17051,6 +17051,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryHistoryUserUniqueWords => {
+                    use aether_core::context::ConversationItem::User;
+                    let unique: std::collections::HashSet<&str> = session.history.iter()
+                        .filter_map(|item| if let User(text) = item { Some(text.as_str()) } else { None })
+                        .flat_map(|text| text.split_whitespace())
+                        .collect();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History user unique words: {}", unique.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryAsstUniqueWords => {
+                    use aether_core::context::ConversationItem::Assistant;
+                    let unique: std::collections::HashSet<&str> = session.history.iter()
+                        .filter_map(|item| if let Assistant { text: Some(t), .. } = item { Some(t.as_str()) } else { None })
+                        .flat_map(|text| text.split_whitespace())
+                        .collect();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History asst unique words: {}", unique.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryToolUseUniqueNames => {
+                    use aether_core::context::ConversationItem::Assistant;
+                    let unique: std::collections::HashSet<&str> = session.history.iter()
+                        .filter_map(|item| if let Assistant { tool_uses, .. } = item { Some(tool_uses) } else { None })
+                        .flat_map(|uses| uses.iter().map(|u| u.name.as_str()))
+                        .collect();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History tool use unique names: {}", unique.len()
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -48493,6 +48526,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/history-user-unique-words" => {
+                                    if _ctx.send(UiCommand::QueryHistoryUserUniqueWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-asst-unique-words" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAsstUniqueWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-tool-use-unique-names" => {
+                                    if _ctx.send(UiCommand::QueryHistoryToolUseUniqueNames).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -50218,6 +50266,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-goal-avg-chars-per-word",
                             "/plan-text-unique-words",
                             "/plan-goal-unique-words",
+                            "/history-user-unique-words",
+                            "/history-asst-unique-words",
+                            "/history-tool-use-unique-names",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

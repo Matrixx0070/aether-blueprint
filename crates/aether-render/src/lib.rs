@@ -2787,6 +2787,12 @@ pub enum UiCommand {
     QueryPlanTextUniqueWords,
     /// Unique word count in the plan goal text.
     QueryPlanGoalUniqueWords,
+    /// Count of unique words across all user turns in history.
+    QueryHistoryUserUniqueWords,
+    /// Count of unique words across all assistant text turns in history.
+    QueryHistoryAsstUniqueWords,
+    /// Count of unique tool names used across all tool_use records in history.
+    QueryHistoryToolUseUniqueNames,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
