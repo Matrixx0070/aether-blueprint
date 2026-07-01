@@ -2799,6 +2799,12 @@ pub enum UiCommand {
     QueryHistoryAnnotUniqueTurns,
     /// Count of unique block names in plan.block_counts keys.
     QueryPlanBlockCountsUniqueKeys,
+    /// Count of unique tool names in plan.tool_call_stats keys.
+    QueryPlanToolCallStatsUniqueKeys,
+    /// Count of unique block names in plan.block_turns keys.
+    QueryPlanBlockTurnsUniqueKeys,
+    /// Count of unique tool names in plan.tool_error_counts keys.
+    QueryPlanToolErrorCountsUniqueKeys,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
