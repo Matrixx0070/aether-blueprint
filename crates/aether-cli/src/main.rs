@@ -11192,6 +11192,59 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QuerySnapshotLast => {
+                    let mut keys: Vec<_> = session.saved_snapshots.keys().collect();
+                    keys.sort();
+                    match keys.last() {
+                        Some(name) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Snapshot[last] (of {}): '{name}'", session.saved_snapshots.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Saved snapshots: none.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolSigLast => {
+                    match session.last_tool_signatures.last() {
+                        Some((name, args)) => {
+                            let args_prev = args.chars().take(80).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Tool sig[last] (of {}): '{name}' args={args_prev}",
+                                session.last_tool_signatures.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Tool signatures: none from last batch.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryAliasLast => {
+                    let mut pairs: Vec<_> = session.aliases.iter().collect();
+                    pairs.sort_by_key(|(k, _)| k.as_str());
+                    match pairs.last() {
+                        Some((k, v)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Alias[last] (of {}): '{k}' → '{}'",
+                                session.aliases.len(),
+                                v.chars().take(80).collect::<String>()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Aliases: none defined.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryPersistentReminderLast => {
                     match session.persistent_reminders.last() {
                         Some(r) => {
@@ -38884,6 +38937,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/snapshot-last" => {
+                                    if _ctx.send(UiCommand::QuerySnapshotLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-sig-last" => {
+                                    if _ctx.send(UiCommand::QueryToolSigLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/alias-last" => {
+                                    if _ctx.send(UiCommand::QueryAliasLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -39952,6 +40020,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/persistent-reminder-last",
                             "/session-note-last",
                             "/plan-block-last",
+                            "/snapshot-last",
+                            "/tool-sig-last",
+                            "/alias-last",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

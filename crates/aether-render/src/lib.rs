@@ -1473,6 +1473,12 @@ pub enum UiCommand {
     QuerySessionNoteLast,
     /// Show the last plan block name from block_counts.
     QueryPlanBlockLast,
+    /// Show the last saved snapshot name (alphabetically).
+    QuerySnapshotLast,
+    /// Show the last tool signature from last_tool_signatures.
+    QueryToolSigLast,
+    /// Show the last alias (key → value) alphabetically.
+    QueryAliasLast,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
