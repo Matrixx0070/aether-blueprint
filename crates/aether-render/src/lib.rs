@@ -1821,6 +1821,12 @@ pub enum UiCommand {
     QueryToolAllowMaxLen,
     /// Show the shortest tool name in the allow list.
     QueryToolAllowMinLen,
+    /// Show the shortest tool name key in tool output history.
+    QueryToolOutputHistKeyMinLen,
+    /// Show the longest block type key in plan block counts.
+    QueryPlanBlockKeyMaxLen,
+    /// Show the longest tool name key in plan tool call stats.
+    QueryPlanToolStatKeyMaxLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
