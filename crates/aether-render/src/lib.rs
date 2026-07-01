@@ -2001,6 +2001,12 @@ pub enum UiCommand {
     QueryRetryOnErrorThresh,
     /// Show how much of the token budget has been used as a percentage.
     QueryTokenBudgetUsedPct,
+    /// Show the cost alert threshold in USD.
+    QueryCostAlertUsd,
+    /// Show the total input token usage for the session.
+    QueryUsageTotalIn,
+    /// Show the total output token usage for the session.
+    QueryUsageTotalOut,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

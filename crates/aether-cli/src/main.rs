@@ -13626,6 +13626,24 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryCostAlertUsd => {
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Cost alert threshold: ${:.4}", session.cost_alert_usd
+                    )));
+                    continue;
+                }
+                UiCommand::QueryUsageTotalIn => {
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Total input tokens this session: {}", session.usage_total.input_tokens
+                    )));
+                    continue;
+                }
+                UiCommand::QueryUsageTotalOut => {
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Total output tokens this session: {}", session.usage_total.output_tokens
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -43103,6 +43121,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/cost-alert-usd" => {
+                                    if _ctx.send(UiCommand::QueryCostAlertUsd).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/usage-total-in" => {
+                                    if _ctx.send(UiCommand::QueryUsageTotalIn).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/usage-total-out" => {
+                                    if _ctx.send(UiCommand::QueryUsageTotalOut).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -44435,6 +44468,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/retry-on-error-max",
                             "/retry-on-error-thresh",
                             "/token-budget-used-pct",
+                            "/cost-alert-usd",
+                            "/usage-total-in",
+                            "/usage-total-out",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
