@@ -16715,6 +16715,38 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryTurnCostLogMinTotalTokens => {
+                    let min = session.turn_cost_log.iter()
+                        .map(|(_, in_tok, out_tok, _)| in_tok + out_tok)
+                        .min();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match min {
+                        Some(v) => format!("Turn cost log min total tokens in one turn: {v}"),
+                        None => "Turn cost log min total tokens: no turns logged".to_string(),
+                    }));
+                    continue;
+                }
+                UiCommand::QueryTurnCostLogCostPerToken => {
+                    let total_tokens: u64 = session.turn_cost_log.iter()
+                        .map(|(_, in_tok, out_tok, _)| in_tok + out_tok)
+                        .sum();
+                    let total_cost: f64 = session.turn_cost_log.iter().map(|(_, _, _, c)| c).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(if total_tokens == 0 {
+                        "Turn cost log cost per token: no tokens logged".to_string()
+                    } else {
+                        format!("Turn cost log avg cost per token: ${:.8}", total_cost / total_tokens as f64)
+                    }));
+                    continue;
+                }
+                UiCommand::QueryTurnCostLogInOutRatio => {
+                    let total_in: u64 = session.turn_cost_log.iter().map(|(_, in_tok, _, _)| in_tok).sum();
+                    let total_out: u64 = session.turn_cost_log.iter().map(|(_, _, out_tok, _)| out_tok).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(if total_out == 0 {
+                        format!("Turn cost log in/out ratio: {total_in}/{total_out} (no output tokens)")
+                    } else {
+                        format!("Turn cost log in/out ratio: {:.2}:1 ({total_in} in / {total_out} out)", total_in as f64 / total_out as f64)
+                    }));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -48007,6 +48039,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/turn-cost-log-min-total-tokens" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogMinTotalTokens).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-cost-log-cost-per-token" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogCostPerToken).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-cost-log-in-out-ratio" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogInOutRatio).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -49702,6 +49749,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-cost-log-total-tokens-sum",
                             "/turn-cost-log-avg-total-tokens",
                             "/turn-cost-log-max-total-tokens",
+                            "/turn-cost-log-min-total-tokens",
+                            "/turn-cost-log-cost-per-token",
+                            "/turn-cost-log-in-out-ratio",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

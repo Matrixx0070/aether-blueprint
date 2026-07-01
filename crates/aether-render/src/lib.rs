@@ -2727,6 +2727,12 @@ pub enum UiCommand {
     QueryTurnCostLogAvgTotalTokens,
     /// Maximum (in_tokens + out_tokens) in a single logged turn.
     QueryTurnCostLogMaxTotalTokens,
+    /// Minimum (in_tokens + out_tokens) in a single logged turn.
+    QueryTurnCostLogMinTotalTokens,
+    /// Average cost per total token (cost / (in+out)) across all logged turns.
+    QueryTurnCostLogCostPerToken,
+    /// Ratio of input tokens to output tokens across all logged turns.
+    QueryTurnCostLogInOutRatio,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
