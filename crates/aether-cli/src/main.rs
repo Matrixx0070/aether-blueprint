@@ -12889,6 +12889,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryLastToolSigSigMaxLen => {
+                    match session.last_tool_signatures.iter().max_by_key(|(_, sig)| sig.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Last tool signatures: none.".to_string())); }
+                        Some((_, sig)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Longest tool sig value: {} chars", sig.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionNoteTsMax => {
+                    match session.session_notes.iter().max_by_key(|(_, ts)| ts) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Session notes: none.".to_string())); }
+                        Some((_, ts)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Newest session note timestamp: {}", ts
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionNoteTsMin => {
+                    match session.session_notes.iter().min_by_key(|(_, ts)| ts) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Session notes: none.".to_string())); }
+                        Some((_, ts)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Oldest session note timestamp: {}", ts
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -42006,6 +42039,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/last-tool-sig-sig-max-len" => {
+                                    if _ctx.send(UiCommand::QueryLastToolSigSigMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-note-ts-max" => {
+                                    if _ctx.send(UiCommand::QuerySessionNoteTsMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-note-ts-min" => {
+                                    if _ctx.send(UiCommand::QuerySessionNoteTsMin).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -43266,6 +43314,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/last-tool-sig-count",
                             "/last-tool-sig-max-len",
                             "/last-tool-sig-min-len",
+                            "/last-tool-sig-sig-max-len",
+                            "/session-note-ts-max",
+                            "/session-note-ts-min",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

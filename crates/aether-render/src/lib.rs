@@ -1857,6 +1857,12 @@ pub enum UiCommand {
     QueryLastToolSigMaxLen,
     /// Show the shortest tool name in last tool signatures.
     QueryLastToolSigMinLen,
+    /// Show the longest signature value in last tool signatures.
+    QueryLastToolSigSigMaxLen,
+    /// Show the highest timestamp in session notes.
+    QuerySessionNoteTsMax,
+    /// Show the lowest timestamp in session notes.
+    QuerySessionNoteTsMin,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
