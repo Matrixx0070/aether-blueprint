@@ -10980,6 +10980,61 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryTurnWallMax => {
+                    match session.turn_wall_ms.iter().max() {
+                        Some(&max_ms) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Max turn wall time: {max_ms}ms ({} turns).", session.turn_wall_ms.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Turn wall times: no turns recorded yet.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnWallMin => {
+                    match session.turn_wall_ms.iter().min() {
+                        Some(&min_ms) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Min turn wall time: {min_ms}ms ({} turns).", session.turn_wall_ms.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Turn wall times: no turns recorded yet.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryResultPreview => {
+                    use aether_core::context::ConversationItem;
+                    let latest = session.history.iter().rev().find_map(|item| {
+                        if let ConversationItem::ToolResults(results) = item {
+                            results.last().map(|r| (r.content.as_str(), r.is_error))
+                        } else {
+                            None
+                        }
+                    });
+                    match latest {
+                        Some((content, is_err)) => {
+                            let preview = content.chars().take(200).collect::<String>();
+                            let status = if is_err { "ERROR" } else { "ok" };
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Latest tool result [{status}]: {preview}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "History: no tool results yet.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -37461,6 +37516,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /turn-wall-max — max wall-clock time across all turns
+                                "/turn-wall-max" => {
+                                    if _ctx.send(UiCommand::QueryTurnWallMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /turn-wall-min — min wall-clock time across all turns
+                                "/turn-wall-min" => {
+                                    if _ctx.send(UiCommand::QueryTurnWallMin).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-result-preview — preview most recent tool result
+                                "/history-result-preview" => {
+                                    if _ctx.send(UiCommand::QueryHistoryResultPreview).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -38435,6 +38508,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-tag-at ",
                             "/alias-key-list",
                             "/bookmark-label-list",
+                            "/turn-wall-max",
+                            "/turn-wall-min",
+                            "/history-result-preview",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

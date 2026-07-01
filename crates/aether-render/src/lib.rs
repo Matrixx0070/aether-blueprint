@@ -1335,6 +1335,12 @@ pub enum UiCommand {
     QueryAliasKeyList,
     /// List all bookmark labels.
     QueryBookmarkLabelList,
+    /// Show maximum wall-clock time across all turns.
+    QueryTurnWallMax,
+    /// Show minimum wall-clock time across all turns.
+    QueryTurnWallMin,
+    /// Preview the most recent tool result from history.
+    QueryHistoryResultPreview,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
