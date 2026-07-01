@@ -2745,6 +2745,12 @@ pub enum UiCommand {
     QuerySessionNoteAvgWords,
     /// Maximum word count in any single session note.
     QuerySessionNoteMaxWords,
+    /// Minimum word count in any single session note.
+    QuerySessionNoteMinWords,
+    /// Total word count across all history annotations.
+    QueryHistoryAnnotWordTotal,
+    /// Average word count per history annotation.
+    QueryHistoryAnnotAvgWords,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

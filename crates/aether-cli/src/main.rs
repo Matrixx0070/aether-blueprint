@@ -16806,6 +16806,38 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QuerySessionNoteMinWords => {
+                    let min = session.session_notes.iter()
+                        .map(|(text, _)| text.split_whitespace().count())
+                        .min();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match min {
+                        Some(v) => format!("Session notes min words in one note: {v}"),
+                        None => "Session notes min words: no notes".to_string(),
+                    }));
+                    continue;
+                }
+                UiCommand::QueryHistoryAnnotWordTotal => {
+                    let total: usize = session.history_annotations.iter()
+                        .map(|(_, text)| text.split_whitespace().count())
+                        .sum();
+                    let n = session.history_annotations.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History annotation total words: {total} ({n} annotations)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryAnnotAvgWords => {
+                    let n = session.history_annotations.len();
+                    let avg = if n == 0 { 0.0 } else {
+                        session.history_annotations.iter()
+                            .map(|(_, text)| text.split_whitespace().count() as f64)
+                            .sum::<f64>() / n as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History annotation avg words per annotation: {avg:.1} ({n} annotations)"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -48143,6 +48175,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/session-note-min-words" => {
+                                    if _ctx.send(UiCommand::QuerySessionNoteMinWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-annot-word-total" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAnnotWordTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-annot-avg-words" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAnnotAvgWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -49847,6 +49894,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-note-word-total",
                             "/session-note-avg-words",
                             "/session-note-max-words",
+                            "/session-note-min-words",
+                            "/history-annot-word-total",
+                            "/history-annot-avg-words",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
