@@ -2889,6 +2889,12 @@ pub enum UiCommand {
     QuerySessionNoteGapMax,
     /// Minimum millisecond gap between any two consecutive session notes.
     QuerySessionNoteGapMin,
+    /// Average turn-index gap between consecutive history annotations.
+    QueryHistoryAnnotGapAvg,
+    /// Maximum turn-index gap between any two consecutive history annotations.
+    QueryHistoryAnnotGapMax,
+    /// Minimum turn-index gap between any two consecutive history annotations.
+    QueryHistoryAnnotGapMin,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
