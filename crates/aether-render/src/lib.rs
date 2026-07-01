@@ -1197,6 +1197,12 @@ pub enum UiCommand {
     QueryHistoryToolResultAt(usize),
     /// Show whether the verifier gate is enabled.
     QueryVerifierGateEnabled,
+    /// List pending reminder bodies (up to 5).
+    QueryPendingReminderList,
+    /// Show the plan goal from a named snapshot.
+    QuerySnapshotPlanGoal(String),
+    /// Show count of error-result items in history.
+    QueryHistoryErrorResultCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

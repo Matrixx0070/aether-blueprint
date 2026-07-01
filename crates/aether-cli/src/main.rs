@@ -8964,6 +8964,52 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QueryPendingReminderList => {
+                    let reminders = &session.pending_reminders;
+                    if reminders.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Pending reminders: none queued.".to_string()
+                        ));
+                    } else {
+                        let lines: Vec<_> = reminders.iter().take(5)
+                            .map(|r| format!("  [{:?}] {}", r.kind, r.body.chars().take(80).collect::<String>()))
+                            .collect();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Pending reminders ({}/{} shown):\n{}",
+                            lines.len(), reminders.len(), lines.join("\n")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QuerySnapshotPlanGoal(name) => {
+                    match session.saved_snapshots.get(&name) {
+                        Some((_, plan)) => {
+                            let goal = plan.goal.as_deref().unwrap_or("(no goal set)");
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Snapshot '{name}' plan goal: {}", goal.chars().take(200).collect::<String>()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Snapshot '{name}': not found."
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryErrorResultCount => {
+                    let n: usize = session.history.iter().map(|item| {
+                        if let aether_core::context::ConversationItem::ToolResults(results) = item {
+                            results.iter().filter(|r| r.is_error).count()
+                        } else {
+                            0
+                        }
+                    }).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Error tool-results in history: {n}."
+                    )));
+                    continue;
+                }
                 UiCommand::QueryPlanBlockTurnCount(name) => {
                     match session.plan.block_turns.get(&name) {
                         Some(turns) => {
@@ -36050,6 +36096,22 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/pending-reminder-list" => {
+                                    if _ctx.send(UiCommand::QueryPendingReminderList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd_str if cmd_str.starts_with("/snapshot-plan-goal ") => {
+                                    let name = cmd_str.trim_start_matches("/snapshot-plan-goal ").trim().to_string();
+                                    if _ctx.send(UiCommand::QuerySnapshotPlanGoal(name)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-error-result-count" => {
+                                    if _ctx.send(UiCommand::QueryHistoryErrorResultCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -36955,6 +37017,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-block-turn-count ",
                             "/history-tool-result-at ",
                             "/verifier-gate-enabled",
+                            "/pending-reminder-list",
+                            "/snapshot-plan-goal ",
+                            "/history-error-result-count",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
