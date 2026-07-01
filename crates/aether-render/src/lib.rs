@@ -2673,6 +2673,12 @@ pub enum UiCommand {
     QueryPlanToolStatsOkTotal,
     /// Sum of err-counts from plan.tool_call_stats.
     QueryPlanToolStatsErrTotal,
+    /// Sum of all values in plan.block_counts.
+    QueryPlanBlockCountsSum,
+    /// Max value in plan.block_counts.
+    QueryPlanBlockCountsMax,
+    /// Total chars across tool names in plan.tool_call_stats keys.
+    QueryPlanToolStatsKeysTotalChars,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

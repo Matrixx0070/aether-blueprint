@@ -16418,6 +16418,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryPlanBlockCountsSum => {
+                    let sum: usize = session.plan.block_counts.values().sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan block_counts sum: {sum}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlanBlockCountsMax => {
+                    let max = session.plan.block_counts.values().copied().max().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan block_counts max: {max}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlanToolStatsKeysTotalChars => {
+                    let total: usize = session.plan.tool_call_stats.keys().map(|k| k.len()).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan tool_call_stats key total chars: {total}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -47575,6 +47596,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/plan-block-counts-sum" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockCountsSum).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-block-counts-max" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockCountsMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-tool-stats-keys-total-chars" => {
+                                    if _ctx.send(UiCommand::QueryPlanToolStatsKeysTotalChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -49243,6 +49279,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-block-count",
                             "/plan-tool-stats-ok-total",
                             "/plan-tool-stats-err-total",
+                            "/plan-block-counts-sum",
+                            "/plan-block-counts-max",
+                            "/plan-tool-stats-keys-total-chars",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
