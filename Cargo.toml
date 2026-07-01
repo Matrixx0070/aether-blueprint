@@ -71,6 +71,7 @@ aether-plugin    = { path = "crates/aether-plugin",    version = "0.35.0" }
 aether-plugin-wasm = { path = "crates/aether-plugin-wasm", version = "0.35.0" }
 aether-flow        = { path = "crates/aether-flow",        version = "0.35.0" }
 aether-symexec     = { path = "crates/aether-symexec",     version = "0.35.0" }
+aether-difffuzz    = { path = "crates/aether-difffuzz",    version = "0.35.0" }
 
 [profile.release]
 lto = "thin"

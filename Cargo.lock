@@ -87,6 +87,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-difffuzz"
+version = "0.35.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "aether-flow"
 version = "0.35.0"
 dependencies = [
