@@ -1179,6 +1179,12 @@ pub enum UiCommand {
     QueryPlanTextLen,
     /// Show bookmark details at a specific index.
     QueryBookmarkAt(usize),
+    /// Show session note at a specific index.
+    QuerySessionNoteAt(usize),
+    /// Show turn label at a specific index.
+    QueryTurnLabelAt(usize),
+    /// Show previous output for a specific tool from output history.
+    QueryToolOutputPrev(String),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

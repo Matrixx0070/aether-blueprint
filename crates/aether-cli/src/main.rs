@@ -8964,6 +8964,58 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QuerySessionNoteAt(idx) => {
+                    match session.session_notes.get(idx) {
+                        Some((text, ts)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Note[{idx}] (ts={ts}): {}", text.chars().take(200).collect::<String>()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Note[{idx}]: out of range ({} notes).", session.session_notes.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnLabelAt(idx) => {
+                    match session.turn_labels.get(idx) {
+                        Some((turn_idx, label)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "TurnLabel[{idx}]: turn={turn_idx}, label='{label}'"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "TurnLabel[{idx}]: out of range ({} labels).", session.turn_labels.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolOutputPrev(name) => {
+                    match session.tool_output_history.get(&name) {
+                        Some((prev, _)) if !prev.is_empty() => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Tool '{name}' prev output ({} chars): {}",
+                                prev.len(),
+                                prev.chars().take(200).collect::<String>()
+                            )));
+                        }
+                        Some(_) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Tool '{name}': no previous output recorded."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Tool '{name}': not in output history."
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionTokenRatio => {
                     let inp = session.usage_total.input_tokens;
                     let out = session.usage_total.output_tokens;
@@ -35830,6 +35882,32 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                cmd_str if cmd_str.starts_with("/session-note-at ") => {
+                                    let arg = cmd_str.trim_start_matches("/session-note-at ").trim();
+                                    if let Ok(idx) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::QuerySessionNoteAt(idx)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /session-note-at <index>".to_string()));
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd_str if cmd_str.starts_with("/turn-label-at ") => {
+                                    let arg = cmd_str.trim_start_matches("/turn-label-at ").trim();
+                                    if let Ok(idx) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::QueryTurnLabelAt(idx)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /turn-label-at <index>".to_string()));
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd_str if cmd_str.starts_with("/tool-output-prev ") => {
+                                    let name = cmd_str.trim_start_matches("/tool-output-prev ").trim().to_string();
+                                    if _ctx.send(UiCommand::QueryToolOutputPrev(name)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -36726,6 +36804,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-token-ratio",
                             "/plan-text-len",
                             "/bookmark-at ",
+                            "/session-note-at ",
+                            "/turn-label-at ",
+                            "/tool-output-prev ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
