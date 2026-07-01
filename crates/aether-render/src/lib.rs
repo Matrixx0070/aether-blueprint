@@ -1995,6 +1995,12 @@ pub enum UiCommand {
     QueryPlanToolErrorCountTotal,
     /// Show the current retry count from session.
     QueryRetryCountCurrent,
+    /// Show the retry_on_error_max threshold.
+    QueryRetryOnErrorMax,
+    /// Show the retry_on_error_threshold value.
+    QueryRetryOnErrorThresh,
+    /// Show how much of the token budget has been used as a percentage.
+    QueryTokenBudgetUsedPct,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
