@@ -12798,6 +12798,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QuerySavedSnapshotKeyMaxLen => {
+                    match session.saved_snapshots.keys().max_by_key(|k| k.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Saved snapshots: none.".to_string())); }
+                        Some(k) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Longest snapshot key: {} chars ('{}')", k.len(), k
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QuerySavedSnapshotKeyMinLen => {
+                    match session.saved_snapshots.keys().min_by_key(|k| k.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Saved snapshots: none.".to_string())); }
+                        Some(k) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Shortest snapshot key: {} chars ('{}')", k.len(), k
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanBlockTurnsMax => {
+                    match session.plan.block_turns.iter().max_by_key(|(_, v)| v.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Plan block turns: none.".to_string())); }
+                        Some((block, turns)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Block with most turns: '{}' ({} turns)", block, turns.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -41870,6 +41903,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/saved-snapshot-key-max-len" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotKeyMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/saved-snapshot-key-min-len" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotKeyMinLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-block-turns-max" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockTurnsMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -43121,6 +43169,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/progress-item-min-len",
                             "/saved-snapshot-count",
                             "/tool-error-count-max",
+                            "/saved-snapshot-key-max-len",
+                            "/saved-snapshot-key-min-len",
+                            "/plan-block-turns-max",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

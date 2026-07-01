@@ -1839,6 +1839,12 @@ pub enum UiCommand {
     QuerySavedSnapshotCount,
     /// Show the tool with the highest consecutive error count.
     QueryToolErrorCountMax,
+    /// Show the longest saved snapshot name key.
+    QuerySavedSnapshotKeyMaxLen,
+    /// Show the shortest saved snapshot name key.
+    QuerySavedSnapshotKeyMinLen,
+    /// Show the plan block type with the most turns recorded.
+    QueryPlanBlockTurnsMax,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
