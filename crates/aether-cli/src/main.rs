@@ -11192,6 +11192,46 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryVerifierBlockedShow => {
+                    match &session.last_verification {
+                        Some(v) => {
+                            let blocked = v.is_blocked();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Verifier last run: blocked={}. {} blocking reason(s).",
+                                blocked, v.blocked_reasons.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Verifier: no verification run yet this session.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanToolErrAt(tool) => {
+                    let count = session.plan.tool_error_counts.get(&tool).copied().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan tool '{tool}' consecutive errors: {count}."
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySessionIntentPreview => {
+                    match &session.session_intent {
+                        Some(intent) => {
+                            let preview = intent.chars().take(160).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Session intent: {preview}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Session intent: not set.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -37765,6 +37805,29 @@ CTF Toolkit — Aether AI-assisted\n\
                                 // /turn-wall-p50 — median wall time across all turns
                                 "/turn-wall-p50" => {
                                     if _ctx.send(UiCommand::QueryTurnWallP50).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /verifier-blocked-show — show whether last verification was blocked
+                                "/verifier-blocked-show" => {
+                                    if _ctx.send(UiCommand::QueryVerifierBlockedShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /plan-tool-err-at <tool> — error count for specific tool
+                                cmd_str if cmd_str.starts_with("/plan-tool-err-at ") => {
+                                    let tool = cmd_str.trim_start_matches("/plan-tool-err-at ").trim().to_string();
+                                    if !tool.is_empty() {
+                                        if _ctx.send(UiCommand::QueryPlanToolErrAt(tool)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /plan-tool-err-at <tool-name>".to_string()));
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /session-intent-preview — show session intent if set
+                                "/session-intent-preview" => {
+                                    if _ctx.send(UiCommand::QuerySessionIntentPreview).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }

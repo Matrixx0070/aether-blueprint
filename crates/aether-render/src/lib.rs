@@ -1365,6 +1365,12 @@ pub enum UiCommand {
     QuerySessionVarCountTotal,
     /// Show median (p50) wall-clock time across all turns.
     QueryTurnWallP50,
+    /// Show whether last verification was blocked.
+    QueryVerifierBlockedShow,
+    /// Show error count for a specific tool in plan.
+    QueryPlanToolErrAt(String),
+    /// Show session intent if set.
+    QuerySessionIntentPreview,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
