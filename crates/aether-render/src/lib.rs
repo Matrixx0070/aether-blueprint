@@ -1755,6 +1755,12 @@ pub enum UiCommand {
     QueryAliasValMaxLen,
     /// Show the shortest alias key string.
     QueryAliasKeyMinLen,
+    /// Show the shortest alias value string.
+    QueryAliasValMinLen,
+    /// Show the shortest session-var value string.
+    QuerySessionVarValMinLen,
+    /// Show the shortest session-var key string.
+    QuerySessionVarKeyMinLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
