@@ -2619,6 +2619,12 @@ pub enum UiCommand {
     QueryTurnWallTotal,
     /// Max LLM-only latency across the session in milliseconds.
     QueryLlmMsMax,
+    /// Min turn wall time across the session in milliseconds.
+    QueryLlmMsMin,
+    /// 95th-percentile turn wall time in milliseconds.
+    QueryTurnWallP95,
+    /// Count of User-role items in the session history.
+    QueryHistoryUserTurns,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

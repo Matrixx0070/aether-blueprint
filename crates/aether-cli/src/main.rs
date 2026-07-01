@@ -16162,6 +16162,30 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryLlmMsMin => {
+                    let min_ms = session.turn_wall_ms.iter().copied().min().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Min turn wall time: {min_ms}ms"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTurnWallP95 => {
+                    let mut sorted = session.turn_wall_ms.clone();
+                    sorted.sort_unstable();
+                    let n = sorted.len();
+                    let p95 = if n == 0 { 0 } else { sorted[(n * 95 / 100).min(n - 1)] };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Turn wall P95: {p95}ms ({n} turns)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryUserTurns => {
+                    let count = session.history.iter().filter(|item| matches!(item, ConversationItem::User(_))).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History user turns: {count}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -47184,6 +47208,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/llm-ms-min" => {
+                                    if _ctx.send(UiCommand::QueryLlmMsMin).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-wall-p95" => {
+                                    if _ctx.send(UiCommand::QueryTurnWallP95).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-user-turns" => {
+                                    if _ctx.send(UiCommand::QueryHistoryUserTurns).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -48825,6 +48864,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-wall-p99",
                             "/turn-wall-total",
                             "/llm-ms-max",
+                            "/llm-ms-min",
+                            "/turn-wall-p95",
+                            "/history-user-turns",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
