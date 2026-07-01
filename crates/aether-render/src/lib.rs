@@ -1911,6 +1911,12 @@ pub enum UiCommand {
     QueryToolErrorCountCount,
     /// Show the count of distinct plan block types.
     QueryPlanBlockTypeCount,
+    /// Show the session uptime in minutes.
+    QuerySessionUptimeMins,
+    /// Show the session uptime in hours.
+    QuerySessionUptimeHours,
+    /// Show the total cost summed from the turn cost log.
+    QueryTurnCostLogTotalCost,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

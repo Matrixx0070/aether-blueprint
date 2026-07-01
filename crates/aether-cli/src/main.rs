@@ -13188,6 +13188,35 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QuerySessionUptimeMins => {
+                    let now_secs = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let elapsed = now_secs.saturating_sub(session.started_at);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session uptime: {} minutes", elapsed / 60
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySessionUptimeHours => {
+                    let now_secs = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let elapsed = now_secs.saturating_sub(session.started_at);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session uptime: {:.2} hours", elapsed as f64 / 3600.0
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTurnCostLogTotalCost => {
+                    let total: f64 = session.turn_cost_log.iter().map(|(_, _, _, cost)| cost).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Total cost from turn log: ${:.6}", total
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -42440,6 +42469,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/session-uptime-mins" => {
+                                    if _ctx.send(UiCommand::QuerySessionUptimeMins).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-uptime-hours" => {
+                                    if _ctx.send(UiCommand::QuerySessionUptimeHours).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-cost-log-total-cost" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogTotalCost).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -43727,6 +43771,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-cost-log-count",
                             "/tool-error-count-count",
                             "/plan-block-type-count",
+                            "/session-uptime-mins",
+                            "/session-uptime-hours",
+                            "/turn-cost-log-total-cost",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
