@@ -11449,6 +11449,38 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryToolErrorCountTotal => {
+                    let total: usize = session.plan.tool_error_counts.values().sum();
+                    let tools = session.plan.tool_error_counts.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Tool error count total: {total} error(s) across {tools} tool(s)."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryAssemblyTelemetryShow => {
+                    match &session.last_assembly_telemetry {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Assembly telemetry: no data yet.".to_string())); }
+                        Some(t) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Assembly telemetry: reminders admitted={} dropped={} long_conv={} d1={} plan={}",
+                                t.reminders_admitted, t.reminders_dropped,
+                                t.long_conv_injected, t.d1_active, t.plan_included
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionUptimeSecs => {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    let uptime = now.saturating_sub(session.started_at);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session uptime: {uptime}s ({} min).", uptime / 60
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -39876,6 +39908,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/tool-error-count-total" => {
+                                    if _ctx.send(UiCommand::QueryToolErrorCountTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/assembly-telemetry-show" => {
+                                    if _ctx.send(UiCommand::QueryAssemblyTelemetryShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-uptime-secs" => {
+                                    if _ctx.send(UiCommand::QuerySessionUptimeSecs).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -40998,6 +41045,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-cost-log-len",
                             "/last-error-tool-len",
                             "/progress-items-done-count",
+                            "/tool-error-count-total",
+                            "/assembly-telemetry-show",
+                            "/session-uptime-secs",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -1581,6 +1581,12 @@ pub enum UiCommand {
     QueryLastErrorToolLen,
     /// Show count of completed progress items.
     QueryProgressItemsDoneCount,
+    /// Show total tool error count across all tools.
+    QueryToolErrorCountTotal,
+    /// Show last assembly telemetry summary.
+    QueryAssemblyTelemetryShow,
+    /// Show session uptime in seconds.
+    QuerySessionUptimeSecs,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
