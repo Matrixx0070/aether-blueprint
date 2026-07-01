@@ -8964,6 +8964,57 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QuerySessionVarCount => {
+                    let n = session.session_vars.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session vars: {n} set. Use /session-vars-show to list them."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlanBlockList => {
+                    if session.plan.block_counts.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Plan: no block types recorded yet.".to_string()
+                        ));
+                    } else {
+                        let mut entries: Vec<_> = session.plan.block_counts.iter().collect();
+                        entries.sort_by_key(|(k, _)| k.as_str());
+                        let list = entries.iter()
+                            .map(|(k, v)| format!("  {k}: {v}"))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Plan block types:\n{list}"
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolOutputDiff(name) => {
+                    match session.tool_output_history.get(&name) {
+                        Some((prev, curr)) => {
+                            if prev.is_empty() {
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                    "Tool '{name}': no previous output to diff (current: {} chars).",
+                                    curr.len()
+                                )));
+                            } else {
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                    "Tool '{name}' diff — prev: {} chars → curr: {} chars.\nPrev preview: {}\nCurr preview: {}",
+                                    prev.len(),
+                                    curr.len(),
+                                    prev.chars().take(120).collect::<String>(),
+                                    curr.chars().take(120).collect::<String>()
+                                )));
+                            }
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Tool '{name}': no output history recorded."
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryLlmFallbackCount => {
                     let n = session.llm_fallback_count;
                     let model = session.llm_fallback_model.as_deref().unwrap_or("none");
@@ -34943,6 +34994,22 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/session-var-count" => {
+                                    if _ctx.send(UiCommand::QuerySessionVarCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-block-list" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd_str if cmd_str.starts_with("/tool-output-diff ") => {
+                                    let name = cmd_str.trim_start_matches("/tool-output-diff ").trim().to_string();
+                                    if _ctx.send(UiCommand::QueryToolOutputDiff(name)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -35794,6 +35861,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/llm-fallback-count",
                             "/system-suffix-len",
                             "/history-assistant-last",
+                            "/session-var-count",
+                            "/plan-block-list",
+                            "/tool-output-diff ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

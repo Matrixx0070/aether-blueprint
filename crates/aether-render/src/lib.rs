@@ -1089,6 +1089,12 @@ pub enum UiCommand {
     QuerySystemSuffixLen,
     /// Show the last assistant message text in history.
     QueryHistoryAssistantLast,
+    /// Count session variables set.
+    QuerySessionVarCount,
+    /// List plan block type names.
+    QueryPlanBlockList,
+    /// Show diff (prev vs current) for a specific tool output.
+    QueryToolOutputDiff(String),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
