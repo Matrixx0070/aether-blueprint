@@ -17323,6 +17323,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryBookmarkLabelWordTotal => {
+                    let total: usize = session.bookmarks.iter()
+                        .map(|(_, _, lbl)| lbl.split_whitespace().count())
+                        .sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Bookmark label word total: {total} (across {} bookmarks)",
+                        session.bookmarks.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QueryBookmarkLabelAvgWords => {
+                    let n = session.bookmarks.len();
+                    let avg = if n == 0 { 0.0 } else {
+                        let total: usize = session.bookmarks.iter()
+                            .map(|(_, _, lbl)| lbl.split_whitespace().count())
+                            .sum();
+                        total as f64 / n as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Bookmark label avg words: {avg:.1} ({n} bookmarks)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryBookmarkLabelMaxWords => {
+                    let max = session.bookmarks.iter()
+                        .map(|(_, _, lbl)| lbl.split_whitespace().count())
+                        .max();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match max {
+                        Some(v) => format!("Bookmark label max words: {v}"),
+                        None => "Bookmarks: none recorded.".to_string(),
+                    }));
+                    continue;
+                }
                 UiCommand::QuerySessionVarKeyWordTotal => {
                     let total: usize = session.session_vars.keys()
                         .map(|k| k.split_whitespace().count())
@@ -49186,6 +49219,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/bookmark-label-word-total" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkLabelWordTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/bookmark-label-avg-words" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkLabelAvgWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/bookmark-label-max-words" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkLabelMaxWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -50956,6 +51004,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-var-key-word-total",
                             "/session-var-key-avg-words",
                             "/session-var-key-max-words",
+                            "/bookmark-label-word-total",
+                            "/bookmark-label-avg-words",
+                            "/bookmark-label-max-words",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

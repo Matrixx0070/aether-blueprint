@@ -2877,6 +2877,12 @@ pub enum UiCommand {
     QuerySessionVarKeyAvgWords,
     /// Max words in any single session_var key.
     QuerySessionVarKeyMaxWords,
+    /// Total word count across all bookmark labels.
+    QueryBookmarkLabelWordTotal,
+    /// Average words per bookmark label.
+    QueryBookmarkLabelAvgWords,
+    /// Max words in any single bookmark label.
+    QueryBookmarkLabelMaxWords,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
