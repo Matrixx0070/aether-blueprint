@@ -1077,6 +1077,12 @@ pub enum UiCommand {
     QuerySessionTagCount,
     /// Count tool output history entries.
     QueryToolOutputCount,
+    /// Show total call count for a specific tool from plan stats.
+    QueryPlanToolTotalCalls(String),
+    /// Show cost of the most recent turn.
+    QueryLastTurnCost,
+    /// Show the last user message in history.
+    QueryHistoryUserLast,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

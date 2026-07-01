@@ -8964,6 +8964,51 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QueryPlanToolTotalCalls(name) => {
+                    match session.plan.tool_call_stats.get(&name) {
+                        Some((ok, err)) => {
+                            let total = ok + err;
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Tool '{name}': {total} total calls ({ok} ok + {err} err)."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Tool '{name}': no calls recorded."
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryLastTurnCost => {
+                    match session.turn_cost_log.last() {
+                        Some((turn_idx, in_tok, out_tok, cost)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Last turn #{turn_idx}: ${cost:.6} ({in_tok} in + {out_tok} out tokens)."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Last turn cost: no turns recorded yet.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryUserLast => {
+                    let found = session.history.iter().rev().find_map(|item| {
+                        if let aether_core::context::ConversationItem::User(msg) = item {
+                            Some(msg.chars().take(200).collect::<String>())
+                        } else {
+                            None
+                        }
+                    });
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(
+                        found.map(|m| format!("Last user message: {m}"))
+                            .unwrap_or_else(|| "No user messages in history.".to_string())
+                    ));
+                    continue;
+                }
                 UiCommand::QueryNoteCount => {
                     let n = session.session_notes.len();
                     let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
@@ -34828,6 +34873,22 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                cmd_str if cmd_str.starts_with("/plan-tool-total-calls ") => {
+                                    let name = cmd_str.trim_start_matches("/plan-tool-total-calls ").trim().to_string();
+                                    if _ctx.send(UiCommand::QueryPlanToolTotalCalls(name)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/last-turn-cost" => {
+                                    if _ctx.send(UiCommand::QueryLastTurnCost).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-user-last" => {
+                                    if _ctx.send(UiCommand::QueryHistoryUserLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -35673,6 +35734,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/note-count",
                             "/session-tag-count",
                             "/tool-output-count",
+                            "/plan-tool-total-calls ",
+                            "/last-turn-cost",
+                            "/history-user-last",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
