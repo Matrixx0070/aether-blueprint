@@ -2697,6 +2697,12 @@ pub enum UiCommand {
     QueryHistoryToolUseNameAvgLen,
     /// Fraction (0.0–1.0) of tool results that are errors.
     QueryHistoryToolResultErrRate,
+    /// Max length of any tool-use name in conversation history.
+    QueryHistoryToolUseNameMaxLen,
+    /// Min length of any tool-use name in conversation history.
+    QueryHistoryToolUseNameMinLen,
+    /// Average length of tool-use IDs in conversation history.
+    QueryHistoryToolUseIdAvgLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
