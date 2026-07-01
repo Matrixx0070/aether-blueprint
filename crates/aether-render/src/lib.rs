@@ -3075,6 +3075,12 @@ pub enum UiCommand {
     QuerySessionNoteAvgTsGap,
     /// Maximum ms gap between any two consecutive session_note timestamps.
     QuerySessionNoteMaxTsGap,
+    /// Total sum of all wall-ms entries across all logged turns.
+    QueryWallMsTotal,
+    /// Average turn-index gap between consecutive cost-log entries.
+    QueryCostLogTurnIdxAvgGap,
+    /// Maximum turn-index gap between consecutive cost-log entries.
+    QueryCostLogTurnIdxMaxGap,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

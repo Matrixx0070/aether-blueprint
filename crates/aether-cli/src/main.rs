@@ -17323,6 +17323,49 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryWallMsTotal => {
+                    let total: u64 = session.turn_wall_ms.iter().sum();
+                    let n = session.turn_wall_ms.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Total wall-ms across all turns: {total} ms ({n} turns)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryCostLogTurnIdxAvgGap => {
+                    let indices: Vec<usize> = session.turn_cost_log.iter().map(|(t, _, _, _)| *t).collect();
+                    let n = indices.len();
+                    if n < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Cost-log turn idx avg gap: N/A ({n} entries — need ≥2)"
+                        )));
+                    } else {
+                        let mut sorted = indices.clone();
+                        sorted.sort_unstable();
+                        let gaps: Vec<usize> = sorted.windows(2).map(|w| w[1].saturating_sub(w[0])).collect();
+                        let avg = gaps.iter().sum::<usize>() as f64 / gaps.len() as f64;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Cost-log turn idx avg gap: {avg:.2} ({n} entries)"
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryCostLogTurnIdxMaxGap => {
+                    let indices: Vec<usize> = session.turn_cost_log.iter().map(|(t, _, _, _)| *t).collect();
+                    let n = indices.len();
+                    if n < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Cost-log turn idx max gap: N/A ({n} entries — need ≥2)"
+                        )));
+                    } else {
+                        let mut sorted = indices.clone();
+                        sorted.sort_unstable();
+                        let max_gap = sorted.windows(2).map(|w| w[1].saturating_sub(w[0])).max().unwrap_or(0);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Cost-log turn idx max gap: {max_gap} ({n} entries)"
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionNoteTsSpan => {
                     let n = session.session_notes.len();
                     if n < 2 {
@@ -50674,6 +50717,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/wall-ms-total" => {
+                                    if _ctx.send(UiCommand::QueryWallMsTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/cost-log-turn-idx-avg-gap" => {
+                                    if _ctx.send(UiCommand::QueryCostLogTurnIdxAvgGap).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/cost-log-turn-idx-max-gap" => {
+                                    if _ctx.send(UiCommand::QueryCostLogTurnIdxMaxGap).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/session-note-ts-span" => {
                                     if _ctx.send(UiCommand::QuerySessionNoteTsSpan).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -52723,6 +52781,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-note-ts-span",
                             "/session-note-avg-ts-gap",
                             "/session-note-max-ts-gap",
+                            "/wall-ms-total",
+                            "/cost-log-turn-idx-avg-gap",
+                            "/cost-log-turn-idx-max-gap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
