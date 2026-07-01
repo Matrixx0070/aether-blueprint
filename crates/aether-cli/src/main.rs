@@ -10429,6 +10429,28 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryAutoCommitTemplateShow => {
+                    let tmpl = &session.auto_commit_template;
+                    let preview = tmpl.chars().take(120).collect::<String>();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Auto-commit template: '{preview}'{}", if tmpl.len() > 120 { "…" } else { "" }
+                    )));
+                    continue;
+                }
+                UiCommand::QueryStickyCtxCount => {
+                    let n = session.sticky_context.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Sticky context entries: {n}. Use /sticky-context-show to list all."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryAnnCount => {
+                    let n = session.history_annotations.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History annotations: {n} defined across conversation turns."
+                    )));
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -36671,6 +36693,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /auto-commit-template-show — show auto-commit message template
+                                "/auto-commit-template-show" => {
+                                    if _ctx.send(UiCommand::QueryAutoCommitTemplateShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /sticky-ctx-count — count sticky context entries
+                                "/sticky-ctx-count" => {
+                                    if _ctx.send(UiCommand::QueryStickyCtxCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-ann-count — count history annotations
+                                "/history-ann-count" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAnnCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -37606,6 +37646,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-label-count",
                             "/session-note-count",
                             "/tool-sig-count",
+                            "/auto-commit-template-show",
+                            "/sticky-ctx-count",
+                            "/history-ann-count",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

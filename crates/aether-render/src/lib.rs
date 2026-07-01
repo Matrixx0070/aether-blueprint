@@ -1257,6 +1257,12 @@ pub enum UiCommand {
     QuerySessionNoteCount,
     /// Count of last-tool-call signatures tracked for dedup.
     QueryToolSigCount,
+    /// Show auto-commit message template.
+    QueryAutoCommitTemplateShow,
+    /// Count sticky context entries.
+    QueryStickyCtxCount,
+    /// Count history annotations.
+    QueryHistoryAnnCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
