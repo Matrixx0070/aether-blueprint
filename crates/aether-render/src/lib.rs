@@ -1599,6 +1599,12 @@ pub enum UiCommand {
     QueryAutoTagRuleFirst,
     /// Show the first sticky context entry.
     QueryStickyContextFirst,
+    /// Show the first error playbook entry.
+    QueryErrorPlaybookFirst,
+    /// Show count of tool output history entries.
+    QueryToolOutputHistoryCount,
+    /// Show the first history annotation.
+    QueryHistoryAnnotFirst,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

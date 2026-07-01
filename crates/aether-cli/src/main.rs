@@ -11535,6 +11535,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryErrorPlaybookFirst => {
+                    match session.error_playbook.first() {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Error playbook: no entries.".to_string())); }
+                        Some((pat, hint)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Error playbook[0] (of {}): pattern='{}' hint='{}'",
+                                session.error_playbook.len(), pat, hint
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolOutputHistoryCount => {
+                    let n = session.tool_output_history.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Tool output history: {n} tool(s) tracked."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryAnnotFirst => {
+                    match session.history_annotations.first() {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("History annotations: none.".to_string())); }
+                        Some((turn, text)) => {
+                            let preview = text.chars().take(80).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "History annotation[0] (of {}): turn={} text='{}{}'",
+                                session.history_annotations.len(), turn, preview,
+                                if text.len() > 80 { "…" } else { "" }
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -40007,6 +40040,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/error-playbook-first" => {
+                                    if _ctx.send(UiCommand::QueryErrorPlaybookFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-output-history-count" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputHistoryCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-annotation-first" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAnnotFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -41138,6 +41186,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/context-warn-60pct",
                             "/auto-tag-rule-first",
                             "/sticky-context-first",
+                            "/error-playbook-first",
+                            "/tool-output-history-count",
+                            "/history-annotation-first",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
