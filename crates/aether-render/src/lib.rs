@@ -2343,6 +2343,12 @@ pub enum UiCommand {
     QueryLlmTimeoutSecs,
     /// Show the max tool calls per turn setting.
     QueryMaxToolCallsPerTurn,
+    /// Show the auto-bookmark-every setting value.
+    QueryAutoBookmarkEveryVal,
+    /// Show the compaction threshold percentage.
+    QueryCompactionPct,
+    /// Show the history size warning threshold in bytes.
+    QueryHistorySizeWarnBytes,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

@@ -15083,6 +15083,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryAutoBookmarkEveryVal => {
+                    let n = session.auto_bookmark_every;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Auto bookmark every: {n} turns"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryCompactionPct => {
+                    let pct = session.compaction_threshold_pct;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Compaction threshold: {pct:.1}%"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistorySizeWarnBytes => {
+                    let n = session.history_size_warn_bytes;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History size warn bytes: {n}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -45415,6 +45436,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/auto-bookmark-every-val" => {
+                                    if _ctx.send(UiCommand::QueryAutoBookmarkEveryVal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/compaction-pct" => {
+                                    if _ctx.send(UiCommand::QueryCompactionPct).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-size-warn-bytes" => {
+                                    if _ctx.send(UiCommand::QueryHistorySizeWarnBytes).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -46918,6 +46954,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-timeout-secs",
                             "/llm-timeout-secs",
                             "/max-tool-calls-per-turn",
+                            "/auto-bookmark-every-val",
+                            "/compaction-pct",
+                            "/history-size-warn-bytes",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
