@@ -17323,6 +17323,55 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryTurnCostLogOutDiffAvg => {
+                    let outs: Vec<u64> = session.turn_cost_log.iter().map(|(_, _, o, _)| *o).collect();
+                    if outs.len() < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn cost log out-token diff avg: need at least 2 entries.".to_string()
+                        ));
+                    } else {
+                        let diffs: Vec<u64> = outs.windows(2)
+                            .map(|w| if w[1] > w[0] { w[1] - w[0] } else { w[0] - w[1] })
+                            .collect();
+                        let avg = diffs.iter().sum::<u64>() as f64 / diffs.len() as f64;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn cost log out-token diff avg: {avg:.1} ({} diffs)", diffs.len()
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnCostLogOutDiffMax => {
+                    let outs: Vec<u64> = session.turn_cost_log.iter().map(|(_, _, o, _)| *o).collect();
+                    if outs.len() < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn cost log out-token diff max: need at least 2 entries.".to_string()
+                        ));
+                    } else {
+                        let max_diff = outs.windows(2)
+                            .map(|w| if w[1] > w[0] { w[1] - w[0] } else { w[0] - w[1] })
+                            .max().unwrap_or(0);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn cost log out-token diff max: {max_diff}"
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnCostLogOutDiffMin => {
+                    let outs: Vec<u64> = session.turn_cost_log.iter().map(|(_, _, o, _)| *o).collect();
+                    if outs.len() < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn cost log out-token diff min: need at least 2 entries.".to_string()
+                        ));
+                    } else {
+                        let min_diff = outs.windows(2)
+                            .map(|w| if w[1] > w[0] { w[1] - w[0] } else { w[0] - w[1] })
+                            .min().unwrap_or(0);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn cost log out-token diff min: {min_diff}"
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryTurnCostLogInDiffAvg => {
                     let ins: Vec<u64> = session.turn_cost_log.iter().map(|(_, i, _, _)| *i).collect();
                     if ins.len() < 2 {
@@ -49716,6 +49765,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/turn-cost-log-out-diff-avg" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogOutDiffAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-cost-log-out-diff-max" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogOutDiffMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-cost-log-out-diff-min" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogOutDiffMin).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -51513,6 +51577,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-cost-log-in-diff-avg",
                             "/turn-cost-log-in-diff-max",
                             "/turn-cost-log-in-diff-min",
+                            "/turn-cost-log-out-diff-avg",
+                            "/turn-cost-log-out-diff-max",
+                            "/turn-cost-log-out-diff-min",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

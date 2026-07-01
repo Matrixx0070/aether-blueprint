@@ -2931,6 +2931,12 @@ pub enum UiCommand {
     QueryTurnCostLogInDiffMax,
     /// Minimum absolute input-token difference between consecutive turn_cost_log entries.
     QueryTurnCostLogInDiffMin,
+    /// Average absolute output-token difference between consecutive turn_cost_log entries.
+    QueryTurnCostLogOutDiffAvg,
+    /// Maximum absolute output-token difference between consecutive turn_cost_log entries.
+    QueryTurnCostLogOutDiffMax,
+    /// Minimum absolute output-token difference between consecutive turn_cost_log entries.
+    QueryTurnCostLogOutDiffMin,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
