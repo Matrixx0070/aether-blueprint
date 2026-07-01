@@ -2835,6 +2835,12 @@ pub enum UiCommand {
     QuerySavedSnapshotPlanGoalAvgLen,
     /// Count of saved snapshots that have a plan goal set.
     QuerySavedSnapshotPlanGoalCount,
+    /// Average plan window value across snapshots that have a window set.
+    QuerySavedSnapshotPlanWindowAvg,
+    /// Max plan window value across all saved snapshots.
+    QuerySavedSnapshotPlanWindowMax,
+    /// Min plan window value across all saved snapshots.
+    QuerySavedSnapshotPlanWindowMin,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

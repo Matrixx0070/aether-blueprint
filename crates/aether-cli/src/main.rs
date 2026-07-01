@@ -17290,6 +17290,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QuerySavedSnapshotPlanWindowAvg => {
+                    let windows: Vec<usize> = session.saved_snapshots.values()
+                        .filter_map(|(_, plan)| plan.window)
+                        .collect();
+                    let n = windows.len();
+                    let avg = if n == 0 { 0.0 } else {
+                        windows.iter().sum::<usize>() as f64 / n as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Saved snapshot plan window avg: {avg:.1} ({n} snapshots with window set)"
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySavedSnapshotPlanWindowMax => {
+                    let max = session.saved_snapshots.values()
+                        .filter_map(|(_, plan)| plan.window)
+                        .max();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match max {
+                        Some(v) => format!("Saved snapshot plan window max: {v}"),
+                        None => "Saved snapshots: none with window set.".to_string(),
+                    }));
+                    continue;
+                }
+                UiCommand::QuerySavedSnapshotPlanWindowMin => {
+                    let min = session.saved_snapshots.values()
+                        .filter_map(|(_, plan)| plan.window)
+                        .min();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match min {
+                        Some(v) => format!("Saved snapshot plan window min: {v}"),
+                        None => "Saved snapshots: none with window set.".to_string(),
+                    }));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -48852,6 +48885,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/saved-snapshot-plan-window-avg" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotPlanWindowAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/saved-snapshot-plan-window-max" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotPlanWindowMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/saved-snapshot-plan-window-min" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotPlanWindowMin).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -50601,6 +50649,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/saved-snapshot-plan-goal-min-len",
                             "/saved-snapshot-plan-goal-avg-len",
                             "/saved-snapshot-plan-goal-count",
+                            "/saved-snapshot-plan-window-avg",
+                            "/saved-snapshot-plan-window-max",
+                            "/saved-snapshot-plan-window-min",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
