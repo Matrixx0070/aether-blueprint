@@ -1557,6 +1557,12 @@ pub enum UiCommand {
     QueryAgentPersonaLen,
     /// Show length of request prefix text.
     QueryRequestPrefixLen,
+    /// Show length of request suffix text.
+    QueryRequestSuffixLen,
+    /// Show length of focus mode text.
+    QueryFocusModeLen,
+    /// Show length of smart pause pattern.
+    QuerySmartPausePatLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

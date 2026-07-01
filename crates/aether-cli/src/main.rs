@@ -11348,6 +11348,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryRequestSuffixLen => {
+                    match &session.request_suffix {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Request suffix: not set.".to_string())); }
+                        Some(s) => { let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Request suffix length: {} chars.", s.len()))); }
+                    }
+                    continue;
+                }
+                UiCommand::QueryFocusModeLen => {
+                    match &session.focus_mode {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Focus mode: not set.".to_string())); }
+                        Some(s) => { let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Focus mode length: {} chars.", s.len()))); }
+                    }
+                    continue;
+                }
+                UiCommand::QuerySmartPausePatLen => {
+                    match &session.smart_pause_pattern {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Smart pause pattern: not set.".to_string())); }
+                        Some(s) => { let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Smart pause pattern length: {} chars.", s.len()))); }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -39715,6 +39736,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/request-suffix-len" => {
+                                    if _ctx.send(UiCommand::QueryRequestSuffixLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/focus-mode-len" => {
+                                    if _ctx.send(UiCommand::QueryFocusModeLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/smart-pause-pat-len" => {
+                                    if _ctx.send(UiCommand::QuerySmartPausePatLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -40825,6 +40861,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/scope-guard-len",
                             "/agent-persona-len",
                             "/request-prefix-len",
+                            "/request-suffix-len",
+                            "/focus-mode-len",
+                            "/smart-pause-pat-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
