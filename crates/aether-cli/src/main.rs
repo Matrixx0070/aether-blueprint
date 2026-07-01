@@ -12018,6 +12018,43 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QuerySessionNoteNewest => {
+                    match session.session_notes.iter().max_by_key(|(_, ts)| *ts) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Session notes: none.".to_string())); }
+                        Some((text, ts)) => {
+                            let preview = text.chars().take(60).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Newest session note (ts={ts}): '{}{}' (of {})",
+                                preview, if text.len() > 60 { "…" } else { "" },
+                                session.session_notes.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryAnnotTurnMax => {
+                    match session.history_annotations.iter().max_by_key(|(turn, _)| *turn) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("History annotations: none.".to_string())); }
+                        Some((turn, text)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "History annotation max turn: {} (text: '{}…')",
+                                turn, text.chars().take(40).collect::<String>()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnLabelTurnMax => {
+                    match session.turn_labels.iter().max_by_key(|(turn, _)| *turn) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Turn labels: none.".to_string())); }
+                        Some((turn, lbl)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Turn label max turn: {} label='{}'", turn, lbl
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -40730,6 +40767,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/session-note-newest" => {
+                                    if _ctx.send(UiCommand::QuerySessionNoteNewest).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-annot-turn-max" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAnnotTurnMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-label-turn-max" => {
+                                    if _ctx.send(UiCommand::QueryTurnLabelTurnMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -41909,6 +41961,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-tool-call-err-total",
                             "/plan-tool-stat-count",
                             "/session-note-oldest",
+                            "/session-note-newest",
+                            "/history-annot-turn-max",
+                            "/turn-label-turn-max",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

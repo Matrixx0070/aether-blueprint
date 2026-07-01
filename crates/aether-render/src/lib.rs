@@ -1695,6 +1695,12 @@ pub enum UiCommand {
     QueryPlanToolStatCount,
     /// Show the oldest session note (earliest timestamp).
     QuerySessionNoteOldest,
+    /// Show the newest session note (latest timestamp).
+    QuerySessionNoteNewest,
+    /// Show the highest turn index with a history annotation.
+    QueryHistoryAnnotTurnMax,
+    /// Show the highest turn index with a turn label.
+    QueryTurnLabelTurnMax,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
