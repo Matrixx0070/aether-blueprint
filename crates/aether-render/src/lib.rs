@@ -2373,6 +2373,12 @@ pub enum UiCommand {
     QueryVerifBlockedFirst,
     /// Show the last plan tool stat key.
     QueryPlanToolStatLast,
+    /// Show the last blocked-reason rule_id from last verification.
+    QueryVerifBlockedLast,
+    /// Show the ok count for the first plan tool stat entry.
+    QueryPlanToolStatFirstOk,
+    /// Show the ok count for the last plan tool stat entry.
+    QueryPlanToolStatLastOk,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

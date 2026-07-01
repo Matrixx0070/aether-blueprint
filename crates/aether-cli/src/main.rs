@@ -15194,6 +15194,34 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryVerifBlockedLast => {
+                    let id = session.last_verification.as_ref()
+                        .and_then(|v| v.blocked_reasons.last())
+                        .map(|f| f.rule_id.as_str())
+                        .unwrap_or("none");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verif blocked last: {id}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlanToolStatFirstOk => {
+                    let ok = session.plan.tool_call_stats.values().next()
+                        .map(|(ok, _)| *ok)
+                        .unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan tool stat first ok: {ok}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlanToolStatLastOk => {
+                    let ok = session.plan.tool_call_stats.values().last()
+                        .map(|(ok, _)| *ok)
+                        .unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan tool stat last ok: {ok}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -45601,6 +45629,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/verif-blocked-last" => {
+                                    if _ctx.send(UiCommand::QueryVerifBlockedLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-tool-stat-first-ok" => {
+                                    if _ctx.send(UiCommand::QueryPlanToolStatFirstOk).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-tool-stat-last-ok" => {
+                                    if _ctx.send(UiCommand::QueryPlanToolStatLastOk).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -47119,6 +47162,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/verif-finding-last-id",
                             "/verif-blocked-first",
                             "/plan-tool-stat-last",
+                            "/verif-blocked-last",
+                            "/plan-tool-stat-first-ok",
+                            "/plan-tool-stat-last-ok",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
