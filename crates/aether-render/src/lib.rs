@@ -2031,6 +2031,12 @@ pub enum UiCommand {
     QueryRequestPrefixSet,
     /// Show whether request suffix is set.
     QueryRequestSuffixSet,
+    /// Show the smart pause pattern value.
+    QuerySmartPauseVal,
+    /// Show the focus mode value.
+    QueryFocusModeVal,
+    /// Show the scope guard value.
+    QueryScopeGuardVal,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
