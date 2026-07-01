@@ -11502,6 +11502,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryContextWarn60Pct => {
+                    let fired = session.context_warned_60pct;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Context 60% warning: {}.", if fired { "has fired" } else { "not yet fired" }
+                    )));
+                    continue;
+                }
+                UiCommand::QueryAutoTagRuleFirst => {
+                    match session.auto_tag_rules.first() {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Auto-tag rules: none defined.".to_string())); }
+                        Some((pat, tag)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Auto-tag rule[0] (of {}): pattern='{}' tag='{}'",
+                                session.auto_tag_rules.len(), pat, tag
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryStickyContextFirst => {
+                    match session.sticky_context.first() {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Sticky context: none set.".to_string())); }
+                        Some(s) => {
+                            let preview = s.chars().take(80).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Sticky context[0] (of {}): {}{}",
+                                session.sticky_context.len(), preview,
+                                if s.len() > 80 { "…" } else { "" }
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -39959,6 +39992,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/context-warn-60pct" => {
+                                    if _ctx.send(UiCommand::QueryContextWarn60Pct).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/auto-tag-rule-first" => {
+                                    if _ctx.send(UiCommand::QueryAutoTagRuleFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/sticky-context-first" => {
+                                    if _ctx.send(UiCommand::QueryStickyContextFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -41087,6 +41135,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/compaction-threshold-pct",
                             "/retry-threshold-show",
                             "/retry-max-show",
+                            "/context-warn-60pct",
+                            "/auto-tag-rule-first",
+                            "/sticky-context-first",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

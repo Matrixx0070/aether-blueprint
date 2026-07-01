@@ -1593,6 +1593,12 @@ pub enum UiCommand {
     QueryRetryThresholdShow,
     /// Show the retry-on-error max count.
     QueryRetryMaxShow,
+    /// Show whether 60% context warning has fired.
+    QueryContextWarn60Pct,
+    /// Show the first auto-tag rule.
+    QueryAutoTagRuleFirst,
+    /// Show the first sticky context entry.
+    QueryStickyContextFirst,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
