@@ -2655,6 +2655,12 @@ pub enum UiCommand {
     QueryHistoryToolUseDistinct,
     /// Total sum of individual tool result entries across all ToolResults blocks.
     QueryHistoryToolResultTotal,
+    /// Total count of error tool results in the session history.
+    QueryHistoryToolResultErrCount,
+    /// Total count of successful tool results in the session history.
+    QueryHistoryToolResultOkCount,
+    /// Total chars across all tool result content strings in the session history.
+    QueryHistoryToolResultTotalChars,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
