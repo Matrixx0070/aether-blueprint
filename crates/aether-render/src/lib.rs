@@ -2391,6 +2391,12 @@ pub enum UiCommand {
     QuerySessionNoteFirstTs,
     /// Show the timestamp of the last session note.
     QuerySessionNoteLastTs,
+    /// Show the cost of the first turn in turn_cost_log.
+    QueryTurnCostLogFirstCost,
+    /// Show the cost of the last turn in turn_cost_log.
+    QueryTurnCostLogLastCost,
+    /// Show the input tokens for the first turn in turn_cost_log.
+    QueryTurnCostLogFirstIn,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
