@@ -16962,6 +16962,48 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryPlanTextSentenceCount => {
+                    let text = &session.plan.text;
+                    let count = if text.is_empty() { 0 } else {
+                        text.split(|c| c == '.' || c == '!' || c == '?')
+                            .filter(|s| !s.trim().is_empty())
+                            .count()
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan text approximate sentence count: {count}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlanTextAvgCharsPerWord => {
+                    let words: Vec<&str> = session.plan.text.split_whitespace().collect();
+                    let n = words.len();
+                    let avg = if n == 0 { 0.0 } else {
+                        words.iter().map(|w| w.len() as f64).sum::<f64>() / n as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan text avg chars per word: {avg:.1} ({n} words)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlanGoalSentenceCount => {
+                    let count = match &session.plan.goal {
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Plan goal: not set. Use /plan-goal <text> to set one.".to_string()
+                            ));
+                            continue;
+                        }
+                        Some(g) => if g.is_empty() { 0 } else {
+                            g.split(|c| c == '.' || c == '!' || c == '?')
+                                .filter(|s: &&str| !s.trim().is_empty())
+                                .count()
+                        },
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan goal approximate sentence count: {count}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -48374,6 +48416,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/plan-text-sentence-count" => {
+                                    if _ctx.send(UiCommand::QueryPlanTextSentenceCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-text-avg-chars-per-word" => {
+                                    if _ctx.send(UiCommand::QueryPlanTextAvgCharsPerWord).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-goal-sentence-count" => {
+                                    if _ctx.send(UiCommand::QueryPlanGoalSentenceCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -50093,6 +50150,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-goal-lines",
                             "/plan-text-avg-words-per-line",
                             "/plan-text-para-count",
+                            "/plan-text-sentence-count",
+                            "/plan-text-avg-chars-per-word",
+                            "/plan-goal-sentence-count",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
