@@ -2259,6 +2259,12 @@ pub enum UiCommand {
     QueryAutoTagRuleLastPat,
     /// Show the name of the first last_tool_signature entry.
     QueryLastToolSigFirst,
+    /// Show the name of the last last_tool_signature entry.
+    QueryLastToolSigLast,
+    /// Show the value of the first last_tool_signature entry.
+    QueryLastToolSigFirstVal,
+    /// Show the value of the last last_tool_signature entry.
+    QueryLastToolSigLastVal,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

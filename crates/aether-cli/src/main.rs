@@ -14728,6 +14728,33 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryLastToolSigLast => {
+                    let name = session.last_tool_signatures.last()
+                        .map(|(n, _)| n.as_str())
+                        .unwrap_or("none");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Last tool sig last: {name}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryLastToolSigFirstVal => {
+                    let val = session.last_tool_signatures.first()
+                        .map(|(_, v)| v.as_str())
+                        .unwrap_or("none");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Last tool sig first val: {val}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryLastToolSigLastVal => {
+                    let val = session.last_tool_signatures.last()
+                        .map(|(_, v)| v.as_str())
+                        .unwrap_or("none");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Last tool sig last val: {val}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -44850,6 +44877,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/last-tool-sig-last" => {
+                                    if _ctx.send(UiCommand::QueryLastToolSigLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/last-tool-sig-first-val" => {
+                                    if _ctx.send(UiCommand::QueryLastToolSigFirstVal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/last-tool-sig-last-val" => {
+                                    if _ctx.send(UiCommand::QueryLastToolSigLastVal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -46311,6 +46353,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/error-playbook-last-pat",
                             "/auto-tag-rule-last-pat",
                             "/last-tool-sig-first",
+                            "/last-tool-sig-last",
+                            "/last-tool-sig-first-val",
+                            "/last-tool-sig-last-val",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
