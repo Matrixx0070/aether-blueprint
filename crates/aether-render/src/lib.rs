@@ -2169,6 +2169,12 @@ pub enum UiCommand {
     QueryLastToolSigTotalChars,
     /// Show the total chars across all progress item texts.
     QueryProgressItemTotalChars,
+    /// Show the total chars across all bookmark labels.
+    QueryBookmarkTotalChars,
+    /// Show the total chars across all turn label texts.
+    QueryTurnLabelTotalChars,
+    /// Show the total chars across all session tags.
+    QuerySessionTagTotalChars,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
