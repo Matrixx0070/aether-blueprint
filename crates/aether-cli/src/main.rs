@@ -26,7 +26,7 @@ use aether_llm::{
     LlmProvider, Message, MessagesRequest,
 };
 use aether_overlay::{Fable5Overlay, OverlayConfig};
-use aether_selfcheck::{Gate, Rule};
+use aether_selfcheck::{Action, Gate, Rule};
 use aether_tools::{builtin::register_builtins, ToolRegistry};
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
@@ -15862,6 +15862,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let count = [s.d1, s.d2, s.d3, s.d4, s.d5, s.d6, s.d7].iter().filter(|&&b| b).count();
                     let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
                         "Overlay sections enabled: {count}/7"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierGateRuleCount => {
+                    let count = session.verifier.gate.rules.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate rule count: {count}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierGateRegexTotal => {
+                    let total: usize = session.verifier.gate.rules.iter().map(|r| r.compiled_regexes.len()).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate total compiled regexes: {total}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierGateBlockCount => {
+                    let count = session.verifier.gate.rules.iter().filter(|r| r.rule.action == Action::Block).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate Block-action rules: {count}"
                     )));
                     continue;
                 }
@@ -46692,6 +46713,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/verifier-gate-rule-count" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateRuleCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-gate-regex-total" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateRegexTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-gate-block-count" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateBlockCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -48294,6 +48330,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/overlay-section-d6",
                             "/overlay-prompt-path-set",
                             "/overlay-sections-enabled-count",
+                            "/verifier-gate-rule-count",
+                            "/verifier-gate-regex-total",
+                            "/verifier-gate-block-count",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

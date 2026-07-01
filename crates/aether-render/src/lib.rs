@@ -2541,6 +2541,12 @@ pub enum UiCommand {
     QueryOverlayPromptPathSet,
     /// Show how many overlay sections (D1-D7) are enabled.
     QueryOverlaySectionsEnabledCount,
+    /// Show the total count of rules in the verifier gate.
+    QueryVerifierGateRuleCount,
+    /// Show the total compiled regex count across all verifier gate rules.
+    QueryVerifierGateRegexTotal,
+    /// Show the count of Block-action rules in the verifier gate.
+    QueryVerifierGateBlockCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
