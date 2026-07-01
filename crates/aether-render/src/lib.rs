@@ -2691,6 +2691,12 @@ pub enum UiCommand {
     QueryHistoryAsstMinChars,
     /// Min content chars among tool results in conversation history.
     QueryHistoryToolResultMinChars,
+    /// Min tool-use count in any single assistant turn.
+    QueryHistoryToolUseMin,
+    /// Average length of tool-use names in conversation history.
+    QueryHistoryToolUseNameAvgLen,
+    /// Fraction (0.0–1.0) of tool results that are errors.
+    QueryHistoryToolResultErrRate,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

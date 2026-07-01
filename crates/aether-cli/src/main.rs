@@ -16503,6 +16503,50 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryHistoryToolUseMin => {
+                    use aether_core::context::ConversationItem::Assistant;
+                    let min = session.history.iter()
+                        .filter_map(|item| {
+                            if let Assistant { tool_uses, .. } = item {
+                                if !tool_uses.is_empty() { Some(tool_uses.len()) } else { None }
+                            } else { None }
+                        })
+                        .min();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match min {
+                        Some(v) => format!("History tool use min (per turn): {v}"),
+                        None => "History tool use min: no turns with tool uses".to_string(),
+                    }));
+                    continue;
+                }
+                UiCommand::QueryHistoryToolUseNameAvgLen => {
+                    use aether_core::context::ConversationItem::Assistant;
+                    let names: Vec<usize> = session.history.iter()
+                        .filter_map(|item| {
+                            if let Assistant { tool_uses, .. } = item { Some(tool_uses) } else { None }
+                        })
+                        .flat_map(|uses| uses.iter().map(|u| u.name.len()))
+                        .collect();
+                    let n = names.len();
+                    let avg = if n == 0 { 0.0 } else { names.iter().sum::<usize>() as f64 / n as f64 };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History tool use name avg len: {avg:.1} ({n} tool uses)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryToolResultErrRate => {
+                    use aether_core::context::ConversationItem::ToolResults;
+                    let (total, errors) = session.history.iter()
+                        .filter_map(|item| if let ToolResults(results) = item { Some(results) } else { None })
+                        .fold((0usize, 0usize), |(tot, err), results| {
+                            (tot + results.len(), err + results.iter().filter(|r| r.is_error).count())
+                        });
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(if total == 0 {
+                        "History tool result error rate: no tool results".to_string()
+                    } else {
+                        format!("History tool result error rate: {errors}/{total} ({:.1}%)", errors as f64 / total as f64 * 100.0)
+                    }));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -47705,6 +47749,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/history-tool-use-min" => {
+                                    if _ctx.send(UiCommand::QueryHistoryToolUseMin).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-tool-use-name-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryHistoryToolUseNameAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-tool-result-err-rate" => {
+                                    if _ctx.send(UiCommand::QueryHistoryToolResultErrRate).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -49382,6 +49441,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-user-min-chars",
                             "/history-asst-min-chars",
                             "/history-tool-result-min-chars",
+                            "/history-tool-use-min",
+                            "/history-tool-use-name-avg-len",
+                            "/history-tool-result-err-rate",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
