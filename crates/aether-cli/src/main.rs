@@ -8964,6 +8964,64 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QuerySessionUptime => {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let elapsed = now.saturating_sub(session.started_at);
+                    let h = elapsed / 3600;
+                    let m = (elapsed % 3600) / 60;
+                    let s = elapsed % 60;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session uptime: {h}h {m}m {s}s ({elapsed}s total)."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryPreviewAt(idx) => {
+                    match session.history.get(idx) {
+                        Some(aether_core::context::ConversationItem::User(msg)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "History[{idx}] User: {}", msg.chars().take(200).collect::<String>()
+                            )));
+                        }
+                        Some(aether_core::context::ConversationItem::Assistant { text, tool_uses }) => {
+                            let preview = text.as_deref().map(|s| s.chars().take(120).collect::<String>()).unwrap_or_default();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "History[{idx}] Assistant: {} ({} tool_uses)", preview, tool_uses.len()
+                            )));
+                        }
+                        Some(aether_core::context::ConversationItem::ToolResults(results)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "History[{idx}] ToolResults: {} result(s)", results.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "History[{idx}]: out of range ({} items).", session.history.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanConsecErrors => {
+                    let errs = &session.plan.tool_error_counts;
+                    if errs.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Plan consecutive errors: none recorded.".to_string()
+                        ));
+                    } else {
+                        let mut entries: Vec<_> = errs.iter().filter(|(_, n)| **n > 0).collect();
+                        entries.sort_by(|a, b| b.1.cmp(a.1));
+                        let list: Vec<_> = entries.iter()
+                            .map(|(k, v)| format!("  {k}: {v} consecutive"))
+                            .collect();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Consecutive tool errors:\n{}", list.join("\n")
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySavedSnapshotList => {
                     let snaps = &session.saved_snapshots;
                     if snaps.is_empty() {
@@ -35514,6 +35572,26 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/session-uptime" => {
+                                    if _ctx.send(UiCommand::QuerySessionUptime).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd_str if cmd_str.starts_with("/history-preview-at ") => {
+                                    let arg = cmd_str.trim_start_matches("/history-preview-at ").trim();
+                                    if let Ok(idx) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::QueryHistoryPreviewAt(idx)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote(format!("Usage: /history-preview-at <index>")));
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-consec-errors" => {
+                                    if _ctx.send(UiCommand::QueryPlanConsecErrors).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -36395,6 +36473,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/saved-snapshot-list",
                             "/turn-cost-avg",
                             "/plan-error-tool",
+                            "/session-uptime",
+                            "/history-preview-at ",
+                            "/plan-consec-errors",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

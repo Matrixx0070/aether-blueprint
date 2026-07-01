@@ -1149,6 +1149,12 @@ pub enum UiCommand {
     QueryTurnCostAvg,
     /// Show which tool triggered last plan error.
     QueryPlanErrorTool,
+    /// Show session uptime in human-readable form.
+    QuerySessionUptime,
+    /// Show a preview of a specific history item by index.
+    QueryHistoryPreviewAt(usize),
+    /// Show consecutive error counts per tool from plan.
+    QueryPlanConsecErrors,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
