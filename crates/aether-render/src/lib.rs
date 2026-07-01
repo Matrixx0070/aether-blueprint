@@ -2043,6 +2043,12 @@ pub enum UiCommand {
     QueryRequestPrefixVal,
     /// Show the request suffix value.
     QueryRequestSuffixVal,
+    /// Show whether auto commit template is non-empty.
+    QueryAutoCommitTemplateSet,
+    /// Show whether plan window is set.
+    QueryPlanWindowSet,
+    /// Show the plan window value.
+    QueryPlanWindowVal,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
