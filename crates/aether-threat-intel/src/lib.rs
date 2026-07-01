@@ -8,10 +8,11 @@ use serde::{Deserialize, Serialize};
 pub mod feeds;
 pub mod apt;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ThreatLevel {
     Critical,
     High,
+    #[default]
     Medium,
     Low,
     Info,
@@ -73,11 +74,6 @@ pub struct ThreatReport {
     pub summary: String,
 }
 
-impl Default for ThreatLevel {
-    fn default() -> Self {
-        ThreatLevel::Medium
-    }
-}
 
 impl ThreatReport {
     pub fn new(id: impl Into<String>) -> Self {

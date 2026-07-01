@@ -14,6 +14,7 @@ thiserror = { workspace = true }
 regex = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }
+ureq = { workspace = true }
 chrono = { workspace = true }
 
 [dev-dependencies]

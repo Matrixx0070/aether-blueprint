@@ -8,6 +8,7 @@ description = "Hardware security and side-channel resistance (TIER 15)"
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+hex = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 regex = { workspace = true }

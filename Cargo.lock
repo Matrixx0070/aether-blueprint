@@ -297,6 +297,7 @@ version = "0.36.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "hex",
  "regex",
  "serde",
  "serde_json",
@@ -708,6 +709,7 @@ dependencies = [
  "serde_yaml",
  "thiserror 2.0.18",
  "tokio",
+ "ureq",
 ]
 
 [[package]]
