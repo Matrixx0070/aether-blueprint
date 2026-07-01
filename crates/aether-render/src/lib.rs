@@ -1851,6 +1851,12 @@ pub enum UiCommand {
     QueryPlanBlockTurnsCount,
     /// Show whether the LLM fallback model is set.
     QueryLlmFallbackModelSet,
+    /// Show the count of last tool signatures.
+    QueryLastToolSigCount,
+    /// Show the longest tool name in last tool signatures.
+    QueryLastToolSigMaxLen,
+    /// Show the shortest tool name in last tool signatures.
+    QueryLastToolSigMinLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
