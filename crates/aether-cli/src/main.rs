@@ -17323,6 +17323,42 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryLastToolSigSigMinWords => {
+                    let min = session.last_tool_signatures.iter()
+                        .map(|(_, sig)| sig.split_whitespace().count())
+                        .min();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match min {
+                        Some(v) => format!("Last tool sig sig min words: {v}"),
+                        None => "Last tool sigs: none recorded.".to_string(),
+                    }));
+                    continue;
+                }
+                UiCommand::QueryProgressItemDoneWordAvg => {
+                    let done: Vec<_> = session.progress_items.iter()
+                        .filter(|(_, d)| *d)
+                        .collect();
+                    let n = done.len();
+                    let avg = if n == 0 { 0.0 } else {
+                        let total: usize = done.iter()
+                            .map(|(text, _)| text.split_whitespace().count())
+                            .sum();
+                        total as f64 / n as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Progress item done word avg: {avg:.1} ({n} done items)"
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySessionVarKeyMinWords => {
+                    let min = session.session_vars.keys()
+                        .map(|k| k.split_whitespace().count())
+                        .min();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match min {
+                        Some(v) => format!("Session var key min words: {v}"),
+                        None => "Session vars: none defined.".to_string(),
+                    }));
+                    continue;
+                }
                 UiCommand::QueryLastToolSigNameMinWords => {
                     let min = session.last_tool_signatures.iter()
                         .map(|(name, _)| name.split_whitespace().count())
@@ -50106,6 +50142,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/last-tool-sig-sig-min-words" => {
+                                    if _ctx.send(UiCommand::QueryLastToolSigSigMinWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/progress-item-done-word-avg" => {
+                                    if _ctx.send(UiCommand::QueryProgressItemDoneWordAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-var-key-min-words" => {
+                                    if _ctx.send(UiCommand::QuerySessionVarKeyMinWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -51927,6 +51978,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/last-tool-sig-name-min-words",
                             "/auto-tag-rule-tag-min-words",
                             "/bookmark-label-min-words",
+                            "/last-tool-sig-sig-min-words",
+                            "/progress-item-done-word-avg",
+                            "/session-var-key-min-words",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

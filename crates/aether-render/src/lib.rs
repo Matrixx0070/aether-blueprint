@@ -2979,6 +2979,12 @@ pub enum UiCommand {
     QueryAutoTagRuleTagMinWords,
     /// Minimum word count in any single bookmark label.
     QueryBookmarkLabelMinWords,
+    /// Minimum word count in any single last_tool_signature sig value.
+    QueryLastToolSigSigMinWords,
+    /// Average word count per done progress item.
+    QueryProgressItemDoneWordAvg,
+    /// Minimum word count in any single session_var key.
+    QuerySessionVarKeyMinWords,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
