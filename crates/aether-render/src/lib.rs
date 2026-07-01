@@ -1191,6 +1191,12 @@ pub enum UiCommand {
     QueryHistoryUserLast2,
     /// Show whether long-conversation digest was injected in last assembly.
     QueryAssemblyLongConv,
+    /// Count how many turns a specific plan block type appears in.
+    QueryPlanBlockTurnCount(String),
+    /// Show the tool-results at a specific history index.
+    QueryHistoryToolResultAt(usize),
+    /// Show whether the verifier gate is enabled.
+    QueryVerifierGateEnabled,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

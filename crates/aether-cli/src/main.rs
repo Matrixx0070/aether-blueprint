@@ -8964,6 +8964,59 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QueryPlanBlockTurnCount(name) => {
+                    match session.plan.block_turns.get(&name) {
+                        Some(turns) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Plan block '{name}': appears in {} turns.", turns.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Plan block '{name}': not tracked in block_turns."
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryToolResultAt(idx) => {
+                    match session.history.get(idx) {
+                        Some(aether_core::context::ConversationItem::ToolResults(results)) => {
+                            if results.is_empty() {
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                    "History[{idx}] ToolResults: empty."
+                                )));
+                            } else {
+                                let lines: Vec<_> = results.iter()
+                                    .map(|r| format!("  {} (err={}) — {}", r.tool_use_id, r.is_error, r.content.chars().take(60).collect::<String>()))
+                                    .collect();
+                                let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                    "History[{idx}] ToolResults ({}):\n{}", results.len(), lines.join("\n")
+                                )));
+                            }
+                        }
+                        Some(_) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "History[{idx}]: not a ToolResults item."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "History[{idx}]: out of range."
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryVerifierGateEnabled => {
+                    let enabled = session.verify_enabled;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate: {}. {} rule(s) loaded.",
+                        if enabled { "ENABLED" } else { "disabled" },
+                        session.verifier.gate.rules.len()
+                    )));
+                    continue;
+                }
                 UiCommand::QueryPlanGoalWords => {
                     match &session.plan.goal {
                         Some(g) => {
@@ -35976,6 +36029,27 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                cmd_str if cmd_str.starts_with("/plan-block-turn-count ") => {
+                                    let name = cmd_str.trim_start_matches("/plan-block-turn-count ").trim().to_string();
+                                    if _ctx.send(UiCommand::QueryPlanBlockTurnCount(name)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd_str if cmd_str.starts_with("/history-tool-result-at ") => {
+                                    let arg = cmd_str.trim_start_matches("/history-tool-result-at ").trim();
+                                    if let Ok(idx) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::QueryHistoryToolResultAt(idx)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /history-tool-result-at <index>".to_string()));
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-gate-enabled" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateEnabled).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -36878,6 +36952,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-goal-words",
                             "/history-user-last2",
                             "/assembly-long-conv",
+                            "/plan-block-turn-count ",
+                            "/history-tool-result-at ",
+                            "/verifier-gate-enabled",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
