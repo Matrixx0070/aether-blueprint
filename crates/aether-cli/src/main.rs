@@ -16362,6 +16362,41 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryHistoryToolResultAvgChars => {
+                    let all_lens: Vec<usize> = session.history.iter().flat_map(|item| {
+                        if let ConversationItem::ToolResults(results) = item {
+                            results.iter().map(|r| r.content.len()).collect::<Vec<_>>()
+                        } else { vec![] }
+                    }).collect();
+                    let n = all_lens.len();
+                    let avg = if n == 0 { 0 } else { all_lens.iter().sum::<usize>() / n };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History avg tool result content chars: {avg} ({n} results)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryToolResultMaxChars => {
+                    let max = session.history.iter().flat_map(|item| {
+                        if let ConversationItem::ToolResults(results) = item {
+                            results.iter().map(|r| r.content.len()).collect::<Vec<_>>()
+                        } else { vec![] }
+                    }).max().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History max tool result content chars: {max}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryToolUseIdTotalChars => {
+                    let total: usize = session.history.iter().filter_map(|item| {
+                        if let ConversationItem::Assistant { tool_uses, .. } = item {
+                            Some(tool_uses.iter().map(|tu| tu.id.len()).sum::<usize>())
+                        } else { None }
+                    }).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History total tool_use ID chars: {total}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -47489,6 +47524,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/history-tool-result-avg-chars" => {
+                                    if _ctx.send(UiCommand::QueryHistoryToolResultAvgChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-tool-result-max-chars" => {
+                                    if _ctx.send(UiCommand::QueryHistoryToolResultMaxChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-tool-use-id-total-chars" => {
+                                    if _ctx.send(UiCommand::QueryHistoryToolUseIdTotalChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -49151,6 +49201,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-tool-result-err-count",
                             "/history-tool-result-ok-count",
                             "/history-tool-result-total-chars",
+                            "/history-tool-result-avg-chars",
+                            "/history-tool-result-max-chars",
+                            "/history-tool-use-id-total-chars",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

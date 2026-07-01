@@ -2661,6 +2661,12 @@ pub enum UiCommand {
     QueryHistoryToolResultOkCount,
     /// Total chars across all tool result content strings in the session history.
     QueryHistoryToolResultTotalChars,
+    /// Average chars per tool result content entry in the session history.
+    QueryHistoryToolResultAvgChars,
+    /// Max chars in any single tool result content entry in the session history.
+    QueryHistoryToolResultMaxChars,
+    /// Total chars across all tool_use IDs in the session history.
+    QueryHistoryToolUseIdTotalChars,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
