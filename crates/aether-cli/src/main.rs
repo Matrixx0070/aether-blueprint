@@ -16868,6 +16868,40 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QuerySessionVarValueAvgWords => {
+                    let n = session.session_vars.len();
+                    let avg = if n == 0 { 0.0 } else {
+                        session.session_vars.values()
+                            .map(|v| v.split_whitespace().count() as f64)
+                            .sum::<f64>() / n as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session var value avg words: {avg:.1} ({n} vars)"
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySessionTagWordTotal => {
+                    let total: usize = session.session_tags.iter()
+                        .map(|t| t.split_whitespace().count())
+                        .sum();
+                    let n = session.session_tags.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session tag total words: {total} ({n} tags)"
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySessionTagAvgWords => {
+                    let n = session.session_tags.len();
+                    let avg = if n == 0 { 0.0 } else {
+                        session.session_tags.iter()
+                            .map(|t| t.split_whitespace().count() as f64)
+                            .sum::<f64>() / n as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session tag avg words per tag: {avg:.1} ({n} tags)"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -48235,6 +48269,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/session-var-value-avg-words" => {
+                                    if _ctx.send(UiCommand::QuerySessionVarValueAvgWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-tag-word-total" => {
+                                    if _ctx.send(UiCommand::QuerySessionTagWordTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-tag-avg-words" => {
+                                    if _ctx.send(UiCommand::QuerySessionTagAvgWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -49945,6 +49994,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-annot-max-words",
                             "/history-annot-min-words",
                             "/session-var-value-word-total",
+                            "/session-var-value-avg-words",
+                            "/session-tag-word-total",
+                            "/session-tag-avg-words",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

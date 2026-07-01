@@ -2757,6 +2757,12 @@ pub enum UiCommand {
     QueryHistoryAnnotMinWords,
     /// Total word count across all session variable values.
     QuerySessionVarValueWordTotal,
+    /// Average word count per session variable value.
+    QuerySessionVarValueAvgWords,
+    /// Total word count across all session tag strings.
+    QuerySessionTagWordTotal,
+    /// Average word count per session tag string.
+    QuerySessionTagAvgWords,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
