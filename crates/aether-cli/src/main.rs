@@ -10451,6 +10451,49 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryHistoryUserLen => {
+                    use aether_core::context::ConversationItem;
+                    let total: usize = session.history.iter().map(|item| match item {
+                        ConversationItem::User(s) => s.len(),
+                        _ => 0,
+                    }).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Total user message chars in history: {total}."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlanRecentErrors => {
+                    let erring: Vec<_> = session.plan.tool_error_counts.iter()
+                        .filter(|(_, &c)| c > 0)
+                        .map(|(k, v)| format!("{k}:{v}"))
+                        .collect();
+                    if erring.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Plan recent errors: none (all tools clean).".to_string()
+                        ));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Plan tools with consecutive errors: {}", erring.join(", ")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryAutoTagRuleList => {
+                    if session.auto_tag_rules.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Auto-tag rules: none defined.".to_string()
+                        ));
+                    } else {
+                        let list: Vec<_> = session.auto_tag_rules.iter()
+                            .enumerate()
+                            .map(|(i, (pat, tag))| format!("[{i}] '{pat}' → '{tag}'"))
+                            .collect();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Auto-tag rules ({}):\n{}", list.len(), list.join("\n")
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -36711,6 +36754,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /history-user-len — total char length of all user messages
+                                "/history-user-len" => {
+                                    if _ctx.send(UiCommand::QueryHistoryUserLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /plan-recent-errors — count tools with consecutive errors in plan
+                                "/plan-recent-errors" => {
+                                    if _ctx.send(UiCommand::QueryPlanRecentErrors).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /auto-tag-rule-list — list all auto-tag rules
+                                "/auto-tag-rule-list" => {
+                                    if _ctx.send(UiCommand::QueryAutoTagRuleList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -37649,6 +37710,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/auto-commit-template-show",
                             "/sticky-ctx-count",
                             "/history-ann-count",
+                            "/history-user-len",
+                            "/plan-recent-errors",
+                            "/auto-tag-rule-list",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

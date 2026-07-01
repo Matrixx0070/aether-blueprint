@@ -1263,6 +1263,12 @@ pub enum UiCommand {
     QueryStickyCtxCount,
     /// Count history annotations.
     QueryHistoryAnnCount,
+    /// Show total char count of all user messages in history.
+    QueryHistoryUserLen,
+    /// Show count of tools with non-zero consecutive errors in the plan.
+    QueryPlanRecentErrors,
+    /// List all auto-tag rules.
+    QueryAutoTagRuleList,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
