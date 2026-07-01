@@ -2229,6 +2229,12 @@ pub enum UiCommand {
     QueryPlanBlockTurnsKeyLast,
     /// Show the text of the first turn label.
     QueryTurnLabelFirstText,
+    /// Show the text of the last turn label.
+    QueryTurnLabelLastText,
+    /// Show the total ok calls across all plan.tool_call_stats.
+    QueryPlanToolStatTotalOk,
+    /// Show the total err calls across all plan.tool_call_stats.
+    QueryPlanToolStatTotalErr,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
