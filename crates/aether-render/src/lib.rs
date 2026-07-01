@@ -2163,6 +2163,12 @@ pub enum UiCommand {
     QueryTaskQueueTotalChars,
     /// Show the total chars across all tool deny entries.
     QueryToolDenyTotalChars,
+    /// Show the total chars across all tool allow entries.
+    QueryToolAllowTotalChars,
+    /// Show the total chars across all last tool signature name+sig pairs.
+    QueryLastToolSigTotalChars,
+    /// Show the total chars across all progress item texts.
+    QueryProgressItemTotalChars,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
