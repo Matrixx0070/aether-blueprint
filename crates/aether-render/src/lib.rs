@@ -1059,6 +1059,12 @@ pub enum UiCommand {
     QueryVerifierBlockedCount,
     /// Show tool-call budget usage (used / max).
     QueryToolCallBudgetUsed,
+    /// Show ok-call count for a specific tool from plan stats.
+    QueryPlanToolOkCount(String),
+    /// Show reminders admitted count from last assembly telemetry.
+    QueryRemindersAdmitted,
+    /// Show last verifier result summary message.
+    QueryVerifierMessage,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

@@ -8964,6 +8964,53 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QueryPlanToolOkCount(name) => {
+                    match session.plan.tool_call_stats.get(&name) {
+                        Some((ok, err)) => {
+                            let total = ok + err;
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Tool '{name}': {ok} ok / {total} total calls ({err} errors)."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Tool '{name}': no stats recorded."
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryRemindersAdmitted => {
+                    match &session.last_assembly_telemetry {
+                        Some(t) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Reminders admitted: {} (dropped: {}) in last assembly.",
+                                t.reminders_admitted, t.reminders_dropped
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "No assembly telemetry recorded yet.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryVerifierMessage => {
+                    match &session.last_verification {
+                        Some(v) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Verifier message: {}", v.message
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "No verifier result yet.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryPlanStepCount => {
                     let total: usize = session.plan.block_counts.values().sum();
                     let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
@@ -34667,6 +34714,22 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                cmd_str if cmd_str.starts_with("/plan-tool-ok-count ") => {
+                                    let name = cmd_str.trim_start_matches("/plan-tool-ok-count ").trim().to_string();
+                                    if _ctx.send(UiCommand::QueryPlanToolOkCount(name)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/reminders-admitted" => {
+                                    if _ctx.send(UiCommand::QueryRemindersAdmitted).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-message" => {
+                                    if _ctx.send(UiCommand::QueryVerifierMessage).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -35503,6 +35566,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-step-count",
                             "/verifier-blocked-count",
                             "/tool-call-budget-used",
+                            "/plan-tool-ok-count ",
+                            "/reminders-admitted",
+                            "/verifier-message",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
