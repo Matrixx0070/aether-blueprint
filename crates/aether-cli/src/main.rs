@@ -7700,6 +7700,55 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryCostPerTurnAvg => {
+                    if session.turn_cost_log.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Cost per turn: no turns with cost data yet.".to_string()
+                        ));
+                    } else {
+                        let total: f64 = session.turn_cost_log.iter().map(|(_, _, _, c)| c).sum();
+                        let avg = total / session.turn_cost_log.len() as f64;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Cost per turn: avg ${avg:.5} over {} turns (total ${total:.4}).",
+                            session.turn_cost_log.len()
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistorySizeBytes => {
+                    let bytes: usize = session.history.iter().map(|item| {
+                        match item {
+                            aether_core::context::ConversationItem::User(s) => s.len(),
+                            aether_core::context::ConversationItem::Assistant { text, tool_uses } => {
+                                text.as_deref().unwrap_or("").len() + tool_uses.len() * 64
+                            }
+                            aether_core::context::ConversationItem::ToolResults(r) => {
+                                r.iter().map(|tr| tr.content.len()).sum()
+                            }
+                        }
+                    }).sum();
+                    let kb = bytes as f64 / 1024.0;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History size: ~{bytes} bytes ({kb:.1} KB) across {} items.",
+                        session.history.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QueryFocusModeShow => {
+                    match &session.focus_mode {
+                        Some(mode) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Focus mode: {mode:?}. Use /focus off to clear."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Focus mode: OFF. Use /focus <mode> to restrict agent scope.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryPlanIncludedShow => {
                     match &session.last_assembly_telemetry {
                         Some(t) => {
@@ -34035,6 +34084,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /cost-per-turn-avg — show average cost per turn
+                                "/cost-per-turn-avg" => {
+                                    if _ctx.send(UiCommand::QueryCostPerTurnAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /history-size-bytes — show history byte size
+                                "/history-size-bytes" => {
+                                    if _ctx.send(UiCommand::QueryHistorySizeBytes).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /focus-mode-show — show active focus mode
+                                "/focus-mode-show" => {
+                                    if _ctx.send(UiCommand::QueryFocusModeShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -34844,6 +34911,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-included-show",
                             "/pending-reminders-count",
                             "/metric-reset-turn",
+                            "/cost-per-turn-avg",
+                            "/history-size-bytes",
+                            "/focus-mode-show",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

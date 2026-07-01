@@ -1005,6 +1005,12 @@ pub enum UiCommand {
     QueryPendingRemindersCount,
     /// Show the turn index at which metrics were last reset.
     QueryMetricResetTurn,
+    /// Show average cost per completed turn.
+    QueryCostPerTurnAvg,
+    /// Show history byte size in memory.
+    QueryHistorySizeBytes,
+    /// Show the active focus mode.
+    QueryFocusModeShow,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
