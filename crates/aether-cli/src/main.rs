@@ -11868,6 +11868,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QuerySessionVarValueMaxLen => {
+                    match session.session_vars.values().max_by_key(|v| v.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Session var value max len: no vars defined.".to_string())); }
+                        Some(v) => { let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Session var value max len: {} chars.", v.len()))); }
+                    }
+                    continue;
+                }
+                UiCommand::QueryAliasValueMaxLen => {
+                    match session.aliases.values().max_by_key(|v| v.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Alias value max len: no aliases defined.".to_string())); }
+                        Some(v) => { let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Alias value max len: {} chars.", v.len()))); }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPromptMacroValueMaxLen => {
+                    match session.prompt_macros.values().max_by_key(|v| v.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Prompt macro value max len: no macros defined.".to_string())); }
+                        Some(v) => { let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Prompt macro value max len: {} chars.", v.len()))); }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -40490,6 +40511,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/session-var-value-max-len" => {
+                                    if _ctx.send(UiCommand::QuerySessionVarValueMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/alias-value-max-len" => {
+                                    if _ctx.send(UiCommand::QueryAliasValueMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/prompt-macro-value-max-len" => {
+                                    if _ctx.send(UiCommand::QueryPromptMacroValueMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -41651,6 +41687,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/prompt-macro-key-avg-len",
                             "/session-var-key-avg-len",
                             "/env-value-max-len",
+                            "/session-var-value-max-len",
+                            "/alias-value-max-len",
+                            "/prompt-macro-value-max-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
