@@ -16081,6 +16081,31 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryVerifierGatePhrasePatternTotal => {
+                    let total: usize = session.verifier.gate.rules.iter().filter_map(|r| {
+                        if let Detector::PhraseMatch { ref patterns, .. } = r.rule.detector { Some(patterns.len()) } else { None }
+                    }).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate PhraseMatch total patterns: {total}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierGateRegexPatternTotal => {
+                    let total: usize = session.verifier.gate.rules.iter().filter_map(|r| {
+                        if let Detector::Regex { ref patterns, .. } = r.rule.detector { Some(patterns.len()) } else { None }
+                    }).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate Regex total patterns: {total}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierGateRemediationHasTpl => {
+                    let count = session.verifier.gate.rules.iter().filter(|r| r.rule.remediation.as_ref().and_then(|rem| rem.template.as_ref()).is_some()).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate rules with remediation template: {count}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -47058,6 +47083,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/verifier-gate-phrase-pattern-total" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGatePhrasePatternTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-gate-regex-pattern-total" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateRegexPatternTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-gate-remediation-has-tpl" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateRemediationHasTpl).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -48690,6 +48730,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/verifier-gate-remediation-strip",
                             "/verifier-gate-remediation-redact",
                             "/verifier-gate-remediation-annotate",
+                            "/verifier-gate-phrase-pattern-total",
+                            "/verifier-gate-regex-pattern-total",
+                            "/verifier-gate-remediation-has-tpl",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

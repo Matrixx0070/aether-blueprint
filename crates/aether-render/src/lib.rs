@@ -2601,6 +2601,12 @@ pub enum UiCommand {
     QueryVerifierGateRemediationRedact,
     /// Count of rules with RemediationStrategy::Annotate.
     QueryVerifierGateRemediationAnnotate,
+    /// Total pattern count across all PhraseMatch detector rules.
+    QueryVerifierGatePhrasePatternTotal,
+    /// Total pattern count across all Regex detector rules.
+    QueryVerifierGateRegexPatternTotal,
+    /// Count of rules where remediation template is Some.
+    QueryVerifierGateRemediationHasTpl,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
