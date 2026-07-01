@@ -1,0 +1,15 @@
+[package]
+name = "aether-taint"
+version = "0.36.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Cross-file taint tracking with sanitizer recognition: sources → sinks with sanitizer kill"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+syn = { workspace = true }
+once_cell = { workspace = true }
+toml = { workspace = true }
+aether-deps-reach = { workspace = true }

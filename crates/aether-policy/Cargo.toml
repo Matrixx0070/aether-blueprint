@@ -1,0 +1,13 @@
+[package]
+name = "aether-policy"
+version = "0.36.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Policy-as-code engine: TOML rules that block/warn/ignore findings by rule_id, severity, path"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+toml = { workspace = true }
+aether-deps-reach = { workspace = true }

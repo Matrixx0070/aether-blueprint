@@ -1,0 +1,13 @@
+[package]
+name = "aether-ebpf"
+version = "0.36.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "eBPF-based syscall anomaly monitor: /proc/net + execve tracing via perf events"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+once_cell = { workspace = true }
+aether-deps-reach = { workspace = true }

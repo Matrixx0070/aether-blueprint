@@ -1,0 +1,15 @@
+[package]
+name = "aether-baseline"
+version = "0.36.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Finding baseline ratchet: store accepted findings, alert on any new ones above threshold"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+rusqlite = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+aether-deps-reach = { workspace = true }

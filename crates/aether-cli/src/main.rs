@@ -29,6 +29,20 @@ use aether_sbom;
 use aether_harden;
 use aether_tls;
 use aether_dast;
+use aether_deps_reach;
+use aether_taint;
+use aether_triage;
+use aether_patch;
+use aether_ebpf;
+use aether_netwatch;
+use aether_drift;
+use aether_semgrep_gen;
+use aether_explain;
+use aether_baseline;
+use aether_pr_bot;
+use aether_policy;
+use aether_report;
+use aether_license;
 use aether_core::context::ConversationItem;
 use aether_core::{agent_turn, agent_turn_streamed, Session, SessionConfig, TurnOutcome};
 use aether_core::planner::Plan;
@@ -467,6 +481,150 @@ enum Cmd {
         /// URL to scan.
         #[arg(long)]
         url: String,
+        /// Emit JSON output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reachability-aware CVE triage: surface CVEs only in crates actually called.
+    DepsReach {
+        /// Path to Cargo.toml (default: Cargo.toml in current dir).
+        #[arg(long, default_value = "Cargo.toml")]
+        manifest: String,
+        /// Emit JSON output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Cross-file taint tracking: env/file/HTTP sources → shell/SQL/file sinks.
+    Taint {
+        /// Directory to scan (default: current dir).
+        #[arg(long, default_value = ".")]
+        dir: String,
+        /// Emit JSON output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Cross-model consensus triage: confirm findings via ≥2 Ollama models.
+    Triage {
+        /// JSON file with findings (output of any aether scanner).
+        #[arg(long)]
+        findings: String,
+        /// Ollama base URL.
+        #[arg(long, default_value = "http://localhost:11434")]
+        ollama: String,
+        /// Emit JSON output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Git worktree auto-patch: LLM-generated fixes validated by cargo test.
+    Patch {
+        /// JSON file with findings to patch.
+        #[arg(long)]
+        findings: String,
+        /// Repository root (default: current dir).
+        #[arg(long, default_value = ".")]
+        repo: String,
+        /// Emit JSON output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// eBPF syscall anomaly monitor (degraded: /proc snapshot mode).
+    Ebpf {
+        /// Emit JSON output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Network egress watcher via /proc/net snapshot diff.
+    Netwatch {
+        /// Baseline snapshot JSON (if not set, lists all active connections).
+        #[arg(long)]
+        baseline: Option<String>,
+        /// Save current snapshot to this path.
+        #[arg(long)]
+        save: Option<String>,
+        /// Emit JSON output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Config drift detector: diff current hardening state against a baseline.
+    Drift {
+        /// Baseline snapshot JSON (produced by 'aether harden --json').
+        #[arg(long)]
+        baseline: String,
+        /// Emit JSON output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Semgrep rule generator: produce YAML rules from aether findings via LLM.
+    SemgrepGen {
+        /// JSON file with findings.
+        #[arg(long)]
+        findings: String,
+        /// Output file for generated rules (default: stdout).
+        #[arg(long)]
+        output: Option<String>,
+    },
+    /// Exploit narrative generator: LLM-written attack story per finding.
+    Explain {
+        /// JSON file with findings.
+        #[arg(long)]
+        findings: String,
+        /// Output format: text or json.
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
+    /// Finding baseline ratchet: flag any new findings not in the accepted baseline.
+    Baseline {
+        /// JSON file with current findings.
+        #[arg(long)]
+        findings: String,
+        /// Accept all current findings into the baseline (initialize/update mode).
+        #[arg(long)]
+        accept: bool,
+        /// SQLite database path for the baseline.
+        #[arg(long, default_value = "/tmp/aether-baseline.db")]
+        db: String,
+    },
+    /// GitHub PR annotator: post inline review comments for each finding.
+    PrBot {
+        /// JSON file with findings to annotate.
+        #[arg(long)]
+        findings: String,
+        /// Run in dry-run mode (print comments, don't post).
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Policy-as-code engine: evaluate findings against TOML policy rules.
+    Policy {
+        /// JSON file with findings.
+        #[arg(long)]
+        findings: String,
+        /// Policy TOML file.
+        #[arg(long)]
+        policy: String,
+        /// Emit JSON output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Compliance report generator: HTML + JSON report from findings.
+    Report {
+        /// JSON file with findings.
+        #[arg(long)]
+        findings: String,
+        /// Report title.
+        #[arg(long, default_value = "Aether Security Report")]
+        title: String,
+        /// Output HTML file.
+        #[arg(long)]
+        html: Option<String>,
+        /// Output JSON file.
+        #[arg(long)]
+        output: Option<String>,
+    },
+    /// SPDX license compatibility checker: flag copyleft deps in Cargo projects.
+    License {
+        /// Path to Cargo.toml (default: Cargo.toml in current dir).
+        #[arg(long, default_value = "Cargo.toml")]
+        manifest: String,
         /// Emit JSON output.
         #[arg(long)]
         json: bool,
@@ -1748,6 +1906,329 @@ async fn main() -> Result<()> {
                             println!("       Fix: {}", f.remediation);
                         }
                         if report.findings.is_empty() { println!("  ✓ No security header issues found"); }
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        Some(Cmd::DepsReach { manifest, json }) => {
+            println!("[TIER 34] Reachability-Aware CVE Triage");
+            let manifest_path = std::path::Path::new(&manifest);
+            match aether_deps_reach::run(manifest_path).await {
+                Err(e) => eprintln!("  deps-reach error: {e}"),
+                Ok(report) => {
+                    if json {
+                        let findings = aether_deps_reach::report_to_findings(&report);
+                        println!("{}", serde_json::to_string_pretty(&findings).unwrap_or_default());
+                    } else {
+                        println!("  Packages scanned : {}", report.packages_scanned);
+                        println!("  CVEs found       : {}", report.reachable_cves.len());
+                        for e in &report.reachable_cves {
+                            let reach = if e.reachable { "REACHABLE" } else { "unreachable" };
+                            println!("  [{}] {} v{} — {} ({:?})", reach, e.package, e.version, e.vuln_id, e.severity);
+                            if let Some(ref cs) = e.call_site { println!("       called at {}", cs); }
+                        }
+                        if report.reachable_cves.is_empty() { println!("  ✓ No reachable CVEs found"); }
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        Some(Cmd::Taint { dir, json }) => {
+            println!("[TIER 31] Cross-File Taint Tracker");
+            let config = aether_taint::TaintConfig::default();
+            let flows = aether_taint::scan_directory(std::path::Path::new(&dir), &config);
+            if json {
+                let findings = aether_taint::flows_to_findings(&flows);
+                println!("{}", serde_json::to_string_pretty(&findings).unwrap_or_default());
+            } else {
+                println!("  Directory : {}", dir);
+                println!("  Flows     : {}", flows.len());
+                for f in &flows {
+                    println!("  [{}] fn `{}` {}:{} → {}:{} ({})", f.cwe, f.fn_name, f.file.display(), f.source_line, f.sink_kind, f.sink_line, f.source_kind);
+                }
+                if flows.is_empty() { println!("  ✓ No taint flows detected"); }
+            }
+            return Ok(());
+        }
+
+        Some(Cmd::Triage { findings, ollama, json }) => {
+            println!("[TIER 40] Cross-Model Consensus Triage");
+            let path = std::path::Path::new(&findings);
+            match aether_triage::load_findings_json(path) {
+                Err(e) => eprintln!("  Cannot load findings: {e}"),
+                Ok(all_findings) => {
+                    let config = aether_triage::TriageConfig {
+                        ollama_url: ollama.clone(),
+                        ..aether_triage::TriageConfig::default()
+                    };
+                    match aether_triage::triage_findings(&all_findings, &config) {
+                        Err(e) => eprintln!("  Triage error: {e}"),
+                        Ok(report) => {
+                            if json {
+                                println!("{}", serde_json::to_string_pretty(&report.confirmed).unwrap_or_default());
+                            } else {
+                                println!("  Input     : {}", all_findings.len());
+                                println!("  Confirmed : {}", report.confirmed.len());
+                                println!("  Suppressed: {}", report.suppressed.len());
+                                for r in &report.confirmed {
+                                    println!("  [CONFIRMED] {} — {}", r.finding.rule_id, r.finding.evidence);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        Some(Cmd::Patch { findings, repo, json }) => {
+            println!("[TIER 38] Git Worktree Auto-Patch");
+            let path = std::path::Path::new(&findings);
+            match aether_triage::load_findings_json(path) {
+                Err(e) => eprintln!("  Cannot load findings: {e}"),
+                Ok(all_findings) => {
+                    let config = aether_patch::PatchConfig::default();
+                    let results = aether_patch::patch_all(&all_findings, std::path::Path::new(&repo), &config);
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&results).unwrap_or_default());
+                    } else {
+                        for r in &results {
+                            let status_str = match &r.status {
+                                aether_patch::PatchStatus::Applied { tests_passed } =>
+                                    if *tests_passed { "APPLIED+PASSING" } else { "APPLIED+FAILING" },
+                                aether_patch::PatchStatus::GenerationFailed(_) => "GENERATION_FAILED",
+                                aether_patch::PatchStatus::ApplyFailed(_) => "APPLY_FAILED",
+                                aether_patch::PatchStatus::WorktreeFailed(_) => "WORKTREE_FAILED",
+                            };
+                            println!("  [{}] {} (attempt {})", status_str, r.finding.rule_id, r.attempt);
+                        }
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        Some(Cmd::Ebpf { json }) => {
+            println!("[TIER 35] eBPF Syscall Anomaly Monitor");
+            let config = aether_ebpf::EbpfConfig::default();
+            match aether_ebpf::scan(&config) {
+                Err(e) => eprintln!("  eBPF scan error: {e}"),
+                Ok(findings) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&findings).unwrap_or_default());
+                    } else {
+                        println!("  Anomalies : {}", findings.len());
+                        for f in &findings { println!("  [{}] {}", f.severity, f.evidence); }
+                        if findings.is_empty() { println!("  ✓ No suspicious syscalls detected"); }
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        Some(Cmd::Netwatch { baseline, save, json }) => {
+            println!("[TIER 36] Network Egress Watcher");
+            let baseline_path = baseline.as_deref().map(std::path::Path::new);
+            match aether_netwatch::analyse(baseline_path) {
+                Err(e) => eprintln!("  netwatch error: {e}"),
+                Ok(findings) => {
+                    if let Some(save_path) = save {
+                        match aether_netwatch::snapshot() {
+                            Ok(snap) => { let _ = aether_netwatch::save_snapshot(&snap, std::path::Path::new(&save_path)); }
+                            Err(e) => eprintln!("  snapshot save error: {e}"),
+                        }
+                    }
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&findings).unwrap_or_default());
+                    } else {
+                        println!("  Findings  : {}", findings.len());
+                        for f in &findings { println!("  [{}] {}", f.severity, f.evidence); }
+                        if findings.is_empty() { println!("  ✓ No unexpected egress detected"); }
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        Some(Cmd::Drift { baseline, json }) => {
+            println!("[TIER 37] Config Drift Detector");
+            match aether_drift::run_drift_check(std::path::Path::new(&baseline)) {
+                Err(e) => eprintln!("  drift check error: {e}"),
+                Ok(findings) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&findings).unwrap_or_default());
+                    } else {
+                        println!("  Drift items : {}", findings.len());
+                        for f in &findings { println!("  [{}] {}", f.severity, f.evidence); }
+                        if findings.is_empty() { println!("  ✓ No hardening drift detected"); }
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        Some(Cmd::SemgrepGen { findings, output }) => {
+            println!("[TIER 32] Semgrep Rule Generator");
+            let path = std::path::Path::new(&findings);
+            match aether_triage::load_findings_json(path) {
+                Err(e) => eprintln!("  Cannot load findings: {e}"),
+                Ok(all_findings) => {
+                    let config = aether_semgrep_gen::SemgrepGenConfig::default();
+                    let rules = aether_semgrep_gen::generate_rules(&all_findings, &config);
+                    let combined = aether_semgrep_gen::combine_rules(&rules);
+                    if let Some(out_path) = output {
+                        std::fs::write(&out_path, &combined).unwrap_or_else(|e| eprintln!("write error: {e}"));
+                        println!("  Rules written to {}", out_path);
+                    } else {
+                        println!("{}", combined);
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        Some(Cmd::Explain { findings, format }) => {
+            println!("[TIER 39] Exploit Narrative Generator");
+            let path = std::path::Path::new(&findings);
+            match aether_triage::load_findings_json(path) {
+                Err(e) => eprintln!("  Cannot load findings: {e}"),
+                Ok(all_findings) => {
+                    let config = aether_explain::ExplainConfig::default();
+                    let explanations = aether_explain::explain_all(&all_findings, &config);
+                    if format == "json" {
+                        println!("{}", serde_json::to_string_pretty(&explanations).unwrap_or_default());
+                    } else {
+                        for exp in &explanations {
+                            println!("{}", aether_explain::explanation_to_markdown(exp));
+                        }
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        Some(Cmd::Baseline { findings, accept, db }) => {
+            println!("[TIER 41] Finding Baseline Ratchet");
+            let path = std::path::Path::new(&findings);
+            match aether_triage::load_findings_json(path) {
+                Err(e) => eprintln!("  Cannot load findings: {e}"),
+                Ok(all_findings) => {
+                    let config = aether_baseline::BaselineConfig {
+                        db_path: std::path::PathBuf::from(&db),
+                        min_severity: aether_baseline::Severity::Medium,
+                    };
+                    if accept {
+                        match aether_baseline::accept_findings(&all_findings, &config) {
+                            Ok(n) => println!("  Accepted {} findings into baseline", n),
+                            Err(e) => eprintln!("  accept error: {e}"),
+                        }
+                    } else {
+                        match aether_baseline::ratchet(&all_findings, &config) {
+                            Err(e) => eprintln!("  ratchet error: {e}"),
+                            Ok(result) => {
+                                println!("  Regressions : {}", result.regressions.len());
+                                println!("  Accepted    : {}", result.accepted.len());
+                                println!("  Below-thresh: {}", result.below_threshold.len());
+                                for f in &result.regressions {
+                                    println!("  [NEW] [{}] {} — {}", f.severity, f.rule_id, f.evidence);
+                                }
+                                if result.regressions.is_empty() { println!("  ✓ No new findings above threshold"); }
+                            }
+                        }
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        Some(Cmd::PrBot { findings, dry_run }) => {
+            println!("[TIER 42] GitHub PR Annotator");
+            let path = std::path::Path::new(&findings);
+            match aether_triage::load_findings_json(path) {
+                Err(e) => eprintln!("  Cannot load findings: {e}"),
+                Ok(all_findings) => {
+                    match aether_pr_bot::PrBotConfig::from_env() {
+                        Err(e) => eprintln!("  PR bot config error: {e}"),
+                        Ok(mut config) => {
+                            config.dry_run = dry_run;
+                            let _ = aether_pr_bot::post_summary(&all_findings, &config);
+                            let result = aether_pr_bot::post_findings(&all_findings, &config);
+                            println!("  Posted : {}", result.posted);
+                            for err in &result.errors { eprintln!("  error: {err}"); }
+                        }
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        Some(Cmd::Policy { findings, policy, json }) => {
+            println!("[TIER 43] Policy-as-Code Engine");
+            let path = std::path::Path::new(&findings);
+            match aether_triage::load_findings_json(path) {
+                Err(e) => eprintln!("  Cannot load findings: {e}"),
+                Ok(all_findings) => {
+                    let policy_file = aether_policy::load_policy_or_default(std::path::Path::new(&policy));
+                    let verdicts = aether_policy::evaluate(&all_findings, &policy_file);
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&verdicts).unwrap_or_default());
+                    } else {
+                        let s = aether_policy::summarise(&verdicts);
+                        println!("  Blocked : {}", s.blocked);
+                        println!("  Warned  : {}", s.warned);
+                        println!("  Ignored : {}", s.ignored);
+                        for v in &verdicts {
+                            println!("  [{:?}] {} — rule: {}", v.action, v.finding.rule_id, v.matched_rule.as_deref().unwrap_or("(default)"));
+                        }
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        Some(Cmd::Report { findings, title, html, output }) => {
+            println!("[TIER 44] Compliance Report Generator");
+            let path = std::path::Path::new(&findings);
+            match aether_triage::load_findings_json(path) {
+                Err(e) => eprintln!("  Cannot load findings: {e}"),
+                Ok(all_findings) => {
+                    let report = aether_report::build_report(&title, &all_findings);
+                    if let Some(html_path) = html {
+                        aether_report::write_html(&report, std::path::Path::new(&html_path))
+                            .unwrap_or_else(|e| eprintln!("  HTML write error: {e}"));
+                        println!("  HTML report → {}", html_path);
+                    }
+                    if let Some(json_path) = output {
+                        aether_report::write_json(&report, std::path::Path::new(&json_path))
+                            .unwrap_or_else(|e| eprintln!("  JSON write error: {e}"));
+                        println!("  JSON report → {}", json_path);
+                    }
+                    println!("  Total     : {}", report.summary.total);
+                    println!("  Critical  : {}", report.summary.critical);
+                    println!("  High      : {}", report.summary.high);
+                    println!("  Medium    : {}", report.summary.medium);
+                    println!("  Low       : {}", report.summary.low);
+                }
+            }
+            return Ok(());
+        }
+
+        Some(Cmd::License { manifest, json }) => {
+            println!("[TIER 45] SPDX License Compatibility Checker");
+            match aether_license::analyse_manifest(std::path::Path::new(&manifest)) {
+                Err(e) => eprintln!("  license analysis error: {e}"),
+                Ok(infos) => {
+                    let findings = aether_license::license_infos_to_findings(&infos);
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&findings).unwrap_or_default());
+                    } else {
+                        println!("  Packages scanned  : {}", infos.len());
+                        println!("  Issues found      : {}", findings.len());
+                        for f in &findings { println!("  [{}] {}", f.severity, f.evidence); }
+                        if findings.is_empty() { println!("  ✓ All licenses compatible"); }
                     }
                 }
             }
@@ -61540,7 +62021,7 @@ fn canonicalize_exc_c14n_subtree(
                 // CDATA is treated identically to character data
                 // (exc-c14n §3.4) — escape the same way Text is
                 // escaped, no `<![CDATA[…]]>` wrapper survives.
-                for &b in c.as_ref() {
+                for &b in <[u8] as AsRef<[u8]>>::as_ref(&c) {
                     match b {
                         b'<' => out.extend_from_slice(b"&lt;"),
                         b'>' => out.extend_from_slice(b"&gt;"),

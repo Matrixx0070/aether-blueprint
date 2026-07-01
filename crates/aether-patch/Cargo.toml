@@ -1,0 +1,13 @@
+[package]
+name = "aether-patch"
+version = "0.36.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Git worktree auto-fix engine: LLM-generated patch candidates validated by cargo test"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+ureq = { workspace = true }
+aether-deps-reach = { workspace = true }

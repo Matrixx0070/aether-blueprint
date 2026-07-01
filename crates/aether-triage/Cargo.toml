@@ -1,0 +1,17 @@
+[package]
+name = "aether-triage"
+version = "0.36.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Cross-model consensus triage: multi-LLM agreement scoring with SQLite verdict cache"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+once_cell = { workspace = true }
+rusqlite = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+ureq = { workspace = true }
+aether-deps-reach = { workspace = true }

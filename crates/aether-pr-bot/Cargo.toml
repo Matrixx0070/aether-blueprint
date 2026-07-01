@@ -1,0 +1,13 @@
+[package]
+name = "aether-pr-bot"
+version = "0.36.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "GitHub PR annotator: posts inline review comments for each finding via GitHub REST API"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+ureq = { workspace = true }
+aether-deps-reach = { workspace = true }
