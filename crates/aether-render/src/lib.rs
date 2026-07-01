@@ -3039,6 +3039,12 @@ pub enum UiCommand {
     QueryHistoryAsstWordTotal,
     /// Average word count per user-role history turn.
     QueryHistoryUserAvgWords,
+    /// Average word count per assistant-role history turn.
+    QueryHistoryAsstAvgWords,
+    /// Maximum word count in any single assistant-role history turn.
+    QueryHistoryAsstMaxWords,
+    /// Maximum word count in any single user-role history turn.
+    QueryHistoryUserMaxWords,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

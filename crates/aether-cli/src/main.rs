@@ -17323,6 +17323,41 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryHistoryAsstAvgWords => {
+                    let asst_words: Vec<usize> = session.history.iter()
+                        .filter_map(|item| if let ConversationItem::Assistant { text: Some(t), .. } = item {
+                            Some(t.split_whitespace().count())
+                        } else { None })
+                        .collect();
+                    let n = asst_words.len();
+                    let avg = if n == 0 { 0.0 } else { asst_words.iter().sum::<usize>() as f64 / n as f64 };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Avg words per assistant turn: {avg:.1} ({n} assistant turns)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryAsstMaxWords => {
+                    let max = session.history.iter()
+                        .filter_map(|item| if let ConversationItem::Assistant { text: Some(t), .. } = item {
+                            Some(t.split_whitespace().count())
+                        } else { None })
+                        .max().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Max words in any assistant turn: {max}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryUserMaxWords => {
+                    let max = session.history.iter()
+                        .filter_map(|item| if let ConversationItem::User(s) = item {
+                            Some(s.split_whitespace().count())
+                        } else { None })
+                        .max().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Max words in any user turn: {max}"
+                    )));
+                    continue;
+                }
                 UiCommand::QueryHistoryUserWordTotal => {
                     let user_n = session.history.iter().filter(|item| matches!(item, ConversationItem::User(_))).count();
                     let total: usize = session.history.iter()
@@ -50461,6 +50496,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/history-asst-avg-words" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAsstAvgWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-asst-max-words" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAsstMaxWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-user-max-words" => {
+                                    if _ctx.send(UiCommand::QueryHistoryUserMaxWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-user-word-total" => {
                                     if _ctx.send(UiCommand::QueryHistoryUserWordTotal).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -52402,6 +52452,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-user-word-total",
                             "/history-asst-word-total",
                             "/history-user-avg-words",
+                            "/history-asst-avg-words",
+                            "/history-asst-max-words",
+                            "/history-user-max-words",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
