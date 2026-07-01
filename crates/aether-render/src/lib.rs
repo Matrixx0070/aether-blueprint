@@ -2283,6 +2283,12 @@ pub enum UiCommand {
     QueryTurnModelAvgLen,
     /// Show the turn-index span covered by session notes.
     QuerySessionNoteSpan,
+    /// Show the max length of model names in turn_models.
+    QueryTurnModelMaxLen,
+    /// Show the min length of model names in turn_models.
+    QueryTurnModelMinLen,
+    /// Show the total chars across all model names in turn_models.
+    QueryTurnModelTotalChars,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
