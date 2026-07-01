@@ -11765,6 +11765,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryMinInputTokensTurn => {
+                    match session.turn_cost_log.iter().min_by_key(|(_, inp, _, _)| *inp) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Min input tokens: no turns logged.".to_string())); }
+                        Some((ti, inp, _, _)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Min input tokens: {inp} at turn {ti}."
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryMinOutputTokensTurn => {
+                    match session.turn_cost_log.iter().min_by_key(|(_, _, out, _)| *out) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Min output tokens: no turns logged.".to_string())); }
+                        Some((ti, _, out, _)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Min output tokens: {out} at turn {ti}."
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryCostPerTurnMax => {
+                    match session.turn_cost_log.iter().max_by(|(_, _, _, a), (_, _, _, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Max cost per turn: no turns logged.".to_string())); }
+                        Some((ti, _, _, c)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Max cost per turn: ${c:.6} at turn {ti}."
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -40342,6 +40375,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/min-input-tokens-turn" => {
+                                    if _ctx.send(UiCommand::QueryMinInputTokensTurn).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/min-output-tokens-turn" => {
+                                    if _ctx.send(UiCommand::QueryMinOutputTokensTurn).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/cost-per-turn-max" => {
+                                    if _ctx.send(UiCommand::QueryCostPerTurnMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -41494,6 +41542,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turns-since-compact",
                             "/max-input-tokens-turn",
                             "/max-output-tokens-turn",
+                            "/min-input-tokens-turn",
+                            "/min-output-tokens-turn",
+                            "/cost-per-turn-max",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
