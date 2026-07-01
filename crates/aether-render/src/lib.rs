@@ -2715,6 +2715,12 @@ pub enum UiCommand {
     QueryHistoryToolResultIdMaxLen,
     /// Min length of any tool_use_id in tool results.
     QueryHistoryToolResultIdMinLen,
+    /// Average history_len at bookmark time across all bookmarks.
+    QueryBookmarkHistLenAvg,
+    /// Total history_len sum across all bookmarks.
+    QueryBookmarkHistLenTotal,
+    /// Average turn_index across all bookmarks.
+    QueryBookmarkTurnAvg,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

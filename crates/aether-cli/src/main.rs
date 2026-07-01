@@ -16656,6 +16656,34 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryBookmarkHistLenAvg => {
+                    let n = session.bookmarks.len();
+                    let avg = if n == 0 { 0.0 } else {
+                        session.bookmarks.iter().map(|(_, hl, _)| *hl).sum::<usize>() as f64 / n as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Bookmark hist_len avg: {avg:.1} ({n} bookmarks)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryBookmarkHistLenTotal => {
+                    let total: usize = session.bookmarks.iter().map(|(_, hl, _)| hl).sum();
+                    let n = session.bookmarks.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Bookmark hist_len total: {total} ({n} bookmarks)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryBookmarkTurnAvg => {
+                    let n = session.bookmarks.len();
+                    let avg = if n == 0 { 0.0 } else {
+                        session.bookmarks.iter().map(|(ti, _, _)| *ti).sum::<usize>() as f64 / n as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Bookmark turn_index avg: {avg:.1} ({n} bookmarks)"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -47918,6 +47946,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/bookmark-hist-len-avg" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkHistLenAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/bookmark-hist-len-total" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkHistLenTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/bookmark-turn-avg" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkTurnAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -49607,6 +49650,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-tool-result-id-avg-len",
                             "/history-tool-result-id-max-len",
                             "/history-tool-result-id-min-len",
+                            "/bookmark-hist-len-avg",
+                            "/bookmark-hist-len-total",
+                            "/bookmark-turn-avg",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
