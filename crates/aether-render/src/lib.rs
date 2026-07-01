@@ -2859,6 +2859,12 @@ pub enum UiCommand {
     QueryErrorPlaybookHintAvgWords,
     /// Max words in any single error_playbook hint.
     QueryErrorPlaybookHintMaxWords,
+    /// Total word count across all last_tool_signature names.
+    QueryLastToolSigNameWordTotal,
+    /// Average words per last_tool_signature name.
+    QueryLastToolSigNameAvgWords,
+    /// Max words in any single last_tool_signature name.
+    QueryLastToolSigNameMaxWords,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
