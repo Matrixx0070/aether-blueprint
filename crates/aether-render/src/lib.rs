@@ -1761,6 +1761,12 @@ pub enum UiCommand {
     QuerySessionVarValMinLen,
     /// Show the shortest session-var key string.
     QuerySessionVarKeyMinLen,
+    /// Show the longest tool name key in tool output history.
+    QueryToolOutputHistKeyMaxLen,
+    /// Show the longest previous output in tool output history.
+    QueryToolOutputHistPrevMaxLen,
+    /// Show the longest current output in tool output history.
+    QueryToolOutputHistCurrMaxLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

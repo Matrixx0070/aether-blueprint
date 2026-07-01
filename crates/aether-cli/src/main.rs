@@ -12370,6 +12370,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryToolOutputHistKeyMaxLen => {
+                    match session.tool_output_history.keys().max_by_key(|k| k.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Tool output history: none.".to_string())); }
+                        Some(k) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Longest tool output history key: {} chars ('{}')", k.len(), k
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolOutputHistPrevMaxLen => {
+                    match session.tool_output_history.values().max_by_key(|(prev, _)| prev.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Tool output history: none.".to_string())); }
+                        Some((prev, _)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Longest tool previous output: {} chars", prev.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolOutputHistCurrMaxLen => {
+                    match session.tool_output_history.values().max_by_key(|(_, curr)| curr.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Tool output history: none.".to_string())); }
+                        Some((_, curr)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Longest tool current output: {} chars", curr.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -41247,6 +41280,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/tool-output-hist-key-max-len" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputHistKeyMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-output-hist-prev-max-len" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputHistPrevMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-output-hist-curr-max-len" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputHistCurrMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -42459,6 +42507,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias-val-min-len",
                             "/session-var-val-min-len",
                             "/session-var-key-min-len",
+                            "/tool-output-hist-key-max-len",
+                            "/tool-output-hist-prev-max-len",
+                            "/tool-output-hist-curr-max-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
