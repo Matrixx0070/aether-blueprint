@@ -2415,6 +2415,12 @@ pub enum UiCommand {
     QuerySavedSnapshotPlanBlocksTotal,
     /// Show the maximum plan blocks_recorded in any single saved snapshot.
     QuerySavedSnapshotPlanBlocksMax,
+    /// Show the minimum plan blocks_recorded in any single saved snapshot.
+    QuerySavedSnapshotPlanBlocksMin,
+    /// Show the total tool_call_stats entry count across all saved snapshot plans.
+    QuerySavedSnapshotPlanToolStatsTotal,
+    /// Show the total block_counts entry count across all saved snapshot plans.
+    QuerySavedSnapshotPlanBlockCountsTotal,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
