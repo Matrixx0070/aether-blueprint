@@ -16106,6 +16106,37 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryVerifierGateBuiltinNameTotalChars => {
+                    let total: usize = session.verifier.gate.rules.iter().filter_map(|r| {
+                        if let Detector::Builtin { ref name, .. } = r.rule.detector { Some(name.len()) } else { None }
+                    }).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate Builtin detector total name chars: {total}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierGatePhrasePatternAvg => {
+                    let phrase_rules: Vec<usize> = session.verifier.gate.rules.iter().filter_map(|r| {
+                        if let Detector::PhraseMatch { ref patterns, .. } = r.rule.detector { Some(patterns.len()) } else { None }
+                    }).collect();
+                    let n = phrase_rules.len();
+                    let avg = if n == 0 { 0 } else { phrase_rules.iter().sum::<usize>() / n };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate PhraseMatch avg patterns per rule: {avg}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifierGateRegexPatternAvg => {
+                    let regex_rules: Vec<usize> = session.verifier.gate.rules.iter().filter_map(|r| {
+                        if let Detector::Regex { ref patterns, .. } = r.rule.detector { Some(patterns.len()) } else { None }
+                    }).collect();
+                    let n = regex_rules.len();
+                    let avg = if n == 0 { 0 } else { regex_rules.iter().sum::<usize>() / n };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier gate Regex avg patterns per rule: {avg}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -47098,6 +47129,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/verifier-gate-builtin-name-total-chars" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateBuiltinNameTotalChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-gate-phrase-pattern-avg" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGatePhrasePatternAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-gate-regex-pattern-avg" => {
+                                    if _ctx.send(UiCommand::QueryVerifierGateRegexPatternAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -48733,6 +48779,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/verifier-gate-phrase-pattern-total",
                             "/verifier-gate-regex-pattern-total",
                             "/verifier-gate-remediation-has-tpl",
+                            "/verifier-gate-builtin-name-total-chars",
+                            "/verifier-gate-phrase-pattern-avg",
+                            "/verifier-gate-regex-pattern-avg",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
