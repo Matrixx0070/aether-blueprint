@@ -1305,6 +1305,12 @@ pub enum UiCommand {
     QuerySessionVarTop,
     /// Show the latest user message text from history.
     QueryHistoryUserLatest,
+    /// Show ratio of error tool results to total tool results in history.
+    QueryHistoryErrorRate,
+    /// Show the first verifier rule ID and description.
+    QueryVerifierRuleTop,
+    /// List names of all saved snapshots.
+    QuerySnapshotNameList,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

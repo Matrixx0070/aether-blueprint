@@ -10764,6 +10764,60 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryHistoryErrorRate => {
+                    use aether_core::context::ConversationItem;
+                    let (total, errors) = session.history.iter().fold((0usize, 0usize), |(t, e), item| {
+                        if let ConversationItem::ToolResults(results) = item {
+                            let err_count = results.iter().filter(|r| r.is_error).count();
+                            (t + results.len(), e + err_count)
+                        } else {
+                            (t, e)
+                        }
+                    });
+                    if total == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "History tool error rate: no tool results yet.".to_string()
+                        ));
+                    } else {
+                        let pct = errors as f64 / total as f64 * 100.0;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "History tool error rate: {errors}/{total} errors ({pct:.1}%)."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryVerifierRuleTop => {
+                    match session.verifier.gate.rules.first() {
+                        Some(cr) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Verifier rule[0]: id='{}' severity={:?} desc='{}'",
+                                cr.rule.id,
+                                cr.rule.severity,
+                                cr.rule.description.chars().take(80).collect::<String>()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Verifier rules: none loaded.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QuerySnapshotNameList => {
+                    if session.saved_snapshots.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Saved snapshots: none. Use /snapshot <name> to create one.".to_string()
+                        ));
+                    } else {
+                        let mut names: Vec<_> = session.saved_snapshots.keys().collect();
+                        names.sort();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Saved snapshots ({}): {}", names.len(), names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -37150,6 +37204,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /history-error-rate — ratio of error tool results to total
+                                "/history-error-rate" => {
+                                    if _ctx.send(UiCommand::QueryHistoryErrorRate).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /verifier-rule-top — first verifier rule id and description
+                                "/verifier-rule-top" => {
+                                    if _ctx.send(UiCommand::QueryVerifierRuleTop).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /snapshot-name-list — list all saved snapshot names
+                                "/snapshot-name-list" => {
+                                    if _ctx.send(UiCommand::QuerySnapshotNameList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -38109,6 +38181,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-err-rate-top",
                             "/session-var-top",
                             "/history-user-latest",
+                            "/history-error-rate",
+                            "/verifier-rule-top",
+                            "/snapshot-name-list",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
