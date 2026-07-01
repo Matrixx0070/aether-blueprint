@@ -3069,6 +3069,12 @@ pub enum UiCommand {
     QueryP90OutTokens,
     /// 99th-percentile output tokens per cost-log entry.
     QueryP99OutTokens,
+    /// Span (ms) between oldest and newest session_note timestamps.
+    QuerySessionNoteTsSpan,
+    /// Average ms gap between consecutive session_note timestamps.
+    QuerySessionNoteAvgTsGap,
+    /// Maximum ms gap between any two consecutive session_note timestamps.
+    QuerySessionNoteMaxTsGap,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

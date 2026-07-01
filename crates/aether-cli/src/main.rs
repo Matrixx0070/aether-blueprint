@@ -17323,6 +17323,55 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QuerySessionNoteTsSpan => {
+                    let n = session.session_notes.len();
+                    if n < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session note ts span: N/A ({n} notes — need ≥2)"
+                        )));
+                    } else {
+                        let min_ts = session.session_notes.iter().map(|(_, ts)| *ts).min().unwrap_or(0);
+                        let max_ts = session.session_notes.iter().map(|(_, ts)| *ts).max().unwrap_or(0);
+                        let span = max_ts.saturating_sub(min_ts);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session note ts span: {span} ms ({n} notes)"
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionNoteAvgTsGap => {
+                    let mut ts_sorted: Vec<u64> = session.session_notes.iter().map(|(_, ts)| *ts).collect();
+                    ts_sorted.sort_unstable();
+                    let n = ts_sorted.len();
+                    if n < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session note avg ts gap: N/A ({n} notes — need ≥2)"
+                        )));
+                    } else {
+                        let gaps: Vec<u64> = ts_sorted.windows(2).map(|w| w[1].saturating_sub(w[0])).collect();
+                        let avg = gaps.iter().sum::<u64>() as f64 / gaps.len() as f64;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session note avg ts gap: {avg:.1} ms ({} gaps across {n} notes)", gaps.len()
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionNoteMaxTsGap => {
+                    let mut ts_sorted: Vec<u64> = session.session_notes.iter().map(|(_, ts)| *ts).collect();
+                    ts_sorted.sort_unstable();
+                    let n = ts_sorted.len();
+                    if n < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session note max ts gap: N/A ({n} notes — need ≥2)"
+                        )));
+                    } else {
+                        let max_gap = ts_sorted.windows(2).map(|w| w[1].saturating_sub(w[0])).max().unwrap_or(0);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session note max ts gap: {max_gap} ms ({n} notes)"
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryP50OutTokens => {
                     let mut v: Vec<u64> = session.turn_cost_log.iter().map(|(_, _, o, _)| *o).collect();
                     v.sort_unstable();
@@ -50625,6 +50674,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/session-note-ts-span" => {
+                                    if _ctx.send(UiCommand::QuerySessionNoteTsSpan).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-note-avg-ts-gap" => {
+                                    if _ctx.send(UiCommand::QuerySessionNoteAvgTsGap).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-note-max-ts-gap" => {
+                                    if _ctx.send(UiCommand::QuerySessionNoteMaxTsGap).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/p50-out-tokens" => {
                                     if _ctx.send(UiCommand::QueryP50OutTokens).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -52656,6 +52720,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/p50-out-tokens",
                             "/p90-out-tokens",
                             "/p99-out-tokens",
+                            "/session-note-ts-span",
+                            "/session-note-avg-ts-gap",
+                            "/session-note-max-ts-gap",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
