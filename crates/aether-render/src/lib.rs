@@ -1863,6 +1863,12 @@ pub enum UiCommand {
     QuerySessionNoteTsMax,
     /// Show the lowest timestamp in session notes.
     QuerySessionNoteTsMin,
+    /// Show the highest history_len value among bookmarks.
+    QueryBookmarkHistLenMax,
+    /// Show the lowest history_len value among bookmarks.
+    QueryBookmarkHistLenMin,
+    /// Show the longest tag string in auto-tag rules.
+    QueryAutoTagRuleTagMaxLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

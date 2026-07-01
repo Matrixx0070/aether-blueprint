@@ -12922,6 +12922,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryBookmarkHistLenMax => {
+                    match session.bookmarks.iter().max_by_key(|(_, hist_len, _)| hist_len) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Bookmarks: none.".to_string())); }
+                        Some((turn, hist_len, lbl)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Bookmark with longest history: {} items at turn {} ('{}')", hist_len, turn, lbl
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryBookmarkHistLenMin => {
+                    match session.bookmarks.iter().min_by_key(|(_, hist_len, _)| hist_len) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Bookmarks: none.".to_string())); }
+                        Some((turn, hist_len, lbl)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Bookmark with shortest history: {} items at turn {} ('{}')", hist_len, turn, lbl
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryAutoTagRuleTagMaxLen => {
+                    match session.auto_tag_rules.iter().max_by_key(|(_, tag)| tag.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Auto-tag rules: none.".to_string())); }
+                        Some((_, tag)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Longest auto-tag rule tag: {} chars ('{}')", tag.len(), tag
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -42054,6 +42087,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/bookmark-hist-len-max" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkHistLenMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/bookmark-hist-len-min" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkHistLenMin).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/auto-tag-rule-tag-max-len" => {
+                                    if _ctx.send(UiCommand::QueryAutoTagRuleTagMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -43317,6 +43365,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/last-tool-sig-sig-max-len",
                             "/session-note-ts-max",
                             "/session-note-ts-min",
+                            "/bookmark-hist-len-max",
+                            "/bookmark-hist-len-min",
+                            "/auto-tag-rule-tag-max-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
