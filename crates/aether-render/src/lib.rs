@@ -2457,6 +2457,12 @@ pub enum UiCommand {
     QueryPostTurnHookLen,
     /// Show whether response_format is set (true/false).
     QueryResponseFormatSet,
+    /// Show the total classifier_evidence items across all pending reminders.
+    QueryPendingReminderEvidenceTotal,
+    /// Show the count of pending reminders with EffectHint::Loosens.
+    QueryPendingReminderLoosenCount,
+    /// Show the count of pending reminders from Source::External.
+    QueryPendingReminderExternalCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

@@ -16,7 +16,7 @@
 use aether_core::context::ConversationItem;
 use aether_core::{agent_turn, agent_turn_streamed, Session, SessionConfig, TurnOutcome};
 use aether_core::planner::Plan;
-use aether_overlay::aether_hook::{Reminder, ReminderKind, Source};
+use aether_overlay::aether_hook::{EffectHint, Reminder, ReminderKind, Source};
 use aether_tools::{Tool, ToolError};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -15519,6 +15519,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     let set = session.response_format.is_some();
                     let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
                         "Response format set: {set}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPendingReminderEvidenceTotal => {
+                    let total: usize = session.pending_reminders.iter().map(|r| r.classifier_evidence.len()).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Pending reminders total classifier evidence items: {total}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPendingReminderLoosenCount => {
+                    let count = session.pending_reminders.iter().filter(|r| r.effect_hint == EffectHint::Loosens).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Pending reminders with EffectHint::Loosens: {count}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPendingReminderExternalCount => {
+                    let count = session.pending_reminders.iter().filter(|r| r.source == Source::External).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Pending reminders from Source::External: {count}"
                     )));
                     continue;
                 }
@@ -46139,6 +46160,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/pending-reminder-evidence-total" => {
+                                    if _ctx.send(UiCommand::QueryPendingReminderEvidenceTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/pending-reminder-loosen-count" => {
+                                    if _ctx.send(UiCommand::QueryPendingReminderLoosenCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/pending-reminder-external-count" => {
+                                    if _ctx.send(UiCommand::QueryPendingReminderExternalCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -47699,6 +47735,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/post-turn-hook-set",
                             "/post-turn-hook-len",
                             "/response-format-set",
+                            "/pending-reminder-evidence-total",
+                            "/pending-reminder-loosen-count",
+                            "/pending-reminder-external-count",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
