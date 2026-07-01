@@ -2301,6 +2301,12 @@ pub enum UiCommand {
     QueryPendingReminderMinLen,
     /// Show the max length of persistent reminders.
     QueryPersistentReminderMaxLen,
+    /// Show the min length of persistent reminders.
+    QueryPersistentReminderMinLen,
+    /// Show the value limit for the first tool_output_limits entry.
+    QueryToolOutputLimitValFirst,
+    /// Show the total of all tool_output_limits values.
+    QueryToolOutputLimitTotal,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
