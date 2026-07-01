@@ -1063,8 +1063,10 @@ cred/scope-blocked carry-forward.
 **Cred/scope-blocked carry-forward to Plan FF:**
 
 - **EE1 Bedrock LIVE round-trip** — seventh-plan cred-blocked.
-  Plan FF retires this from the carry-forward and just documents
-  the env vars needed.
+  RETIRED by FF1 (2026-07-01): env vars + cred-acquisition
+  checklists now live in `docs/byoc-setup.md`; the Z4/Z5/Z6
+  fake-endpoint smokes remain the CI-enforced wire-format
+  contract. Carry-forward list is now 2 (mTLS + SCIM).
 - **EE2 OIDC mTLS client auth (RFC 8705)** — still deferred since
   Plan BB. Plan FF re-frames this as its main theme (mTLS-dedicated
   plan, mirroring Plan Y's SAML-dedicated approach).
