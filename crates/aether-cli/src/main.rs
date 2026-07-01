@@ -16838,6 +16838,36 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryHistoryAnnotMaxWords => {
+                    let max = session.history_annotations.iter()
+                        .map(|(_, text)| text.split_whitespace().count())
+                        .max();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match max {
+                        Some(v) => format!("History annotation max words in one annotation: {v}"),
+                        None => "History annotation max words: no annotations".to_string(),
+                    }));
+                    continue;
+                }
+                UiCommand::QueryHistoryAnnotMinWords => {
+                    let min = session.history_annotations.iter()
+                        .map(|(_, text)| text.split_whitespace().count())
+                        .min();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match min {
+                        Some(v) => format!("History annotation min words in one annotation: {v}"),
+                        None => "History annotation min words: no annotations".to_string(),
+                    }));
+                    continue;
+                }
+                UiCommand::QuerySessionVarValueWordTotal => {
+                    let total: usize = session.session_vars.values()
+                        .map(|v| v.split_whitespace().count())
+                        .sum();
+                    let n = session.session_vars.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session var value total words: {total} ({n} vars)"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -48190,6 +48220,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/history-annot-max-words" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAnnotMaxWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-annot-min-words" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAnnotMinWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-var-value-word-total" => {
+                                    if _ctx.send(UiCommand::QuerySessionVarValueWordTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -49897,6 +49942,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-note-min-words",
                             "/history-annot-word-total",
                             "/history-annot-avg-words",
+                            "/history-annot-max-words",
+                            "/history-annot-min-words",
+                            "/session-var-value-word-total",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
