@@ -7700,6 +7700,57 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryTokenBudgetFired => {
+                    if session.token_budget_warn_pct <= 0.0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Token-budget warn: not configured (no threshold set).".to_string()
+                        ));
+                    } else if session.token_budget_warn_fired {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Token-budget warn: FIRED (threshold was {:.0}%). Use /compact or /clear to reset.",
+                            session.token_budget_warn_pct * 100.0
+                        )));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Token-budget warn: armed at {:.0}% — not yet fired.",
+                            session.token_budget_warn_pct * 100.0
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QuerySnapshotKeys => {
+                    if session.saved_snapshots.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Saved snapshots: none. Use /snapshot <key> to save one.".to_string()
+                        ));
+                    } else {
+                        let mut keys: Vec<&String> = session.saved_snapshots.keys().collect();
+                        keys.sort();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Saved snapshots ({} total): {}", keys.len(),
+                            keys.iter().map(|k| k.as_str()).collect::<Vec<_>>().join(", ")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryProgressItemsList => {
+                    if session.progress_items.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Progress items: none tracked. Use /progress-add <desc> to add one.".to_string()
+                        ));
+                    } else {
+                        let done = session.progress_items.iter().filter(|(_, d)| *d).count();
+                        let mut lines = vec![format!(
+                            "Progress items ({}/{} done):", done, session.progress_items.len()
+                        )];
+                        for (i, (desc, complete)) in session.progress_items.iter().enumerate() {
+                            let mark = if *complete { "✓" } else { "○" };
+                            lines.push(format!("  [{i}] {mark} {desc}"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(lines.join("\n")));
+                    }
+                    continue;
+                }
                 UiCommand::QueryCostPerTurnAvg => {
                     if session.turn_cost_log.is_empty() {
                         let _ = etx_for_driver.send(UiEvent::SystemNote(
@@ -34102,6 +34153,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /token-budget-fired — show if token-budget warn has fired
+                                "/token-budget-fired" => {
+                                    if _ctx.send(UiCommand::QueryTokenBudgetFired).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /snapshot-keys — list all saved snapshot keys
+                                "/snapshot-keys" => {
+                                    if _ctx.send(UiCommand::QuerySnapshotKeys).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /progress-items-list — list all progress items
+                                "/progress-items-list" => {
+                                    if _ctx.send(UiCommand::QueryProgressItemsList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -34914,6 +34983,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/cost-per-turn-avg",
                             "/history-size-bytes",
                             "/focus-mode-show",
+                            "/token-budget-fired",
+                            "/snapshot-keys",
+                            "/progress-items-list",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

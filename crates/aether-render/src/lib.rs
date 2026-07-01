@@ -1011,6 +1011,12 @@ pub enum UiCommand {
     QueryHistorySizeBytes,
     /// Show the active focus mode.
     QueryFocusModeShow,
+    /// Show whether the token-budget warn threshold has already fired.
+    QueryTokenBudgetFired,
+    /// List all saved snapshot keys.
+    QuerySnapshotKeys,
+    /// List all progress items with their completion status.
+    QueryProgressItemsList,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
