@@ -13843,6 +13843,48 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryToolOutputHistoryKeyAvgLen => {
+                    let n = session.tool_output_history.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Tool output history key avg len: no entries.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.tool_output_history.keys().map(|k| k.len()).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Tool output history key avg len: {:.1}", total as f64 / n as f64
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolOutputHistAvgPrevLen => {
+                    let n = session.tool_output_history.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Tool output history avg prev len: no entries.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.tool_output_history.values().map(|(prev, _)| prev.len()).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Tool output history avg prev len: {:.1}", total as f64 / n as f64
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolOutputHistAvgCurrLen => {
+                    let n = session.tool_output_history.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Tool output history avg curr len: no entries.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.tool_output_history.values().map(|(_, curr)| curr.len()).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Tool output history avg curr len: {:.1}", total as f64 / n as f64
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -43485,6 +43527,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/tool-output-history-key-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputHistoryKeyAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-output-hist-avg-prev-len" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputHistAvgPrevLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-output-hist-avg-curr-len" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputHistAvgCurrLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -44850,6 +44907,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/auto-continue-cooldown-val",
                             "/plan-tool-stats-count",
                             "/plan-tool-error-counts-count",
+                            "/tool-output-history-key-avg-len",
+                            "/tool-output-hist-avg-prev-len",
+                            "/tool-output-hist-avg-curr-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

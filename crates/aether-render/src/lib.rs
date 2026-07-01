@@ -2067,6 +2067,12 @@ pub enum UiCommand {
     QueryPlanToolStatsCount,
     /// Show the count of entries in plan.tool_error_counts.
     QueryPlanToolErrorCountsCount,
+    /// Show the average key length in tool output history.
+    QueryToolOutputHistoryKeyAvgLen,
+    /// Show the average prev-output length in tool output history.
+    QueryToolOutputHistAvgPrevLen,
+    /// Show the average curr-output length in tool output history.
+    QueryToolOutputHistAvgCurrLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
