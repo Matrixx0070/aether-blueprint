@@ -2085,6 +2085,12 @@ pub enum UiCommand {
     QueryEnvVarMaxKeyLen,
     /// Show the min key length in session_env.
     QueryEnvVarMinKeyLen,
+    /// Show the max value length in session_env.
+    QueryEnvVarMaxValLen,
+    /// Show the min value length in session_env.
+    QueryEnvVarMinValLen,
+    /// Show the avg key length in session_env.
+    QueryEnvVarAvgKeyLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

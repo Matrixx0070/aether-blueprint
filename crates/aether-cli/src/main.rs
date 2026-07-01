@@ -13927,6 +13927,34 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryEnvVarMaxValLen => {
+                    let max = session.session_env.values().map(|v| v.len()).max().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Env var max val len: {}", max
+                    )));
+                    continue;
+                }
+                UiCommand::QueryEnvVarMinValLen => {
+                    let min = session.session_env.values().map(|v| v.len()).min().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Env var min val len: {}", min
+                    )));
+                    continue;
+                }
+                UiCommand::QueryEnvVarAvgKeyLen => {
+                    let n = session.session_env.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Env var avg key len: no env vars set.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.session_env.keys().map(|k| k.len()).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Env var avg key len: {:.1}", total as f64 / n as f64
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -43614,6 +43642,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/env-var-max-val-len" => {
+                                    if _ctx.send(UiCommand::QueryEnvVarMaxValLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/env-var-min-val-len" => {
+                                    if _ctx.send(UiCommand::QueryEnvVarMinValLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/env-var-avg-key-len" => {
+                                    if _ctx.send(UiCommand::QueryEnvVarAvgKeyLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -44988,6 +45031,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-output-hist-min-curr-len",
                             "/env-var-max-key-len",
                             "/env-var-min-key-len",
+                            "/env-var-max-val-len",
+                            "/env-var-min-val-len",
+                            "/env-var-avg-key-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
