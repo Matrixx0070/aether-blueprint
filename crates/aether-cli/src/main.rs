@@ -11282,6 +11282,51 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryStickyContextAvgLen => {
+                    let n = session.sticky_context.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Sticky context avg len: none set.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.sticky_context.iter().map(|s| s.len()).sum();
+                        let avg = total / n;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Sticky context avg len: {avg} chars/entry across {n} entries."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryErrorPlaybookHintAvgLen => {
+                    let n = session.error_playbook.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Error playbook hint avg len: no entries.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.error_playbook.iter().map(|(_, h)| h.len()).sum();
+                        let avg = total / n;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Error playbook hint avg len: {avg} chars/hint across {n} entries."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolDenyAvgLen => {
+                    let n = session.tool_deny.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Tool deny avg len: no entries.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.tool_deny.iter().map(|t| t.len()).sum();
+                        let avg = total / n;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Tool deny avg len: {avg} chars/pattern across {n} patterns."
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -39619,6 +39664,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/sticky-context-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryStickyContextAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/error-playbook-hint-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryErrorPlaybookHintAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-deny-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryToolDenyAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -40723,6 +40783,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-label-avg-len",
                             "/warmup-file-avg-len",
                             "/session-tag-avg-len",
+                            "/sticky-context-avg-len",
+                            "/error-playbook-hint-avg-len",
+                            "/tool-deny-avg-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

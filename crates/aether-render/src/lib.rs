@@ -1545,6 +1545,12 @@ pub enum UiCommand {
     QueryWarmupFileAvgLen,
     /// Show average length of session tags.
     QuerySessionTagAvgLen,
+    /// Show average length of sticky context entries.
+    QueryStickyContextAvgLen,
+    /// Show average length of error playbook hints.
+    QueryErrorPlaybookHintAvgLen,
+    /// Show average length of tool-deny patterns.
+    QueryToolDenyAvgLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
