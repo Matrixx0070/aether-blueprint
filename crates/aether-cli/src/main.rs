@@ -15703,6 +15703,44 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryToolOutputHistPrevAvgLen => {
+                    let n = session.tool_output_history.len();
+                    let avg = if n == 0 {
+                        0
+                    } else {
+                        session.tool_output_history.values().map(|(prev, _)| prev.len()).sum::<usize>() / n
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Tool output history avg previous output length: {avg} (over {n} entries)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryToolOutputHistDeltaMax => {
+                    let max = session.tool_output_history.values()
+                        .map(|(prev, curr)| {
+                            let a = curr.len();
+                            let b = prev.len();
+                            if a > b { a - b } else { b - a }
+                        })
+                        .max()
+                        .unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Tool output history max |curr-prev| length delta: {max}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryToolOutputHistKeyAvgLen => {
+                    let n = session.tool_output_history.len();
+                    let avg = if n == 0 {
+                        0
+                    } else {
+                        session.tool_output_history.keys().map(|k| k.len()).sum::<usize>() / n
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Tool output history avg key length: {avg} (over {n} entries)"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -46440,6 +46478,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/tool-output-hist-prev-avg" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputHistPrevAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-output-hist-delta-max" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputHistDeltaMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-output-hist-key-avg" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputHistKeyAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -48024,6 +48077,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-output-hist-curr-total",
                             "/tool-output-hist-prev-total",
                             "/tool-output-hist-curr-avg",
+                            "/tool-output-hist-prev-avg",
+                            "/tool-output-hist-delta-max",
+                            "/tool-output-hist-key-avg",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
