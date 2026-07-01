@@ -1809,6 +1809,12 @@ pub enum UiCommand {
     QuerySessionTagMaxLen,
     /// Show the shortest session tag string.
     QuerySessionTagMinLen,
+    /// Show the longest task string in the task queue.
+    QueryTaskQueueMaxLen,
+    /// Show the shortest task string in the task queue.
+    QueryTaskQueueMinLen,
+    /// Show the longest tool name in the deny list.
+    QueryToolDenyMaxLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
