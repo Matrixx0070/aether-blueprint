@@ -17084,6 +17084,34 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryHistoryToolResultUniqueIds => {
+                    use aether_core::context::ConversationItem::ToolResults;
+                    let unique: std::collections::HashSet<&str> = session.history.iter()
+                        .filter_map(|item| if let ToolResults(results) = item { Some(results) } else { None })
+                        .flat_map(|results| results.iter().map(|r| r.tool_use_id.as_str()))
+                        .collect();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History tool result unique tool_use_ids: {}", unique.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryAnnotUniqueTurns => {
+                    let unique: std::collections::HashSet<usize> = session.history_annotations.iter()
+                        .map(|(turn, _)| *turn)
+                        .collect();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History annotation unique turn indices: {} ({} total annotations)",
+                        unique.len(), session.history_annotations.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlanBlockCountsUniqueKeys => {
+                    let count = session.plan.block_counts.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan block_counts unique block names: {count}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -48541,6 +48569,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/history-tool-result-unique-ids" => {
+                                    if _ctx.send(UiCommand::QueryHistoryToolResultUniqueIds).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-annot-unique-turns" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAnnotUniqueTurns).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-block-counts-unique-keys" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockCountsUniqueKeys).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -50269,6 +50312,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-user-unique-words",
                             "/history-asst-unique-words",
                             "/history-tool-use-unique-names",
+                            "/history-tool-result-unique-ids",
+                            "/history-annot-unique-turns",
+                            "/plan-block-counts-unique-keys",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

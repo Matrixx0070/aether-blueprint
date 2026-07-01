@@ -2793,6 +2793,12 @@ pub enum UiCommand {
     QueryHistoryAsstUniqueWords,
     /// Count of unique tool names used across all tool_use records in history.
     QueryHistoryToolUseUniqueNames,
+    /// Count of unique tool_use_id values across all tool results in history.
+    QueryHistoryToolResultUniqueIds,
+    /// Count of unique turn indices referenced by history annotations.
+    QueryHistoryAnnotUniqueTurns,
+    /// Count of unique block names in plan.block_counts keys.
+    QueryPlanBlockCountsUniqueKeys,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
