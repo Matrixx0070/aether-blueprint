@@ -2019,6 +2019,12 @@ pub enum UiCommand {
     QueryTokenBudgetWarnFiredStatus,
     /// Show whether context 60pct warning has fired.
     QueryContextWarnedStatus,
+    /// Show the total LLM fallback count for this session.
+    QueryLlmFallbackCountTotal,
+    /// Show the current turn index.
+    QueryTurnIndexCurrent,
+    /// Show whether a smart pause pattern is set.
+    QuerySmartPauseSet,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

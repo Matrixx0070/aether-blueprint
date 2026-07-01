@@ -13681,6 +13681,25 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryLlmFallbackCountTotal => {
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "LLM fallback count this session: {}", session.llm_fallback_count
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTurnIndexCurrent => {
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Current turn index: {}", session.turn_index
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySmartPauseSet => {
+                    let set = session.smart_pause_pattern.is_some();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Smart pause pattern set: {}", set
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -43203,6 +43222,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/llm-fallback-count-total" => {
+                                    if _ctx.send(UiCommand::QueryLlmFallbackCountTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-index-current" => {
+                                    if _ctx.send(UiCommand::QueryTurnIndexCurrent).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/smart-pause-set" => {
+                                    if _ctx.send(UiCommand::QuerySmartPauseSet).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -44544,6 +44578,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/compaction-happened-status",
                             "/token-budget-warn-fired-status",
                             "/context-warned-status",
+                            "/llm-fallback-count-total",
+                            "/turn-index-current",
+                            "/smart-pause-set",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
