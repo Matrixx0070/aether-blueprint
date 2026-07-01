@@ -1401,6 +1401,12 @@ pub enum UiCommand {
     QueryHistoryAnnotCount,
     /// Show a specific progress item by index.
     QueryProgressItemAt(usize),
+    /// Show the output limit for a named tool.
+    QueryToolOutputLimitAt(String),
+    /// Show an error playbook entry by index.
+    QueryPlaybookAtShow(usize),
+    /// Show the total count of queued tasks.
+    QueryTaskQueueLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

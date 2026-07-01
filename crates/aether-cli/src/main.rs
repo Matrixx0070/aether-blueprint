@@ -11192,6 +11192,45 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryToolOutputLimitAt(tool) => {
+                    match session.tool_output_limits.get(&tool) {
+                        Some(limit) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Tool output limit for '{tool}': {limit} chars."
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Tool output limit for '{tool}': not set (uses global default)."
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlaybookAtShow(idx) => {
+                    match session.error_playbook.get(idx) {
+                        Some((pattern, hint)) => {
+                            let pat_prev = pattern.chars().take(60).collect::<String>();
+                            let hint_prev = hint.chars().take(100).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Playbook[{idx}]: pattern='{pat_prev}' → hint='{hint_prev}'"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Playbook[{idx}]: out of range ({} entries).", session.error_playbook.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryTaskQueueLen => {
+                    let n = session.task_queue.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Task queue: {n} task{} queued.", if n == 1 { "" } else { "s" }
+                    )));
+                    continue;
+                }
                 UiCommand::QueryCooldownMsShow => {
                     let ms = session.auto_continue_cooldown_ms;
                     if ms == 0 {
@@ -38098,6 +38137,31 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                cmd_str if cmd_str.starts_with("/tool-output-limit-at ") => {
+                                    let tool = cmd_str.trim_start_matches("/tool-output-limit-at ").trim().to_string();
+                                    if !tool.is_empty() {
+                                        if _ctx.send(UiCommand::QueryToolOutputLimitAt(tool)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /tool-output-limit-at <tool-name>".to_string()));
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd_str if cmd_str.starts_with("/playbook-at-show ") => {
+                                    let rest = cmd_str.trim_start_matches("/playbook-at-show ").trim();
+                                    if let Ok(idx) = rest.parse::<usize>() {
+                                        if _ctx.send(UiCommand::QueryPlaybookAtShow(idx)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /playbook-at-show <index>".to_string()));
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/task-queue-len" => {
+                                    if _ctx.send(UiCommand::QueryTaskQueueLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -39130,6 +39194,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/cooldown-ms-show",
                             "/history-annot-count",
                             "/progress-item-at ",
+                            "/tool-output-limit-at ",
+                            "/playbook-at-show ",
+                            "/task-queue-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
