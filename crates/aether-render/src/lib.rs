@@ -2493,6 +2493,12 @@ pub enum UiCommand {
     QueryPendingReminderCyberWarningCount,
     /// Show the count of pending reminders with ReminderKind::RetrievalHit.
     QueryPendingReminderRetrievalHitCount,
+    /// Show the count of pending reminders with ReminderKind::IpReminder.
+    QueryPendingReminderIpCount,
+    /// Show the count of pending reminders with ReminderKind::LongConversation.
+    QueryPendingReminderLongConvCount,
+    /// Show the count of pending reminders with ReminderKind::SessionStart.
+    QueryPendingReminderSessionStartCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
