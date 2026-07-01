@@ -11192,6 +11192,51 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryHistoryAnnotAvgLen => {
+                    let n = session.history_annotations.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "History annotation avg len: no annotations yet.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.history_annotations.iter().map(|(_, t)| t.len()).sum();
+                        let avg = total / n;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "History annotation avg len: {avg} chars/note across {n} annotations."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryStickyAvgLen => {
+                    let n = session.sticky_context.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Sticky context avg len: none set.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.sticky_context.iter().map(|s| s.len()).sum();
+                        let avg = total / n;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Sticky context avg len: {avg} chars/snippet across {n} snippets."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryAliasValueAvgLen => {
+                    let n = session.aliases.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Alias value avg len: no aliases defined.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.aliases.values().map(|v| v.len()).sum();
+                        let avg = total / n;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Alias value avg len: {avg} chars/value across {n} aliases."
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryTurnWallMinAll => {
                     match session.turn_wall_ms.iter().min() {
                         Some(min) => {
@@ -39379,6 +39424,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/history-annot-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAnnotAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/sticky-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryStickyAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/alias-value-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryAliasValueAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -40471,6 +40531,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-wall-min-all",
                             "/plan-tool-call-rate",
                             "/session-note-avg-len",
+                            "/history-annot-avg-len",
+                            "/sticky-avg-len",
+                            "/alias-value-avg-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -1521,6 +1521,12 @@ pub enum UiCommand {
     QueryPlanToolCallRate,
     /// Show average length of session notes.
     QuerySessionNoteAvgLen,
+    /// Show average length of history annotations.
+    QueryHistoryAnnotAvgLen,
+    /// Show average length of sticky context snippets.
+    QueryStickyAvgLen,
+    /// Show average length of alias values.
+    QueryAliasValueAvgLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
