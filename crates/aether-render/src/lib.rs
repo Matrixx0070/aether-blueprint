@@ -1665,6 +1665,12 @@ pub enum UiCommand {
     QueryAliasValueMaxLen,
     /// Show max length of any prompt macro body.
     QueryPromptMacroValueMaxLen,
+    /// Show max length of any session var key.
+    QuerySessionVarKeyMaxLen,
+    /// Show max length of any env var key.
+    QueryEnvKeyMaxLen,
+    /// Show max length of any alias name.
+    QueryAliasKeyMaxLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
