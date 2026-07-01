@@ -2127,6 +2127,12 @@ pub enum UiCommand {
     QueryPlanBlockTurnsMinLen,
     /// Show the max value in tool_output_limits.
     QueryToolOutputLimitValMax,
+    /// Show the min value in tool_output_limits.
+    QueryToolOutputLimitValMin,
+    /// Show the avg value in tool_output_limits.
+    QueryToolOutputLimitValAvg,
+    /// Show the avg turn index across all bookmarks.
+    QueryBookmarkAvgTurnIdx,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

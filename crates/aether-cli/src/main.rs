@@ -14121,6 +14121,41 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryToolOutputLimitValMin => {
+                    let min = session.tool_output_limits.values().copied().min().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Tool output limit val min: {min}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryToolOutputLimitValAvg => {
+                    let n = session.tool_output_limits.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Tool output limit val avg: no limits set.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.tool_output_limits.values().sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Tool output limit val avg: {:.1}", total as f64 / n as f64
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryBookmarkAvgTurnIdx => {
+                    let n = session.bookmarks.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Bookmark avg turn idx: no bookmarks.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.bookmarks.iter().map(|(idx, _, _)| idx).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Bookmark avg turn idx: {:.1}", total as f64 / n as f64
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -43913,6 +43948,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/tool-output-limit-val-min" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputLimitValMin).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-output-limit-val-avg" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputLimitValAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/bookmark-avg-turn-idx" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkAvgTurnIdx).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -45308,6 +45358,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias-avg-val-len",
                             "/plan-block-turns-min-len",
                             "/tool-output-limit-val-max",
+                            "/tool-output-limit-val-min",
+                            "/tool-output-limit-val-avg",
+                            "/bookmark-avg-turn-idx",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
