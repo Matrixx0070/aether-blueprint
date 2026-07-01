@@ -1029,6 +1029,12 @@ pub enum UiCommand {
     QueryNoteLatest,
     /// List all tool output char limits.
     QueryToolOutputLimitsList,
+    /// Show which turns a specific verifier rule blocked.
+    QueryPlanBlockTurns(String),
+    /// Get the expansion of a named prompt macro.
+    QueryMacroGet(String),
+    /// Get a specific session environment variable by key.
+    QueryEnvGet(String),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

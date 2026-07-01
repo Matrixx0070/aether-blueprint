@@ -7700,6 +7700,58 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryPlanBlockTurns(rule) => {
+                    match session.plan.block_turns.get(&rule) {
+                        Some(turns) if !turns.is_empty() => {
+                            let list: Vec<String> = turns.iter().map(|t| t.to_string()).collect();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Rule {rule:?} blocked at turns: [{}] ({} times).",
+                                list.join(", "), turns.len()
+                            )));
+                        }
+                        _ => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Rule {rule:?}: no block history (either never triggered or pruned)."
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryMacroGet(name) => {
+                    match session.prompt_macros.get(&name) {
+                        Some(text) => {
+                            let preview = if text.len() > 300 {
+                                format!("{}… ({} chars)", &text[..300], text.len())
+                            } else {
+                                text.clone()
+                            };
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Macro !{name}:\n{preview}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Macro !{name}: not defined. Use /macro {name} <text> to create."
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryEnvGet(key) => {
+                    match session.session_env.get(&key) {
+                        Some(val) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Env {key}={val:?}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Env {key:?}: not set. Use /env-set {key} <value> to define."
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryAliasGet(name) => {
                     match session.aliases.get(&name) {
                         Some(expansion) => {
@@ -34319,6 +34371,39 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /plan-block-turns <rule> — show which turns a rule blocked
+                                cmd_str if cmd_str.starts_with("/plan-block-turns ") => {
+                                    let rule = cmd_str.trim_start_matches("/plan-block-turns ").trim().to_string();
+                                    if rule.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /plan-block-turns <rule-id>".to_string()));
+                                    } else if _ctx.send(UiCommand::QueryPlanBlockTurns(rule)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /macro-get <name> — get prompt macro expansion
+                                cmd_str if cmd_str.starts_with("/macro-get ") => {
+                                    let name = cmd_str.trim_start_matches("/macro-get ").trim().to_string();
+                                    if name.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /macro-get <name>".to_string()));
+                                    } else if _ctx.send(UiCommand::QueryMacroGet(name)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /env-get <key> — get a session env variable
+                                cmd_str if cmd_str.starts_with("/env-get ") => {
+                                    let key = cmd_str.trim_start_matches("/env-get ").trim().to_string();
+                                    if key.is_empty() {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /env-get <KEY>".to_string()));
+                                    } else if _ctx.send(UiCommand::QueryEnvGet(key)).is_err() {
+                                        break 'outer;
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -35140,6 +35225,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/alias-get ",
                             "/note-latest",
                             "/tool-output-limits-list",
+                            "/plan-block-turns ",
+                            "/macro-get ",
+                            "/env-get ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
