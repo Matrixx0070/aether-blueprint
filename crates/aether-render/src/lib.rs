@@ -2223,6 +2223,12 @@ pub enum UiCommand {
     QueryPromptMacroKeyLast,
     /// Show the last key in session_env.
     QueryEnvVarKeyLast,
+    /// Show the last key in plan.block_counts.
+    QueryPlanBlockCountKeyLast,
+    /// Show the last key in plan.block_turns.
+    QueryPlanBlockTurnsKeyLast,
+    /// Show the text of the first turn label.
+    QueryTurnLabelFirstText,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
