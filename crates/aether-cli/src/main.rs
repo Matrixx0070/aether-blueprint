@@ -17323,6 +17323,38 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryProgressItemDoneWordTotal => {
+                    let total: usize = session.progress_items.iter()
+                        .filter(|(_, done)| *done)
+                        .map(|(text, _)| text.split_whitespace().count())
+                        .sum();
+                    let done_n = session.progress_items.iter().filter(|(_, d)| *d).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Progress item done word total: {total} (across {done_n} done items)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryProgressItemPendingWordTotal => {
+                    let total: usize = session.progress_items.iter()
+                        .filter(|(_, done)| !done)
+                        .map(|(text, _)| text.split_whitespace().count())
+                        .sum();
+                    let pend_n = session.progress_items.iter().filter(|(_, d)| !d).count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Progress item pending word total: {total} (across {pend_n} pending items)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryProgressItemWordTotal => {
+                    let total: usize = session.progress_items.iter()
+                        .map(|(text, _)| text.split_whitespace().count())
+                        .sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Progress item word total: {total} (across {} items)",
+                        session.progress_items.len()
+                    )));
+                    continue;
+                }
                 UiCommand::QueryLastToolSigNameWordTotal => {
                     let total: usize = session.last_tool_signatures.iter()
                         .map(|(name, _)| name.split_whitespace().count())
@@ -49091,6 +49123,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/progress-item-done-word-total" => {
+                                    if _ctx.send(UiCommand::QueryProgressItemDoneWordTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/progress-item-pending-word-total" => {
+                                    if _ctx.send(UiCommand::QueryProgressItemPendingWordTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/progress-item-word-total" => {
+                                    if _ctx.send(UiCommand::QueryProgressItemWordTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -50855,6 +50902,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/last-tool-sig-name-word-total",
                             "/last-tool-sig-name-avg-words",
                             "/last-tool-sig-name-max-words",
+                            "/progress-item-done-word-total",
+                            "/progress-item-pending-word-total",
+                            "/progress-item-word-total",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

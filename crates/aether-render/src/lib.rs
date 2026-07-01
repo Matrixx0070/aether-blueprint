@@ -2865,6 +2865,12 @@ pub enum UiCommand {
     QueryLastToolSigNameAvgWords,
     /// Max words in any single last_tool_signature name.
     QueryLastToolSigNameMaxWords,
+    /// Total word count across all done progress items.
+    QueryProgressItemDoneWordTotal,
+    /// Total word count across all pending progress items.
+    QueryProgressItemPendingWordTotal,
+    /// Total word count across all progress items (done + pending).
+    QueryProgressItemWordTotal,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
