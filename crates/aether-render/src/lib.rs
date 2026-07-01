@@ -1869,6 +1869,12 @@ pub enum UiCommand {
     QueryBookmarkHistLenMin,
     /// Show the longest tag string in auto-tag rules.
     QueryAutoTagRuleTagMaxLen,
+    /// Show the shortest tag string in auto-tag rules.
+    QueryAutoTagRuleTagMinLen,
+    /// Show the plan block type with the highest recorded count.
+    QueryPlanBlockValMax,
+    /// Show the plan block type with the lowest recorded count.
+    QueryPlanBlockValMin,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

@@ -12955,6 +12955,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryAutoTagRuleTagMinLen => {
+                    match session.auto_tag_rules.iter().min_by_key(|(_, tag)| tag.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Auto-tag rules: none.".to_string())); }
+                        Some((_, tag)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Shortest auto-tag rule tag: {} chars ('{}')", tag.len(), tag
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanBlockValMax => {
+                    match session.plan.block_counts.iter().max_by_key(|(_, &v)| v) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Plan block counts: none.".to_string())); }
+                        Some((block, count)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Most frequent plan block: '{}' ({} times)", block, count
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanBlockValMin => {
+                    match session.plan.block_counts.iter().min_by_key(|(_, &v)| v) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Plan block counts: none.".to_string())); }
+                        Some((block, count)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Least frequent plan block: '{}' ({} times)", block, count
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -42102,6 +42135,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/auto-tag-rule-tag-min-len" => {
+                                    if _ctx.send(UiCommand::QueryAutoTagRuleTagMinLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-block-val-max" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockValMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-block-val-min" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockValMin).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -43368,6 +43416,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/bookmark-hist-len-max",
                             "/bookmark-hist-len-min",
                             "/auto-tag-rule-tag-max-len",
+                            "/auto-tag-rule-tag-min-len",
+                            "/plan-block-val-max",
+                            "/plan-block-val-min",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
