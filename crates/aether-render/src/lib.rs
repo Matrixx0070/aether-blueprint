@@ -1323,6 +1323,12 @@ pub enum UiCommand {
     QueryStickyCtxPreview,
     /// List all tool names tracked in plan stats.
     QueryPlanToolList,
+    /// List all session env variable keys.
+    QueryEnvKeyList,
+    /// List all tool names in tool-output history.
+    QueryToolOutputKeyList,
+    /// List all prompt macro keys.
+    QueryMacroKeyList,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

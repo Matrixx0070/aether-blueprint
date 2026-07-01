@@ -10893,6 +10893,48 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryEnvKeyList => {
+                    if session.session_env.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Session env: empty. Use /env-set <key> <value> to add vars.".to_string()
+                        ));
+                    } else {
+                        let mut keys: Vec<_> = session.session_env.keys().collect();
+                        keys.sort();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session env keys ({}): {}", keys.len(), keys.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolOutputKeyList => {
+                    if session.tool_output_history.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Tool output history: empty (no tools tracked yet).".to_string()
+                        ));
+                    } else {
+                        let mut keys: Vec<_> = session.tool_output_history.keys().collect();
+                        keys.sort();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Tool output history keys ({}): {}", keys.len(), keys.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryMacroKeyList => {
+                    if session.prompt_macros.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Prompt macros: none defined.".to_string()
+                        ));
+                    } else {
+                        let mut keys: Vec<_> = session.prompt_macros.keys().collect();
+                        keys.sort();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Prompt macro keys ({}): {}", keys.len(), keys.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -37333,6 +37375,24 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /env-key-list — list all session env keys
+                                "/env-key-list" => {
+                                    if _ctx.send(UiCommand::QueryEnvKeyList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tool-output-key-list — list all tool names in tool-output history
+                                "/tool-output-key-list" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputKeyList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /macro-key-list — list all prompt macro keys
+                                "/macro-key-list" => {
+                                    if _ctx.send(UiCommand::QueryMacroKeyList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -38301,6 +38361,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/cost-per-token",
                             "/sticky-ctx-preview",
                             "/plan-tool-list",
+                            "/env-key-list",
+                            "/tool-output-key-list",
+                            "/macro-key-list",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
