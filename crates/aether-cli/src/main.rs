@@ -16269,6 +16269,33 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryHistoryUserMaxChars => {
+                    let max = session.history.iter().filter_map(|item| {
+                        if let ConversationItem::User(s) = item { Some(s.len()) } else { None }
+                    }).max().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History user max chars in a turn: {max}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryAsstMaxChars => {
+                    let max = session.history.iter().filter_map(|item| {
+                        if let ConversationItem::Assistant { text: Some(t), .. } = item { Some(t.len()) } else { None }
+                    }).max().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History assistant max chars in a turn: {max}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryToolUseMax => {
+                    let max = session.history.iter().filter_map(|item| {
+                        if let ConversationItem::Assistant { tool_uses, .. } = item { Some(tool_uses.len()) } else { None }
+                    }).max().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History max tool_uses in a single assistant turn: {max}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -47351,6 +47378,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/history-user-max-chars" => {
+                                    if _ctx.send(UiCommand::QueryHistoryUserMaxChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-asst-max-chars" => {
+                                    if _ctx.send(UiCommand::QueryHistoryAsstMaxChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-tool-use-max" => {
+                                    if _ctx.send(UiCommand::QueryHistoryToolUseMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -49004,6 +49046,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-user-avg-chars",
                             "/history-asst-avg-chars",
                             "/history-tool-use-avg",
+                            "/history-user-max-chars",
+                            "/history-asst-max-chars",
+                            "/history-tool-use-max",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
