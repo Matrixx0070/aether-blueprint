@@ -1815,6 +1815,12 @@ pub enum UiCommand {
     QueryTaskQueueMinLen,
     /// Show the longest tool name in the deny list.
     QueryToolDenyMaxLen,
+    /// Show the shortest tool name in the deny list.
+    QueryToolDenyMinLen,
+    /// Show the longest tool name in the allow list.
+    QueryToolAllowMaxLen,
+    /// Show the shortest tool name in the allow list.
+    QueryToolAllowMinLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
