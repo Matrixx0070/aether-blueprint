@@ -1629,6 +1629,12 @@ pub enum UiCommand {
     QuerySavedSnapshotLast,
     /// Show total plan block-turn entry count across all blocks.
     QueryPlanBlockTurnTotal,
+    /// Show average output tokens per turn.
+    QueryOutputTokensAvg,
+    /// Show average input tokens per turn.
+    QueryInputTokensAvg,
+    /// Show total cost in USD for the session.
+    QueryCostTotalUsd,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
