@@ -2409,6 +2409,12 @@ pub enum UiCommand {
     QuerySavedSnapshotValueItemsAvg,
     /// Show the maximum ConversationItem count in any single saved snapshot.
     QuerySavedSnapshotValueItemsMax,
+    /// Show the minimum ConversationItem count in any single saved snapshot.
+    QuerySavedSnapshotValueItemsMin,
+    /// Show the total plan blocks_recorded across all saved snapshots.
+    QuerySavedSnapshotPlanBlocksTotal,
+    /// Show the maximum plan blocks_recorded in any single saved snapshot.
+    QuerySavedSnapshotPlanBlocksMax,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
