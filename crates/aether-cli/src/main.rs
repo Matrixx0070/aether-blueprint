@@ -14701,6 +14701,33 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryErrorPlaybookLastPat => {
+                    let pat = session.error_playbook.last()
+                        .map(|(p, _)| p.as_str())
+                        .unwrap_or("none");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Error playbook last pat: {pat}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryAutoTagRuleLastPat => {
+                    let pat = session.auto_tag_rules.last()
+                        .map(|(p, _)| p.as_str())
+                        .unwrap_or("none");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Auto-tag rule last pat: {pat}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryLastToolSigFirst => {
+                    let name = session.last_tool_signatures.first()
+                        .map(|(n, _)| n.as_str())
+                        .unwrap_or("none");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Last tool sig first: {name}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -44808,6 +44835,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/error-playbook-last-pat" => {
+                                    if _ctx.send(UiCommand::QueryErrorPlaybookLastPat).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/auto-tag-rule-last-pat" => {
+                                    if _ctx.send(UiCommand::QueryAutoTagRuleLastPat).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/last-tool-sig-first" => {
+                                    if _ctx.send(UiCommand::QueryLastToolSigFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -46266,6 +46308,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-annot-last-text",
                             "/error-playbook-first-pat",
                             "/auto-tag-rule-first-pat",
+                            "/error-playbook-last-pat",
+                            "/auto-tag-rule-last-pat",
+                            "/last-tool-sig-first",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

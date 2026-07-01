@@ -2253,6 +2253,12 @@ pub enum UiCommand {
     QueryErrorPlaybookFirstPat,
     /// Show the pattern of the first auto-tag rule.
     QueryAutoTagRuleFirstPat,
+    /// Show the pattern of the last error playbook entry.
+    QueryErrorPlaybookLastPat,
+    /// Show the pattern of the last auto-tag rule.
+    QueryAutoTagRuleLastPat,
+    /// Show the name of the first last_tool_signature entry.
+    QueryLastToolSigFirst,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
