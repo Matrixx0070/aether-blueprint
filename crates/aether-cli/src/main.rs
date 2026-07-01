@@ -16902,6 +16902,33 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QuerySessionTagMaxWords => {
+                    let max = session.session_tags.iter()
+                        .map(|t| t.split_whitespace().count())
+                        .max();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match max {
+                        Some(v) => format!("Session tag max words in one tag: {v}"),
+                        None => "Session tag max words: no tags".to_string(),
+                    }));
+                    continue;
+                }
+                UiCommand::QuerySessionTagMinWords => {
+                    let min = session.session_tags.iter()
+                        .map(|t| t.split_whitespace().count())
+                        .min();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match min {
+                        Some(v) => format!("Session tag min words in one tag: {v}"),
+                        None => "Session tag min words: no tags".to_string(),
+                    }));
+                    continue;
+                }
+                UiCommand::QueryPlanTextWords => {
+                    let words = session.plan.text.split_whitespace().count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan text word count: {words}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -48284,6 +48311,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/session-tag-max-words" => {
+                                    if _ctx.send(UiCommand::QuerySessionTagMaxWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-tag-min-words" => {
+                                    if _ctx.send(UiCommand::QuerySessionTagMinWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-text-words" => {
+                                    if _ctx.send(UiCommand::QueryPlanTextWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -49997,6 +50039,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-var-value-avg-words",
                             "/session-tag-word-total",
                             "/session-tag-avg-words",
+                            "/session-tag-max-words",
+                            "/session-tag-min-words",
+                            "/plan-text-words",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

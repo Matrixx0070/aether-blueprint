@@ -2763,6 +2763,12 @@ pub enum UiCommand {
     QuerySessionTagWordTotal,
     /// Average word count per session tag string.
     QuerySessionTagAvgWords,
+    /// Maximum word count in any single session tag.
+    QuerySessionTagMaxWords,
+    /// Minimum word count in any single session tag.
+    QuerySessionTagMinWords,
+    /// Word count of the current plan text.
+    QueryPlanTextWords,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
