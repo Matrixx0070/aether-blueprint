@@ -12238,6 +12238,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryPromptMacroValMaxLen => {
+                    match session.prompt_macros.values().max_by_key(|v| v.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Prompt macros: none.".to_string())); }
+                        Some(v) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Longest prompt macro value: {} chars", v.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryEnvVarKeyMaxLen => {
+                    match session.session_env.keys().max_by_key(|k| k.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Session env: none.".to_string())); }
+                        Some(k) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Longest env var key: {} chars ('{}')", k.len(), k
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryEnvVarValMaxLen => {
+                    match session.session_env.values().max_by_key(|v| v.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Session env: none.".to_string())); }
+                        Some(v) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Longest env var value: {} chars", v.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -41055,6 +41088,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/prompt-macro-val-max-len" => {
+                                    if _ctx.send(UiCommand::QueryPromptMacroValMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/env-var-key-max-len" => {
+                                    if _ctx.send(UiCommand::QueryEnvVarKeyMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/env-var-val-max-len" => {
+                                    if _ctx.send(UiCommand::QueryEnvVarValMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -42255,6 +42303,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/env-var-count",
                             "/sticky-context-count",
                             "/progress-items-count",
+                            "/prompt-macro-val-max-len",
+                            "/env-var-key-max-len",
+                            "/env-var-val-max-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

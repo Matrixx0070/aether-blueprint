@@ -1737,6 +1737,12 @@ pub enum UiCommand {
     QueryStickyContextCount,
     /// Show the total count of progress items.
     QueryProgressItemsCount,
+    /// Show the longest prompt macro value string.
+    QueryPromptMacroValMaxLen,
+    /// Show the longest session env-var key string.
+    QueryEnvVarKeyMaxLen,
+    /// Show the longest session env-var value string.
+    QueryEnvVarValMaxLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
