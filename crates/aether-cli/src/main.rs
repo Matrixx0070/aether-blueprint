@@ -17323,6 +17323,33 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryPlaybookPerTurn => {
+                    let turns = session.history.len();
+                    let pb = session.error_playbook.len();
+                    let ratio = if turns == 0 { 0.0 } else { pb as f64 / turns as f64 };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Playbook entries per turn: {ratio:.3} ({pb} entries / {turns} history items)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVarsPerTurn => {
+                    let turns = session.history.len();
+                    let vars = session.session_vars.len();
+                    let ratio = if turns == 0 { 0.0 } else { vars as f64 / turns as f64 };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Vars per turn: {ratio:.3} ({vars} vars / {turns} history items)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryAnnotsPerTurn => {
+                    let turns = session.history.len();
+                    let annots = session.history_annotations.len();
+                    let ratio = if turns == 0 { 0.0 } else { annots as f64 / turns as f64 };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Annotations per turn: {ratio:.3} ({annots} annotations / {turns} history items)"
+                    )));
+                    continue;
+                }
                 UiCommand::QueryNotesPerTurn => {
                     let turns = session.history.len();
                     let notes = session.session_notes.len();
@@ -50199,6 +50226,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/playbook-per-turn" => {
+                                    if _ctx.send(UiCommand::QueryPlaybookPerTurn).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/vars-per-turn" => {
+                                    if _ctx.send(UiCommand::QueryVarsPerTurn).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/annots-per-turn" => {
+                                    if _ctx.send(UiCommand::QueryAnnotsPerTurn).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -52026,6 +52068,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/notes-per-turn",
                             "/bookmarks-per-turn",
                             "/labels-per-turn",
+                            "/playbook-per-turn",
+                            "/vars-per-turn",
+                            "/annots-per-turn",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

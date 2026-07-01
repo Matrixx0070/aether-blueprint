@@ -2991,6 +2991,12 @@ pub enum UiCommand {
     QueryBookmarksPerTurn,
     /// Ratio of turn label count to history turn count.
     QueryLabelsPerTurn,
+    /// Ratio of error_playbook entries to history turn count.
+    QueryPlaybookPerTurn,
+    /// Ratio of session_vars count to history turn count.
+    QueryVarsPerTurn,
+    /// Ratio of history_annotations count to history turn count.
+    QueryAnnotsPerTurn,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
