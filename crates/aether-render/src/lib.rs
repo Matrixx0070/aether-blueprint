@@ -2421,6 +2421,12 @@ pub enum UiCommand {
     QuerySavedSnapshotPlanToolStatsTotal,
     /// Show the total block_counts entry count across all saved snapshot plans.
     QuerySavedSnapshotPlanBlockCountsTotal,
+    /// Show the total block_turns entry count across all saved snapshot plans.
+    QuerySavedSnapshotPlanBlockTurnsTotal,
+    /// Show the total tool_error_counts entry count across all saved snapshot plans.
+    QuerySavedSnapshotPlanToolErrorsTotal,
+    /// Show the count of saved snapshots whose plan has a last_error_text set.
+    QuerySavedSnapshotPlanHasErrorCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
