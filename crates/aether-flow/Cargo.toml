@@ -1,0 +1,14 @@
+[package]
+name = "aether-flow"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AetherCode cross-file taint graph: source-to-sink data-flow analysis across Rust and Python source files."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+regex.workspace = true
+once_cell.workspace = true
+anyhow.workspace = true
+glob.workspace = true

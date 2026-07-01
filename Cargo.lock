@@ -87,6 +87,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-flow"
+version = "0.35.0"
+dependencies = [
+ "anyhow",
+ "glob",
+ "once_cell",
+ "regex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "aether-hook"
 version = "0.35.0"
 dependencies = [
