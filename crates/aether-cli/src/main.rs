@@ -7700,6 +7700,61 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryHistoryItemShow(idx) => {
+                    match session.history.get(idx) {
+                        Some(item) => {
+                            let desc = match item {
+                                aether_core::context::ConversationItem::User(text) => {
+                                    let preview = if text.len() > 200 { format!("{}…", &text[..200]) } else { text.clone() };
+                                    format!("User: {preview}")
+                                }
+                                aether_core::context::ConversationItem::Assistant { text, tool_uses } => {
+                                    let txt = text.as_deref().unwrap_or("(no text)");
+                                    let preview = if txt.len() > 100 { format!("{}…", &txt[..100]) } else { txt.to_string() };
+                                    format!("Assistant: {preview} [{} tool use(s)]", tool_uses.len())
+                                }
+                                aether_core::context::ConversationItem::ToolResults(results) => {
+                                    format!("ToolResults: {} result(s)", results.len())
+                                }
+                            };
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "History[{idx}]: {desc}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "History index {idx}: out of range ({} items).", session.history.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryVerifierRulesCount => {
+                    let n = session.verifier.gate.rules.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verifier: {n} rule(s) loaded. Use /verify-show for enable/disable status."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryToolStatsTop => {
+                    let stats = &session.plan.tool_call_stats;
+                    if stats.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Tool stats: no calls recorded yet.".to_string()
+                        ));
+                    } else {
+                        let mut entries: Vec<_> = stats.iter()
+                            .map(|(name, (ok, err))| (name, ok + err, ok, err))
+                            .collect();
+                        entries.sort_by(|a, b| b.1.cmp(&a.1));
+                        let mut lines = vec!["Top tools by call count:".to_string()];
+                        for (name, total, ok, err) in entries.iter().take(5) {
+                            lines.push(format!("  {name}: {total} calls ({ok} ok, {err} err)"));
+                        }
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(lines.join("\n")));
+                    }
+                    continue;
+                }
                 UiCommand::QueryStickyGet(idx) => {
                     match session.sticky_context.get(idx) {
                         Some(entry) => {
@@ -34476,6 +34531,29 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                // /history-item-show <idx> — show a specific history item
+                                cmd_str if cmd_str.starts_with("/history-item-show ") => {
+                                    let arg = cmd_str.trim_start_matches("/history-item-show ").trim();
+                                    if let Ok(idx) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::QueryHistoryItemShow(idx)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /history-item-show <index>".to_string()));
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /verifier-rules-count — count verifier rules loaded
+                                "/verifier-rules-count" => {
+                                    if _ctx.send(UiCommand::QueryVerifierRulesCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                // /tool-stats-top — show top 5 tools by call count
+                                "/tool-stats-top" => {
+                                    if _ctx.send(UiCommand::QueryToolStatsTop).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -35303,6 +35381,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/sticky-get ",
                             "/warmup-get ",
                             "/plan-summary",
+                            "/history-item-show ",
+                            "/verifier-rules-count",
+                            "/tool-stats-top",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

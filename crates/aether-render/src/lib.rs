@@ -1041,6 +1041,12 @@ pub enum UiCommand {
     QueryWarmupGet(usize),
     /// Show a concise plan health summary.
     QueryPlanSummary,
+    /// Show a specific history item by index.
+    QueryHistoryItemShow(usize),
+    /// Count the number of verifier rules loaded.
+    QueryVerifierRulesCount,
+    /// Show top 5 tools by total call count.
+    QueryToolStatsTop,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
