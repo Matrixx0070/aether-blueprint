@@ -58218,6 +58218,18 @@ fn build_sso_http_client(
     if let Some(secs) = timeout_secs {
         builder = builder.timeout(std::time::Duration::from_secs(secs));
     }
+    // FF5: enterprise/test IdPs fronted by a private CA — add it to
+    // the trust set WITHOUT disabling verification (there is
+    // deliberately no accept-invalid-certs knob here).
+    if let Ok(ca_path) = std::env::var("AETHER_OIDC_EXTRA_ROOT_CA_PEM") {
+        let pem = std::fs::read(&ca_path).with_context(|| {
+            format!("read AETHER_OIDC_EXTRA_ROOT_CA_PEM {ca_path}")
+        })?;
+        let ca = reqwest::Certificate::from_pem(&pem).with_context(|| {
+            format!("parse AETHER_OIDC_EXTRA_ROOT_CA_PEM {ca_path} as PEM cert")
+        })?;
+        builder = builder.add_root_certificate(ca);
+    }
     let mut leaf_der = None;
     if let Some(m) = mtls {
         let (identity, der) = load_mtls_identity(m)?;
@@ -61499,6 +61511,11 @@ fn load_idp_signing_keys() -> Result<Vec<(IdpVerifyingKey, Vec<u8>)>> {
 /// less battle-tested in production than Ed25519, but the SAML
 /// metadata ecosystem allows it; refusing it loud was the v0.34
 /// posture, accepting it is the v0.35 EE6 posture.
+///
+/// FF6 (2026-07-01): crates.io max_stable is still 0.9.0 and the
+/// 0.14 line remains pre-release (0.14.0-pre.15) — the pre-release
+/// dependency state persists; re-check per the risk register §EE6
+/// audit gap at each plan boundary.
 #[derive(Debug, Clone)]
 enum IdpVerifyingKey {
     Rsa(rsa::RsaPublicKey),
