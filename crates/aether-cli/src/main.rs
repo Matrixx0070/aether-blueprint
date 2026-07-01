@@ -17323,6 +17323,55 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryTurnCostLogCostDiffAvg => {
+                    let costs: Vec<f64> = session.turn_cost_log.iter().map(|(_, _, _, c)| *c).collect();
+                    if costs.len() < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn cost log cost diff avg: need at least 2 entries.".to_string()
+                        ));
+                    } else {
+                        let diffs: Vec<f64> = costs.windows(2)
+                            .map(|w| (w[1] - w[0]).abs())
+                            .collect();
+                        let avg = diffs.iter().sum::<f64>() / diffs.len() as f64;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn cost log cost diff avg: ${avg:.8} ({} diffs)", diffs.len()
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnCostLogCostDiffMax => {
+                    let costs: Vec<f64> = session.turn_cost_log.iter().map(|(_, _, _, c)| *c).collect();
+                    if costs.len() < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn cost log cost diff max: need at least 2 entries.".to_string()
+                        ));
+                    } else {
+                        let max_diff = costs.windows(2)
+                            .map(|w| (w[1] - w[0]).abs())
+                            .fold(f64::NEG_INFINITY, f64::max);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn cost log cost diff max: ${max_diff:.8}"
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnCostLogCostDiffMin => {
+                    let costs: Vec<f64> = session.turn_cost_log.iter().map(|(_, _, _, c)| *c).collect();
+                    if costs.len() < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn cost log cost diff min: need at least 2 entries.".to_string()
+                        ));
+                    } else {
+                        let min_diff = costs.windows(2)
+                            .map(|w| (w[1] - w[0]).abs())
+                            .fold(f64::INFINITY, f64::min);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn cost log cost diff min: ${min_diff:.8}"
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryTurnWallDiffAvg => {
                     let ms = &session.turn_wall_ms;
                     if ms.len() < 2 {
@@ -49588,6 +49637,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/turn-cost-log-cost-diff-avg" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogCostDiffAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-cost-log-cost-diff-max" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogCostDiffMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-cost-log-cost-diff-min" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogCostDiffMin).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -51379,6 +51443,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-wall-diff-avg",
                             "/turn-wall-diff-max",
                             "/turn-wall-diff-min",
+                            "/turn-cost-log-cost-diff-avg",
+                            "/turn-cost-log-cost-diff-max",
+                            "/turn-cost-log-cost-diff-min",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

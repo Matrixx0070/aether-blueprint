@@ -2919,6 +2919,12 @@ pub enum UiCommand {
     QueryTurnWallDiffMax,
     /// Minimum absolute difference between consecutive turn wall-clock times (ms).
     QueryTurnWallDiffMin,
+    /// Average absolute cost difference between consecutive turn_cost_log entries.
+    QueryTurnCostLogCostDiffAvg,
+    /// Maximum absolute cost difference between consecutive turn_cost_log entries.
+    QueryTurnCostLogCostDiffMax,
+    /// Minimum absolute cost difference between consecutive turn_cost_log entries.
+    QueryTurnCostLogCostDiffMin,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
