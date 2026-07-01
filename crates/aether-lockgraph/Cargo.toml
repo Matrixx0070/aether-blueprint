@@ -1,0 +1,13 @@
+[package]
+name = "aether-lockgraph"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AetherCode lock-order graph builder: detects potential deadlocks by analysing lock acquisition order across threads and finding cycles."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+regex.workspace = true
+once_cell.workspace = true
