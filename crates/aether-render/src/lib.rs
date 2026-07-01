@@ -2907,6 +2907,12 @@ pub enum UiCommand {
     QueryTurnLabelGapMax,
     /// Minimum turn-index gap between any two consecutive turn labels.
     QueryTurnLabelGapMin,
+    /// Average turn-index gap between consecutive turn_cost_log entries.
+    QueryTurnCostLogGapAvg,
+    /// Maximum turn-index gap between any two consecutive turn_cost_log entries.
+    QueryTurnCostLogGapMax,
+    /// Minimum turn-index gap between any two consecutive turn_cost_log entries.
+    QueryTurnCostLogGapMin,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

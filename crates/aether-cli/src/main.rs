@@ -17323,6 +17323,49 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryTurnCostLogGapAvg => {
+                    let turns: Vec<usize> = session.turn_cost_log.iter().map(|(t, _, _, _)| *t).collect();
+                    if turns.len() < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn cost log gap avg: need at least 2 entries.".to_string()
+                        ));
+                    } else {
+                        let gaps: Vec<usize> = turns.windows(2).map(|w| w[1].saturating_sub(w[0])).collect();
+                        let avg = gaps.iter().sum::<usize>() as f64 / gaps.len() as f64;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn cost log turn gap avg: {avg:.1} ({} gaps)", gaps.len()
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnCostLogGapMax => {
+                    let turns: Vec<usize> = session.turn_cost_log.iter().map(|(t, _, _, _)| *t).collect();
+                    if turns.len() < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn cost log gap max: need at least 2 entries.".to_string()
+                        ));
+                    } else {
+                        let max_gap = turns.windows(2).map(|w| w[1].saturating_sub(w[0])).max().unwrap_or(0);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn cost log turn gap max: {max_gap}"
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnCostLogGapMin => {
+                    let turns: Vec<usize> = session.turn_cost_log.iter().map(|(t, _, _, _)| *t).collect();
+                    if turns.len() < 2 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn cost log gap min: need at least 2 entries.".to_string()
+                        ));
+                    } else {
+                        let min_gap = turns.windows(2).map(|w| w[1].saturating_sub(w[0])).min().unwrap_or(0);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn cost log turn gap min: {min_gap}"
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QueryTurnLabelGapAvg => {
                     let turns: Vec<usize> = session.turn_labels.iter().map(|(t, _)| *t).collect();
                     if turns.len() < 2 {
@@ -49466,6 +49509,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/turn-cost-log-gap-avg" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogGapAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-cost-log-gap-max" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogGapMax).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-cost-log-gap-min" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostLogGapMin).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -51251,6 +51309,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-label-gap-avg",
                             "/turn-label-gap-max",
                             "/turn-label-gap-min",
+                            "/turn-cost-log-gap-avg",
+                            "/turn-cost-log-gap-max",
+                            "/turn-cost-log-gap-min",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
