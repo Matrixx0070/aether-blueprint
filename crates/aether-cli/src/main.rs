@@ -12304,6 +12304,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QuerySessionVarValMaxLen => {
+                    match session.session_vars.values().max_by_key(|v| v.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Session vars: none.".to_string())); }
+                        Some(v) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Longest session var value: {} chars", v.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryAliasValMaxLen => {
+                    match session.aliases.values().max_by_key(|v| v.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Aliases: none.".to_string())); }
+                        Some(v) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Longest alias value: {} chars", v.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryAliasKeyMinLen => {
+                    match session.aliases.keys().min_by_key(|k| k.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Aliases: none.".to_string())); }
+                        Some(k) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Shortest alias key: {} chars ('{}')", k.len(), k
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -41151,6 +41184,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/session-var-val-max-len" => {
+                                    if _ctx.send(UiCommand::QuerySessionVarValMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/alias-val-max-len" => {
+                                    if _ctx.send(UiCommand::QueryAliasValMaxLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/alias-key-min-len" => {
+                                    if _ctx.send(UiCommand::QueryAliasKeyMinLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -42357,6 +42405,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/env-var-key-min-len",
                             "/env-var-val-min-len",
                             "/prompt-macro-val-min-len",
+                            "/session-var-val-max-len",
+                            "/alias-val-max-len",
+                            "/alias-key-min-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

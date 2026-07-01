@@ -1749,6 +1749,12 @@ pub enum UiCommand {
     QueryEnvVarValMinLen,
     /// Show the shortest prompt macro value string.
     QueryPromptMacroValMinLen,
+    /// Show the longest session-var value string.
+    QuerySessionVarValMaxLen,
+    /// Show the longest alias value string.
+    QueryAliasValMaxLen,
+    /// Show the shortest alias key string.
+    QueryAliasKeyMinLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
