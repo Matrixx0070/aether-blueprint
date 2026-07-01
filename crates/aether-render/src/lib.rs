@@ -1173,6 +1173,12 @@ pub enum UiCommand {
     QueryStickyContextLen,
     /// Show tool uses at a specific history index.
     QueryHistoryToolUseAt(usize),
+    /// Show input/output token ratio for this session.
+    QuerySessionTokenRatio,
+    /// Show character count of the current plan text.
+    QueryPlanTextLen,
+    /// Show bookmark details at a specific index.
+    QueryBookmarkAt(usize),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

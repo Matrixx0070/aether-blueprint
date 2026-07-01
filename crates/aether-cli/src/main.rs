@@ -8964,6 +8964,38 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QuerySessionTokenRatio => {
+                    let inp = session.usage_total.input_tokens;
+                    let out = session.usage_total.output_tokens;
+                    let ratio = if out == 0 { f64::INFINITY } else { inp as f64 / out as f64 };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Token ratio in:out = {inp}:{out} ({ratio:.2}:1)."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlanTextLen => {
+                    let len = session.plan.text.len();
+                    let words = session.plan.text.split_whitespace().count();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan text: {len} chars / {words} words."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryBookmarkAt(idx) => {
+                    match session.bookmarks.get(idx) {
+                        Some((turn_idx, hist_len, label)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Bookmark[{idx}]: turn={turn_idx}, history_len={hist_len}, label='{label}'"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Bookmark[{idx}]: out of range ({} bookmarks).", session.bookmarks.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryLlmMsLast => {
                     let ms = session.llm_ms_last;
                     let total = session.llm_ms_total;
@@ -35778,6 +35810,26 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/session-token-ratio" => {
+                                    if _ctx.send(UiCommand::QuerySessionTokenRatio).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-text-len" => {
+                                    if _ctx.send(UiCommand::QueryPlanTextLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd_str if cmd_str.starts_with("/bookmark-at ") => {
+                                    let arg = cmd_str.trim_start_matches("/bookmark-at ").trim();
+                                    if let Ok(idx) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::QueryBookmarkAt(idx)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /bookmark-at <index>".to_string()));
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -36671,6 +36723,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/llm-ms-last",
                             "/sticky-context-len",
                             "/history-tool-use-at ",
+                            "/session-token-ratio",
+                            "/plan-text-len",
+                            "/bookmark-at ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
