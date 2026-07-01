@@ -2271,6 +2271,12 @@ pub enum UiCommand {
     QueryTurnWallCount,
     /// Show the first model in turn_models.
     QueryTurnModelFirst,
+    /// Show the count of entries in turn_models.
+    QueryTurnModelCount,
+    /// Show the 90th-percentile turn wall time.
+    QueryTurnWallP90,
+    /// Show the average timestamp of session notes.
+    QuerySessionNoteTsAvg,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

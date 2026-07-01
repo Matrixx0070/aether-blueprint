@@ -14776,6 +14776,43 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryTurnModelCount => {
+                    let n = session.turn_models.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Turn model count: {n}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTurnWallP90 => {
+                    if session.turn_wall_ms.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn wall p90: no data.".to_string()
+                        ));
+                    } else {
+                        let mut sorted = session.turn_wall_ms.clone();
+                        sorted.sort_unstable();
+                        let idx = (sorted.len() * 9 / 10).saturating_sub(1).min(sorted.len() - 1);
+                        let p90 = sorted[idx];
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn wall p90: {p90}ms"
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionNoteTsAvg => {
+                    if session.session_notes.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Session note ts avg: no notes.".to_string()
+                        ));
+                    } else {
+                        let sum: u64 = session.session_notes.iter().map(|(_, ts)| ts).sum();
+                        let avg = sum / session.session_notes.len() as u64;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Session note ts avg: {avg}"
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -44928,6 +44965,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/turn-model-count" => {
+                                    if _ctx.send(UiCommand::QueryTurnModelCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-wall-p90" => {
+                                    if _ctx.send(UiCommand::QueryTurnWallP90).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-note-ts-avg" => {
+                                    if _ctx.send(UiCommand::QuerySessionNoteTsAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -46395,6 +46447,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-wall-first",
                             "/turn-wall-count",
                             "/turn-model-first",
+                            "/turn-model-count",
+                            "/turn-wall-p90",
+                            "/session-note-ts-avg",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
