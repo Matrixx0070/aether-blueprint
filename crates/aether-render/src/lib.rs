@@ -1071,6 +1071,12 @@ pub enum UiCommand {
     QueryHistoryByteSize,
     /// Show average cost per turn for this session.
     QuerySessionCostPerTurn,
+    /// Count session notes stored.
+    QueryNoteCount,
+    /// Count session tags assigned.
+    QuerySessionTagCount,
+    /// Count tool output history entries.
+    QueryToolOutputCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

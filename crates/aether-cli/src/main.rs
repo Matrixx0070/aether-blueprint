@@ -8964,6 +8964,32 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QueryNoteCount => {
+                    let n = session.session_notes.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session notes: {n} stored. Use /notes to list them."
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySessionTagCount => {
+                    let n = session.session_tags.len();
+                    let tags = if n == 0 {
+                        "none".to_string()
+                    } else {
+                        session.session_tags.iter().cloned().collect::<Vec<_>>().join(", ")
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session tags: {n} — {tags}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryToolOutputCount => {
+                    let n = session.tool_output_history.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Tool output history: {n} tool(s) tracked."
+                    )));
+                    continue;
+                }
                 UiCommand::QueryPlanDirty => {
                     let dirty = session.plan.is_dirty();
                     let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
@@ -34787,6 +34813,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/note-count" => {
+                                    if _ctx.send(UiCommand::QueryNoteCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-tag-count" => {
+                                    if _ctx.send(UiCommand::QuerySessionTagCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-output-count" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -35629,6 +35670,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/plan-dirty",
                             "/history-byte-size",
                             "/session-cost-per-turn",
+                            "/note-count",
+                            "/session-tag-count",
+                            "/tool-output-count",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
