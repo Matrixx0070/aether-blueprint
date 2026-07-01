@@ -2439,6 +2439,12 @@ pub enum UiCommand {
     QuerySavedSnapshotPlanGoalTotalChars,
     /// Show the count of saved snapshots whose plan has a window set.
     QuerySavedSnapshotPlanHasWindowCount,
+    /// Show the sum of all tool_error_counts values across all saved snapshot plans.
+    QuerySavedSnapshotPlanToolErrorsSum,
+    /// Show the sum of ok counts from tool_call_stats across all saved snapshot plans.
+    QuerySavedSnapshotPlanToolOkSum,
+    /// Show the sum of err counts from tool_call_stats across all saved snapshot plans.
+    QuerySavedSnapshotPlanToolErrSum,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

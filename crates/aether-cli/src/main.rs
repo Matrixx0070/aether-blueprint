@@ -15452,6 +15452,33 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QuerySavedSnapshotPlanToolErrorsSum => {
+                    let total: usize = session.saved_snapshots.values()
+                        .map(|(_, plan)| plan.tool_error_counts.values().sum::<usize>())
+                        .sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Saved snapshots total plan tool errors (summed): {total}"
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySavedSnapshotPlanToolOkSum => {
+                    let total: usize = session.saved_snapshots.values()
+                        .map(|(_, plan)| plan.tool_call_stats.values().map(|(ok, _)| ok).sum::<usize>())
+                        .sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Saved snapshots total plan tool ok calls (summed): {total}"
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySavedSnapshotPlanToolErrSum => {
+                    let total: usize = session.saved_snapshots.values()
+                        .map(|(_, plan)| plan.tool_call_stats.values().map(|(_, err)| err).sum::<usize>())
+                        .sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Saved snapshots total plan tool err calls (summed): {total}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -46024,6 +46051,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/snapshot-plan-tool-errors-sum" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotPlanToolErrorsSum).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/snapshot-plan-tool-ok-sum" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotPlanToolOkSum).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/snapshot-plan-tool-err-sum" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotPlanToolErrSum).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -47575,6 +47617,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/snapshot-plan-has-goal-count",
                             "/snapshot-plan-goal-total-chars",
                             "/snapshot-plan-has-window-count",
+                            "/snapshot-plan-tool-errors-sum",
+                            "/snapshot-plan-tool-ok-sum",
+                            "/snapshot-plan-tool-err-sum",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
