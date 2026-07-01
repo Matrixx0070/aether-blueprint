@@ -11192,6 +11192,45 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryRequestSuffixText => {
+                    match &session.request_suffix {
+                        Some(suffix) => {
+                            let preview = suffix.chars().take(160).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Request suffix: {preview}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Request suffix: not set.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QuerySmartPausePat => {
+                    match &session.smart_pause_pattern {
+                        Some(pat) => {
+                            let preview = pat.chars().take(160).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Smart pause pattern: {preview}"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Smart pause: OFF (no pattern set).".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolDenyCount => {
+                    let n = session.tool_deny.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Tool deny list: {n} entr{}. Use /tool-deny-show to list.", if n == 1 { "y" } else { "ies" }
+                    )));
+                    continue;
+                }
                 UiCommand::QueryScopeGuardText => {
                     match &session.scope_guard {
                         Some(pattern) => {
@@ -38002,6 +38041,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/request-suffix-text" => {
+                                    if _ctx.send(UiCommand::QueryRequestSuffixText).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/smart-pause-pat" => {
+                                    if _ctx.send(UiCommand::QuerySmartPausePat).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-deny-count" => {
+                                    if _ctx.send(UiCommand::QueryToolDenyCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 cmd_str if cmd_str.starts_with("/history-annotation-at ") => {
                                     let rest = cmd_str.trim_start_matches("/history-annotation-at ").trim();
                                     if let Ok(idx) = rest.parse::<usize>() {
@@ -39013,6 +39067,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/scope-guard-text",
                             "/agent-persona-text",
                             "/request-prefix-text",
+                            "/request-suffix-text",
+                            "/smart-pause-pat",
+                            "/tool-deny-count",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

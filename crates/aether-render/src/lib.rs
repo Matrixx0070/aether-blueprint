@@ -1389,6 +1389,12 @@ pub enum UiCommand {
     QueryAgentPersonaText,
     /// Show the request prefix if set.
     QueryRequestPrefixText,
+    /// Show the request suffix if set.
+    QueryRequestSuffixText,
+    /// Show the smart-pause pattern if set.
+    QuerySmartPausePat,
+    /// Count of tool-deny entries.
+    QueryToolDenyCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
