@@ -2973,6 +2973,12 @@ pub enum UiCommand {
     QueryAutoTagRulePatMinWords,
     /// Minimum word count in any single error_playbook hint.
     QueryErrorPlaybookHintMinWords,
+    /// Minimum word count in any single last_tool_signature name.
+    QueryLastToolSigNameMinWords,
+    /// Minimum word count in any single auto_tag_rule tag.
+    QueryAutoTagRuleTagMinWords,
+    /// Minimum word count in any single bookmark label.
+    QueryBookmarkLabelMinWords,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

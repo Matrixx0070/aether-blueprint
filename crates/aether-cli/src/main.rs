@@ -17323,6 +17323,36 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryLastToolSigNameMinWords => {
+                    let min = session.last_tool_signatures.iter()
+                        .map(|(name, _)| name.split_whitespace().count())
+                        .min();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match min {
+                        Some(v) => format!("Last tool sig name min words: {v}"),
+                        None => "Last tool sigs: none recorded.".to_string(),
+                    }));
+                    continue;
+                }
+                UiCommand::QueryAutoTagRuleTagMinWords => {
+                    let min = session.auto_tag_rules.iter()
+                        .map(|(_, tag)| tag.split_whitespace().count())
+                        .min();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match min {
+                        Some(v) => format!("Auto-tag rule tag min words: {v}"),
+                        None => "Auto-tag rules: none defined.".to_string(),
+                    }));
+                    continue;
+                }
+                UiCommand::QueryBookmarkLabelMinWords => {
+                    let min = session.bookmarks.iter()
+                        .map(|(_, _, lbl)| lbl.split_whitespace().count())
+                        .min();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match min {
+                        Some(v) => format!("Bookmark label min words: {v}"),
+                        None => "Bookmarks: none recorded.".to_string(),
+                    }));
+                    continue;
+                }
                 UiCommand::QueryTurnLabelMinWords => {
                     let min = session.turn_labels.iter()
                         .map(|(_, lbl)| lbl.split_whitespace().count())
@@ -50061,6 +50091,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/last-tool-sig-name-min-words" => {
+                                    if _ctx.send(UiCommand::QueryLastToolSigNameMinWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/auto-tag-rule-tag-min-words" => {
+                                    if _ctx.send(UiCommand::QueryAutoTagRuleTagMinWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/bookmark-label-min-words" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkLabelMinWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -51879,6 +51924,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/turn-label-min-words",
                             "/auto-tag-rule-pat-min-words",
                             "/error-playbook-hint-min-words",
+                            "/last-tool-sig-name-min-words",
+                            "/auto-tag-rule-tag-min-words",
+                            "/bookmark-label-min-words",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
