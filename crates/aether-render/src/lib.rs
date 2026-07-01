@@ -1635,6 +1635,12 @@ pub enum UiCommand {
     QueryInputTokensAvg,
     /// Show total cost in USD for the session.
     QueryCostTotalUsd,
+    /// Show turns elapsed since last compaction (or session start).
+    QueryTurnsSinceCompact,
+    /// Show the turn with highest input token count.
+    QueryMaxInputTokensTurn,
+    /// Show the turn with highest output token count.
+    QueryMaxOutputTokensTurn,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
