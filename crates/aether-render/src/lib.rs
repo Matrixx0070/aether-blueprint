@@ -1497,6 +1497,12 @@ pub enum UiCommand {
     QueryPlanBlockMax,
     /// Show the average turn cost across all logged turns.
     QueryTurnCostAvgAll,
+    /// Show the plan block name with the lowest count.
+    QueryPlanBlockMin,
+    /// Show total ok tool calls across all plan stats.
+    QueryPlanToolOkSum,
+    /// Show sum of all turn wall-clock times in ms.
+    QueryTurnWallSum,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

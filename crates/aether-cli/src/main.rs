@@ -11192,6 +11192,41 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryPlanBlockMin => {
+                    let best = session.plan.block_counts.iter()
+                        .min_by_key(|(_, v)| *v);
+                    match best {
+                        Some((name, count)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Plan block with lowest count: '{name}' ({count} time{}).",
+                                if *count == 1 { "" } else { "s" }
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Plan block counts: none recorded.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanToolOkSum => {
+                    let total_ok: usize = session.plan.tool_call_stats.values().map(|(ok, _)| *ok).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan tool ok calls (total): {total_ok} across {} tracked tools.",
+                        session.plan.tool_call_stats.len()
+                    )));
+                    continue;
+                }
+                UiCommand::QueryTurnWallSum => {
+                    let total: u64 = session.turn_wall_ms.iter().sum();
+                    let n = session.turn_wall_ms.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Turn wall-clock sum: {total}ms across {n} turns ({:.1}s total).",
+                        total as f64 / 1000.0
+                    )));
+                    continue;
+                }
                 UiCommand::QueryVerifierRuleLast => {
                     match session.verifier.gate.rules.last() {
                         Some(cr) => {
@@ -39145,6 +39180,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/plan-block-min" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockMin).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-tool-ok-sum" => {
+                                    if _ctx.send(UiCommand::QueryPlanToolOkSum).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-wall-sum" => {
+                                    if _ctx.send(UiCommand::QueryTurnWallSum).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -40225,6 +40275,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/verifier-rule-last",
                             "/plan-block-max",
                             "/turn-cost-avg-all",
+                            "/plan-block-min",
+                            "/plan-tool-ok-sum",
+                            "/turn-wall-sum",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
