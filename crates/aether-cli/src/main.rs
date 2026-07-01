@@ -11192,6 +11192,51 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryPersistentReminderAvgLen => {
+                    let n = session.persistent_reminders.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Persistent reminder avg len: none set.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.persistent_reminders.iter().map(|r| r.len()).sum();
+                        let avg = total / n;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Persistent reminder avg len: {avg} chars/reminder across {n} reminders."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryAutoTagPatAvgLen => {
+                    let n = session.auto_tag_rules.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Auto-tag pattern avg len: no rules defined.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.auto_tag_rules.iter().map(|(p, _)| p.len()).sum();
+                        let avg = total / n;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Auto-tag pattern avg len: {avg} chars/pattern across {n} rules."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryBookmarkLabelAvgLen => {
+                    let n = session.bookmarks.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Bookmark label avg len: no bookmarks.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.bookmarks.iter().map(|(_, _, lbl)| lbl.len()).sum();
+                        let avg = total / n;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Bookmark label avg len: {avg} chars/label across {n} bookmarks."
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -39499,6 +39544,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/persistent-reminder-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryPersistentReminderAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/auto-tag-pat-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryAutoTagPatAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/bookmark-label-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkLabelAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -40597,6 +40657,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-var-value-avg-len",
                             "/env-value-avg-len",
                             "/prompt-macro-avg-len",
+                            "/persistent-reminder-avg-len",
+                            "/auto-tag-pat-avg-len",
+                            "/bookmark-label-avg-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -1533,6 +1533,12 @@ pub enum UiCommand {
     QueryEnvValueAvgLen,
     /// Show average length of prompt macro texts.
     QueryPromptMacroAvgLen,
+    /// Show average length of persistent reminders.
+    QueryPersistentReminderAvgLen,
+    /// Show average length of auto-tag patterns.
+    QueryAutoTagPatAvgLen,
+    /// Show average length of bookmark labels.
+    QueryBookmarkLabelAvgLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
