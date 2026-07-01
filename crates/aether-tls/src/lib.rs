@@ -53,7 +53,7 @@ pub struct CertInfo {
     pub issuer: String,
     pub not_before: String,
     pub not_after: String,
-    pub days_until_expiry: i64,
+    pub days_until_expiry: Option<i64>,
     pub key_type: String,
     pub key_bits: Option<u32>,
     pub sans: Vec<String>,
@@ -171,9 +171,8 @@ fn parse_dates(output: &str) -> (String, String) {
     (not_before, not_after)
 }
 
-fn parse_days_until_expiry(not_after: &str) -> i64 {
+fn parse_days_until_expiry(not_after: &str) -> Option<i64> {
     // openssl date format: "Mar 15 00:00:00 2025 GMT"
-    // Try to parse it
     let formats = [
         "%b %e %H:%M:%S %Y %Z",
         "%b %d %H:%M:%S %Y %Z",
@@ -181,10 +180,10 @@ fn parse_days_until_expiry(not_after: &str) -> i64 {
     for fmt in formats {
         if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(not_after.trim(), fmt) {
             let dt_utc = DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc);
-            return (dt_utc - Utc::now()).num_days();
+            return Some((dt_utc - Utc::now()).num_days());
         }
     }
-    9999 // can't parse — assume OK
+    None // unparseable — caller emits TLS_EXPIRY_UNPARSEABLE finding
 }
 
 fn parse_key_info(output: &str) -> (String, Option<u32>) {
@@ -344,27 +343,41 @@ fn analyze_findings(report: &TlsAuditReport, raw_output: &str) -> Vec<TlsFinding
 
     // Cert expiry
     if let Some(ref cert) = report.certificate {
-        if cert.days_until_expiry < 0 {
-            findings.push(TlsFinding {
-                severity: TlsSeverity::Critical,
-                title: "Certificate EXPIRED".to_string(),
-                detail: format!("Expired {} days ago (notAfter: {})", -cert.days_until_expiry, cert.not_after),
-                cve: None,
-            });
-        } else if cert.days_until_expiry < 14 {
-            findings.push(TlsFinding {
-                severity: TlsSeverity::Critical,
-                title: format!("Certificate expiring in {} days", cert.days_until_expiry),
-                detail: format!("notAfter: {}", cert.not_after),
-                cve: None,
-            });
-        } else if cert.days_until_expiry < 30 {
-            findings.push(TlsFinding {
-                severity: TlsSeverity::High,
-                title: format!("Certificate expiring in {} days", cert.days_until_expiry),
-                detail: format!("notAfter: {}", cert.not_after),
-                cve: None,
-            });
+        match cert.days_until_expiry {
+            None if !cert.not_after.is_empty() => {
+                // Date string present but not parseable — surface as a finding rather than silently passing.
+                findings.push(TlsFinding {
+                    severity: TlsSeverity::Medium,
+                    title: "TLS_EXPIRY_UNPARSEABLE".to_string(),
+                    detail: format!("Cannot parse certificate notAfter date: '{}'", cert.not_after),
+                    cve: None,
+                });
+            }
+            Some(d) if d < 0 => {
+                findings.push(TlsFinding {
+                    severity: TlsSeverity::Critical,
+                    title: "Certificate EXPIRED".to_string(),
+                    detail: format!("Expired {} days ago (notAfter: {})", -d, cert.not_after),
+                    cve: None,
+                });
+            }
+            Some(d) if d < 14 => {
+                findings.push(TlsFinding {
+                    severity: TlsSeverity::Critical,
+                    title: format!("Certificate expiring in {} days", d),
+                    detail: format!("notAfter: {}", cert.not_after),
+                    cve: None,
+                });
+            }
+            Some(d) if d < 30 => {
+                findings.push(TlsFinding {
+                    severity: TlsSeverity::High,
+                    title: format!("Certificate expiring in {} days", d),
+                    detail: format!("notAfter: {}", cert.not_after),
+                    cve: None,
+                });
+            }
+            _ => {}
         }
 
         // Self-signed
@@ -478,7 +491,9 @@ pub fn audit(host: &str, port: u16) -> Result<TlsAuditReport> {
     let serial = parse_serial(&raw);
     let sig_alg = parse_sig_alg(&raw);
     let chain_depth = count_chain_depth(&raw);
-    let days = if not_after.is_empty() { 9999 } else { parse_days_until_expiry(&not_after) };
+    // None when not_after is absent OR when the date string cannot be parsed;
+    // analyze_findings distinguishes the two via cert.not_after.is_empty().
+    let days: Option<i64> = if not_after.is_empty() { None } else { parse_days_until_expiry(&not_after) };
 
     let cert = if subject.is_empty() && issuer.is_empty() {
         None
@@ -544,15 +559,56 @@ mod tests {
 
     #[test]
     fn parse_days_future() {
-        // A date far in the future should return large positive number
         let d = parse_days_until_expiry("Jan  1 00:00:00 2099 GMT");
-        assert!(d > 10000, "expected far-future date, got {d}");
+        assert!(d.unwrap() > 10000, "expected far-future date");
     }
 
     #[test]
     fn parse_days_past() {
         let d = parse_days_until_expiry("Jan  1 00:00:00 2000 GMT");
-        assert!(d < 0, "expected past date to be negative, got {d}");
+        assert!(d.unwrap() < 0, "expected past date to be negative");
+    }
+
+    #[test]
+    fn parse_days_malformed_returns_none() {
+        // Garbage date strings must return None, never 9999.
+        assert_eq!(parse_days_until_expiry("not-a-date"), None);
+        assert_eq!(parse_days_until_expiry("2025/03/15"), None);
+        assert_eq!(parse_days_until_expiry(""), None);
+    }
+
+    #[test]
+    fn unparseable_date_emits_finding() {
+        let report = TlsAuditReport {
+            host: "test".to_string(),
+            port: 443,
+            negotiated_protocol: "TLSv1.3".to_string(),
+            negotiated_cipher: "TLS_AES_256_GCM_SHA384".to_string(),
+            certificate: Some(CertInfo {
+                subject: "CN=test".to_string(),
+                issuer: "CN=CA".to_string(),
+                not_before: String::new(),
+                not_after: "2025/03/15 00:00:00".to_string(), // non-empty but wrong format
+                days_until_expiry: None,
+                key_type: "RSA".to_string(),
+                key_bits: Some(2048),
+                sans: vec![],
+                is_self_signed: false,
+                serial: "01".to_string(),
+                signature_algorithm: "sha256WithRSAEncryption".to_string(),
+            }),
+            chain_depth: 2,
+            hsts_present: true,
+            hsts_max_age: Some(31536000),
+            findings: vec![],
+            grade: String::new(),
+        };
+        let findings = analyze_findings(&report, "");
+        let unparseable = findings.iter().find(|f| f.title == "TLS_EXPIRY_UNPARSEABLE");
+        assert!(unparseable.is_some(), "expected TLS_EXPIRY_UNPARSEABLE finding");
+        assert_eq!(unparseable.unwrap().severity, TlsSeverity::Medium);
+        assert!(unparseable.unwrap().detail.contains("2025/03/15 00:00:00"),
+            "detail must include the raw date string");
     }
 
     #[test]
@@ -583,7 +639,7 @@ mod tests {
                 issuer: "CN=CA".to_string(),
                 not_before: "Jan  1 00:00:00 2020 GMT".to_string(),
                 not_after: "Jan  1 00:00:00 2021 GMT".to_string(),
-                days_until_expiry: -100,
+                days_until_expiry: Some(-100),
                 key_type: "RSA".to_string(),
                 key_bits: Some(2048),
                 sans: vec![],

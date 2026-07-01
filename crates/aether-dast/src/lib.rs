@@ -625,3 +625,169 @@ mod tests {
         assert_eq!(compute_grade(&[]), "A+");
     }
 }
+
+// ── Integration tests (real HTTP, local server) ───────────────────────────────
+//
+// Each test spins a minimal std::net::TcpListener server in a background
+// thread — no extra test dependencies, no mocking of curl.  The server
+// accepts up to `MAX_CONNS` connections so it survives curl's habit of
+// making an extra probe when it encounters a redirect or sends Origin.
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+    use std::time::Duration;
+
+    const MAX_CONNS: usize = 4;
+
+    /// Binds a random port, returns it, and starts a background thread that
+    /// serves `response` verbatim to every incoming connection.
+    fn start_static_server(response: &'static str) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            for _ in 0..MAX_CONNS {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    let mut buf = [0u8; 4096];
+                    let _ = stream.read(&mut buf);
+                    let _ = stream.write_all(response.as_bytes());
+                    // drop stream — signals EOF to curl
+                }
+            }
+        });
+        // Give the OS a moment to start accepting before curl connects.
+        thread::sleep(Duration::from_millis(60));
+        port
+    }
+
+    /// Like start_static_server but reflects the incoming `Origin:` header
+    /// as `Access-Control-Allow-Origin` and adds `Allow-Credentials: true`,
+    /// simulating the most dangerous CORS misconfiguration.
+    fn start_cors_reflect_server() -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            for _ in 0..MAX_CONNS {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    let mut buf = [0u8; 8192];
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n]);
+
+                    // Pull the Origin header value sent by curl.
+                    let origin = req.lines()
+                        .find(|l| l.to_lowercase().starts_with("origin:"))
+                        .and_then(|l| l.splitn(2, ':').nth(1))
+                        .map(|s| s.trim().to_string())
+                        .unwrap_or_else(|| "https://evil-attacker.aether-dast.test".to_string());
+
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\n\
+                         Access-Control-Allow-Origin: {origin}\r\n\
+                         Access-Control-Allow-Credentials: true\r\n\
+                         Content-Length: 2\r\n\
+                         Connection: close\r\n\
+                         \r\n\
+                         OK"
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                }
+            }
+        });
+        thread::sleep(Duration::from_millis(60));
+        port
+    }
+
+    // ── cookie tests ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn cookie_missing_all_flags_detected_end_to_end() {
+        // Session cookie with no Secure, no HttpOnly, no SameSite.
+        let port = start_static_server(concat!(
+            "HTTP/1.1 200 OK\r\n",
+            "Set-Cookie: session=deadbeef; Path=/\r\n",
+            "Content-Length: 2\r\n",
+            "Connection: close\r\n",
+            "\r\n",
+            "OK"
+        ));
+        let url = format!("http://127.0.0.1:{}/", port);
+        let report = scan(&url).expect("scan must not error");
+
+        let checks: Vec<&str> = report.findings.iter().map(|f| f.check.as_str()).collect();
+        assert!(
+            checks.contains(&"cookie-secure"),
+            "expected cookie-secure finding; got: {:?}", checks
+        );
+        assert!(
+            checks.contains(&"cookie-httponly"),
+            "expected cookie-httponly finding; got: {:?}", checks
+        );
+        assert!(
+            checks.contains(&"cookie-samesite"),
+            "expected cookie-samesite finding; got: {:?}", checks
+        );
+        // Severity spot-check
+        assert!(
+            report.findings.iter().any(|f| f.check == "cookie-secure"
+                && f.severity == DastSeverity::High),
+            "missing-Secure must be HIGH"
+        );
+    }
+
+    #[test]
+    fn cookie_with_all_flags_no_cookie_findings() {
+        // Properly configured cookie — no cookie-* findings expected.
+        let port = start_static_server(concat!(
+            "HTTP/1.1 200 OK\r\n",
+            "Set-Cookie: session=deadbeef; Path=/; Secure; HttpOnly; SameSite=Strict\r\n",
+            "Content-Length: 2\r\n",
+            "Connection: close\r\n",
+            "\r\n",
+            "OK"
+        ));
+        let url = format!("http://127.0.0.1:{}/", port);
+        let report = scan(&url).expect("scan must not error");
+
+        let cookie_findings: Vec<&DastFinding> = report.findings.iter()
+            .filter(|f| f.check.starts_with("cookie-"))
+            .collect();
+        assert!(
+            cookie_findings.is_empty(),
+            "well-configured cookie must produce zero cookie-* findings; got: {:?}",
+            cookie_findings.iter().map(|f| &f.check).collect::<Vec<_>>()
+        );
+    }
+
+    // ── CORS reflection test ──────────────────────────────────────────────────
+
+    #[test]
+    fn cors_origin_reflection_with_credentials_critical_end_to_end() {
+        // Server reflects whatever Origin curl sent + credentials=true.
+        // scan() sends Origin: https://evil-attacker.aether-dast.test, so the
+        // server ACAO will equal that exact string → check_cors fires Critical.
+        let port = start_cors_reflect_server();
+        let url = format!("http://127.0.0.1:{}/", port);
+        let report = scan(&url).expect("scan must not error");
+
+        let cors_findings: Vec<&DastFinding> = report.findings.iter()
+            .filter(|f| f.check == "cors")
+            .collect();
+        assert!(
+            !cors_findings.is_empty(),
+            "expected at least one cors finding; got none"
+        );
+        assert!(
+            cors_findings.iter().any(|f| f.severity == DastSeverity::Critical),
+            "CORS origin reflection with credentials must be Critical; got severities: {:?}",
+            cors_findings.iter().map(|f| &f.severity).collect::<Vec<_>>()
+        );
+        // The detail must mention "credentials" so the finding is actionable.
+        let crit = cors_findings.iter().find(|f| f.severity == DastSeverity::Critical).unwrap();
+        assert!(
+            crit.detail.to_lowercase().contains("credential"),
+            "Critical CORS detail must mention credentials; got: {}", crit.detail
+        );
+    }
+}

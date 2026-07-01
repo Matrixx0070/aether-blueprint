@@ -1703,7 +1703,10 @@ async fn main() -> Result<()> {
                         if let Some(ref cert) = report.certificate {
                             println!("  Subject  : {}", cert.subject);
                             println!("  Issuer   : {}", cert.issuer);
-                            println!("  Expires  : {} ({} days)", cert.not_after, cert.days_until_expiry);
+                            match cert.days_until_expiry {
+                                Some(d) => println!("  Expires  : {} ({} days)", cert.not_after, d),
+                                None    => println!("  Expires  : {} (unparseable date)", cert.not_after),
+                            }
                             println!("  Key      : {} {:?} bits", cert.key_type, cert.key_bits);
                             println!("  SigAlg   : {}", cert.signature_algorithm);
                             if !cert.sans.is_empty() {
