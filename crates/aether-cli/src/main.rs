@@ -8964,6 +8964,45 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QueryContextWindowSize => {
+                    let model = &session.config.model;
+                    let window = aether_core::compaction::context_window_for_model(model);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Context window for '{model}': {window} tokens."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryHistoryTotalBytes => {
+                    let bytes: usize = session.history.iter().map(|item| match item {
+                        aether_core::context::ConversationItem::User(s) => s.len(),
+                        aether_core::context::ConversationItem::Assistant { text, tool_uses } => {
+                            text.as_deref().map(|s| s.len()).unwrap_or(0)
+                                + tool_uses.iter().map(|t| t.name.len() + t.input.to_string().len()).sum::<usize>()
+                        }
+                        aether_core::context::ConversationItem::ToolResults(r) => {
+                            r.iter().map(|t| t.content.len()).sum()
+                        }
+                    }).sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "History total text: ~{} KB ({bytes} bytes).", bytes / 1024
+                    )));
+                    continue;
+                }
+                UiCommand::QueryStickyContextTop => {
+                    match session.sticky_context.first() {
+                        Some(entry) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Sticky[0]: {}", entry.chars().take(200).collect::<String>()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Sticky context: empty.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryToolCallsThisTurn => {
                     let used = session.tool_call_budget;
                     let max = session.config.max_tool_calls_per_turn;
@@ -36290,6 +36329,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/context-window-size" => {
+                                    if _ctx.send(UiCommand::QueryContextWindowSize).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-total-bytes" => {
+                                    if _ctx.send(UiCommand::QueryHistoryTotalBytes).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/sticky-context-top" => {
+                                    if _ctx.send(UiCommand::QueryStickyContextTop).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -37207,6 +37261,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-calls-this-turn",
                             "/history-first-tool",
                             "/plan-recent-blocks",
+                            "/context-window-size",
+                            "/history-total-bytes",
+                            "/sticky-context-top",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

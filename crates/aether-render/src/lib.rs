@@ -1221,6 +1221,12 @@ pub enum UiCommand {
     QueryHistoryFirstTool,
     /// Show the 5 most recently recorded plan block types.
     QueryPlanRecentBlocks,
+    /// Show model context window size in tokens.
+    QueryContextWindowSize,
+    /// Show total byte size of all history text content.
+    QueryHistoryTotalBytes,
+    /// Show the first sticky context entry.
+    QueryStickyContextTop,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
