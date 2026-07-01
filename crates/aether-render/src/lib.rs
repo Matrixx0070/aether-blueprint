@@ -1725,6 +1725,12 @@ pub enum UiCommand {
     QueryBookmarkLabelMinLen,
     /// Show the shortest session note text.
     QuerySessionNoteTextMinLen,
+    /// Show the tool with the highest ok-call count.
+    QueryToolCallOkMax,
+    /// Show the tool with the highest error-call count.
+    QueryToolCallErrMax,
+    /// Show the count of defined prompt macros.
+    QueryPromptMacroCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
