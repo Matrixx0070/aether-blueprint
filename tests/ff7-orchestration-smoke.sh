@@ -16,9 +16,16 @@ OUT=$(mktemp /tmp/ff7-smoke-XXXX.log)
 
 PROMPT='Audit this codebase for release-blocking issues. Dispatch parallel Agent sub-agents to cover: dependencies+build config, CI+ops, and runtime error handling. Then merge their findings into a top-5 list. Be thorough.'
 
-cd "$TARGET"
-printf '%s\n/exit\n' "$PROMPT" | timeout 900 "$AETHER" >"$OUT" 2>&1
-rc=$?
+# Replay mode: FF7_REPLAY_LOG=<path> re-runs the assertions against a
+# previously captured log instead of burning another live audit run.
+if [ -n "${FF7_REPLAY_LOG:-}" ]; then
+  OUT="$FF7_REPLAY_LOG"
+  rc=0
+else
+  cd "$TARGET"
+  printf '%s\n/exit\n' "$PROMPT" | timeout 900 "$AETHER" >"$OUT" 2>&1
+  rc=$?
+fi
 
 echo "--- exit code: $rc (124 = wedge/timeout) ---"
 tail -5 "$OUT"
@@ -32,7 +39,8 @@ if [ "$rc" -eq 124 ]; then
   echo "FAIL: REPL wedged (timeout)"
   fail=1
 fi
-agent_calls=$(grep -c '\[tool\] Agent' "$OUT" || true)
+# Strip ANSI color codes first — the REPL colorizes "[tool]".
+agent_calls=$(sed 's/\x1b\[[0-9;]*m//g' "$OUT" | grep -c '\[tool\] Agent' || true)
 echo "Agent dispatches observed: $agent_calls"
 if [ "$agent_calls" -lt 2 ]; then
   echo "FAIL: fewer than 2 parallel Agent dispatches — bug path not exercised"

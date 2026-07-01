@@ -1,6 +1,6 @@
 [package]
 name = "aether-license"
-version = "0.36.0"
+version = "0.37.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "SPDX license compatibility checker: parses Cargo.lock, flags GPL/AGPL conflicts with permissive code"

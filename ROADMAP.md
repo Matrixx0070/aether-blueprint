@@ -1076,11 +1076,38 @@ cred/scope-blocked carry-forward.
 **v0.35.0 ship metadata:** see Plan FF's STATUS row backfill + tag
 v0.35.0.
 
-## v0.36 — next (Plan FF draft)
+## v0.36 — security-crate tiers 31-45 + mock→real sweep — shipped 2026-07-01
+
+Shipped OUTSIDE the plan-letter cadence as an autonomous tiers build
+(run 28548024257 green, release published + cosign-verified):
+
+- 14 new production crates (aether-deps-reach / taint / triage /
+  patch / ebpf / netwatch / drift / semgrep-gen / explain / baseline
+  / pr-bot / policy / report / license) wired into aether-cli; 115
+  new tests. Live-verified: `aether license` (58 packages) and
+  `aether taint` (5 CWE flows).
+- Post-tag commit cfc2673: mock threat-intel feeds → real
+  VirusTotal/URLHaus/ThreatFox/Shodan/CIRCL APIs; fake TPM
+  attestation → real tpm2-tools invocation (ships in v0.37).
+
+## v0.37 — dedicated OIDC mTLS plan (Plan FF) — shipped 2026-07-01
 
 Plan FF re-frames as a dedicated **OIDC mTLS plan** (mirroring Plan
 Y's dedicated-SAML approach that successfully landed the full SAML
 pipeline in one 24h budget). One main theme + small filler.
+Shipped-as-built notes: FF3 uses rustls `Identity::from_pem`
+(key+cert one buffer) — `from_pkcs8_pem` is a native-tls-only API
+and this workspace pins rustls; there is no introspection endpoint
+in the codebase (the draft's mention was aspirational), so the two
+wired POST paths are token exchange + refresh grant (×3 call
+sites). New env knobs: `AETHER_OIDC_REQUIRE_CNF_X5T_S256=1`
+(advisory→hard cnf binding), `AETHER_OIDC_EXTRA_ROOT_CA_PEM`
+(private-CA trust without disabling verification). FF7's fix is a
+pre-flight sanitize-or-refuse pairing guard in agent_turn_inner —
+production self-heals (drop orphan tool_results / synthesize
+missing ones, stderr WARN per repair), `AETHER_DEBUG=1` hard-fails
+via the new `AgentError::Internal`. See STATUS FF1–FF8 rows for
+per-slice live-verify evidence.
 
 - **FF1 BYOC carry-forward retirement** — six plans of Bedrock+Vertex+
   Azure deferral is enough. Document the env vars + the

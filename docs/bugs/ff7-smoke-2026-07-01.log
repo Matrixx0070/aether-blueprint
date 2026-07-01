@@ -1,0 +1,101 @@
+aether — agentic CLI
+  model:   claude-opus-4-7
+  cwd:     /root/sudo-ai-v4  (main)
+  session: 19f200befe9-4a4c
+  type /help for commands, /sessions to browse history, Ctrl-D to exit
+
+aether › [2m…[0m[2Kaether › I'll dispatch three parallel sub-agents to audit different aspects of the codebase, then merge their findings.
+  [35m[tool][0m Bash cd /root/sudo-ai-v4 && pwd && ls -la | head -40
+     ✓ /root/sudo-ai-v4  total 1436
+
+aether › [2m…[0m[2K
+  [35m[tool][0m Bash cd /root/sudo-ai-v4 && ls -la | tail -40 && echo "---" && find . -maxdepth 2 -name "packag…
+     ✓ drwxr-xr-x  21 root root   4096 Jun 27 13:16 graphify-out  -rwxr-xr-x   1 root root  10656 Jun 28 04:23 install.sh
+
+aether › [2m…[0m[2Kaether › Node/pnpm monorepo. Now dispatching three parallel sub-agents.
+  [35m[tool][0m TodoWrite
+     ✓ 1. [~] Dispatch parallel sub-agents for 3 audit domains  2. [ ] Merge findings into top-5 release blockers
+
+aether › [2m…[0m[2K
+  [35m[tool][0m Agent Deps and build audit
+  [35m[tool][0m Agent CI and ops audit
+  [35m[tool][0m Agent Runtime error handling audit
+     ✓ Confirmed: `EXEC_APPROVAL_MODE=off` disables the exec approval gate entirely. That's the top finding. I have enough to synthesize the final report.  # Release-B
+     ✓ I have sufficient context to compile a prioritized findings list. Let me also quickly check the eval-gate workflow and Dockerfile/install.sh highlights via memo  
+     ✓ Not blocking — proceeding to the deliverable.  ---
+
+aether › [2m…[0m[2Kaether › All three sub-agents returned solid findings. Now merging into the top-5.
+  [35m[tool][0m TodoWrite
+     ✓ 1. [x] Dispatch parallel sub-agents for 3 audit domains  2. [~] Merge findings into top-5 release blockers
+
+aether › [2m…[0m[2Kaether › [1;4;36mRelease-Blocking Audit — `/root/sudo-ai-v4`[0m
+
+Three parallel sub-agents ran (deps+build, CI+ops, runtime error handling). 30+ raw findings; merged and re-ranked below by [1mactual release-risk[22m — probability × blast-radius × difficulty-to-detect-post-ship.
+
+[2m────────────────────────────────────────[0m
+
+[1;4;34m🔴 TOP 5 RELEASE BLOCKERS[0m
+
+[1;35m1. Approval gate disabled in shipped `.env`[0m
+[1mFile:[22m [38;5;117m/root/sudo-ai-v4/.env[0m → [38;5;117mEXEC_APPROVAL_MODE=off[0m
+Per [38;5;117msrc/core/security/approval/types.ts:44[0m, [38;5;117moff[0m means [3m"no gate, all commands run immediately."[23m This is the entire security posture of the product. [38;5;117m.gitignore[0m excludes [38;5;117m.env[0m from git, but a naïve [38;5;117mCOPY . .[0m in the Dockerfile will bake it into the image unless [38;5;117m.dockerignore[0m blocks it (unverified — must confirm).
+[1mFix:[22m delete/rename to [38;5;117m.env.local[0m, add [38;5;117m.env[0m (and [38;5;117m.env.*[0m except [38;5;117m.env.example[0m) to [38;5;117m.dockerignore[0m, and make the app refuse to boot when [38;5;117mEXEC_APPROVAL_MODE=off[0m in a non-dev NODE_ENV.
+
+[1;35m2. Blocking `execSync` on hot request path — kills concurrent sessions[0m
+[1mFile:[22m [38;5;117msrc/core/tools/builtin/browser/search.ts:122[0m
+Every browser-tool [38;5;117msearch[0m call stalls the entire Node event loop for up to 35 s. Under two concurrent Telegram/web-chat users, one search freezes both. Compounded by an unguarded [38;5;117mJSON.parse[0m on the child's stdout at [38;5;117msearch.ts:129[0m — malformed output crashes the tool with an unhandled rejection.
+[1mFix:[22m switch to [38;5;117mpromisify(execFile)[0m / streamed [38;5;117mspawn[0m, and wrap the parse in try/catch that falls back to the DDG backend.
+
+[1;35m3. Release workflow has no CI-passing precondition and neuters the supply-chain gate[0m
+[1mFile:[22m [38;5;117m.github/workflows/release.yml:9-12[0m, [38;5;117m:58-59[0m, [38;5;117m:77-85[0m
+Tag push triggers publish with no [38;5;117mworkflow_run[0m dependency on green [38;5;117mmain[0m. Inside the job, [38;5;117mpnpm audit --prod || true[0m silently accepts any advisory, and SBOM generation runs [38;5;117m|| true[0m while the artifact still uploads with [38;5;117mif-no-files-found: warn[0m — provenance is unenforced. Also no [38;5;117menvironment:[0m protection on the npm-publish job, so any compromised maintainer PAT publishes immediately.
+[1mFix:[22m gate on [38;5;117mworkflow_run: { workflows: [CI], types: [completed], conclusion: success }[0m; drop [38;5;117m|| true[0m from audit and SBOM steps; bind publish to a protected [38;5;117menvironment: npm-publish[0m with required reviewers.
+
+[1;35m4. Placeholder auth tokens in `.env.example` become real prod tokens[0m
+[1mFile:[22m [38;5;117m.env.example:7-8[0m — [38;5;117mWEB_CHAT_TOKEN=replace-with-strong-random-token[0m, [38;5;117mGATEWAY_TOKEN=…[0m
+Operators routinely [38;5;117mcp .env.example .env[0m and forget to rotate. The app happily accepts the placeholder as a valid Bearer token on gateway routes.
+[1mFix:[22m ship empty ([38;5;117mWEB_CHAT_TOKEN=[0m) and add a startup guard that refuses to bind the authed routes if the value equals the placeholder literal or is empty in production.
+
+[1;35m5. Silent failure modes in reply / degraded-mode paths (no operator signal)[0m
+Three linked issues, one class of bug:
+  • [38;5;117msrc/cli.ts:1713[0m — nested empty [38;5;117mcatch {}[0m on Telegram fallback reply. If both keyboard and plain send fail, user sees nothing, logs see nothing.
+  • [38;5;117msrc/cli.ts:2204,2210[0m — when [38;5;117mgatewayServer[0m isn't ready, web-chat is permanently disabled for the daemon's lifetime with only a [38;5;117mlog.warn[0m; [38;5;117m/health[0m still reports OK.
+  • [38;5;117msrc/cli.ts:4087-4092[0m — [38;5;117munhandledRejection[0m handler exists but only writes to [38;5;117mprocessLog[0m; no counter, no [38;5;117m/health[0m degradation, no alert surface.
+
+The daemon can run in a degraded state indefinitely with no operator-visible signal.
+[1mFix:[22m log both catch branches with context; expose a [38;5;117mstate.degraded[0m flag and [38;5;117mstate.unhandledRejections[0m counter through [38;5;117m/api/admin/health[0m so external monitors alarm on drift.
+
+[2m────────────────────────────────────────[0m
+
+[1;4;34mRunners-up (fix soon, not release-blocking)[0m
+
+| # | Issue | File |
+|---|---|---|
+| 6 | Missing [38;5;117mfetch[0m timeouts on stacked pollers | [38;5;117msrc/cli/commands/chat/hooks/useSkills.ts:54[0m, [38;5;117msrc/core/channels/telegram.ts:{116,156,198}[0m |
+| 7 | [38;5;117mprod-seal-flip.sh[0m "rollback" is just another reload — not a rollback | [38;5;117mscripts/prod-seal-flip.sh:210-235[0m |
+| 8 | Hardcoded seal [38;5;117m.so[0m SHA-256 with no rotation path | [38;5;117mscripts/prod-seal-flip.sh:48[0m |
+| 9 | No [38;5;117mtimeout-minutes[0m and no [38;5;117mconcurrency:[0m group on any CI job | [38;5;117m.github/workflows/ci.yml[0m |
+| 10 | Sync [38;5;117mreadFileSync[0m per SPA request | [38;5;117msrc/core/gateway/static-middleware.ts:143[0m |
+| 11 | [38;5;117mpackage.json[0m missing [38;5;117mengines[0m field → runtime drift | [38;5;117mpackage.json[0m |
+| 12 | [38;5;117mbubblewrap[0m installed unpinned via apt in CI | [38;5;117m.github/workflows/ci.yml[0m |
+
+[2m────────────────────────────────────────[0m
+
+[1;4;34mRecommended release gate (in order)[0m
+1. Delete/relocate [38;5;117m.env[0m, verify [38;5;117m.dockerignore[0m, add prod-mode assertion for [38;5;117mEXEC_APPROVAL_MODE[0m [1m(#1)[22m
+2. Rewrite [38;5;117mbrowser/search.ts[0m to async + guarded parse [1m(#2)[22m
+3. Add [38;5;117mworkflow_run[0m gate + drop [38;5;117m|| true[0m in [38;5;117mrelease.yml[0m + protected environment [1m(#3)[22m
+4. Empty out placeholder tokens + startup guard [1m(#4)[22m
+5. Wire degraded-mode signals into [38;5;117m/health[0m [1m(#5)[22m
+
+Then re-run: [38;5;117mpnpm build && pnpm test && pnpm audit --audit-level=high[0m in a clean checkout, and install [38;5;117mosv-scanner[0m to close the supply-chain audit gap the deps sub-agent flagged (OSV binary wasn't on PATH — the NpmAudit-only pass is incomplete).
+  [35m[tool][0m TodoWrite
+     ✓ 1. [x] Dispatch parallel sub-agents for 3 audit domains  2. [x] Merge findings into top-5 release blockers
+
+aether › [2m…[0m[2Kaether › Audit complete. Three sub-agents ran in parallel, producing 30+ findings across deps/build, CI/ops, and runtime error handling. Merged into a top-5 focused on [1mthings that will bite in production[22m (silent auth bypass, event-loop stalls, unenforced release gates, placeholder credentials becoming real ones, and silent degraded-mode).
+
+Two caveats worth flagging so you don't over-trust the report:
+  • [1mUNVERIFIED — Dockerfile-vs-[38;5;117m.env[0m interaction (blocker #1).[22m The deps sub-agent didn't confirm whether the current [38;5;117mDockerfile[0m COPY layers actually ship the [38;5;117m.env[0m. Worth a 30-second [38;5;117mdocker build . && docker run --rm <img> ls /app/.env[0m before releasing.
+  • [1mIncomplete supply-chain scan.[22m [38;5;117mosv-scanner[0m wasn't on PATH; only [38;5;117mnpm audit[0m ran (0 advisories). Install it and re-run before cutting the tag.
+  [tokens in=91389 out=5662 13.9 t/s cost~$1.7955 ctx=46%]
+  [context] ~91k input tokens used. `/compact` is available if the context grows too large.
