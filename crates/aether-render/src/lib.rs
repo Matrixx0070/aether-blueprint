@@ -1977,6 +1977,12 @@ pub enum UiCommand {
     QueryEnvVarFirst,
     /// Show the last key in session_env.
     QueryEnvVarLast,
+    /// Show the average label length of bookmarks.
+    QueryBookmarkAvgLabelLen,
+    /// Show the average ok count across all plan tool stats.
+    QueryPlanToolStatAvgOk,
+    /// Show the average err count across all plan tool stats.
+    QueryPlanToolStatAvgErr,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

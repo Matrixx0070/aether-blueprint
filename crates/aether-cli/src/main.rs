@@ -13510,6 +13510,48 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryBookmarkAvgLabelLen => {
+                    let n = session.bookmarks.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Bookmark avg label len: no bookmarks.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.bookmarks.iter().map(|(_, _, label)| label.len()).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Bookmark avg label len: {:.1}", total as f64 / n as f64
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanToolStatAvgOk => {
+                    let n = session.plan.tool_call_stats.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Plan tool stat avg ok: no stats.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.plan.tool_call_stats.values().map(|(ok, _)| ok).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Plan tool stat avg ok count: {:.1}", total as f64 / n as f64
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanToolStatAvgErr => {
+                    let n = session.plan.tool_call_stats.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Plan tool stat avg err: no stats.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.plan.tool_call_stats.values().map(|(_, err)| err).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Plan tool stat avg err count: {:.1}", total as f64 / n as f64
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -42927,6 +42969,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/bookmark-avg-label-len" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkAvgLabelLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-tool-stat-avg-ok" => {
+                                    if _ctx.send(UiCommand::QueryPlanToolStatAvgOk).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-tool-stat-avg-err" => {
+                                    if _ctx.send(UiCommand::QueryPlanToolStatAvgErr).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -44247,6 +44304,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/auto-tag-rule-avg-tag-len",
                             "/env-var-first",
                             "/env-var-last",
+                            "/bookmark-avg-label-len",
+                            "/plan-tool-stat-avg-ok",
+                            "/plan-tool-stat-avg-err",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
