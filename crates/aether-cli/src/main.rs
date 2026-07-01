@@ -11192,6 +11192,56 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryTurnCostFirst => {
+                    match session.turn_cost_log.first() {
+                        Some((turn_idx, tokens_in, tokens_out, cost)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Turn cost[0] (of {}): turn={turn_idx} in={tokens_in} out={tokens_out} cost=${cost:.6}",
+                                session.turn_cost_log.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Turn cost log: empty.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPendingReminderFirst => {
+                    match session.pending_reminders.first() {
+                        Some(r) => {
+                            let preview = r.body.chars().take(120).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Pending reminder[0] (of {}): {preview}",
+                                session.pending_reminders.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Pending reminders: none.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryVerifierRuleFirst => {
+                    match session.verifier.gate.rules.first() {
+                        Some(cr) => {
+                            let desc = cr.rule.description.chars().take(100).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Verifier rule[0] (of {}): id='{}' — {desc}",
+                                session.verifier.gate.rules.len(), cr.rule.id
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Verifier rules: none loaded.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySnapshotFirst => {
                     let mut keys: Vec<_> = session.saved_snapshots.keys().collect();
                     keys.sort();
@@ -38504,6 +38554,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/turn-cost-first" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/pending-reminder-first" => {
+                                    if _ctx.send(UiCommand::QueryPendingReminderFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-rule-first" => {
+                                    if _ctx.send(UiCommand::QueryVerifierRuleFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -39554,6 +39619,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/snapshot-first",
                             "/tool-sig-first",
                             "/verifier-finding-first",
+                            "/turn-cost-first",
+                            "/pending-reminder-first",
+                            "/verifier-rule-first",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

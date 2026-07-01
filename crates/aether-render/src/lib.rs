@@ -1437,6 +1437,12 @@ pub enum UiCommand {
     QueryToolSigFirst,
     /// Show the first verifier finding from last_verification.
     QueryVerifierFindingFirst,
+    /// Show the first turn cost log entry.
+    QueryTurnCostFirst,
+    /// Show the first pending reminder body.
+    QueryPendingReminderFirst,
+    /// Show the first verifier gate rule id and description.
+    QueryVerifierRuleFirst,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
