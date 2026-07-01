@@ -11989,6 +11989,35 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryPlanToolCallErrTotal => {
+                    let total: usize = session.plan.tool_call_stats.values().map(|(_, err)| *err).sum();
+                    let tools = session.plan.tool_call_stats.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan tool call ERR total: {total} failed call(s) across {tools} tool(s)."
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlanToolStatCount => {
+                    let n = session.plan.tool_call_stats.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan tool stat count: {n} tool(s) tracked."
+                    )));
+                    continue;
+                }
+                UiCommand::QuerySessionNoteOldest => {
+                    match session.session_notes.iter().min_by_key(|(_, ts)| *ts) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Session notes: none.".to_string())); }
+                        Some((text, ts)) => {
+                            let preview = text.chars().take(60).collect::<String>();
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Oldest session note (ts={ts}): '{}{}' (of {})",
+                                preview, if text.len() > 60 { "…" } else { "" },
+                                session.session_notes.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -40686,6 +40715,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/plan-tool-call-err-total" => {
+                                    if _ctx.send(UiCommand::QueryPlanToolCallErrTotal).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-tool-stat-count" => {
+                                    if _ctx.send(UiCommand::QueryPlanToolStatCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/session-note-oldest" => {
+                                    if _ctx.send(UiCommand::QuerySessionNoteOldest).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -41862,6 +41906,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-output-limit-min",
                             "/tool-output-hist-diff-count",
                             "/plan-tool-call-ok-total",
+                            "/plan-tool-call-err-total",
+                            "/plan-tool-stat-count",
+                            "/session-note-oldest",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

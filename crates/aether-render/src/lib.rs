@@ -1689,6 +1689,12 @@ pub enum UiCommand {
     QueryToolOutputHistDiffCount,
     /// Show total successful tool calls across all tools in the plan stats.
     QueryPlanToolCallOkTotal,
+    /// Show total failed tool calls across all tools in the plan stats.
+    QueryPlanToolCallErrTotal,
+    /// Show count of tools tracked in plan stats.
+    QueryPlanToolStatCount,
+    /// Show the oldest session note (earliest timestamp).
+    QuerySessionNoteOldest,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
