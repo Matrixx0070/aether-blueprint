@@ -2511,6 +2511,12 @@ pub enum UiCommand {
     QueryToolOutputHistDeltaMax,
     /// Show the average key length in tool_output_history.
     QueryToolOutputHistKeyAvgLen,
+    /// Show the total chars across all keys in tool_output_history.
+    QueryToolOutputHistKeyTotalChars,
+    /// Show the min absolute length delta between curr and prev in tool_output_history.
+    QueryToolOutputHistDeltaMin,
+    /// Show the average absolute length delta between curr and prev in tool_output_history.
+    QueryToolOutputHistDeltaAvg,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
