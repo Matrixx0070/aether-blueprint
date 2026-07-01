@@ -2385,6 +2385,12 @@ pub enum UiCommand {
     QueryPlanToolStatLastErr,
     /// Show the block count for the last plan block count entry.
     QueryPlanBlockCountLast,
+    /// Show the last turn index in the last plan block turns entry.
+    QueryPlanBlockTurnsLast,
+    /// Show the timestamp of the first session note.
+    QuerySessionNoteFirstTs,
+    /// Show the timestamp of the last session note.
+    QuerySessionNoteLastTs,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
