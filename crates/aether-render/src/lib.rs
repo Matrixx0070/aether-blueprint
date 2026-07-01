@@ -1095,6 +1095,12 @@ pub enum UiCommand {
     QueryPlanBlockList,
     /// Show diff (prev vs current) for a specific tool output.
     QueryToolOutputDiff(String),
+    /// Show whether pause-now flag is active.
+    QueryPauseNowShow,
+    /// Show character length of current plan goal.
+    QueryPlanGoalLen,
+    /// Show whether the 60% context warning has fired.
+    QueryContextWarnPct,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

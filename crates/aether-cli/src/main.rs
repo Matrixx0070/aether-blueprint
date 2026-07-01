@@ -8964,6 +8964,41 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QueryPauseNowShow => {
+                    let active = session.pause_now;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Pause-now: {} — {}",
+                        if active { "ACTIVE" } else { "inactive" },
+                        if active { "agent will pause before next AI call." } else { "use /pause-now to activate." }
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlanGoalLen => {
+                    match &session.plan.goal {
+                        Some(g) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Plan goal: {} chars — preview: {}",
+                                g.len(),
+                                g.chars().take(100).collect::<String>()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Plan goal: not set. Use /plan-goal <text> to set one.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryContextWarnPct => {
+                    let warned = session.context_warned_60pct;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Context 60% warning: {} (fired={}). Current fill: see /context-fill-pct.",
+                        if warned { "has fired this session" } else { "not yet fired" },
+                        warned
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarCount => {
                     let n = session.session_vars.len();
                     let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
@@ -35010,6 +35045,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/pause-now-show" => {
+                                    if _ctx.send(UiCommand::QueryPauseNowShow).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-goal-len" => {
+                                    if _ctx.send(UiCommand::QueryPlanGoalLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/context-warn-pct" => {
+                                    if _ctx.send(UiCommand::QueryContextWarnPct).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -35864,6 +35914,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-var-count",
                             "/plan-block-list",
                             "/tool-output-diff ",
+                            "/pause-now-show",
+                            "/plan-goal-len",
+                            "/context-warn-pct",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
