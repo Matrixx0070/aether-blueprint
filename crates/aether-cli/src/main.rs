@@ -17163,6 +17163,36 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryErrorPlaybookPatTotalChars => {
+                    let total: usize = session.error_playbook.iter()
+                        .map(|(pat, _)| pat.len())
+                        .sum();
+                    let n = session.error_playbook.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Error playbook pattern total chars: {total} ({n} entries)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryAutoTagRulePatTotalChars => {
+                    let total: usize = session.auto_tag_rules.iter()
+                        .map(|(pat, _)| pat.len())
+                        .sum();
+                    let n = session.auto_tag_rules.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Auto-tag rule pattern total chars: {total} ({n} rules)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryAutoTagRuleTagTotalChars => {
+                    let total: usize = session.auto_tag_rules.iter()
+                        .map(|(_, tag)| tag.len())
+                        .sum();
+                    let n = session.auto_tag_rules.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Auto-tag rule tag total chars: {total} ({n} rules)"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -48665,6 +48695,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/error-playbook-pat-total-chars" => {
+                                    if _ctx.send(UiCommand::QueryErrorPlaybookPatTotalChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/auto-tag-rule-pat-total-chars" => {
+                                    if _ctx.send(UiCommand::QueryAutoTagRulePatTotalChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/auto-tag-rule-tag-total-chars" => {
+                                    if _ctx.send(UiCommand::QueryAutoTagRuleTagTotalChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -50402,6 +50447,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/saved-snapshot-plan-text-min-len",
                             "/progress-item-done-rate",
                             "/error-playbook-hint-total-chars",
+                            "/error-playbook-pat-total-chars",
+                            "/auto-tag-rule-pat-total-chars",
+                            "/auto-tag-rule-tag-total-chars",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

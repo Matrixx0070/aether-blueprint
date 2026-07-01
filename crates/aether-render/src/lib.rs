@@ -2811,6 +2811,12 @@ pub enum UiCommand {
     QueryProgressItemDoneRate,
     /// Total chars across all error_playbook hint strings.
     QueryErrorPlaybookHintTotalChars,
+    /// Total chars across all error_playbook pattern strings.
+    QueryErrorPlaybookPatTotalChars,
+    /// Total chars across all auto_tag_rules pattern fields.
+    QueryAutoTagRulePatTotalChars,
+    /// Total chars across all auto_tag_rules tag fields.
+    QueryAutoTagRuleTagTotalChars,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
