@@ -1233,6 +1233,12 @@ pub enum UiCommand {
     QueryBookmarkByLabel(String),
     /// Show count of recorded turns for a specific plan block type.
     QueryPlanBlockAt(String),
+    /// Show average LLM call latency in milliseconds across session.
+    QueryLlmMsAvg,
+    /// Show a 150-char preview of the current plan text.
+    QueryPlanTextPreview,
+    /// Show the rule ID of the first blocking verifier finding.
+    QueryVerifierLastRule,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

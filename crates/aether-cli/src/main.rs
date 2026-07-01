@@ -8964,6 +8964,63 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QueryLlmMsAvg => {
+                    let turns = session.turn_cost_log.len();
+                    let total_ms = session.llm_ms_total;
+                    if turns == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "LLM ms avg: no turns recorded yet.".to_string()
+                        ));
+                    } else {
+                        let avg = total_ms / turns as u64;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "LLM avg latency: {avg}ms over {turns} turns (total: {total_ms}ms)."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanTextPreview => {
+                    let text = &session.plan.text;
+                    if text.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Plan text: empty.".to_string()
+                        ));
+                    } else {
+                        let preview = text.chars().take(150).collect::<String>();
+                        let more = if text.chars().count() > 150 { "…" } else { "" };
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Plan text preview ({} chars):\n{preview}{more}", text.len()
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryVerifierLastRule => {
+                    match &session.last_verification {
+                        Some(v) if !v.blocked_reasons.is_empty() => {
+                            let f = &v.blocked_reasons[0];
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Last blocking rule: '{}' [{:?}]", f.rule_id, f.severity
+                            )));
+                        }
+                        Some(v) if !v.findings.is_empty() => {
+                            let f = &v.findings[0];
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Last finding (non-blocking): '{}' [{:?}]", f.rule_id, f.severity
+                            )));
+                        }
+                        Some(_) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Last verification: no findings.".to_string()
+                            ));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "No verification result yet.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryAutoTagRuleAt(idx) => {
                     match session.auto_tag_rules.get(idx) {
                         Some((pattern, tag)) => {
@@ -36413,6 +36470,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/llm-ms-avg" => {
+                                    if _ctx.send(UiCommand::QueryLlmMsAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-text-preview" => {
+                                    if _ctx.send(UiCommand::QueryPlanTextPreview).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verifier-last-rule" => {
+                                    if _ctx.send(UiCommand::QueryVerifierLastRule).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -37336,6 +37408,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/auto-tag-rule-at ",
                             "/bookmark-by-label ",
                             "/plan-block-at ",
+                            "/llm-ms-avg",
+                            "/plan-text-preview",
+                            "/verifier-last-rule",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
