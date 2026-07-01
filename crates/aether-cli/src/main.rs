@@ -8964,6 +8964,57 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QuerySavedSnapshotList => {
+                    let snaps = &session.saved_snapshots;
+                    if snaps.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Saved snapshots: none. Use /snapshot <name> to save one.".to_string()
+                        ));
+                    } else {
+                        let mut names: Vec<_> = snaps.keys().collect();
+                        names.sort();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Saved snapshots ({}):\n  {}",
+                            names.len(),
+                            names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnCostAvg => {
+                    let log = &session.turn_cost_log;
+                    if log.is_empty() {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Turn cost avg: no turns recorded yet.".to_string()
+                        ));
+                    } else {
+                        let total: f64 = log.iter().map(|(_, _, _, c)| c).sum();
+                        let avg = total / log.len() as f64;
+                        let min = log.iter().map(|(_, _, _, c)| *c).fold(f64::INFINITY, f64::min);
+                        let max = log.iter().map(|(_, _, _, c)| *c).fold(0.0_f64, f64::max);
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Turn cost: avg=${avg:.6}, min=${min:.6}, max=${max:.6} over {} turns.",
+                            log.len()
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanErrorTool => {
+                    match &session.plan.last_error_tool {
+                        Some(tool) => {
+                            let msg = session.plan.last_error_text.as_deref().unwrap_or("(no message)");
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Last plan error tool: '{tool}' — {}", msg.chars().take(120).collect::<String>()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Plan last error: none recorded.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryAutoCompactEnabled => {
                     let enabled = session.auto_compact_on_stuck;
                     let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
@@ -35448,6 +35499,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/saved-snapshot-list" => {
+                                    if _ctx.send(UiCommand::QuerySavedSnapshotList).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-cost-avg" => {
+                                    if _ctx.send(UiCommand::QueryTurnCostAvg).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-error-tool" => {
+                                    if _ctx.send(UiCommand::QueryPlanErrorTool).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -36326,6 +36392,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/auto-compact-enabled",
                             "/verifier-rules-list",
                             "/plan-tool-block-turns ",
+                            "/saved-snapshot-list",
+                            "/turn-cost-avg",
+                            "/plan-error-tool",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

@@ -1143,6 +1143,12 @@ pub enum UiCommand {
     QueryVerifierRulesList,
     /// Show block_turns for a specific plan block type (by name).
     QueryPlanToolBlockTurns(String),
+    /// List names of all saved session snapshots.
+    QuerySavedSnapshotList,
+    /// Show average cost per turn (alias for session-cost-per-turn with turn breakdown).
+    QueryTurnCostAvg,
+    /// Show which tool triggered last plan error.
+    QueryPlanErrorTool,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
