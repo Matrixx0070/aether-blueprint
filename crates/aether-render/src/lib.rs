@@ -2121,6 +2121,12 @@ pub enum UiCommand {
     QueryPlanBlockTurnsMaxLen,
     /// Show the avg key length in session aliases.
     QueryAliasAvgKeyLen,
+    /// Show the avg value length in session aliases.
+    QueryAliasAvgValLen,
+    /// Show the min turns in a single block_turns entry.
+    QueryPlanBlockTurnsMinLen,
+    /// Show the max value in tool_output_limits.
+    QueryToolOutputLimitValMax,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
