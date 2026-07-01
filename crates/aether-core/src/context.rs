@@ -285,6 +285,147 @@ fn translate_history(items: &[ConversationItem]) -> Vec<Message> {
     out
 }
 
+/// FF7: pre-flight tool_use/tool_result pairing guard.
+///
+/// Anthropic rejects any request where a `tool_result` block's
+/// `tool_use_id` has no matching `tool_use` in the immediately
+/// preceding assistant message ("unexpected tool_use_id found in
+/// tool_result blocks", HTTP 400) — and equally where an assistant
+/// `tool_use` goes unanswered by the next message. A real-user session
+/// (2026-06-27, docs/bugs/orchestration-tool-use-id-mismatch.md)
+/// wedged the REPL on exactly this: parallel sub-agent dispatch left
+/// an unbalanced thread and every subsequent API call 400'd.
+///
+/// This walks the OUTGOING message list and repairs both defect
+/// shapes in place:
+///   1. orphan `tool_result` (no matching `tool_use` in the previous
+///      message) → block dropped; a placeholder Text block keeps the
+///      message non-empty when everything was dropped.
+///   2. unanswered `tool_use` (no matching `tool_result` in the next
+///      message) → a synthesized `is_error` tool_result is added
+///      (into the following tool-result message, or as a new user
+///      message when the dispatch was dangling at the end).
+///
+/// Returns one human-readable description per repair — empty means
+/// the thread was already balanced. Callers decide the posture:
+/// production logs the repairs and proceeds (self-heal, never wedge);
+/// `AETHER_DEBUG=1` escalates any repair to a hard error so the bug
+/// that produced the imbalance surfaces in development.
+pub fn sanitize_tool_pairing(messages: &mut Vec<Message>) -> Vec<String> {
+    use std::collections::HashSet;
+    let mut repairs: Vec<String> = Vec::new();
+
+    // Pass 1 — drop orphan tool_results.
+    for i in 0..messages.len() {
+        let prev_ids: HashSet<String> = if i == 0 {
+            HashSet::new()
+        } else {
+            messages[i - 1]
+                .content
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let msg = &mut messages[i];
+        let had_blocks = !msg.content.is_empty();
+        msg.content.retain(|b| match b {
+            ContentBlock::ToolResult { tool_use_id, .. } => {
+                let ok = prev_ids.contains(tool_use_id);
+                if !ok {
+                    repairs.push(format!(
+                        "dropped orphan tool_result `{tool_use_id}` at message {i} \
+                         (no matching tool_use in the previous message)"
+                    ));
+                }
+                ok
+            }
+            _ => true,
+        });
+        if had_blocks && msg.content.is_empty() {
+            msg.content.push(ContentBlock::Text {
+                text: "[unpaired tool results removed by the pre-flight repair]".into(),
+            });
+        }
+    }
+
+    // Pass 2 — synthesize missing tool_results for unanswered tool_uses.
+    let mut i = 0;
+    while i < messages.len() {
+        let pending: Vec<String> = if messages[i].role == Role::Assistant {
+            messages[i]
+                .content
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+                    _ => None,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if !pending.is_empty() {
+            let answered: HashSet<String> = messages
+                .get(i + 1)
+                .map(|m| {
+                    m.content
+                        .iter()
+                        .filter_map(|b| match b {
+                            ContentBlock::ToolResult { tool_use_id, .. } => {
+                                Some(tool_use_id.clone())
+                            }
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let missing: Vec<String> = pending
+                .into_iter()
+                .filter(|id| !answered.contains(id))
+                .collect();
+            if !missing.is_empty() {
+                let synthesized: Vec<ContentBlock> = missing
+                    .iter()
+                    .map(|id| ContentBlock::ToolResult {
+                        tool_use_id: id.clone(),
+                        content: "(tool result missing — synthesized by the \
+                                  pre-flight repair; the tool call did not \
+                                  produce a recorded result)"
+                            .into(),
+                        is_error: true,
+                    })
+                    .collect();
+                for id in &missing {
+                    repairs.push(format!(
+                        "synthesized missing tool_result for unanswered tool_use \
+                         `{id}` at message {i}"
+                    ));
+                }
+                let next_has_results = messages.get(i + 1).is_some_and(|m| {
+                    m.content
+                        .iter()
+                        .any(|b| matches!(b, ContentBlock::ToolResult { .. }))
+                });
+                if next_has_results {
+                    messages[i + 1].content.extend(synthesized);
+                } else {
+                    messages.insert(
+                        i + 1,
+                        Message {
+                            role: Role::User,
+                            content: synthesized,
+                        },
+                    );
+                }
+            }
+        }
+        i += 1;
+    }
+    repairs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,5 +459,110 @@ mod tests {
                 "KERNEL_SYSTEM_PROMPT missing ACTION-FIRST fragment: {fragment:?}"
             );
         }
+    }
+
+    // ── FF7 sanitize_tool_pairing ────────────────────────────────────
+
+    fn tu(id: &str) -> ContentBlock {
+        ContentBlock::ToolUse { id: id.into(), name: "Bash".into(), input: serde_json::json!({}) }
+    }
+    fn tr(id: &str) -> ContentBlock {
+        ContentBlock::ToolResult { tool_use_id: id.into(), content: "ok".into(), is_error: false }
+    }
+    fn msg(role: Role, content: Vec<ContentBlock>) -> Message {
+        Message { role, content }
+    }
+
+    /// FF7: a balanced thread passes through untouched, zero repairs.
+    #[test]
+    fn ff7_balanced_thread_untouched() {
+        let mut m = vec![
+            msg(Role::User, vec![ContentBlock::Text { text: "go".into() }]),
+            msg(Role::Assistant, vec![tu("a"), tu("b")]),
+            msg(Role::User, vec![tr("a"), tr("b")]),
+        ];
+        let before = m.clone();
+        let repairs = sanitize_tool_pairing(&mut m);
+        assert!(repairs.is_empty(), "no repairs expected: {repairs:?}");
+        assert_eq!(format!("{m:?}"), format!("{before:?}"), "thread unchanged");
+    }
+
+    /// FF7: an orphan tool_result (the field-incident shape — a
+    /// sub-agent-internal id leaked into the thread) is dropped and
+    /// reported; the paired result survives.
+    #[test]
+    fn ff7_orphan_tool_result_dropped() {
+        let mut m = vec![
+            msg(Role::User, vec![ContentBlock::Text { text: "go".into() }]),
+            msg(Role::Assistant, vec![tu("parent-1")]),
+            msg(Role::User, vec![tr("parent-1"), tr("subagent-internal-9")]),
+        ];
+        let repairs = sanitize_tool_pairing(&mut m);
+        assert_eq!(repairs.len(), 1, "one repair: {repairs:?}");
+        assert!(repairs[0].contains("subagent-internal-9"));
+        let ids: Vec<&str> = m[2].content.iter().filter_map(|b| match b {
+            ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+            _ => None,
+        }).collect();
+        assert_eq!(ids, vec!["parent-1"], "only the paired result survives");
+    }
+
+    /// FF7: a message that was ONLY orphan results gets a placeholder
+    /// Text block instead of going out empty (empty content is also a
+    /// 400 at the API).
+    #[test]
+    fn ff7_all_orphans_leaves_placeholder() {
+        let mut m = vec![
+            msg(Role::User, vec![ContentBlock::Text { text: "go".into() }]),
+            msg(Role::Assistant, vec![ContentBlock::Text { text: "hm".into() }]),
+            msg(Role::User, vec![tr("ghost-1"), tr("ghost-2")]),
+        ];
+        let repairs = sanitize_tool_pairing(&mut m);
+        assert_eq!(repairs.len(), 2, "{repairs:?}");
+        assert_eq!(m[2].content.len(), 1);
+        assert!(matches!(&m[2].content[0], ContentBlock::Text { .. }));
+    }
+
+    /// FF7: an unanswered tool_use mid-thread (the budget-exhausted /
+    /// error sub-agent path when the result never landed) gets a
+    /// synthesized is_error tool_result added to the following
+    /// tool-result message.
+    #[test]
+    fn ff7_unanswered_tool_use_synthesized_into_next() {
+        let mut m = vec![
+            msg(Role::User, vec![ContentBlock::Text { text: "go".into() }]),
+            msg(Role::Assistant, vec![tu("a"), tu("b"), tu("c")]),
+            msg(Role::User, vec![tr("a"), tr("c")]), // "b" never answered
+        ];
+        let repairs = sanitize_tool_pairing(&mut m);
+        assert_eq!(repairs.len(), 1, "{repairs:?}");
+        assert!(repairs[0].contains("`b`"), "{repairs:?}");
+        let b = m[2].content.iter().find_map(|blk| match blk {
+            ContentBlock::ToolResult { tool_use_id, is_error, content } if tool_use_id == "b" =>
+                Some((*is_error, content.clone())),
+            _ => None,
+        }).expect("synthesized result for b present");
+        assert!(b.0, "synthesized result is is_error");
+        assert!(b.1.contains("synthesized"));
+    }
+
+    /// FF7: a dangling dispatch at the very end of the thread (parent
+    /// emitted tool_uses, nothing came back at all) gets a whole new
+    /// user message with synthesized results.
+    #[test]
+    fn ff7_dangling_dispatch_gets_new_message() {
+        let mut m = vec![
+            msg(Role::User, vec![ContentBlock::Text { text: "go".into() }]),
+            msg(Role::Assistant, vec![tu("x"), tu("y")]),
+        ];
+        let repairs = sanitize_tool_pairing(&mut m);
+        assert_eq!(repairs.len(), 2, "{repairs:?}");
+        assert_eq!(m.len(), 3, "a new message was inserted");
+        assert_eq!(m[2].role, Role::User);
+        let ids: Vec<&str> = m[2].content.iter().filter_map(|b| match b {
+            ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+            _ => None,
+        }).collect();
+        assert_eq!(ids, vec!["x", "y"]);
     }
 }

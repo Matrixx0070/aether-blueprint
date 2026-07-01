@@ -55075,6 +55075,11 @@ fn session_load(path: &std::path::Path) -> Vec<aether_render::ChatLine> {
 fn explain_agent_error(e: &aether_core::AgentError) -> String {
     match e {
         aether_core::AgentError::Llm(inner) => inner.actionable(),
+        aether_core::AgentError::Internal(msg) => format!(
+            "internal invariant failure: {msg}\n  This is an aether bug — \
+             re-run without AETHER_DEBUG=1 to let the pre-flight repair \
+             self-heal, and please file the message above."
+        ),
     }
 }
 
@@ -68775,5 +68780,85 @@ BBBB-SECOND-CERT
         assert_eq!(decoded, payload);
         assert!(decode_jwt_payload_json("no-dots").is_err());
     }
+    // ── FF7 sub-agent termination paths ──────────────────────────────
+    // The executor pairs whatever AgentTool::run returns (Ok or Err)
+    // with the PARENT dispatch tool_use_id, so the contract under test
+    // is: every termination path returns exactly one Ok/Err whose text
+    // is the sub-agent's FINAL result — never a sub-agent-internal
+    // tool_use/tool_result structure that could leak into the parent
+    // thread.
+
+    fn ff7_agent_tool(llm: Arc<aether_core::mock::MockLlmProvider>) -> AgentTool {
+        AgentTool::new(
+            llm,
+            "mock-model".to_string(),
+            aether_perm::PermissionMode::BypassPermissions,
+        )
+    }
+
+    /// FF7 happy path: sub-agent answers with text → Ok(final text).
+    #[tokio::test]
+    async fn ff7_subagent_happy_path_returns_final_text() {
+        use aether_tools::Tool as _;
+        let llm = Arc::new(MockLlmProvider::new());
+        llm.push(MessagesResponse {
+            content: vec![ContentBlock::Text { text: "the audit found 3 issues".into() }],
+            stop_reason: StopReason::EndTurn,
+            usage: None,
+        });
+        let tool = ff7_agent_tool(Arc::clone(&llm));
+        let out = tool
+            .run(serde_json::json!({"prompt": "audit"}))
+            .await
+            .expect("happy path returns Ok");
+        assert_eq!(out, "the audit found 3 issues");
+    }
+
+    /// FF7 budget-exhausted path: the sub-agent burns all its turns on
+    /// tool calls and never produces a final reply → Ok with the
+    /// explicit exhaustion sentinel (which the executor then pairs with
+    /// the parent dispatch id) — NOT an error, NOT internal history.
+    #[tokio::test]
+    async fn ff7_subagent_budget_exhausted_returns_sentinel() {
+        use aether_tools::Tool as _;
+        let llm = Arc::new(MockLlmProvider::new());
+        // Every scripted turn requests a nonexistent tool → error result
+        // → ContinueImmediately, until SUB_AGENT_MAX_TURNS runs out.
+        for i in 0..SUB_AGENT_MAX_TURNS {
+            llm.push(MessagesResponse {
+                content: vec![ContentBlock::ToolUse {
+                    id: format!("internal-{i}"),
+                    name: "NoSuchTool".into(),
+                    input: serde_json::json!({}),
+                }],
+                stop_reason: StopReason::ToolUse,
+                usage: None,
+            });
+        }
+        let tool = ff7_agent_tool(Arc::clone(&llm));
+        let out = tool
+            .run(serde_json::json!({"prompt": "loop forever"}))
+            .await
+            .expect("budget exhaustion is a clean Ok, not a thread-corrupting error");
+        assert_eq!(out, "(sub-agent exhausted turn budget without final reply)");
+        assert_eq!(llm.call_count(), SUB_AGENT_MAX_TURNS, "used every turn");
+    }
+
+    /// FF7 internal-error path: the sub-agent's LLM dies mid-run → a
+    /// single Err naming the sub-agent (the executor converts it to
+    /// is_error=true content under the parent dispatch id).
+    #[tokio::test]
+    async fn ff7_subagent_internal_error_returns_err() {
+        use aether_tools::Tool as _;
+        let llm = Arc::new(MockLlmProvider::new()); // empty script → transport error
+        let tool = ff7_agent_tool(llm);
+        let err = tool
+            .run(serde_json::json!({"prompt": "boom"}))
+            .await
+            .expect_err("dead LLM must surface as Err");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("sub-agent"), "error names the sub-agent: {msg}");
+    }
 }
+
 

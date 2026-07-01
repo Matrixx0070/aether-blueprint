@@ -93,6 +93,12 @@ pub enum TurnOutcome {
 pub enum AgentError {
     #[error("llm: {0}")]
     Llm(#[from] LlmError),
+    /// FF7: an internal invariant broke (e.g. the pre-flight
+    /// tool_use/tool_result pairing check under AETHER_DEBUG=1).
+    /// Surfaced as a structured error INSTEAD of letting Anthropic
+    /// reject the wire call with an opaque 400.
+    #[error("internal: {0}")]
+    Internal(String),
 }
 
 pub struct Session {
@@ -820,6 +826,25 @@ async fn agent_turn_inner(
         plan_text.as_deref(),
     );
     session.last_assembly_telemetry = Some(telemetry);
+
+    // FF7: pre-flight pairing guard — repair (or, under AETHER_DEBUG=1,
+    // refuse) any tool_use/tool_result imbalance BEFORE the wire call.
+    // An unbalanced thread otherwise 400s at Anthropic and, in the
+    // 2026-06-27 field incident, wedged the REPL main loop with no
+    // actionable error. Applies to sub-agent sessions too — they run
+    // this same code path.
+    let pairing_repairs = context::sanitize_tool_pairing(&mut req.messages);
+    if !pairing_repairs.is_empty() {
+        if std::env::var("AETHER_DEBUG").ok().as_deref() == Some("1") {
+            return Err(AgentError::Internal(format!(
+                "pre-flight tool pairing check failed (AETHER_DEBUG=1 hard mode): {}",
+                pairing_repairs.join("; ")
+            )));
+        }
+        for r in &pairing_repairs {
+            eprintln!("[preflight] WARN {r} — repaired before the API call (FF7)");
+        }
+    }
 
     // Inject extended thinking config when enabled. Tools must be empty while
     // thinking is active — the model cannot mix thinking + tool_use.
