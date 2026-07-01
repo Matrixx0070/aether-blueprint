@@ -2397,6 +2397,12 @@ pub enum UiCommand {
     QueryTurnCostLogLastCost,
     /// Show the input tokens for the first turn in turn_cost_log.
     QueryTurnCostLogFirstIn,
+    /// Show the input tokens for the last turn in turn_cost_log.
+    QueryTurnCostLogLastIn,
+    /// Show the output tokens for the first turn in turn_cost_log.
+    QueryTurnCostLogFirstOut,
+    /// Show the output tokens for the last turn in turn_cost_log.
+    QueryTurnCostLogLastOut,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
