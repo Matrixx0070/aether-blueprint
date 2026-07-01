@@ -1101,6 +1101,12 @@ pub enum UiCommand {
     QueryPlanGoalLen,
     /// Show whether the 60% context warning has fired.
     QueryContextWarnPct,
+    /// Count ToolResults items in conversation history.
+    QueryHistoryToolResultCount,
+    /// Count pending reminders queued for injection.
+    QueryPendingReminderCount,
+    /// List all tool names tracked in plan call stats.
+    QueryPlanToolNames,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
