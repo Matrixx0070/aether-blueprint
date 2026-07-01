@@ -8964,6 +8964,45 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     ));
                     continue;
                 }
+                UiCommand::QuerySessionCostAlert => {
+                    let threshold = session.cost_alert_usd;
+                    let fired = session.cost_alert_fired;
+                    if threshold == 0.0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Cost alert: not set. Use /cost-alert <USD> to configure.".to_string()
+                        ));
+                    } else {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Cost alert: ${threshold:.4} threshold — fired: {fired}."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanBlockTurnsLen(name) => {
+                    match session.plan.block_turns.get(&name) {
+                        Some(turns) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Plan block '{name}': {} turn entries — turns: {:?}",
+                                turns.len(),
+                                &turns[turns.len().saturating_sub(5)..]
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Plan block '{name}': not tracked."
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryHistoryTurnCount => {
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Session turn index: {} (history items: {}).",
+                        session.turn_index,
+                        session.history.len()
+                    )));
+                    continue;
+                }
                 UiCommand::QueryHistoryToolResultCount => {
                     let n = session.history.iter().filter(|item| {
                         matches!(item, aether_core::context::ConversationItem::ToolResults(_))
@@ -35108,6 +35147,22 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/session-cost-alert" => {
+                                    if _ctx.send(UiCommand::QuerySessionCostAlert).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd_str if cmd_str.starts_with("/plan-block-turns-len ") => {
+                                    let name = cmd_str.trim_start_matches("/plan-block-turns-len ").trim().to_string();
+                                    if _ctx.send(UiCommand::QueryPlanBlockTurnsLen(name)).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/history-turn-count" => {
+                                    if _ctx.send(UiCommand::QueryHistoryTurnCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -35968,6 +36023,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/history-tool-result-count",
                             "/pending-reminder-count",
                             "/plan-tool-names",
+                            "/session-cost-alert",
+                            "/plan-block-turns-len ",
+                            "/history-turn-count",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

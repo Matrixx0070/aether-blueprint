@@ -1107,6 +1107,12 @@ pub enum UiCommand {
     QueryPendingReminderCount,
     /// List all tool names tracked in plan call stats.
     QueryPlanToolNames,
+    /// Show cost alert threshold and whether it has fired.
+    QuerySessionCostAlert,
+    /// Show the number of turn entries in the plan block_turns map for a block type.
+    QueryPlanBlockTurnsLen(String),
+    /// Show current turn index for this session.
+    QueryHistoryTurnCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
