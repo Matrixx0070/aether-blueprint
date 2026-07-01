@@ -1617,6 +1617,12 @@ pub enum UiCommand {
     QueryStickyContextLast,
     /// Show the last error playbook entry.
     QueryErrorPlaybookLast,
+    /// Show the last progress item.
+    QueryProgressItemLast,
+    /// Show the last bookmark.
+    QueryBookmarkLast,
+    /// Show the last tool-deny pattern.
+    QueryToolDenyLast,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

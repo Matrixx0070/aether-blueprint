@@ -11638,6 +11638,38 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryProgressItemLast => {
+                    match session.progress_items.last() {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Progress items: none.".to_string())); }
+                        Some((text, done)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Progress item last (of {}): [{}] {}",
+                                session.progress_items.len(),
+                                if *done { "x" } else { " " }, text
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryBookmarkLast => {
+                    match session.bookmarks.last() {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Bookmarks: none.".to_string())); }
+                        Some((turn, hist_len, label)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Bookmark last (of {}): turn={} hist_len={} label='{}'",
+                                session.bookmarks.len(), turn, hist_len, label
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolDenyLast => {
+                    match session.tool_deny.last() {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Tool deny: no entries.".to_string())); }
+                        Some(t) => { let _ = etx_for_driver.send(UiEvent::SystemNote(format!("Tool deny last (of {}): '{}'", session.tool_deny.len(), t))); }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -40155,6 +40187,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/progress-item-last" => {
+                                    if _ctx.send(UiCommand::QueryProgressItemLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/bookmark-last" => {
+                                    if _ctx.send(UiCommand::QueryBookmarkLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-deny-last" => {
+                                    if _ctx.send(UiCommand::QueryToolDenyLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -41295,6 +41342,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/task-queue-last",
                             "/sticky-context-last",
                             "/error-playbook-last",
+                            "/progress-item-last",
+                            "/bookmark-last",
+                            "/tool-deny-last",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
