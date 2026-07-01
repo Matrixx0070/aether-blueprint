@@ -1239,6 +1239,12 @@ pub enum UiCommand {
     QueryPlanTextPreview,
     /// Show the rule ID of the first blocking verifier finding.
     QueryVerifierLastRule,
+    /// Show error playbook entry at a specific index.
+    QueryErrorPlaybookAt(usize),
+    /// Show persistent reminder at a specific index.
+    QueryPersistentReminderAt(usize),
+    /// Show session variable entry at index.
+    QuerySessionVarAt(usize),
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

@@ -10319,6 +10319,55 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryErrorPlaybookAt(idx) => {
+                    match session.error_playbook.get(idx) {
+                        Some((pattern, response)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Error playbook[{idx}]: pattern='{}' → response='{}'",
+                                pattern.chars().take(80).collect::<String>(),
+                                response.chars().take(80).collect::<String>()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Error playbook[{idx}]: out of range ({} entries).", session.error_playbook.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPersistentReminderAt(idx) => {
+                    match session.persistent_reminders.get(idx) {
+                        Some(text) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Persistent reminder[{idx}]: {}", text.chars().take(200).collect::<String>()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Persistent reminder[{idx}]: out of range ({} entries).", session.persistent_reminders.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QuerySessionVarAt(idx) => {
+                    let mut pairs: Vec<_> = session.session_vars.iter().collect();
+                    pairs.sort_by_key(|(k, _)| k.as_str());
+                    match pairs.get(idx) {
+                        Some((k, v)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Session var[{idx}]: '{k}' = '{v}'"
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Session var[{idx}]: out of range ({} vars).", session.session_vars.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::SetMaxResponseLength(n) => {
                     let directive = format!("Limit your response to at most {n} words unless the user explicitly asks for more detail.");
                     let existing = session.config.system_suffix.get_or_insert_with(String::new);
@@ -36485,6 +36534,36 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                cmd_str if cmd_str.starts_with("/error-playbook-at ") => {
+                                    let arg = cmd_str.trim_start_matches("/error-playbook-at ").trim();
+                                    if let Ok(idx) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::QueryErrorPlaybookAt(idx)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /error-playbook-at <index>".to_string()));
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd_str if cmd_str.starts_with("/persistent-reminder-at ") => {
+                                    let arg = cmd_str.trim_start_matches("/persistent-reminder-at ").trim();
+                                    if let Ok(idx) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::QueryPersistentReminderAt(idx)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /persistent-reminder-at <index>".to_string()));
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                cmd_str if cmd_str.starts_with("/session-var-at ") => {
+                                    let arg = cmd_str.trim_start_matches("/session-var-at ").trim();
+                                    if let Ok(idx) = arg.parse::<usize>() {
+                                        if _ctx.send(UiCommand::QuerySessionVarAt(idx)).is_err() { break 'outer; }
+                                    } else {
+                                        ui.chat_lines.push(ChatLine::SystemNote("Usage: /session-var-at <index>".to_string()));
+                                    }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 _ => {}
                             }
                             // Push to history (deduplicate consecutive identical entries)
@@ -37411,6 +37490,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/llm-ms-avg",
                             "/plan-text-preview",
                             "/verifier-last-rule",
+                            "/error-playbook-at ",
+                            "/persistent-reminder-at ",
+                            "/session-var-at ",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
