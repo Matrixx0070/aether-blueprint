@@ -1647,6 +1647,12 @@ pub enum UiCommand {
     QueryMinOutputTokensTurn,
     /// Show the maximum cost of a single turn.
     QueryCostPerTurnMax,
+    /// Show the minimum cost of a single turn.
+    QueryCostPerTurnMin,
+    /// Show average length of env var keys.
+    QueryEnvKeyAvgLen,
+    /// Show average length of alias names.
+    QueryAliasAvgLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

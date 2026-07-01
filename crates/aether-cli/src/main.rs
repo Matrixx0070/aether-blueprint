@@ -11798,6 +11798,43 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryCostPerTurnMin => {
+                    match session.turn_cost_log.iter().min_by(|(_, _, _, a), (_, _, _, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Min cost per turn: no turns logged.".to_string())); }
+                        Some((ti, _, _, c)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Min cost per turn: ${c:.6} at turn {ti}."
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryEnvKeyAvgLen => {
+                    let n = session.session_env.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Env key avg len: no vars set.".to_string()));
+                    } else {
+                        let total: usize = session.session_env.keys().map(|k| k.len()).sum();
+                        let avg = total / n;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Env key avg len: {avg} chars/key across {n} vars."
+                        )));
+                    }
+                    continue;
+                }
+                UiCommand::QueryAliasAvgLen => {
+                    let n = session.aliases.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote("Alias avg len: no aliases defined.".to_string()));
+                    } else {
+                        let total: usize = session.aliases.keys().map(|k| k.len()).sum();
+                        let avg = total / n;
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Alias avg len: {avg} chars/name across {n} aliases."
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -40390,6 +40427,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/cost-per-turn-min" => {
+                                    if _ctx.send(UiCommand::QueryCostPerTurnMin).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/env-key-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryEnvKeyAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/alias-avg-len" => {
+                                    if _ctx.send(UiCommand::QueryAliasAvgLen).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -41545,6 +41597,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/min-input-tokens-turn",
                             "/min-output-tokens-turn",
                             "/cost-per-turn-max",
+                            "/cost-per-turn-min",
+                            "/env-key-avg-len",
+                            "/alias-avg-len",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
