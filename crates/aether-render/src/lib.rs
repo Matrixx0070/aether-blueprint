@@ -2037,6 +2037,12 @@ pub enum UiCommand {
     QueryFocusModeVal,
     /// Show the scope guard value.
     QueryScopeGuardVal,
+    /// Show the agent persona value.
+    QueryAgentPersonaVal,
+    /// Show the request prefix value.
+    QueryRequestPrefixVal,
+    /// Show the request suffix value.
+    QueryRequestSuffixVal,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
