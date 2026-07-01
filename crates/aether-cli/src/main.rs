@@ -15062,6 +15062,27 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryToolTimeoutSecs => {
+                    let n = session.tool_timeout_secs;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Tool timeout secs: {n}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryLlmTimeoutSecs => {
+                    let n = session.llm_timeout_secs;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "LLM timeout secs: {n}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryMaxToolCallsPerTurn => {
+                    let n = session.config.max_tool_calls_per_turn;
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Max tool calls per turn: {n}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -45379,6 +45400,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/tool-timeout-secs" => {
+                                    if _ctx.send(UiCommand::QueryToolTimeoutSecs).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/llm-timeout-secs" => {
+                                    if _ctx.send(UiCommand::QueryLlmTimeoutSecs).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/max-tool-calls-per-turn" => {
+                                    if _ctx.send(UiCommand::QueryMaxToolCallsPerTurn).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -46879,6 +46915,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/metrics-reset-turn",
                             "/dedup-tool-calls",
                             "/checkpoint-every-tools",
+                            "/tool-timeout-secs",
+                            "/llm-timeout-secs",
+                            "/max-tool-calls-per-turn",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

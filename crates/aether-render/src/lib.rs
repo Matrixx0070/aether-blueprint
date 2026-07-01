@@ -2337,6 +2337,12 @@ pub enum UiCommand {
     QueryDeduplicateToolCalls,
     /// Show the checkpoint-every-tools setting.
     QueryCheckpointEveryTools,
+    /// Show the tool timeout in seconds.
+    QueryToolTimeoutSecs,
+    /// Show the LLM request timeout in seconds.
+    QueryLlmTimeoutSecs,
+    /// Show the max tool calls per turn setting.
+    QueryMaxToolCallsPerTurn,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
