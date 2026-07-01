@@ -12831,6 +12831,35 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryPlanBlockTurnsMin => {
+                    match session.plan.block_turns.iter().min_by_key(|(_, v)| v.len()) {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("Plan block turns: none.".to_string())); }
+                        Some((block, turns)) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Block with fewest turns: '{}' ({} turns)", block, turns.len()
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryPlanBlockTurnsCount => {
+                    let n = session.plan.block_turns.len();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan block types with turns: {}", n
+                    )));
+                    continue;
+                }
+                UiCommand::QueryLlmFallbackModelSet => {
+                    match &session.llm_fallback_model {
+                        None => { let _ = etx_for_driver.send(UiEvent::SystemNote("LLM fallback model: not set.".to_string())); }
+                        Some(m) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "LLM fallback model: '{}'", m
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -41918,6 +41947,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/plan-block-turns-min" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockTurnsMin).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-block-turns-count" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockTurnsCount).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/llm-fallback-model-set" => {
+                                    if _ctx.send(UiCommand::QueryLlmFallbackModelSet).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -43172,6 +43216,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/saved-snapshot-key-max-len",
                             "/saved-snapshot-key-min-len",
                             "/plan-block-turns-max",
+                            "/plan-block-turns-min",
+                            "/plan-block-turns-count",
+                            "/llm-fallback-model-set",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

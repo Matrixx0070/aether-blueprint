@@ -1845,6 +1845,12 @@ pub enum UiCommand {
     QuerySavedSnapshotKeyMinLen,
     /// Show the plan block type with the most turns recorded.
     QueryPlanBlockTurnsMax,
+    /// Show the plan block type with the fewest turns recorded.
+    QueryPlanBlockTurnsMin,
+    /// Show the count of distinct block types in plan block turns.
+    QueryPlanBlockTurnsCount,
+    /// Show whether the LLM fallback model is set.
+    QueryLlmFallbackModelSet,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
