@@ -14320,6 +14320,33 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     )));
                     continue;
                 }
+                UiCommand::QueryVerifRuleFirstId => {
+                    let id = session.verifier.gate.rules.first()
+                        .map(|r| r.rule.id.as_str())
+                        .unwrap_or("none");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verif rule first id: {id}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryVerifRuleLastId => {
+                    let id = session.verifier.gate.rules.last()
+                        .map(|r| r.rule.id.as_str())
+                        .unwrap_or("none");
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Verif rule last id: {id}"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryToolOutputHistTotalChars => {
+                    let total: usize = session.tool_output_history.iter()
+                        .map(|(k, (prev, curr))| k.len() + prev.len() + curr.len())
+                        .sum();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Tool output hist total chars: {total}"
+                    )));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -44232,6 +44259,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/verif-rule-first-id" => {
+                                    if _ctx.send(UiCommand::QueryVerifRuleFirstId).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/verif-rule-last-id" => {
+                                    if _ctx.send(UiCommand::QueryVerifRuleLastId).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-output-hist-total-chars" => {
+                                    if _ctx.send(UiCommand::QueryToolOutputHistTotalChars).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -45651,6 +45693,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/bookmark-total-chars",
                             "/turn-label-total-chars",
                             "/session-tag-total-chars",
+                            "/verif-rule-first-id",
+                            "/verif-rule-last-id",
+                            "/tool-output-hist-total-chars",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

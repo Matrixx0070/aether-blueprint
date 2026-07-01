@@ -2175,6 +2175,12 @@ pub enum UiCommand {
     QueryTurnLabelTotalChars,
     /// Show the total chars across all session tags.
     QuerySessionTagTotalChars,
+    /// Show the rule_id of the first rule in the verifier gate.
+    QueryVerifRuleFirstId,
+    /// Show the rule_id of the last rule in the verifier gate.
+    QueryVerifRuleLastId,
+    /// Show the total chars in all tool output history (keys + prev + curr).
+    QueryToolOutputHistTotalChars,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
