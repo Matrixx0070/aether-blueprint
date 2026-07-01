@@ -1449,6 +1449,12 @@ pub enum UiCommand {
     QueryTurnCostLast,
     /// Count done progress items separately (vs total).
     QueryProgressDoneCount,
+    /// Show the first tool in the allow list.
+    QueryToolAllowFirst,
+    /// Show the first tool in the deny list.
+    QueryToolDenyFirst,
+    /// Show the last model used across turns.
+    QueryTurnModelLast,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

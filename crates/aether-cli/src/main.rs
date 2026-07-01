@@ -11192,6 +11192,55 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryToolAllowFirst => {
+                    let mut list = session.tool_allow.clone();
+                    list.sort();
+                    match list.first() {
+                        Some(name) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Tool allow[0] (of {}): '{name}'", session.tool_allow.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Tool allow list: empty (all tools allowed).".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryToolDenyFirst => {
+                    let mut list = session.tool_deny.clone();
+                    list.sort();
+                    match list.first() {
+                        Some(name) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Tool deny[0] (of {}): '{name}'", session.tool_deny.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Tool deny list: empty (no tools blocked).".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                UiCommand::QueryTurnModelLast => {
+                    match session.turn_models.last() {
+                        Some(model) => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                                "Turn model[last] (of {}): '{model}'", session.turn_models.len()
+                            )));
+                        }
+                        None => {
+                            let _ = etx_for_driver.send(UiEvent::SystemNote(
+                                "Turn models: no turns recorded yet.".to_string()
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 UiCommand::QueryToolOutputHistFirst => {
                     let mut keys: Vec<_> = session.tool_output_history.keys().collect();
                     keys.sort();
@@ -38625,6 +38674,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/tool-allow-first" => {
+                                    if _ctx.send(UiCommand::QueryToolAllowFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/tool-deny-first" => {
+                                    if _ctx.send(UiCommand::QueryToolDenyFirst).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/turn-model-last" => {
+                                    if _ctx.send(UiCommand::QueryTurnModelLast).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -39681,6 +39745,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/tool-output-hist-first",
                             "/turn-cost-last",
                             "/progress-done-count",
+                            "/tool-allow-first",
+                            "/tool-deny-first",
+                            "/turn-model-last",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
