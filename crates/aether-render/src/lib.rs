@@ -2313,6 +2313,12 @@ pub enum UiCommand {
     QueryToolOutputLimitAvgVal,
     /// Show the maximum of all tool_output_limits values.
     QueryToolOutputLimitMaxVal,
+    /// Show the minimum of all tool_output_limits values.
+    QueryToolOutputLimitMinVal,
+    /// Show the first key in saved_snapshots.
+    QuerySavedSnapshotKeyFirst,
+    /// Show the last key in saved_snapshots.
+    QuerySavedSnapshotKeyLast,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
