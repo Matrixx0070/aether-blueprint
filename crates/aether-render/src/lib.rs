@@ -2589,6 +2589,12 @@ pub enum UiCommand {
     QueryVerifierGateAppliesNoCreative,
     /// Count of rules using the PhraseMatch detector in the verifier gate.
     QueryVerifierGateDetectorPhrase,
+    /// Count of rules using the Regex detector in the verifier gate.
+    QueryVerifierGateDetectorRegex,
+    /// Count of rules using the Builtin detector in the verifier gate.
+    QueryVerifierGateDetectorBuiltin,
+    /// Count of rules with a Some(remediation) in the verifier gate.
+    QueryVerifierGateRuleHasRemediation,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
