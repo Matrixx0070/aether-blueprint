@@ -1251,6 +1251,12 @@ pub enum UiCommand {
     QueryPromptMacroAt(usize),
     /// Show warmup file path at a given index.
     QueryWarmupFileAt(usize),
+    /// Count of turn labels defined in the session.
+    QueryTurnLabelCount,
+    /// Count of session notes stored.
+    QuerySessionNoteCount,
+    /// Count of last-tool-call signatures tracked for dedup.
+    QueryToolSigCount,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
