@@ -2115,6 +2115,12 @@ pub enum UiCommand {
     QueryVerifRuleCount,
     /// Show the total turns across all plan block_turns entries.
     QueryPlanBlockTurnsTotal,
+    /// Show whether the last verification was blocked.
+    QueryVerifIsBlocked,
+    /// Show the max turns in a single block_turns entry.
+    QueryPlanBlockTurnsMaxLen,
+    /// Show the avg key length in session aliases.
+    QueryAliasAvgKeyLen,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
