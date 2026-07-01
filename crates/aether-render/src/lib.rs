@@ -2943,6 +2943,12 @@ pub enum UiCommand {
     QuerySessionVarValueMinWords,
     /// Count of session_vars whose value contains at least one word.
     QuerySessionVarValueNonEmptyCount,
+    /// Average word count per progress item.
+    QueryProgressItemAvgWords,
+    /// Maximum word count in any single progress item.
+    QueryProgressItemMaxWords,
+    /// Minimum word count in any single progress item.
+    QueryProgressItemMinWords,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].

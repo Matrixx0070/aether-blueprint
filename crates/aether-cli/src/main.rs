@@ -17323,6 +17323,39 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }));
                     continue;
                 }
+                UiCommand::QueryProgressItemAvgWords => {
+                    let n = session.progress_items.len();
+                    let avg = if n == 0 { 0.0 } else {
+                        let total: usize = session.progress_items.iter()
+                            .map(|(text, _)| text.split_whitespace().count())
+                            .sum();
+                        total as f64 / n as f64
+                    };
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Progress item avg words: {avg:.1} ({n} items)"
+                    )));
+                    continue;
+                }
+                UiCommand::QueryProgressItemMaxWords => {
+                    let max = session.progress_items.iter()
+                        .map(|(text, _)| text.split_whitespace().count())
+                        .max();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match max {
+                        Some(v) => format!("Progress item max words: {v}"),
+                        None => "Progress items: none defined.".to_string(),
+                    }));
+                    continue;
+                }
+                UiCommand::QueryProgressItemMinWords => {
+                    let min = session.progress_items.iter()
+                        .map(|(text, _)| text.split_whitespace().count())
+                        .min();
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(match min {
+                        Some(v) => format!("Progress item min words: {v}"),
+                        None => "Progress items: none defined.".to_string(),
+                    }));
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueMaxWords => {
                     let max = session.session_vars.values()
                         .map(|v| v.split_whitespace().count())
@@ -49824,6 +49857,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/progress-item-avg-words" => {
+                                    if _ctx.send(UiCommand::QueryProgressItemAvgWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/progress-item-max-words" => {
+                                    if _ctx.send(UiCommand::QueryProgressItemMaxWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/progress-item-min-words" => {
+                                    if _ctx.send(UiCommand::QueryProgressItemMinWords).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -51627,6 +51675,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/session-var-value-max-words",
                             "/session-var-value-min-words",
                             "/session-var-value-non-empty-count",
+                            "/progress-item-avg-words",
+                            "/progress-item-max-words",
+                            "/progress-item-min-words",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];
