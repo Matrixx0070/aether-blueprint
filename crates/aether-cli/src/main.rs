@@ -13552,6 +13552,34 @@ async fn run_tui(model: &str, permission_mode: aether_perm::PermissionMode) -> R
                     }
                     continue;
                 }
+                UiCommand::QueryPlanToolStatMaxOk => {
+                    let max = session.plan.tool_call_stats.values().map(|(ok, _)| *ok).max().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan tool stat max ok: {}", max
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlanToolStatMaxErr => {
+                    let max = session.plan.tool_call_stats.values().map(|(_, err)| *err).max().unwrap_or(0);
+                    let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                        "Plan tool stat max err: {}", max
+                    )));
+                    continue;
+                }
+                UiCommand::QueryPlanBlockAvgTurns => {
+                    let n = session.plan.block_turns.len();
+                    if n == 0 {
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(
+                            "Plan block avg turns: no block turns recorded.".to_string()
+                        ));
+                    } else {
+                        let total: usize = session.plan.block_turns.values().map(|v| v.len()).sum();
+                        let _ = etx_for_driver.send(UiEvent::SystemNote(format!(
+                            "Plan block avg turns per block: {:.1}", total as f64 / n as f64
+                        )));
+                    }
+                    continue;
+                }
                 UiCommand::QuerySessionVarValueAvgLen => {
                     let n = session.session_vars.len();
                     if n == 0 {
@@ -42984,6 +43012,21 @@ CTF Toolkit — Aether AI-assisted\n\
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
                                     continue;
                                 }
+                                "/plan-tool-stat-max-ok" => {
+                                    if _ctx.send(UiCommand::QueryPlanToolStatMaxOk).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-tool-stat-max-err" => {
+                                    if _ctx.send(UiCommand::QueryPlanToolStatMaxErr).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
+                                "/plan-block-avg-turns" => {
+                                    if _ctx.send(UiCommand::QueryPlanBlockAvgTurns).is_err() { break 'outer; }
+                                    ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
+                                    continue;
+                                }
                                 "/history-annot-count" => {
                                     if _ctx.send(UiCommand::QueryHistoryAnnotCount).is_err() { break 'outer; }
                                     ui.input_buffer.clear(); ui.input_cursor = 0; ui.follow_tail = true;
@@ -44307,6 +44350,9 @@ CTF Toolkit — Aether AI-assisted\n\
                             "/bookmark-avg-label-len",
                             "/plan-tool-stat-avg-ok",
                             "/plan-tool-stat-avg-err",
+                            "/plan-tool-stat-max-ok",
+                            "/plan-tool-stat-max-err",
+                            "/plan-block-avg-turns",
                         ];
                         // Subcommand completions for commands that take a known keyword argument.
                         const MODEL_SUBS: &[&str] = &["opus", "sonnet", "haiku"];

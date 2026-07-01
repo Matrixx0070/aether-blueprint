@@ -1983,6 +1983,12 @@ pub enum UiCommand {
     QueryPlanToolStatAvgOk,
     /// Show the average err count across all plan tool stats.
     QueryPlanToolStatAvgErr,
+    /// Show the max ok count across all plan tool stats.
+    QueryPlanToolStatMaxOk,
+    /// Show the max err count across all plan tool stats.
+    QueryPlanToolStatMaxErr,
+    /// Show the average turns per block from plan.block_turns.
+    QueryPlanBlockAvgTurns,
 }
 
 /// Style for the info column of a [`ChatLine::SplashRow`].
