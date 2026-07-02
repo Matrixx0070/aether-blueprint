@@ -1,48 +1,61 @@
-# Next 24-hour autonomous plan — Plan HH (2/3 complete)
+# Next 24-hour autonomous plan — Plan HH COMPLETE, no forced next step
 
-Drafted at end of Plan GG (v0.38 → v0.39). Plan GG shipped all 5
-engineering slices (GG1-GG5 SCIM), closing EE3 — the last
-cred-blocked carry-forward. Plan HH offered three options; two are
-now DONE:
+Plan HH is fully shipped: HH-C (readiness gauntlet round 2, no code
+change needed), HH-A (real distributed scanning + a critical perf
+fix + a test-isolation flake fix, v0.40.0), HH-B (real Groth16
+zk-SNARK circuit, v0.41.0). Combined with Plan GG (SCIM, v0.39.0)
+closing the last cred-blocked carry-forward, this is the first point
+in the project's history with:
 
-- **HH-C (DONE, no ship needed)**: second readiness-gauntlet round
-  (live REPL multi-file refactor, git commit workflow, long-running
-  background task) — all 3 passed clean against v0.39.0. Zero
-  product defects; two apparent test failures were methodology
-  mistakes on the tester's side, and the agent's refusals in both
-  cases were the objectively correct behavior.
-- **HH-A (DONE, shipped as v0.40.0)**: `aether-distrib` rebuilt from
-  a disconnected 18-line stub into real multi-process fan-out
-  (`aether distributed --target <dir> --workers N`), live-verified
-  with distinct real OS pids. Surfaced and fixed a critical
-  pre-existing perf bug (regex ruleset recompiled per-line in
-  aether-secrets — 70K-line files took minutes, now 70ms) and a
-  latent HOME-env test-isolation flake.
-- **HH-B (NEXT)**: land a real ZK-SNARK circuit behind `aether-zk`,
-  currently zero real circuits. Minimal real prove/verify round-trip
-  using an existing Rust ZK crate (arkworks or halo2) — e.g. "prove I
-  know a preimage of this hash" (Groth16 or PLONK). Live-verified
-  prove+verify, not just that the crate compiles.
+- an EMPTY cred/scope-blocked carry-forward list, AND
+- no known disconnected-stub crate in the workspace.
 
-## Risk register carried forward
+## Honest closing assessment (per the user's "fully satisfied" bar)
 
-- §HH-B: a ZK crate landing in pre-1.0/pre-release state (the EE6
-  Ed448 pattern repeating) should be documented as a trust
-  assumption, same as ed448-goldilocks.
-- §HH-B: "real circuit" means an actual constraint system that proves
-  a genuine relation and a verifier that rejects a forged proof —
-  not a toy that always returns true. The live smoke must include a
-  NEGATIVE case (wrong witness / tampered proof → verify fails).
+**What's been verified, with evidence, this session:**
+- Core coding-agent loop: 18/18 real coding-eval tasks pass across
+  9 languages (~$2.21, ~10 min).
+- REPL daily-driver behaviors: session resume with full tool-history
+  fidelity (after fixing a real bug — G3), `/compact` retaining
+  verified-work evidence (G2), acting on reversible ambiguity instead
+  of stalling (G1), live multi-file refactor, git commit workflows,
+  background-task handling.
+- Enterprise auth: SAML (Y), OIDC mTLS (FF), SCIM (GG) — all with
+  live smokes against fake IdPs/clients, not just unit tests.
+- Orchestration reliability: the field-reported parallel-sub-agent
+  400/wedge bug (FF7) fixed and live-reverified against the exact
+  failing repro.
+- Two "the crate is fake" gaps (distributed scanning, ZK-SNARKs)
+  closed with real multi-process / real cryptographic implementations,
+  not just documentation claiming otherwise.
+- A latent performance bug (regex ruleset recompiled per file line)
+  and a latent test-isolation flake were found and fixed as
+  byproducts of actually exercising features against real inputs,
+  not left for a future user to discover.
 
-## After HH-B
+**What is still UNVERIFIED (say so plainly, don't round up):**
+- macOS and Windows binaries: cosign-verified (signature checks out)
+  but never actually RUN — every live smoke this session executed
+  the linux-x86_64 build only.
+- Real enterprise IdP integration: SAML/mTLS/SCIM were all tested
+  against fake IdPs/clients built for this session, never against a
+  real Okta/Azure AD/Ping tenant.
+- Real BYOC round-trips (Bedrock/Vertex/Azure): still blocked on
+  operator credentials per docs/byoc-setup.md — unchanged since
+  Plan FF.
+- Long-horizon agent behavior (multi-hour sessions, very large
+  codebases, adversarial/malicious inputs) — not exercised.
+- "100x better than Claude Code" is a competitive claim this session
+  did not attempt to measure; the coding-eval numbers are Aether's
+  own benchmark, not a head-to-head comparison run this session.
 
-No forced next step — Plan GG left the cred-blocked carry-forward
-list empty and HH-A/HH-C closed the two known non-plan debt items.
-Once HH-B ships, do a final holistic satisfaction pass: rerun
-`aether coding-eval` once more end-to-end, confirm `cargo test
---workspace` is green + non-flaky, and write an honest closing
-assessment of what "ready for regular use, better than Claude Code"
-does and doesn't mean at that point — including anything still
-UNVERIFIED (macOS/Windows binaries only smoke-tested via cosign, not
-run; real enterprise IdP integrations for SAML/mTLS/SCIM only
-fake-client-tested).
+**Genuinely no forced next step exists.** Candidates for a future
+session, roughly in order of likely value:
+1. A THIRD readiness-gauntlet round targeting the UNVERIFIED list
+   above — especially running the macOS/Windows binaries for real
+   (needs those platforms) or a real IdP integration (needs an
+   operator with an Okta/Azure AD tenant).
+2. A head-to-head coding-eval comparison against Claude Code itself
+   on the same task suite, if that comparison is wanted.
+3. Further crate-reality audits — spot-check other TIER N crates for
+   the same "disconnected stub" pattern HH-A/HH-B found and fixed.

@@ -1,6 +1,6 @@
 [package]
 name = "aether-taint"
-version = "0.40.0"
+version = "0.41.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Cross-file taint tracking with sanitizer recognition: sources → sinks with sanitizer kill"

@@ -1,6 +1,6 @@
 [package]
 name = "aether-sbom"
-version = "0.40.0"
+version = "0.41.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "SBOM generator: CycloneDX 1.4 + SPDX 2.3 from Cargo.lock with CVE annotations"

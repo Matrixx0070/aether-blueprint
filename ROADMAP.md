@@ -1298,6 +1298,49 @@ crate.
   product defects — both correctly-refused-to-fabricate and
   correctly-denied-on-no-answer behaviors were the RIGHT call.
 
+## v0.41 — real ZK-SNARK circuit (Plan HH-B) — shipped 2026-07-02
+
+Closes the last of the two v0.36 non-plan-debt gaps (aether-distrib
+went real in HH-A/v0.40; aether-zk goes real here). With this, the
+readiness/debt backlog opened across Plans GG/HH is fully closed —
+no cred-blocked carry-forward, no known disconnected-stub crate.
+
+- **Real Groth16 circuit over BN254** (arkworks 0.6): proves
+  knowledge of a secret `x` such that `x^3 + x + 5 = y` for a public
+  `y`, without revealing `x`. aether-zk's pre-existing Merkle proofs
+  and hash commitments are real cryptography but not zero-knowledge
+  (a Merkle proof reveals the sibling path); this is the first
+  actual SNARK in the crate. Deliberately the simplest relation that
+  is still genuine (not a toy that always returns true) — a SHA-256
+  preimage circuit would need a much larger gadget surface for the
+  same "is this real" answer, and the wiring pattern (constraint
+  synthesis → circuit-specific setup → prove → verify) is identical
+  regardless of which relation goes in.
+- Caught two real issues during implementation: (1) arkworks 0.6
+  renamed `r1cs` → `gr1cs` and `enforce_constraint` →
+  `enforce_r1cs_constraint` (a module reorg, quick fix); (2) a real
+  logic bug — the circuit eagerly unwrapped the witness before
+  creating any variables, so circuit-specific setup (which builds the
+  shape with `x=None`) failed immediately. Fixed by threading
+  `Option<Fr>` through every dependent value and deferring
+  `.ok_or()` inside each lazy assignment closure — the standard
+  arkworks pattern, initially collapsed into eager unwraps.
+- 6 new tests: the real prove+verify round-trip, plus 4 negative
+  cases per the risk register (a real SNARK must reject forgeries,
+  not just accept genuine proofs) — wrong public input, mismatched
+  witness/claim, bit-flipped proof bytes (via real serialize/
+  deserialize), proof-from-one-setup rejected under a different
+  setup's key. 15/15 aether-zk tests pass.
+- Live-verified through the actual built CLI: `aether zk-proof
+  --snark` runs setup/prove/verify against the real binary —
+  "verify(real): true", "verify(forged): false". Wired as a demo
+  flag alongside the pre-existing TIER 18 Merkle/commitment demo.
+- Trust assumption (documented at the dependency declaration, same
+  posture as the ed448-goldilocks note): arkworks 0.6 is a
+  comparatively recent major version of a widely-used but not-1.0
+  ecosystem.
+- `cargo test --workspace`: 778 tests, 0 failures.
+
 ## v0.9 — enterprise
 
 - SAML / OIDC federation

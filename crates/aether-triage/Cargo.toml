@@ -1,6 +1,6 @@
 [package]
 name = "aether-triage"
-version = "0.40.0"
+version = "0.41.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Cross-model consensus triage: multi-LLM agreement scoring with SQLite verdict cache"
