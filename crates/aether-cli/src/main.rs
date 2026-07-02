@@ -4809,7 +4809,51 @@ fn load_session_history(id: &str, session: &mut Session) -> Result<()> {
                     tool_uses: Vec::new(),
                 });
             }
+            // G3 (2026-07-02 readiness gauntlet): tool_use / tool_result
+            // records were previously DROPPED on resume, so a resumed
+            // session had zero record of prior tool calls — the agent
+            // (and the compaction EVIDENCE section) then reported "I made
+            // no tool calls in this session" for work it HAD verified.
+            // Reconstruct them so resumed history matches live history.
+            "tool_use" => {
+                let tu = aether_core::context::RecordedToolUse {
+                    id: parsed.tool_use_id.clone().unwrap_or_default(),
+                    name: parsed.tool.clone().unwrap_or_default(),
+                    input: parsed.input.clone().unwrap_or(serde_json::Value::Null),
+                };
+                match session.history.last_mut() {
+                    Some(ConversationItem::Assistant { tool_uses, .. }) => {
+                        tool_uses.push(tu);
+                    }
+                    _ => session.history.push(ConversationItem::Assistant {
+                        text: None,
+                        tool_uses: vec![tu],
+                    }),
+                }
+            }
+            "tool_result" => {
+                let r = aether_core::context::RecordedToolResult {
+                    tool_use_id: parsed.tool_use_id.clone().unwrap_or_default(),
+                    content: parsed.output.clone().unwrap_or_default(),
+                    is_error: parsed.is_error,
+                };
+                match session.history.last_mut() {
+                    Some(ConversationItem::ToolResults(rs)) => rs.push(r),
+                    _ => session
+                        .history
+                        .push(ConversationItem::ToolResults(vec![r])),
+                }
+            }
             _ => {}
+        }
+    }
+    // G3: a resumed thread can end mid-turn (Assistant with tool_uses but
+    // the tool_results never got logged before exit). The FF7 pairing
+    // guard repairs that at send time, but drop a trailing unanswered
+    // Assistant here so resume starts from a clean, balanced boundary.
+    if let Some(ConversationItem::Assistant { tool_uses, .. }) = session.history.last() {
+        if !tool_uses.is_empty() {
+            session.history.pop();
         }
     }
     Ok(())
@@ -68404,6 +68448,125 @@ BBBB-SECOND-CERT
         assert!(p.ends_with("abc-123.jsonl"));
         let s = p.to_string_lossy();
         assert!(s.contains(".aether/sessions"));
+    }
+
+    /// G3 (2026-07-02 readiness gauntlet): resuming a session used to
+    /// DROP every tool_use/tool_result record, so a resumed agent had
+    /// zero memory of tool calls it actually made — surfaced as "I made
+    /// no tool calls in this session" for prior-verified work. Build a
+    /// fixture session log with a full turn (user -> assistant+tool_use ->
+    /// tool_result -> assistant) and assert load_session_history
+    /// reconstructs it faithfully.
+    #[test]
+    fn g3_resume_reconstructs_tool_use_and_results() {
+        let tmp = std::env::temp_dir().join(format!("aether-g3-test-{}", std::process::id()));
+        std::fs::create_dir_all(tmp.join(".aether/sessions")).unwrap();
+        let session_id = "g3-fixture";
+        let lines = [
+            r#"{"ts":"1","kind":"user","text":"read fizz.py"}"#,
+            r#"{"ts":"2","kind":"assistant","text":"Let me check."}"#,
+            r#"{"ts":"3","kind":"tool_use","tool":"Read","input":{"file_path":"fizz.py"},"tool_use_id":"t1"}"#,
+            r#"{"ts":"4","kind":"tool_result","output":"def fizzbuzz(n): ...","tool_use_id":"t1","is_error":false}"#,
+            r#"{"ts":"5","kind":"assistant","text":"It implements fizzbuzz."}"#,
+        ];
+        std::fs::write(
+            tmp.join(".aether/sessions").join(format!("{session_id}.jsonl")),
+            lines.join("\n"),
+        )
+        .unwrap();
+
+        let real_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", &tmp);
+
+        let overlay = Fable5Overlay::new(OverlayConfig::default());
+        let gate = Gate::new(default_rules()).unwrap();
+        let mut tools = ToolRegistry::new();
+        register_builtins(&mut tools);
+        let llm = Arc::new(MockLlmProvider::new());
+        let mut session = Session::new(SessionConfig::default(), overlay, llm, gate, tools);
+        load_session_history(session_id, &mut session).expect("load fixture");
+
+        if let Some(h) = real_home {
+            std::env::set_var("HOME", h);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let tool_use_msg = session.history.iter().find_map(|item| match item {
+            ConversationItem::Assistant { tool_uses, .. } if !tool_uses.is_empty() => {
+                Some(tool_uses.clone())
+            }
+            _ => None,
+        });
+        let tool_uses = tool_use_msg.expect("a tool_use was reconstructed");
+        assert_eq!(tool_uses.len(), 1);
+        assert_eq!(tool_uses[0].id, "t1");
+        assert_eq!(tool_uses[0].name, "Read");
+
+        let results = session.history.iter().find_map(|item| match item {
+            ConversationItem::ToolResults(rs) => Some(rs.clone()),
+            _ => None,
+        });
+        let results = results.expect("a ToolResults item was reconstructed");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].tool_use_id, "t1");
+        assert!(results[0].content.contains("fizzbuzz"));
+
+        let last_text = session.history.iter().rev().find_map(|item| match item {
+            ConversationItem::Assistant { text: Some(t), .. } => Some(t.clone()),
+            _ => None,
+        });
+        assert_eq!(last_text.as_deref(), Some("It implements fizzbuzz."));
+    }
+
+    /// G3: a resumed thread ending mid-turn (Assistant with tool_uses but
+    /// the tool_results were never logged, e.g. the process was killed)
+    /// gets that trailing unbalanced Assistant dropped, so resume starts
+    /// from a clean boundary rather than relying solely on the FF7
+    /// pre-flight repair to paper over it.
+    #[test]
+    fn g3_resume_drops_trailing_unanswered_tool_use() {
+        let tmp = std::env::temp_dir().join(format!("aether-g3b-test-{}", std::process::id()));
+        std::fs::create_dir_all(tmp.join(".aether/sessions")).unwrap();
+        let session_id = "g3b-fixture";
+        let lines = [
+            r#"{"ts":"1","kind":"user","text":"do a thing"}"#,
+            r#"{"ts":"2","kind":"assistant","text":null}"#,
+            r#"{"ts":"3","kind":"tool_use","tool":"Bash","input":{"command":"sleep 999"},"tool_use_id":"dangling"}"#,
+        ];
+        std::fs::write(
+            tmp.join(".aether/sessions").join(format!("{session_id}.jsonl")),
+            lines.join("\n"),
+        )
+        .unwrap();
+
+        let real_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", &tmp);
+
+        let overlay = Fable5Overlay::new(OverlayConfig::default());
+        let gate = Gate::new(default_rules()).unwrap();
+        let mut tools = ToolRegistry::new();
+        register_builtins(&mut tools);
+        let llm = Arc::new(MockLlmProvider::new());
+        let mut session = Session::new(SessionConfig::default(), overlay, llm, gate, tools);
+        load_session_history(session_id, &mut session).expect("load fixture");
+
+        if let Some(h) = real_home {
+            std::env::set_var("HOME", h);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        assert!(
+            !session.history.iter().any(|item| matches!(
+                item,
+                ConversationItem::Assistant { tool_uses, .. } if !tool_uses.is_empty()
+            )),
+            "dangling tool_use must be dropped, not left unbalanced: {:?}",
+            session.history
+        );
     }
 
     // ── v0.7.1 security auto-route ────────────────────────────────────────
