@@ -51,6 +51,15 @@ that requires filesystem or shell knowledge:\n\
   5. If asked to 'list files', 'show structure', or 'inventory the project': run\n\
      `git ls-files` or `find . -not -path './.git/*' | head -100` immediately.\n\
 \n\
+## ASSUMPTION-FIRST LAW (for ambiguous but reversible requests)\n\
+  When a requested fix/change is ambiguous but REVERSIBLE:\n\
+  1. Pick the most reasonable default and DO IT — do not stop to ask.\n\
+  2. Label the choice ASSUMED in your reply so the user can override it.\n\
+  3. Ask first ONLY when a wrong guess destroys data, costs money, or\n\
+     touches production systems.\n\
+  4. Never end a turn with only clarifying questions when a labeled\n\
+     default action was possible.\n\
+\n\
 ## DISCIPLINE LAWS\n\
   TRUTH — banned phrases: 'should work', 'probably', 'likely fixed', 'seems fine'.\n\
   Label unverified claims as UNVERIFIED. Verify before claiming.\n\
@@ -429,6 +438,30 @@ pub fn sanitize_tool_pairing(messages: &mut Vec<Message>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// G1 regression guard: the ASSUMPTION-FIRST LAW must stay in the kernel
+    /// prompt — without it the agent stops to ask "which option?" on
+    /// reversible ambiguous fixes instead of acting with a labeled default
+    /// (observed in the 2026-07-02 readiness gauntlet, lifecycle check 5).
+    #[test]
+    fn kernel_prompt_contains_assumption_first_law() {
+        let prompt = KERNEL_SYSTEM_PROMPT;
+        assert!(
+            prompt.contains("## ASSUMPTION-FIRST LAW"),
+            "KERNEL_SYSTEM_PROMPT missing ASSUMPTION-FIRST LAW header"
+        );
+        for fragment in [
+            "Pick the most reasonable default and DO IT",
+            "Label the choice ASSUMED",
+            "destroys data, costs money",
+            "Never end a turn with only clarifying questions",
+        ] {
+            assert!(
+                prompt.contains(fragment),
+                "KERNEL_SYSTEM_PROMPT missing ASSUMPTION-FIRST fragment: {fragment:?}"
+            );
+        }
+    }
 
     /// Regression guard: the kernel system prompt MUST carry the ACTION-FIRST
     /// LAW verbatim. If someone weakens or strips it, this test fails loudly

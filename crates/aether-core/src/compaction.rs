@@ -38,7 +38,7 @@ pub fn context_window_for_model(model: &str) -> u64 {
 pub const COMPACTION_THRESHOLD_PCT: f64 = 0.80;
 
 /// Maximum tokens we ask the summarizer to produce. Increased to 4096 to
-/// give the structured 6-section prompt enough room to preserve error
+/// give the structured 7-section prompt enough room to preserve error
 /// messages, file paths, and current step without truncation.
 const SUMMARY_MAX_TOKENS: u32 = 4096;
 
@@ -101,13 +101,13 @@ pub fn serialize_history(items: &[ConversationItem]) -> String {
     out
 }
 
-/// Structured 6-section summary prompt. Each section has a labelled heading
+/// Structured 7-section summary prompt. Each section has a labelled heading
 /// so critical signal (error messages, file paths, next step) is never lost
 /// in prose compression. The agent reads this on every turn after compaction.
 pub fn summary_prompt(history_text: &str) -> String {
     format!(
         "Summarize this in-progress agent conversation so it fits in fewer tokens.\n\
-         Use EXACTLY these six labelled sections — no other format. One header per line:\n\n\
+         Use EXACTLY these seven labelled sections — no other format. One header per line:\n\n\
          GOAL: [one sentence — what the user asked for or what is being built]\n\
          PROGRESS: [what was completed; which files changed; test results if any]\n\
          CURRENT-STEP: [the exact task or command in progress when this summary was cut]\n\
@@ -115,6 +115,10 @@ pub fn summary_prompt(history_text: &str) -> String {
                   include exact error messages and file:line references if present]\n\
          KEY-IDS: [file paths, function names, variable names, PR numbers, and \
                    other identifiers referenced in this session]\n\
+         EVIDENCE: [which claims were VERIFIED by tool calls — list the tool \
+                    calls made (files read, commands run) and what they proved; \
+                    the post-compaction agent must not mistake verified work \
+                    for unverified claims]\n\
          NEXT-ACTION: [what the agent was about to do next]\n\n\
          Write NONE for a section if truly nothing belongs there. \
          Keep each section to 1-3 lines. Do not add extra sections or commentary.\n\n\
@@ -292,9 +296,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn summary_prompt_contains_all_six_sections() {
+    fn summary_prompt_contains_all_seven_sections() {
         let p = summary_prompt("USER: hi\nASSISTANT: hello\n");
-        for section in &["GOAL:", "PROGRESS:", "CURRENT-STEP:", "ERRORS:", "KEY-IDS:", "NEXT-ACTION:"] {
+        for section in &["GOAL:", "PROGRESS:", "CURRENT-STEP:", "ERRORS:", "KEY-IDS:", "EVIDENCE:", "NEXT-ACTION:"] {
             assert!(
                 p.contains(section),
                 "summary_prompt missing section {section}. Got:\n{p}"
