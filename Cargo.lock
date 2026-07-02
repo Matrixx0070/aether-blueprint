@@ -42,6 +42,7 @@ dependencies = [
  "aether-crypto-audit",
  "aether-dast",
  "aether-deps-reach",
+ "aether-distrib",
  "aether-drift",
  "aether-ebpf",
  "aether-explain",
@@ -221,10 +222,13 @@ dependencies = [
 name = "aether-distrib"
 version = "0.39.0"
 dependencies = [
+ "aether-secrets",
  "anyhow",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
+ "walkdir",
 ]
 
 [[package]]

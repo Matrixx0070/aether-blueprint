@@ -91,7 +91,17 @@ macro_rules! rule {
     };
 }
 
-fn rules() -> Vec<(&'static str, &'static str, Regex, SecretSeverity, f64, &'static str)> {
+type RuleTuple = (&'static str, &'static str, Regex, SecretSeverity, f64, &'static str);
+
+/// PERF (HH-A, 2026-07-02): this used to be a plain fn that rebuilt
+/// (and recompiled) every regex on EVERY call. `scan_line` calls it
+/// once per line, so scanning a large file (e.g. a 70K-line source
+/// file) recompiled ~30 regexes ~70,000 times — a distributed-scan
+/// live smoke against aether-cli's own main.rs surfaced this as a
+/// worker process pegged at high CPU for minutes. `Lazy` compiles
+/// the ruleset exactly once per process, matching the pattern
+/// already used for ALLOWLIST_PATTERNS above.
+static RULES: Lazy<Vec<RuleTuple>> = Lazy::new(|| {
     vec![
         // ── Cloud credentials ──────────────────────────────────────────────
         (
@@ -246,7 +256,7 @@ fn rules() -> Vec<(&'static str, &'static str, Regex, SecretSeverity, f64, &'sta
             "Revoke at console.anthropic.com. Check usage for abuse."
         ),
     ]
-}
+});
 
 // ── Redaction ─────────────────────────────────────────────────────────────────
 
@@ -277,9 +287,9 @@ fn is_allowlisted(value: &str) -> bool {
 
 pub fn scan_line(line: &str, source: &str, line_num: usize, seen: &mut HashSet<String>) -> Vec<SecretFinding> {
     let mut findings = Vec::new();
-    let rules = rules();
+    let rules = &*RULES;
 
-    for (rule_id, rule_name, re, severity, min_entropy, rec) in &rules {
+    for (rule_id, rule_name, re, severity, min_entropy, rec) in rules {
         if let Some(m) = re.find(line) {
             let matched = m.as_str();
             // Allowlist check
@@ -501,5 +511,40 @@ mod tests {
             // Don't assert on findings count (varies by repo state)
             assert!(result.is_ok());
         }
+    }
+
+    /// PERF regression guard (HH-A, 2026-07-02): `rules()` used to be a
+    /// plain fn rebuilding + recompiling ~30 regexes on EVERY call, and
+    /// `scan_line` calls it once per line — so a 70K-line file recompiled
+    /// the whole ruleset ~70,000 times. This surfaced as a distributed-
+    /// scan worker process pegged at high CPU for minutes when pointed
+    /// at aether-cli's own main.rs. Scanning a large synthetic file must
+    /// complete in low milliseconds, not tens of seconds — a wide,
+    /// generous bound (2s) that still fails hard if the ruleset is ever
+    /// un-cached again, while leaving headroom for slow CI machines.
+    #[test]
+    fn scan_file_on_large_input_is_fast() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp = std::env::temp_dir()
+            .join(format!("aether-secrets-perf-{}-{}", std::process::id(), nanos));
+        let mut content = String::with_capacity(20_000 * 40);
+        for i in 0..20_000 {
+            content.push_str(&format!("let ordinary_line_{i} = do_nothing_interesting();\n"));
+        }
+        std::fs::write(&tmp, &content).unwrap();
+        let start = std::time::Instant::now();
+        let mut seen = std::collections::HashSet::new();
+        let result = scan_file(&tmp, &mut seen);
+        let elapsed = start.elapsed();
+        let _ = std::fs::remove_file(&tmp);
+        assert!(result.is_ok());
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "scanning 20,000 ordinary lines took {elapsed:?} — the regex \
+             ruleset is being rebuilt per-line again (see RULES: Lazy<...>)"
+        );
     }
 }

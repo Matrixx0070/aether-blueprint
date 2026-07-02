@@ -383,10 +383,31 @@ enum Cmd {
         #[arg(long)]
         launch: bool,
     },
-    /// Distributed analysis (TIER 24).
+    /// Distributed analysis (TIER 24): fan a secrets scan out across
+    /// N real OS worker processes. `--target <dir>` runs the
+    /// coordinator; without it, prints legacy status text
+    /// (back-compat with the pre-HH-A demo output).
     Distributed {
+        /// Legacy demo argument — kept for back-compat.
         #[arg(long)]
         node: Option<String>,
+        /// Directory to scan. Presence of this flag switches into
+        /// real coordinator mode.
+        #[arg(long)]
+        target: Option<String>,
+        /// Number of real child worker processes to spawn.
+        #[arg(long, default_value_t = 4)]
+        workers: usize,
+        /// Emit JSON instead of a human-readable summary.
+        #[arg(long)]
+        json: bool,
+        /// Internal: run as a worker process. Reads absolute file
+        /// paths from stdin (one per line) until EOF, scans each with
+        /// aether-secrets, and writes one JSON WorkerResult line to
+        /// stdout. Not intended for direct operator use — the
+        /// coordinator spawns this itself via `current_exe`.
+        #[arg(long, hide = true)]
+        worker: bool,
     },
     /// Nation-state defense toolkit (TIER 25).
     NationState {
@@ -1547,13 +1568,50 @@ async fn main() -> Result<()> {
             }
             return Ok(());
         }
-        Some(Cmd::Distributed { node }) => {
+        Some(Cmd::Distributed { node, target, workers, json, worker }) => {
+            // HH-A: `--worker` is the child-process entry point. It is
+            // spawned BY the coordinator (see spawn_distributed_worker
+            // in aether-distrib) with stdin/stdout piped — reaching
+            // this branch directly from a terminal just runs one
+            // worker over whatever is on stdin, which is harmless but
+            // not the intended UX (hence `hide = true` on the flag).
+            if worker {
+                let stdin = std::io::stdin();
+                let stdout = std::io::stdout();
+                aether_distrib::run_worker(stdin.lock(), stdout.lock())?;
+                return Ok(());
+            }
+            if let Some(dir) = target {
+                let path = std::path::Path::new(&dir);
+                let report = aether_distrib::scan_directory_distributed(path, workers.max(1))
+                    .with_context(|| format!("distributed scan of {dir}"))?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!("[TIER 24] Distributed Analysis — {} real worker process(es)", report.worker_count);
+                    println!("  target:         {}", report.target);
+                    println!("  files scanned:  {}", report.total_files);
+                    println!("  wall time:      {}ms", report.wall_ms);
+                    println!("  findings:       {}", report.total_findings);
+                    for w in &report.workers {
+                        println!(
+                            "    worker pid={:<8} files={:<5} findings={:<4} elapsed={}ms",
+                            w.pid, w.files_scanned, w.findings.len(), w.elapsed_ms
+                        );
+                    }
+                    for f in report.all_findings() {
+                        println!("  [{:?}] {} — {}:{} ({})", f.severity, f.rule_name, f.source, f.line, f.snippet);
+                    }
+                }
+                return Ok(());
+            }
+            // Legacy demo path — back-compat for the pre-HH-A `--node` UX.
             println!("[TIER 24] Distributed Analysis");
+            println!("  Note: pass --target <dir> [--workers N] for a real multi-process scan");
             if let Some(id) = node {
                 println!("  Node: {}", id);
                 println!("  Peers: (connecting...)");
                 println!("  Analysis State: Ready");
-                println!("  Note: Federated analysis uses local scan + aether supply-chain watch mode");
             }
             return Ok(());
         }
@@ -65628,6 +65686,22 @@ mod tests {
     use aether_core::mock::MockLlmProvider;
     use aether_llm::{ContentBlock, MessagesResponse, StopReason};
 
+    /// HH-A follow-up (2026-07-02): `cargo test --workspace` surfaced
+    /// a flake in `g3_resume_drops_trailing_unanswered_tool_use` under
+    /// full parallel execution — every test in this module that calls
+    /// `std::env::set_var("HOME", ...)` mutates GLOBAL process state,
+    /// so two such tests running on different threads at the same
+    /// time can read each other's HOME mid-test. This lock serializes
+    /// every HOME-mutating test (see call sites below) without
+    /// affecting the rest of the suite's parallelism. Handles a
+    /// poisoned lock (a prior HOME-mutating test panicking) by taking
+    /// the inner value anyway — a poisoned HOME-test-lock must not
+    /// cascade into every subsequent HOME-test failing too.
+    static HOME_ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    fn lock_home_env() -> std::sync::MutexGuard<'static, ()> {
+        HOME_ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Y1: AuthnRequest XML emits the required attributes and the
     /// Issuer body matches the SP entity ID. Pin IssueInstant + ID so
     /// the assertion is stable across runs.
@@ -66171,6 +66245,7 @@ mod tests {
     /// base64 fields and persists the file at 0600.
     #[test]
     fn y7_session_token_format_and_mode() {
+        let _home_lock = lock_home_env();
         use base64::Engine as _;
         let dir = std::env::temp_dir().join(format!(
             "aether-y7-{}-{}",
@@ -66380,6 +66455,7 @@ mod tests {
     /// the field fails loudly.
     #[test]
     fn cc4_apply_persists_metadata_fingerprint() {
+        let _home_lock = lock_home_env();
         let _guard = aether_core::mock::ENV_TEST_LOCK
             .lock()
             .expect("env lock");
@@ -66435,6 +66511,7 @@ mod tests {
     /// shape + the cert count + the directory contents.
     #[test]
     fn bb6_apply_metadata_persists_url_and_lays_out_certs() {
+        let _home_lock = lock_home_env();
         let _guard = aether_core::mock::ENV_TEST_LOCK
             .lock()
             .expect("env lock");
@@ -66507,6 +66584,7 @@ mod tests {
     /// different cert — old cert MUST NOT be retained.
     #[test]
     fn bb6_apply_metadata_clears_stale_certs_on_rotation() {
+        let _home_lock = lock_home_env();
         let _guard = aether_core::mock::ENV_TEST_LOCK
             .lock()
             .expect("env lock");
@@ -67575,6 +67653,7 @@ BBBB-SECOND-CERT
     /// also gates.
     #[test]
     fn dd5_apply_bails_on_expired_metadata() {
+        let _home_lock = lock_home_env();
         let _guard = aether_core::mock::ENV_TEST_LOCK
             .lock()
             .expect("env lock");
@@ -67617,6 +67696,7 @@ BBBB-SECOND-CERT
     /// persists `null` (or absent) when it doesn't.
     #[test]
     fn dd5_apply_persists_valid_until_when_present() {
+        let _home_lock = lock_home_env();
         let _guard = aether_core::mock::ENV_TEST_LOCK
             .lock()
             .expect("env lock");
@@ -67828,6 +67908,7 @@ BBBB-SECOND-CERT
     /// null when it doesn't.
     #[test]
     fn ee5_apply_persists_cache_duration_when_present() {
+        let _home_lock = lock_home_env();
         let _guard = aether_core::mock::ENV_TEST_LOCK
             .lock()
             .expect("env lock");
@@ -69061,6 +69142,7 @@ BBBB-SECOND-CERT
     /// reconstructs it faithfully.
     #[test]
     fn g3_resume_reconstructs_tool_use_and_results() {
+        let _home_lock = lock_home_env();
         let tmp = std::env::temp_dir().join(format!("aether-g3-test-{}", std::process::id()));
         std::fs::create_dir_all(tmp.join(".aether/sessions")).unwrap();
         let session_id = "g3-fixture";
@@ -69129,6 +69211,7 @@ BBBB-SECOND-CERT
     /// pre-flight repair to paper over it.
     #[test]
     fn g3_resume_drops_trailing_unanswered_tool_use() {
+        let _home_lock = lock_home_env();
         let tmp = std::env::temp_dir().join(format!("aether-g3b-test-{}", std::process::id()));
         std::fs::create_dir_all(tmp.join(".aether/sessions")).unwrap();
         let session_id = "g3b-fixture";
@@ -69254,6 +69337,7 @@ BBBB-SECOND-CERT
     /// exists.
     #[test]
     fn gg2_scim_and_tenant_bearers_are_isolated() {
+        let _home_lock = lock_home_env();
         let tmp = std::env::temp_dir().join(format!("aether-gg2-test-{}", std::process::id()));
         std::fs::create_dir_all(tmp.join(".aether")).unwrap();
         let real_home = std::env::var_os("HOME");
@@ -69316,6 +69400,7 @@ BBBB-SECOND-CERT
     /// `PATCH .../active false` deactivation is supposed to achieve.
     #[test]
     fn gg3_deactivated_bearer_rejected_by_tenant_acl() {
+        let _home_lock = lock_home_env();
         let tmp = std::env::temp_dir().join(format!("aether-gg3-test-{}", std::process::id()));
         std::fs::create_dir_all(tmp.join(".aether")).unwrap();
         let real_home = std::env::var_os("HOME");

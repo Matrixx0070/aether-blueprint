@@ -29,6 +29,7 @@ aether-zk.workspace = true
 aether-threat-model.workspace = true
 aether-redteam.workspace = true
 aether-nsd.workspace = true
+aether-distrib.workspace = true
 aether-secrets.workspace = true
 aether-sbom.workspace = true
 aether-harden.workspace = true
