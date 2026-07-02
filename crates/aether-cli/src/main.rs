@@ -289,6 +289,16 @@ enum Cmd {
         #[command(subcommand)]
         sub: TenantCmd,
     },
+    /// SCIM 2.0 (RFC 7643/7644) provisioning admin: configure the
+    /// dedicated provisioning bearer that an enterprise IdP presents to
+    /// `/scim/v2/*` on `aether serve`. Distinct from both AETHER_SERVE_TOKEN
+    /// and any tenant bearer in ~/.aether/tenants.json — a leaked SCIM
+    /// token cannot be used against /v1/messages or /v1/trust, and vice
+    /// versa. Stored at ~/.aether/scim.json (mode 0600).
+    Scim {
+        #[command(subcommand)]
+        sub: ScimCmd,
+    },
     /// Webhook notifications: register HTTPS endpoints that fire on
     /// key events. Stored at ~/.aether/webhooks.json (mode 0600).
     /// Each POST carries an X-Aether-Signature: sha256=<hex> header.
@@ -775,6 +785,31 @@ enum TenantCmd {
 }
 
 #[derive(Subcommand, Debug)]
+enum ScimCmd {
+    /// Configure (or rotate) the SCIM provisioning bearer. Hashed
+    /// (sha256) before being stored at ~/.aether/scim.json — the raw
+    /// token is never on disk. This is the ONLY credential
+    /// `/scim/v2/*` routes accept; it is checked against a separate
+    /// store from ~/.aether/tenants.json, so a SCIM token can never be
+    /// replayed against /v1/messages, /v1/trust, or /ws/chat.
+    Configure {
+        /// The provisioning bearer to hash + persist. Use --from-stdin
+        /// to avoid it landing in shell history.
+        #[arg(long)]
+        token: Option<String>,
+        #[arg(long, default_value_t = false)]
+        from_stdin: bool,
+    },
+    /// Show whether SCIM is configured (never prints the bearer or its
+    /// hash in full — first 16 hex chars only, same convention as
+    /// `aether tenant list`).
+    Status,
+    /// Remove the SCIM config — `/scim/v2/*` routes then 501 until
+    /// reconfigured.
+    Remove,
+}
+
+#[derive(Subcommand, Debug)]
 enum WebhookCmd {
     /// List configured webhooks.
     List,
@@ -1127,6 +1162,9 @@ async fn main() -> Result<()> {
         }
         Some(Cmd::Tenant { sub }) => {
             return tenant_cmd(sub);
+        }
+        Some(Cmd::Scim { sub }) => {
+            return scim_cmd(sub);
         }
         Some(Cmd::Webhook { sub }) => {
             return webhook_cmd(sub).await;
@@ -5154,6 +5192,17 @@ async fn run_serve(
         .route("/admin/reload-pool", post(admin_reload_pool_handler))
         .route("/metrics", axum::routing::get(metrics_handler))
         .route("/healthz", axum::routing::get(|| async { "ok" }))
+        // GG: SCIM 2.0 provisioning — separate bearer scheme (scim.json),
+        // gated 501 until `aether scim configure` runs.
+        .route(
+            "/scim/v2/Users",
+            axum::routing::get(scim_list_users_handler).post(scim_create_user_handler),
+        )
+        .route(
+            "/scim/v2/Users/:id",
+            axum::routing::patch(scim_patch_user_handler).delete(scim_delete_user_handler),
+        )
+        .route("/scim/v2/Groups", axum::routing::get(scim_list_groups_handler))
         .with_state(state.clone());
     let listener = tokio::net::TcpListener::bind(bind)
         .await
@@ -5180,6 +5229,10 @@ async fn run_serve(
     eprintln!("  GET  /metrics      Prometheus text-format counters (turns, tool_calls, complete, 4xx, 429, rollback)");
     eprintln!("  POST /admin/reload-pool   clear the LLM provider pool (bearer-protected; use after `aether sso login`)");
     eprintln!("  GET  /healthz");
+    eprintln!("  GET  /scim/v2/Users          list (bearer-protected by `aether scim configure`; ?filter=userName eq \"...\")");
+    eprintln!("  POST /scim/v2/Users          provision (body: userName + aether extension {{bearer, tenant, global}})");
+    eprintln!("  PATCH/DEL /scim/v2/Users/:id deactivate/reactivate (replace active) or delete");
+    eprintln!("  GET  /scim/v2/Groups         tenants-as-groups (read-only)");
     eprintln!(
         "  [rate-limit: {} rpm/IP, max-sessions: {}]",
         state.rate.rpm, state.max_sessions
@@ -5547,6 +5600,15 @@ fn check_tenant_acl(
             "bearer not in tenant ACL",
         ));
     };
+    // GG3: a bearer deactivated via SCIM (PATCH .../active false) is locked
+    // out of every ACL-gated route, not just the SCIM routes themselves —
+    // deactivation must be immediate and total.
+    if !row.active {
+        return Err(trust_error_response(
+            403,
+            "bearer deactivated (SCIM active=false)",
+        ));
+    }
     match tenant {
         Some(slug) => {
             if !row.allowed_tenants.iter().any(|t| t == slug) {
@@ -62902,6 +62964,27 @@ struct TenantAclRow {
     /// Compared against `SELECT SUM(cost_usd) FROM turns WHERE …`.
     #[serde(default)]
     daily_cost_usd_cap: Option<f64>,
+    /// GG3: SCIM-managed activation flag. `#[serde(default = "default_true")]`
+    /// keeps every pre-GG row (written by `aether tenant grant`, which has no
+    /// concept of deactivation) active by default. A SCIM `PATCH .../active
+    /// false` sets this to false WITHOUT deleting the row — the audit trail
+    /// (who granted, which tenants) survives a deactivation, only a DELETE
+    /// removes the row outright. `check_tenant_acl` treats active=false as
+    /// a hard 403 on every route the ACL gates, not just SCIM's own routes —
+    /// an operator deactivating a compromised bearer via the IdP must see
+    /// that bearer locked out everywhere immediately.
+    #[serde(default = "default_true")]
+    active: bool,
+    /// GG1/GG4: the SCIM `userName` this bearer was provisioned under
+    /// (e.g. an email address). `aether tenant grant` never sets this —
+    /// only SCIM POST does. `GET /scim/v2/Users?filter=userName eq "..."`
+    /// matches against this field, not the bearer hash.
+    #[serde(default)]
+    scim_user_name: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn tenants_acl_path() -> Result<PathBuf> {
@@ -63010,6 +63093,8 @@ fn tenant_cmd(sub: TenantCmd) -> Result<()> {
                     global,
                     rpm_cap,
                     daily_cost_usd_cap,
+                    active: true,
+                    scim_user_name: None,
                 });
                 eprintln!(
                     "[tenant] new row: bearer={}… → tenants=[{}], global={}, rpm_cap={:?}, daily_cost_usd_cap={:?}",
@@ -63062,6 +63147,523 @@ fn tenant_cmd(sub: TenantCmd) -> Result<()> {
             Ok(())
         }
     }
+}
+
+// ── GG: SCIM 2.0 provisioning ────────────────────────────────────────────
+
+/// GG2: the ONLY credential accepted by `/scim/v2/*`. Deliberately a
+/// separate on-disk store from `TenantAcl` (tenants.json) — a SCIM
+/// bearer hash living in a different file, checked by a different
+/// function, means there is no code path where a tenant bearer
+/// authenticates a SCIM request or vice versa.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct ScimConfig {
+    #[serde(default = "default_acl_version")]
+    version: u32,
+    bearer_sha256: String,
+}
+
+fn scim_config_path() -> Result<PathBuf> {
+    let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME not set"))?;
+    Ok(PathBuf::from(home).join(".aether/scim.json"))
+}
+
+fn load_scim_config() -> Result<Option<ScimConfig>> {
+    let path = scim_config_path()?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+    let cfg: ScimConfig = serde_json::from_slice(&bytes)
+        .with_context(|| format!("parse {}", path.display()))?;
+    Ok(Some(cfg))
+}
+
+fn save_scim_config(cfg: &ScimConfig) -> Result<()> {
+    let path = scim_config_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let json = serde_json::to_string_pretty(cfg)?;
+    std::fs::write(&path, json).with_context(|| format!("write {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+/// GG3: append-only audit trail for every SCIM mutation (create /
+/// deactivate / reactivate / delete), mirroring the JSONL-sidecar
+/// convention used elsewhere in this codebase (session logs, webhook
+/// deliveries) rather than adding a sqlite table for a low-volume,
+/// admin-facing log. 0600, one JSON object per line.
+fn scim_audit_path() -> Result<PathBuf> {
+    let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME not set"))?;
+    Ok(PathBuf::from(home).join(".aether/scim_audit.jsonl"))
+}
+
+fn scim_audit_append(action: &str, target_id: &str, tenant: Option<&str>, detail: &str) {
+    let Ok(path) = scim_audit_path() else { return };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let line = serde_json::json!({
+        "ts": SessionLine::ts_now(),
+        "action": action,
+        "target_id": target_id,
+        "tenant": tenant,
+        "detail": detail,
+    });
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "{line}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
+    }
+}
+
+fn scim_cmd(sub: ScimCmd) -> Result<()> {
+    match sub {
+        ScimCmd::Configure { token, from_stdin } => {
+            let raw = read_bearer_arg(token, from_stdin)?;
+            if raw.is_empty() {
+                anyhow::bail!("token is empty");
+            }
+            let hash = sha256_hex(&raw);
+            save_scim_config(&ScimConfig {
+                version: default_acl_version(),
+                bearer_sha256: hash.clone(),
+            })?;
+            eprintln!(
+                "[scim configure] wrote {} (0600); bearer_sha256={}…",
+                scim_config_path()?.display(),
+                &hash[..16.min(hash.len())],
+            );
+            Ok(())
+        }
+        ScimCmd::Status => {
+            let path = scim_config_path()?;
+            match load_scim_config()? {
+                Some(cfg) => {
+                    println!("scim: configured at {}", path.display());
+                    println!(
+                        "  bearer_sha256: {}…",
+                        &cfg.bearer_sha256[..16.min(cfg.bearer_sha256.len())]
+                    );
+                }
+                None => println!(
+                    "scim: not configured — run `aether scim configure --token <token>` \
+                     (/scim/v2/* returns 501 until then)"
+                ),
+            }
+            Ok(())
+        }
+        ScimCmd::Remove => {
+            let path = scim_config_path()?;
+            match std::fs::remove_file(&path) {
+                Ok(_) => eprintln!("[scim] removed {}", path.display()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    eprintln!("[scim] not configured (nothing to remove)");
+                }
+                Err(e) => anyhow::bail!("remove {}: {e}", path.display()),
+            }
+            Ok(())
+        }
+    }
+}
+
+/// GG2: `/scim/v2/*` bearer check against the DEDICATED scim.json
+/// store — NOT tenants.json, NOT AETHER_SERVE_TOKEN. Absent config is
+/// 501 (feature not enabled), not 401/403 — an operator who hasn't run
+/// `aether scim configure` gets a clear "not enabled" signal instead
+/// of an ambiguous auth failure.
+fn check_scim_bearer(headers: &axum::http::HeaderMap) -> Result<(), axum::response::Response> {
+    let Some(cfg) = load_scim_config().ok().flatten() else {
+        return Err(scim_error_response(
+            501,
+            "notImplemented",
+            "SCIM is not configured — run `aether scim configure --token <token>`",
+        ));
+    };
+    let bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(|s| s.trim())
+        .unwrap_or("");
+    if bearer.is_empty() || !constant_time_eq(sha256_hex(bearer).as_bytes(), cfg.bearer_sha256.as_bytes()) {
+        return Err(scim_error_response(
+            401,
+            "invalidCredentials",
+            "valid Authorization: Bearer <SCIM provisioning token> required",
+        ));
+    }
+    Ok(())
+}
+
+/// RFC 7644 §3.12 SCIM error response shape.
+fn scim_error_response(status: u16, scim_type: &str, detail: &str) -> axum::response::Response {
+    if (400..500).contains(&status) {
+        bump(&METRIC_4XX_TOTAL);
+    }
+    let body = serde_json::json!({
+        "schemas": ["urn:ietf:params:scim:api:messages:2.0:Error"],
+        "status": status.to_string(),
+        "scimType": scim_type,
+        "detail": detail,
+    });
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::from_u16(status).unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR))
+        .header("content-type", "application/scim+json")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap_or_default()
+}
+
+/// GG1: render one ACL row as a SCIM `User` resource. `id` is the full
+/// bearer sha256 hex (stable, unique, never the bearer itself).
+fn scim_user_resource(row: &TenantAclRow) -> serde_json::Value {
+    serde_json::json!({
+        "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+        "id": row.bearer_sha256,
+        "userName": row.scim_user_name.clone().unwrap_or_else(|| row.bearer_sha256.clone()),
+        "active": row.active,
+        "urn:ietf:params:scim:schemas:extension:aether:1.0:User": {
+            "tenants": row.allowed_tenants,
+            "global": row.global,
+        },
+        "meta": { "resourceType": "User" },
+    })
+}
+
+/// GG4: minimal RFC 7644 §3.4.2.2 filter subset — `<attr> eq "<value>"`
+/// (only `userName` is a meaningful attribute in this token-identity
+/// model). Anything else is an explicit 400 citing the supported
+/// subset rather than a silent no-match — an IdP misconfigured to
+/// filter on `emails` or use `co`/`sw` operators should see why lookup
+/// isn't working, not get an empty result set.
+fn parse_scim_eq_filter(filter: &str) -> Result<(String, String), String> {
+    let trimmed = filter.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let Some(eq_pos) = lower.find(" eq ") else {
+        return Err(format!(
+            "unsupported filter `{trimmed}` — only `<attr> eq \"<value>\"` is supported"
+        ));
+    };
+    let attr = trimmed[..eq_pos].trim().to_string();
+    let rest = trimmed[eq_pos + 4..].trim();
+    let value = rest
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .ok_or_else(|| format!("filter value must be double-quoted: `{trimmed}`"))?;
+    if attr.is_empty() || value.is_empty() {
+        return Err(format!("empty attribute or value in filter: `{trimmed}`"));
+    }
+    Ok((attr, value.to_string()))
+}
+
+#[derive(serde::Deserialize)]
+struct ScimListQuery {
+    filter: Option<String>,
+}
+
+/// `GET /scim/v2/Users` — optionally filtered by `?filter=userName eq "..."`.
+async fn scim_list_users_handler(
+    axum::extract::State(state): axum::extract::State<ServeState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<ScimListQuery>,
+) -> axum::response::Response {
+    let ip = extract_client_ip(&headers);
+    if let Err(resp) = rate_check(&state, &ip) {
+        return resp;
+    }
+    if let Err(resp) = check_scim_bearer(&headers) {
+        return resp;
+    }
+    let acl = load_tenant_acl().ok().flatten().unwrap_or_default();
+    let rows: Vec<&TenantAclRow> = match query.filter.as_deref() {
+        None => acl.acls.iter().collect(),
+        Some(f) => {
+            let (attr, value) = match parse_scim_eq_filter(f) {
+                Ok(v) => v,
+                Err(msg) => return scim_error_response(400, "invalidFilter", &msg),
+            };
+            if !attr.eq_ignore_ascii_case("userName") {
+                return scim_error_response(
+                    400,
+                    "invalidFilter",
+                    &format!("only the `userName` attribute is filterable, got `{attr}`"),
+                );
+            }
+            acl.acls
+                .iter()
+                .filter(|r| r.scim_user_name.as_deref() == Some(value.as_str()))
+                .collect()
+        }
+    };
+    let resources: Vec<serde_json::Value> = rows.iter().map(|r| scim_user_resource(r)).collect();
+    let body = serde_json::json!({
+        "schemas": ["urn:ietf:params:scim:api:messages:2.0:ListResponse"],
+        "totalResults": resources.len(),
+        "Resources": resources,
+    });
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header("content-type", "application/scim+json")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap_or_default()
+}
+
+/// GG1/GG3: body accepted by `POST /scim/v2/Users`. The token-identity
+/// model has no username/password — the IdP-provisioned bearer travels
+/// in the aether extension attribute; `userName` is a human label used
+/// only for filtering/display. Aliasing `active` to default true
+/// matches SCIM core's implicit-active-on-create convention.
+#[derive(serde::Deserialize)]
+struct ScimCreateUserRequest {
+    #[serde(rename = "userName")]
+    user_name: Option<String>,
+    #[serde(default = "default_true")]
+    active: bool,
+    #[serde(rename = "urn:ietf:params:scim:schemas:extension:aether:1.0:User")]
+    aether_ext: ScimAetherExtension,
+}
+
+#[derive(serde::Deserialize)]
+struct ScimAetherExtension {
+    bearer: String,
+    tenant: String,
+    #[serde(default)]
+    global: bool,
+}
+
+/// `POST /scim/v2/Users` — GG3 lifecycle: grants the tenant in the
+/// aether extension attribute for the presented bearer, creating or
+/// updating the ACL row (same upsert semantics as `aether tenant
+/// grant`). Returns 201 with the SCIM User representation.
+async fn scim_create_user_handler(
+    axum::extract::State(state): axum::extract::State<ServeState>,
+    headers: axum::http::HeaderMap,
+    body: axum::Json<ScimCreateUserRequest>,
+) -> axum::response::Response {
+    let ip = extract_client_ip(&headers);
+    if let Err(resp) = rate_check(&state, &ip) {
+        return resp;
+    }
+    if let Err(resp) = check_scim_bearer(&headers) {
+        return resp;
+    }
+    let bearer_raw = body.0.aether_ext.bearer.trim().to_string();
+    if bearer_raw.is_empty() {
+        return scim_error_response(
+            400,
+            "invalidValue",
+            "the aether extension `bearer` attribute is required",
+        );
+    }
+    let tenant = body.0.aether_ext.tenant.trim().to_string();
+    if tenant.is_empty() {
+        return scim_error_response(400, "invalidValue", "the aether extension `tenant` attribute is required");
+    }
+    let bearer_hash = sha256_hex(&bearer_raw);
+    let mut acl = load_tenant_acl().ok().flatten().unwrap_or_default();
+    if let Some(row) = acl.acls.iter_mut().find(|r| r.bearer_sha256 == bearer_hash) {
+        if !row.allowed_tenants.iter().any(|t| t == &tenant) {
+            row.allowed_tenants.push(tenant.clone());
+        }
+        if body.0.aether_ext.global {
+            row.global = true;
+        }
+        row.active = body.0.active;
+        row.scim_user_name = body.0.user_name.clone();
+    } else {
+        acl.acls.push(TenantAclRow {
+            bearer_sha256: bearer_hash.clone(),
+            allowed_tenants: vec![tenant.clone()],
+            global: body.0.aether_ext.global,
+            rpm_cap: None,
+            daily_cost_usd_cap: None,
+            active: body.0.active,
+            scim_user_name: body.0.user_name.clone(),
+        });
+    }
+    if let Err(e) = save_tenant_acl(&acl) {
+        return scim_error_response(500, "internal", &format!("persist ACL: {e}"));
+    }
+    scim_audit_append("create", &bearer_hash, Some(&tenant), "granted via POST /scim/v2/Users");
+    let row = acl.acls.iter().find(|r| r.bearer_sha256 == bearer_hash).expect("just inserted/updated");
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::CREATED)
+        .header("content-type", "application/scim+json")
+        .body(axum::body::Body::from(scim_user_resource(row).to_string()))
+        .unwrap_or_default()
+}
+
+#[derive(serde::Deserialize)]
+struct ScimPatchOp {
+    op: String,
+    path: Option<String>,
+    value: serde_json::Value,
+}
+
+#[derive(serde::Deserialize)]
+struct ScimPatchRequest {
+    #[serde(rename = "Operations")]
+    operations: Vec<ScimPatchOp>,
+}
+
+/// `PATCH /scim/v2/Users/{id}` — GG3 lifecycle: the ONLY operation
+/// supported is `replace` on `active` (the Okta/Azure-AD deactivate
+/// convention — risk register §GG3). Anything else is a loud 501
+/// rather than a silent no-op, since a SCIM implementation that
+/// pretends to support ops it ignores is worse than one that refuses.
+async fn scim_patch_user_handler(
+    axum::extract::State(state): axum::extract::State<ServeState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    body: axum::Json<ScimPatchRequest>,
+) -> axum::response::Response {
+    let ip = extract_client_ip(&headers);
+    if let Err(resp) = rate_check(&state, &ip) {
+        return resp;
+    }
+    if let Err(resp) = check_scim_bearer(&headers) {
+        return resp;
+    }
+    let mut acl = load_tenant_acl().ok().flatten().unwrap_or_default();
+    let Some(row) = acl.acls.iter_mut().find(|r| r.bearer_sha256 == id) else {
+        return scim_error_response(404, "invalidValue", &format!("no User with id `{id}`"));
+    };
+    for op in &body.0.operations {
+        let is_active_replace = op.op.eq_ignore_ascii_case("replace")
+            && op.path.as_deref().map(|p| p.eq_ignore_ascii_case("active")).unwrap_or(false);
+        if !is_active_replace {
+            return scim_error_response(
+                501,
+                "invalidValue",
+                &format!(
+                    "unsupported PATCH operation `{} {}` — only `replace active <bool>` is implemented",
+                    op.op,
+                    op.path.as_deref().unwrap_or("(no path)")
+                ),
+            );
+        }
+        let Some(new_active) = op.value.as_bool() else {
+            return scim_error_response(400, "invalidValue", "`active` value must be a boolean");
+        };
+        row.active = new_active;
+    }
+    let new_active = row.active;
+    let tenants = row.allowed_tenants.clone();
+    if let Err(e) = save_tenant_acl(&acl) {
+        return scim_error_response(500, "internal", &format!("persist ACL: {e}"));
+    }
+    scim_audit_append(
+        if new_active { "reactivate" } else { "deactivate" },
+        &id,
+        tenants.first().map(|s| s.as_str()),
+        "via PATCH /scim/v2/Users/{id}",
+    );
+    let row = acl.acls.iter().find(|r| r.bearer_sha256 == id).expect("just patched");
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header("content-type", "application/scim+json")
+        .body(axum::body::Body::from(scim_user_resource(row).to_string()))
+        .unwrap_or_default()
+}
+
+/// `DELETE /scim/v2/Users/{id}` — GG3 lifecycle: removes the ACL row
+/// entirely (harder than deactivate — no audit-relevant grant history
+/// survives). 204 on success, 404 if the id doesn't exist.
+async fn scim_delete_user_handler(
+    axum::extract::State(state): axum::extract::State<ServeState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> axum::response::Response {
+    let ip = extract_client_ip(&headers);
+    if let Err(resp) = rate_check(&state, &ip) {
+        return resp;
+    }
+    if let Err(resp) = check_scim_bearer(&headers) {
+        return resp;
+    }
+    let mut acl = load_tenant_acl().ok().flatten().unwrap_or_default();
+    let before = acl.acls.len();
+    let tenant = acl
+        .acls
+        .iter()
+        .find(|r| r.bearer_sha256 == id)
+        .and_then(|r| r.allowed_tenants.first().cloned());
+    acl.acls.retain(|r| r.bearer_sha256 != id);
+    if acl.acls.len() == before {
+        return scim_error_response(404, "invalidValue", &format!("no User with id `{id}`"));
+    }
+    if let Err(e) = save_tenant_acl(&acl) {
+        return scim_error_response(500, "internal", &format!("persist ACL: {e}"));
+    }
+    scim_audit_append("delete", &id, tenant.as_deref(), "via DELETE /scim/v2/Users/{id}");
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::NO_CONTENT)
+        .body(axum::body::Body::empty())
+        .unwrap_or_default()
+}
+
+/// `GET /scim/v2/Groups` — GG1: read-only. Each distinct tenant slug
+/// across all ACL rows becomes a Group; `members` lists the bearer
+/// hashes granted that tenant. No POST/PATCH/DELETE — per Plan GG
+/// scope, group membership is managed exclusively via the Users
+/// resource's `tenant` extension attribute.
+async fn scim_list_groups_handler(
+    axum::extract::State(state): axum::extract::State<ServeState>,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    let ip = extract_client_ip(&headers);
+    if let Err(resp) = rate_check(&state, &ip) {
+        return resp;
+    }
+    if let Err(resp) = check_scim_bearer(&headers) {
+        return resp;
+    }
+    let acl = load_tenant_acl().ok().flatten().unwrap_or_default();
+    let mut tenants: Vec<String> = acl
+        .acls
+        .iter()
+        .flat_map(|r| r.allowed_tenants.iter().cloned())
+        .collect();
+    tenants.sort();
+    tenants.dedup();
+    let resources: Vec<serde_json::Value> = tenants
+        .iter()
+        .map(|t| {
+            let members: Vec<serde_json::Value> = acl
+                .acls
+                .iter()
+                .filter(|r| r.allowed_tenants.iter().any(|x| x == t))
+                .map(|r| serde_json::json!({ "value": r.bearer_sha256, "display": r.scim_user_name }))
+                .collect();
+            serde_json::json!({
+                "schemas": ["urn:ietf:params:scim:schemas:core:2.0:Group"],
+                "id": t,
+                "displayName": t,
+                "members": members,
+                "meta": { "resourceType": "Group" },
+            })
+        })
+        .collect();
+    let body = serde_json::json!({
+        "schemas": ["urn:ietf:params:scim:api:messages:2.0:ListResponse"],
+        "totalResults": resources.len(),
+        "Resources": resources,
+    });
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header("content-type", "application/scim+json")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap_or_default()
 }
 
 // ── U2: webhook notifications ────────────────────────────────────────────
@@ -68567,6 +69169,188 @@ BBBB-SECOND-CERT
             "dangling tool_use must be dropped, not left unbalanced: {:?}",
             session.history
         );
+    }
+
+    // ── Plan GG: SCIM 2.0 provisioning ─────────────────────────────────────
+
+    #[test]
+    fn gg4_parse_eq_filter_happy_path() {
+        let (attr, value) = parse_scim_eq_filter(r#"userName eq "alice@example.com""#).unwrap();
+        assert_eq!(attr, "userName");
+        assert_eq!(value, "alice@example.com");
+    }
+
+    #[test]
+    fn gg4_parse_eq_filter_case_insensitive_operator() {
+        // RFC 7644 §3.4.2.2 operators are case-insensitive.
+        let (attr, value) = parse_scim_eq_filter(r#"userName EQ "bob""#).unwrap();
+        assert_eq!(attr, "userName");
+        assert_eq!(value, "bob");
+    }
+
+    #[test]
+    fn gg4_parse_eq_filter_rejects_unsupported_operator() {
+        let err = parse_scim_eq_filter(r#"userName co "ali""#).unwrap_err();
+        assert!(err.contains("unsupported filter"), "{err}");
+    }
+
+    #[test]
+    fn gg4_parse_eq_filter_rejects_unquoted_value() {
+        let err = parse_scim_eq_filter("userName eq alice").unwrap_err();
+        assert!(err.contains("double-quoted"), "{err}");
+    }
+
+    #[test]
+    fn gg4_parse_eq_filter_rejects_empty_value() {
+        let err = parse_scim_eq_filter(r#"userName eq """#).unwrap_err();
+        assert!(err.contains("empty"), "{err}");
+    }
+
+    /// GG1: the SCIM User resource shape carries the stable id (full
+    /// bearer hash, never the raw bearer), the human userName label,
+    /// active flag, and the aether tenant/global extension.
+    #[test]
+    fn gg1_scim_user_resource_shape() {
+        let row = aether_cli_test_tenant_row();
+        let v = scim_user_resource(&row);
+        assert_eq!(v["id"], row.bearer_sha256);
+        assert_eq!(v["userName"], "alice@example.com");
+        assert_eq!(v["active"], true);
+        assert_eq!(
+            v["urn:ietf:params:scim:schemas:extension:aether:1.0:User"]["tenants"][0],
+            "acme"
+        );
+    }
+
+    /// GG1: with no scim_user_name set (a bearer granted via `aether
+    /// tenant grant`, never provisioned through SCIM), userName falls
+    /// back to the bearer hash rather than emitting null/empty.
+    #[test]
+    fn gg1_scim_user_resource_falls_back_username_to_hash() {
+        let mut row = aether_cli_test_tenant_row();
+        row.scim_user_name = None;
+        let v = scim_user_resource(&row);
+        assert_eq!(v["userName"], row.bearer_sha256);
+    }
+
+    fn aether_cli_test_tenant_row() -> TenantAclRow {
+        TenantAclRow {
+            bearer_sha256: sha256_hex("test-bearer-gg"),
+            allowed_tenants: vec!["acme".to_string()],
+            global: false,
+            rpm_cap: None,
+            daily_cost_usd_cap: None,
+            active: true,
+            scim_user_name: Some("alice@example.com".to_string()),
+        }
+    }
+
+    /// GG2 (privilege separation, risk register §GG2): a bearer
+    /// configured as the SCIM provisioning token must NOT authenticate
+    /// against the tenant ACL, and a tenant bearer must NOT
+    /// authenticate against SCIM — they live in separate on-disk
+    /// stores (scim.json vs tenants.json) checked by separate
+    /// functions, so this test pins that no accidental cross-check
+    /// exists.
+    #[test]
+    fn gg2_scim_and_tenant_bearers_are_isolated() {
+        let tmp = std::env::temp_dir().join(format!("aether-gg2-test-{}", std::process::id()));
+        std::fs::create_dir_all(tmp.join(".aether")).unwrap();
+        let real_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", &tmp);
+
+        let scim_token = "scim-provisioning-token";
+        let tenant_token = "tenant-bearer-token";
+        save_scim_config(&ScimConfig {
+            version: 1,
+            bearer_sha256: sha256_hex(scim_token),
+        })
+        .unwrap();
+        save_tenant_acl(&TenantAcl {
+            version: 1,
+            acls: vec![TenantAclRow {
+                bearer_sha256: sha256_hex(tenant_token),
+                allowed_tenants: vec!["acme".to_string()],
+                global: false,
+                rpm_cap: None,
+                daily_cost_usd_cap: None,
+                active: true,
+                scim_user_name: None,
+            }],
+        })
+        .unwrap();
+
+        let mut scim_headers = axum::http::HeaderMap::new();
+        scim_headers.insert(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {tenant_token}").parse().unwrap(),
+        );
+        let scim_result = check_scim_bearer(&scim_headers);
+
+        let mut tenant_headers = axum::http::HeaderMap::new();
+        tenant_headers.insert(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {scim_token}").parse().unwrap(),
+        );
+        let tenant_result = check_tenant_acl(&tenant_headers, None);
+
+        if let Some(h) = real_home {
+            std::env::set_var("HOME", h);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        assert!(
+            scim_result.is_err(),
+            "the TENANT bearer must be rejected by SCIM auth"
+        );
+        assert!(
+            tenant_result.is_err(),
+            "the SCIM bearer must be rejected by tenant ACL auth (no tenants.json row for it)"
+        );
+    }
+
+    /// GG3: a row with active=false must be rejected by
+    /// check_tenant_acl on every route it gates, mirroring what a SCIM
+    /// `PATCH .../active false` deactivation is supposed to achieve.
+    #[test]
+    fn gg3_deactivated_bearer_rejected_by_tenant_acl() {
+        let tmp = std::env::temp_dir().join(format!("aether-gg3-test-{}", std::process::id()));
+        std::fs::create_dir_all(tmp.join(".aether")).unwrap();
+        let real_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", &tmp);
+
+        let token = "deactivated-bearer";
+        save_tenant_acl(&TenantAcl {
+            version: 1,
+            acls: vec![TenantAclRow {
+                bearer_sha256: sha256_hex(token),
+                allowed_tenants: vec!["acme".to_string()],
+                global: false,
+                rpm_cap: None,
+                daily_cost_usd_cap: None,
+                active: false,
+                scim_user_name: Some("bob@example.com".to_string()),
+            }],
+        })
+        .unwrap();
+
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {token}").parse().unwrap(),
+        );
+        let result = check_tenant_acl(&headers, Some("acme"));
+
+        if let Some(h) = real_home {
+            std::env::set_var("HOME", h);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        assert!(result.is_err(), "deactivated bearer must be rejected");
     }
 
     // ── v0.7.1 security auto-route ────────────────────────────────────────
