@@ -269,6 +269,230 @@ impl AuditChain {
     }
 }
 
+// ── Real ZK-SNARK (HH-B, 2026-07-02) ───────────────────────────────────────────
+//
+// Everything above this section is a real cryptographic primitive
+// (Merkle proofs, hash commitments, hash-chain audit log) but NONE of
+// it is a zero-knowledge SNARK — a Merkle inclusion proof reveals the
+// sibling path, and a hash commitment reveals the value on opening.
+// This section closes that gap with an actual Groth16 circuit over
+// BN254 (the arkworks ecosystem): a real R1CS constraint system, a
+// real trusted setup producing a proving/verifying key pair, and a
+// real succinct proof a verifier can accept or reject WITHOUT ever
+// seeing the witness.
+//
+// The relation proved is the canonical arkworks Groth16 tutorial
+// circuit: given a public y, prove knowledge of a secret x such that
+// x^3 + x + 5 = y. This is intentionally the simplest circuit that is
+// still a genuine SNARK (not a toy that always returns true) — a
+// larger relation (e.g. a SHA-256 preimage circuit) would need
+// thousands of constraints and a much larger gadget dependency
+// surface for the same "is this crate real" answer. The pattern here
+// (define a ConstraintSynthesizer, run circuit-specific setup, prove,
+// verify) is exactly how a production relation would be wired in —
+// only the relation itself is a stand-in.
+pub mod snark {
+    use ark_bn254::{Bn254, Fr};
+    use ark_groth16::{Groth16, Proof, ProvingKey, VerifyingKey};
+    use ark_relations::lc;
+    use ark_relations::gr1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError, Variable};
+    use ark_snark::SNARK;
+    use ark_std::rand::{RngCore, SeedableRng};
+
+    /// The relation: prove knowledge of `x` such that `x^3 + x + 5 = y`,
+    /// where `y` is the public input and `x` stays hidden. `None` means
+    /// "build the circuit shape without a witness" — used during setup.
+    #[derive(Clone)]
+    pub struct CubicCircuit {
+        pub x: Option<Fr>,
+    }
+
+    impl ConstraintSynthesizer<Fr> for CubicCircuit {
+        fn generate_constraints(self, cs: ConstraintSystemRef<Fr>) -> Result<(), SynthesisError> {
+            // NB: the assignment closures below must stay LAZY (Option
+            // threaded through, `.ok_or()` deferred inside each
+            // closure) rather than eagerly unwrapped up front. During
+            // circuit-specific SETUP, `self.x` is `None` — setup only
+            // needs the circuit's SHAPE (which variables/constraints
+            // exist), not concrete values, and arkworks skips invoking
+            // these closures in that mode. An eager `self.x.ok_or(...)?`
+            // at the top of this function fails setup outright.
+            let x_val = self.x;
+            let x = cs.new_witness_variable(|| x_val.ok_or(SynthesisError::AssignmentMissing))?;
+            let x_sq_val = x_val.map(|v| v * v);
+            let x_sq = cs.new_witness_variable(|| x_sq_val.ok_or(SynthesisError::AssignmentMissing))?;
+            let x_cube_val = x_sq_val.and_then(|sq| x_val.map(|v| sq * v));
+            let x_cube = cs.new_witness_variable(|| x_cube_val.ok_or(SynthesisError::AssignmentMissing))?;
+            let y_val = x_cube_val.and_then(|cube| x_val.map(|v| cube + v + Fr::from(5u64)));
+            let y = cs.new_input_variable(|| y_val.ok_or(SynthesisError::AssignmentMissing))?;
+
+            // x * x = x^2
+            cs.enforce_r1cs_constraint(|| lc!() + x, || lc!() + x, || lc!() + x_sq)?;
+            // x^2 * x = x^3
+            cs.enforce_r1cs_constraint(|| lc!() + x_sq, || lc!() + x, || lc!() + x_cube)?;
+            // (x^3 + x + 5) * 1 = y
+            cs.enforce_r1cs_constraint(
+                || lc!() + x_cube + x + (Fr::from(5u64), Variable::One),
+                || lc!() + Variable::One,
+                || lc!() + y,
+            )?;
+            Ok(())
+        }
+    }
+
+    /// Real trusted setup for the cubic relation. Circuit-specific
+    /// (Groth16's per-relation CRS, not a universal setup like PLONK)
+    /// — produces a genuine proving/verifying key pair over BN254.
+    pub fn setup(seed: u64) -> anyhow::Result<(ProvingKey<Bn254>, VerifyingKey<Bn254>)> {
+        let mut rng = ark_std::rand::rngs::StdRng::seed_from_u64(seed);
+        let circuit = CubicCircuit { x: None };
+        let (pk, vk) = Groth16::<Bn254>::circuit_specific_setup(circuit, &mut rng)
+            .map_err(|e| anyhow::anyhow!("Groth16 setup failed: {e}"))?;
+        Ok((pk, vk))
+    }
+
+    /// Prove knowledge of `secret_x` without revealing it. Returns the
+    /// proof plus the public output `y = x^3 + x + 5` the verifier
+    /// needs (the prover computes and discloses `y`; only `x` stays
+    /// hidden — that's the whole point of the relation).
+    pub fn prove(pk: &ProvingKey<Bn254>, secret_x: u64, seed: u64) -> anyhow::Result<(Proof<Bn254>, Fr)> {
+        let mut rng = ark_std::rand::rngs::StdRng::seed_from_u64(seed);
+        let x = Fr::from(secret_x);
+        let y = x * x * x + x + Fr::from(5u64);
+        let circuit = CubicCircuit { x: Some(x) };
+        let proof = Groth16::<Bn254>::prove(pk, circuit, &mut rng)
+            .map_err(|e| anyhow::anyhow!("Groth16 prove failed: {e}"))?;
+        Ok((proof, y))
+    }
+
+    /// Verify a proof against the public output `y`. Returns `false`
+    /// (not an error) on a genuinely invalid proof/public-input pair —
+    /// that is Groth16 doing its job, not a crate bug.
+    pub fn verify(vk: &VerifyingKey<Bn254>, y: Fr, proof: &Proof<Bn254>) -> anyhow::Result<bool> {
+        Groth16::<Bn254>::verify(vk, &[y], proof)
+            .map_err(|e| anyhow::anyhow!("Groth16 verify failed: {e}"))
+    }
+
+    /// Serialize a verifying key to bytes (compressed) — for
+    /// persisting/transmitting the "public parameters" side of the
+    /// trusted setup independent of any specific proof.
+    pub fn serialize_vk(vk: &VerifyingKey<Bn254>) -> anyhow::Result<Vec<u8>> {
+        use ark_serialize::CanonicalSerialize;
+        let mut buf = Vec::new();
+        vk.serialize_compressed(&mut buf)
+            .map_err(|e| anyhow::anyhow!("serialize vk: {e}"))?;
+        Ok(buf)
+    }
+
+    /// Reconstruct a random-looking (but deterministic, given `seed`)
+    /// 64-bit field element for exercising the relation in tests
+    /// without leaking anything about how a real secret would be
+    /// chosen in production.
+    pub fn deterministic_test_secret(seed: u64) -> u64 {
+        let mut rng = ark_std::rand::rngs::StdRng::seed_from_u64(seed);
+        rng.next_u64() % 1_000_000
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// The full real round-trip: setup -> prove -> verify succeeds
+        /// for a genuine (x, y) pair.
+        #[test]
+        fn groth16_prove_verify_roundtrip_succeeds() {
+            let (pk, vk) = setup(42).unwrap();
+            let (proof, y) = prove(&pk, 3, 7).unwrap();
+            // x=3 => y = 27 + 3 + 5 = 35
+            assert_eq!(y, Fr::from(35u64));
+            assert!(verify(&vk, y, &proof).unwrap(), "genuine proof must verify");
+        }
+
+        /// Negative case (risk register §HH-B): a proof is bound to
+        /// the public input it was generated for. Presenting the SAME
+        /// proof against a DIFFERENT public y must be rejected, not
+        /// silently accepted — this is what separates a real
+        /// zero-knowledge argument from a rubber stamp.
+        #[test]
+        fn groth16_verify_rejects_wrong_public_input() {
+            let (pk, vk) = setup(42).unwrap();
+            let (proof, _correct_y) = prove(&pk, 3, 7).unwrap();
+            let wrong_y = Fr::from(999u64);
+            assert!(
+                !verify(&vk, wrong_y, &proof).unwrap(),
+                "proof for y=35 must NOT verify against a forged y=999"
+            );
+        }
+
+        /// Negative case: a different secret produces a different
+        /// proof; using witness x=4 (y=73) but claiming y=35 (x=3's
+        /// output) must fail.
+        #[test]
+        fn groth16_verify_rejects_mismatched_witness_and_claim() {
+            let (pk, vk) = setup(42).unwrap();
+            let (proof_for_x4, y_for_x4) = prove(&pk, 4, 9).unwrap();
+            // x=4 => y = 64 + 4 + 5 = 73
+            assert_eq!(y_for_x4, Fr::from(73u64));
+            let claimed_wrong_y = Fr::from(35u64); // x=3's output
+            assert!(!verify(&vk, claimed_wrong_y, &proof_for_x4).unwrap());
+        }
+
+        /// A tampered (bit-flipped) proof must not verify. Round-trips
+        /// through the real (de)serialization path — this is closer to
+        /// "an attacker intercepted and corrupted a proof in transit"
+        /// than constructing a garbage Proof value directly.
+        #[test]
+        fn groth16_verify_rejects_tampered_proof_bytes() {
+            use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+            let (pk, vk) = setup(42).unwrap();
+            let (proof, y) = prove(&pk, 3, 7).unwrap();
+            let mut bytes = Vec::new();
+            proof.serialize_compressed(&mut bytes).unwrap();
+            // Flip a bit partway through the encoded proof.
+            let flip_at = bytes.len() / 2;
+            bytes[flip_at] ^= 0x01;
+            match Proof::<Bn254>::deserialize_compressed(&bytes[..]) {
+                Ok(tampered) => {
+                    // Deserialization can succeed on a flipped bit (it's
+                    // still valid curve-point encoding) — the SNARK's
+                    // pairing check must be what actually catches it.
+                    assert!(
+                        !verify(&vk, y, &tampered).unwrap_or(false),
+                        "a bit-flipped proof must not verify"
+                    );
+                }
+                Err(_) => {
+                    // Also acceptable: the corrupted bytes weren't even
+                    // a valid point encoding. Either failure mode proves
+                    // tampering is caught.
+                }
+            }
+        }
+
+        /// The verifying key actually depends on the circuit shape —
+        /// two independent setups (different seeds) must NOT produce
+        /// interchangeable keys; a proof from one setup must not
+        /// verify under the other setup's key.
+        #[test]
+        fn proof_from_one_setup_does_not_verify_under_another_setups_key() {
+            let (pk_a, _vk_a) = setup(1).unwrap();
+            let (_pk_b, vk_b) = setup(2).unwrap();
+            let (proof_a, y_a) = prove(&pk_a, 3, 7).unwrap();
+            assert!(
+                !verify(&vk_b, y_a, &proof_a).unwrap_or(false),
+                "a proof from setup A's proving key must not verify under setup B's key"
+            );
+        }
+
+        #[test]
+        fn serialize_vk_round_trips_nonempty() {
+            let (_pk, vk) = setup(42).unwrap();
+            let bytes = serialize_vk(&vk).unwrap();
+            assert!(!bytes.is_empty());
+        }
+    }
+}
+
 // Backwards compat
 pub fn verify_zk_proof(proof: &ZkProof) -> anyhow::Result<bool> {
     Ok(!proof.proof_bytes.is_empty() && !proof.statement.is_empty())

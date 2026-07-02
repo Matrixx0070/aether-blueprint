@@ -360,6 +360,13 @@ enum Cmd {
         generate: bool,
         #[arg(long)]
         verify: bool,
+        /// HH-B: exercise the real Groth16 zk-SNARK circuit
+        /// (--generate/--verify above are Merkle proofs + hash
+        /// commitments, real crypto but NOT zero-knowledge -- this
+        /// flag runs an actual SNARK setup/prove/verify round-trip,
+        /// plus a forged-input negative case).
+        #[arg(long)]
+        snark: bool,
     },
     /// Cryptanalysis (TIER 19).
     Cryptanalysis {
@@ -1384,7 +1391,7 @@ async fn main() -> Result<()> {
             }
             return Ok(());
         }
-        Some(Cmd::ZkProof { generate, verify }) => {
+        Some(Cmd::ZkProof { generate, verify, snark }) => {
             use aether_zk::{AuditChain, build_merkle_tree, generate_inclusion_proof, verify_inclusion_proof};
             println!("[TIER 18] Cryptographic Audit Proofs (SHA-256 Merkle + Commitments)");
             if generate {
@@ -1417,6 +1424,24 @@ async fn main() -> Result<()> {
             if verify {
                 println!("  Proof verification: Use generate first to create a proof, then verify it.");
                 println!("  All inclusion proofs are self-verifying — no external oracle required.");
+            }
+            if snark {
+                use aether_zk::snark;
+                println!();
+                println!("[HH-B] Real Groth16 zk-SNARK (BN254) — relation: x^3 + x + 5 = y");
+                let (pk, vk) = snark::setup(42).context("SNARK setup")?;
+                println!("  setup        : OK (circuit-specific trusted setup, seed=42)");
+                let secret_x = 7u64;
+                let (proof, y) = snark::prove(&pk, secret_x, 99).context("SNARK prove")?;
+                println!("  prove        : secret x is NOT shown; public y={y}");
+                let ok = snark::verify(&vk, y, &proof).context("SNARK verify")?;
+                println!("  verify(real) : {ok} (expected true — genuine proof)");
+                let forged_y = y + ark_bn254::Fr::from(1u64);
+                let forged_ok = snark::verify(&vk, forged_y, &proof).context("SNARK verify (forged)")?;
+                println!("  verify(forged): {forged_ok} (expected false — tampered public input)");
+                if !ok || forged_ok {
+                    anyhow::bail!("SNARK self-check failed: real proof should verify, forged should not");
+                }
             }
             return Ok(());
         }

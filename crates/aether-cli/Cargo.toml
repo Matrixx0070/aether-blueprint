@@ -80,6 +80,8 @@ rsa.workspace = true
 ed25519-dalek.workspace = true
 ed448-goldilocks.workspace = true
 x509-parser.workspace = true
+# HH-B: BN254 scalar field, for the --snark CLI demo's forged-input case.
+ark-bn254 = "0.6"
 once_cell.workspace = true
 chrono.workspace = true
 rustyline = "13"
