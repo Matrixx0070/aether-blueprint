@@ -1244,6 +1244,60 @@ after Plan FF — deferred since Plan BB.
   privilege separation, GG3 deactivation lockout). aether-core
   65+14, aether-cli 164 pass (was 155).
 
+## v0.40 — real distributed scanning (Plan HH-A) — shipped 2026-07-02
+
+User directive (2026-07-02, still standing): "100 times better than
+Claude Code, ready for regular use, don't stop until fully
+satisfied." With Plan GG closing the last cred-blocked carry-forward,
+HH-A tackled the other kind of debt: a completely disconnected stub
+crate.
+
+- **Real multi-process fan-out**: pre-HH-A, `aether-distrib` was an
+  18-line stub with NO callers anywhere in the workspace — the
+  `aether distributed` CLI command printed hardcoded
+  "Peers: (connecting...)" with zero connection to the crate. Now
+  `aether distributed --target <dir> [--workers N] [--json]` shards
+  a directory's files round-robin across N REAL child OS processes
+  (each re-execs `current_exe distributed --worker`, piped
+  stdin/stdout), each running the existing `aether-secrets::scan_file`
+  primitive, aggregated by the coordinator. Per the risk register:
+  `tokio::spawn`/thread concurrency would NOT have closed this gap —
+  this codebase already has plenty of that; "distributed" had to mean
+  distinct OS-level PIDs, which the integration test asserts directly.
+- **Critical perf bug found + fixed as a byproduct of testing it for
+  real**: the live smoke against a real ~200-file target hung a
+  worker at high CPU. Root cause: `aether-secrets::rules()` rebuilt
+  and recompiled ~30 regexes on EVERY call, and `scan_line` calls it
+  once per LINE — scanning aether-cli's own 70K-line `main.rs`
+  recompiled the whole ruleset ~70,000 times. Fixed with a
+  `Lazy<Vec<...>>` static (same pattern already used for
+  `ALLOWLIST_PATTERNS` in the same file, just never applied to the
+  rule table). `main.rs` now scans in ~70ms — was hanging for
+  minutes. This bug had been latent since aether-secrets shipped;
+  nobody had pointed a full-content scan at a file that large before.
+- **Latent test-isolation flake fixed**: `cargo test --workspace`
+  under full parallelism surfaced a race — 11 test functions (this
+  session's FF2/G3/GG additions plus some pre-existing ones) mutate
+  the global `HOME` env var with no synchronization. Added a shared
+  mutex so they serialize. Confirmed clean across 3 consecutive full
+  workspace runs (0 failures, 772 tests).
+- Tests: 4 aether-distrib unit tests + 1 integration test (spawns a
+  real separate `fake_worker` binary, asserts distinct PIDs) + 1
+  aether-secrets perf-regression guard (20K-line synthetic scan must
+  complete under 2s). Live smoke `tests/hh-a-distributed-smoke.sh`:
+  6 workers → 6 distinct real PIDs against a 198-file target,
+  0.25s wall time; `--workers 1` edge case; legacy `--node`
+  back-compat path.
+- Also ran a second readiness-gauntlet round (HH-C, no ship needed):
+  live REPL multi-file refactor, git commit workflow (with the
+  correct `--permission-mode bypassPermissions` flag), and a
+  long-running background task — all three passed clean on the
+  v0.39.0 binary. Two apparent failures during testing turned out to
+  be test-methodology mistakes (a git-fixture set up post-refactor,
+  and a missing bypass flag for a piped non-interactive session), not
+  product defects — both correctly-refused-to-fabricate and
+  correctly-denied-on-no-answer behaviors were the RIGHT call.
+
 ## v0.9 — enterprise
 
 - SAML / OIDC federation
