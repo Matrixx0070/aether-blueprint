@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.37.0"
+version = "0.38.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "AetherCode — a 10x Claude Code clone (workspace)"
@@ -57,61 +57,61 @@ clap = { version = "4", features = ["derive", "env"] }
 
 # Internal — workspace-relative path deps. Versioned so each crate can be
 # published independently later without changing call sites.
-aether-hook      = { path = "crates/aether-hook",      version = "0.37.0" }
-aether-selfcheck = { path = "crates/aether-selfcheck", version = "0.37.0" }
-aether-overlay   = { path = "crates/aether-overlay",   version = "0.37.0" }
-aether-llm       = { path = "crates/aether-llm",       version = "0.37.0" }
-aether-tools     = { path = "crates/aether-tools",     version = "0.37.0" }
-aether-mcp       = { path = "crates/aether-mcp",       version = "0.37.0" }
-aether-perm      = { path = "crates/aether-perm",      version = "0.37.0" }
-aether-mem       = { path = "crates/aether-mem",       version = "0.37.0" }
-aether-skill     = { path = "crates/aether-skill",     version = "0.37.0" }
-aether-store     = { path = "crates/aether-store",     version = "0.37.0" }
-aether-render    = { path = "crates/aether-render",    version = "0.37.0" }
-aether-core      = { path = "crates/aether-core",      version = "0.37.0" }
-aether-sec       = { path = "crates/aether-sec",       version = "0.37.0" }
-aether-plugin    = { path = "crates/aether-plugin",    version = "0.37.0" }
-aether-plugin-wasm = { path = "crates/aether-plugin-wasm", version = "0.37.0" }
-aether-flow        = { path = "crates/aether-flow",        version = "0.37.0" }
-aether-symexec     = { path = "crates/aether-symexec",     version = "0.37.0" }
-aether-difffuzz    = { path = "crates/aether-difffuzz",    version = "0.37.0" }
-aether-muttest     = { path = "crates/aether-muttest",     version = "0.37.0" }
-aether-abi         = { path = "crates/aether-abi",         version = "0.37.0" }
-aether-concolic    = { path = "crates/aether-concolic",    version = "0.37.0" }
-aether-invariant   = { path = "crates/aether-invariant",   version = "0.37.0" }
-aether-shuttle     = { path = "crates/aether-shuttle",     version = "0.37.0" }
-aether-lockgraph   = { path = "crates/aether-lockgraph",   version = "0.37.0" }
-aether-threat-intel  = { path = "crates/aether-threat-intel",  version = "0.37.0" }
-aether-hwsec         = { path = "crates/aether-hwsec",         version = "0.37.0" }
-aether-crypto-audit  = { path = "crates/aether-crypto-audit",  version = "0.37.0" }
-aether-supply-chain  = { path = "crates/aether-supply-chain",  version = "0.37.0" }
-aether-malware       = { path = "crates/aether-malware",       version = "0.37.0" }
-aether-container     = { path = "crates/aether-container",     version = "0.37.0" }
-aether-reveng        = { path = "crates/aether-reveng",        version = "0.37.0" }
-aether-incident      = { path = "crates/aether-incident",      version = "0.37.0" }
-aether-zk            = { path = "crates/aether-zk",            version = "0.37.0" }
-aether-threat-model  = { path = "crates/aether-threat-model",  version = "0.37.0" }
-aether-redteam       = { path = "crates/aether-redteam",       version = "0.37.0" }
-aether-nsd           = { path = "crates/aether-nsd",           version = "0.37.0" }
-aether-secrets       = { path = "crates/aether-secrets",       version = "0.37.0" }
-aether-sbom          = { path = "crates/aether-sbom",          version = "0.37.0" }
-aether-harden        = { path = "crates/aether-harden",        version = "0.37.0" }
-aether-tls           = { path = "crates/aether-tls",           version = "0.37.0" }
-aether-dast          = { path = "crates/aether-dast",          version = "0.37.0" }
-aether-deps-reach    = { path = "crates/aether-deps-reach",    version = "0.37.0" }
-aether-taint         = { path = "crates/aether-taint",         version = "0.37.0" }
-aether-triage        = { path = "crates/aether-triage",        version = "0.37.0" }
-aether-patch         = { path = "crates/aether-patch",         version = "0.37.0" }
-aether-ebpf          = { path = "crates/aether-ebpf",          version = "0.37.0" }
-aether-netwatch      = { path = "crates/aether-netwatch",      version = "0.37.0" }
-aether-drift         = { path = "crates/aether-drift",         version = "0.37.0" }
-aether-semgrep-gen   = { path = "crates/aether-semgrep-gen",   version = "0.37.0" }
-aether-explain       = { path = "crates/aether-explain",       version = "0.37.0" }
-aether-baseline      = { path = "crates/aether-baseline",      version = "0.37.0" }
-aether-pr-bot        = { path = "crates/aether-pr-bot",        version = "0.37.0" }
-aether-policy        = { path = "crates/aether-policy",        version = "0.37.0" }
-aether-report        = { path = "crates/aether-report",        version = "0.37.0" }
-aether-license       = { path = "crates/aether-license",       version = "0.37.0" }
+aether-hook      = { path = "crates/aether-hook",      version = "0.38.0" }
+aether-selfcheck = { path = "crates/aether-selfcheck", version = "0.38.0" }
+aether-overlay   = { path = "crates/aether-overlay",   version = "0.38.0" }
+aether-llm       = { path = "crates/aether-llm",       version = "0.38.0" }
+aether-tools     = { path = "crates/aether-tools",     version = "0.38.0" }
+aether-mcp       = { path = "crates/aether-mcp",       version = "0.38.0" }
+aether-perm      = { path = "crates/aether-perm",      version = "0.38.0" }
+aether-mem       = { path = "crates/aether-mem",       version = "0.38.0" }
+aether-skill     = { path = "crates/aether-skill",     version = "0.38.0" }
+aether-store     = { path = "crates/aether-store",     version = "0.38.0" }
+aether-render    = { path = "crates/aether-render",    version = "0.38.0" }
+aether-core      = { path = "crates/aether-core",      version = "0.38.0" }
+aether-sec       = { path = "crates/aether-sec",       version = "0.38.0" }
+aether-plugin    = { path = "crates/aether-plugin",    version = "0.38.0" }
+aether-plugin-wasm = { path = "crates/aether-plugin-wasm", version = "0.38.0" }
+aether-flow        = { path = "crates/aether-flow",        version = "0.38.0" }
+aether-symexec     = { path = "crates/aether-symexec",     version = "0.38.0" }
+aether-difffuzz    = { path = "crates/aether-difffuzz",    version = "0.38.0" }
+aether-muttest     = { path = "crates/aether-muttest",     version = "0.38.0" }
+aether-abi         = { path = "crates/aether-abi",         version = "0.38.0" }
+aether-concolic    = { path = "crates/aether-concolic",    version = "0.38.0" }
+aether-invariant   = { path = "crates/aether-invariant",   version = "0.38.0" }
+aether-shuttle     = { path = "crates/aether-shuttle",     version = "0.38.0" }
+aether-lockgraph   = { path = "crates/aether-lockgraph",   version = "0.38.0" }
+aether-threat-intel  = { path = "crates/aether-threat-intel",  version = "0.38.0" }
+aether-hwsec         = { path = "crates/aether-hwsec",         version = "0.38.0" }
+aether-crypto-audit  = { path = "crates/aether-crypto-audit",  version = "0.38.0" }
+aether-supply-chain  = { path = "crates/aether-supply-chain",  version = "0.38.0" }
+aether-malware       = { path = "crates/aether-malware",       version = "0.38.0" }
+aether-container     = { path = "crates/aether-container",     version = "0.38.0" }
+aether-reveng        = { path = "crates/aether-reveng",        version = "0.38.0" }
+aether-incident      = { path = "crates/aether-incident",      version = "0.38.0" }
+aether-zk            = { path = "crates/aether-zk",            version = "0.38.0" }
+aether-threat-model  = { path = "crates/aether-threat-model",  version = "0.38.0" }
+aether-redteam       = { path = "crates/aether-redteam",       version = "0.38.0" }
+aether-nsd           = { path = "crates/aether-nsd",           version = "0.38.0" }
+aether-secrets       = { path = "crates/aether-secrets",       version = "0.38.0" }
+aether-sbom          = { path = "crates/aether-sbom",          version = "0.38.0" }
+aether-harden        = { path = "crates/aether-harden",        version = "0.38.0" }
+aether-tls           = { path = "crates/aether-tls",           version = "0.38.0" }
+aether-dast          = { path = "crates/aether-dast",          version = "0.38.0" }
+aether-deps-reach    = { path = "crates/aether-deps-reach",    version = "0.38.0" }
+aether-taint         = { path = "crates/aether-taint",         version = "0.38.0" }
+aether-triage        = { path = "crates/aether-triage",        version = "0.38.0" }
+aether-patch         = { path = "crates/aether-patch",         version = "0.38.0" }
+aether-ebpf          = { path = "crates/aether-ebpf",          version = "0.38.0" }
+aether-netwatch      = { path = "crates/aether-netwatch",      version = "0.38.0" }
+aether-drift         = { path = "crates/aether-drift",         version = "0.38.0" }
+aether-semgrep-gen   = { path = "crates/aether-semgrep-gen",   version = "0.38.0" }
+aether-explain       = { path = "crates/aether-explain",       version = "0.38.0" }
+aether-baseline      = { path = "crates/aether-baseline",      version = "0.38.0" }
+aether-pr-bot        = { path = "crates/aether-pr-bot",        version = "0.38.0" }
+aether-policy        = { path = "crates/aether-policy",        version = "0.38.0" }
+aether-report        = { path = "crates/aether-report",        version = "0.38.0" }
+aether-license       = { path = "crates/aether-license",       version = "0.38.0" }
 
 [profile.release]
 lto = "thin"

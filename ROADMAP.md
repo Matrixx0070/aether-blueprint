@@ -1155,6 +1155,52 @@ per-slice live-verify evidence.
 - **FF8 wrap-up** — version bump + ROADMAP + STATUS + Plan GG draft
   + tag + ship. The pre-tag placeholder check (EE4) gates this.
 
+## v0.38 — daily-driver readiness gauntlet — shipped 2026-07-02
+
+User directive: "continue fully autonomous until you're fully
+satisfied Aether is ready for regular use like Claude Code." Rather
+than more enterprise plumbing (SCIM stayed queued as Plan GG), this
+plan ran Aether's own 18-task real-coding benchmark plus a set of
+manual REPL lifecycle probes against the v0.37.0 binary and fixed
+every real gap found.
+
+- **Coding-eval baseline**: `aether coding-eval eval/coding/suite.yaml`
+  — 18/18 passed (Python/Rust/JS/Go/TS/SQL/Bash/Docker/Java), 589s
+  agent wall, ~$2.21 total. No regressions to fix here — recorded as
+  the readiness floor.
+- **G1 — assumption-first law**: told to "fix it yourself until it
+  runs" against an ambiguous-but-reversible failure (a script
+  importing a genuinely nonexistent module), the agent diagnosed
+  correctly but then STOPPED and asked the user to pick between 3
+  options instead of acting. New ASSUMPTION-FIRST LAW in
+  KERNEL_SYSTEM_PROMPT: pick the reasonable default and act, label it
+  ASSUMED, only ask first when a wrong guess destroys data / costs
+  money / touches prod. Live-reverified post-fix: same scenario now
+  gets a working shim + a labeled assumption instead of a stall.
+- **G2 — compaction EVIDENCE section**: after `/compact`, the agent
+  under-reported its own verified work (claimed "never verified with
+  a tool call" for something it HAD verified pre-compaction). The
+  6-section compaction summary_prompt gains a 7th EVIDENCE section
+  listing which claims were verified by which tool calls.
+- **G3 — resume tool-history reconstruction (the real bug)**: found
+  while testing G2 — `load_session_history` only replayed `user` and
+  `assistant` records, silently dropping every `tool_use`/
+  `tool_result`. A resumed session had ZERO memory of tool calls the
+  original session made. Manually confirmed: resuming and asking
+  "did you verify X with a tool call" got a false "no tool calls in
+  this session" for a session that had run the exact verifying
+  command. Fixed by reconstructing `tool_use` (attached to the
+  preceding Assistant, or a synthesized carrier) and `tool_result`
+  (coalesced into the following ToolResults) on load, plus dropping
+  a trailing unanswered Assistant so resume starts from a balanced
+  boundary. Live-reverified: resumed session correctly recalled exact
+  tool names + arguments + results, including the distinction between
+  "read source" and "executed and observed" — the precise nuance the
+  bug used to erase. 2 new tests (full-turn reconstruction, dangling
+  tool_use dropped).
+- Tests: aether-core 65+14, aether-cli 155 — all pass (was 153; +2
+  for G3).
+
 ## v0.9 — enterprise
 
 - SAML / OIDC federation
