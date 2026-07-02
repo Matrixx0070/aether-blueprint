@@ -1201,6 +1201,49 @@ every real gap found.
 - Tests: aether-core 65+14, aether-cli 155 — all pass (was 153; +2
   for G3).
 
+## v0.39 — SCIM 2.0 provisioning (Plan GG) — shipped 2026-07-02
+
+Dedicated SCIM plan (mirroring Plan Y's SAML and Plan FF's mTLS
+dedicated-plan pattern). Closes EE3, the sole carry-forward left
+after Plan FF — deferred since Plan BB.
+
+- **GG1 routes**: `GET/POST /scim/v2/Users`, `PATCH/DELETE
+  /scim/v2/Users/:id`, `GET /scim/v2/Groups` (read-only — tenant
+  slugs rendered as SCIM Groups, membership managed only via the
+  Users resource). axum gained the `query` feature for `?filter`.
+- **GG2 dedicated bearer**: new `~/.aether/scim.json`
+  (`aether scim configure/status/remove`) checked by
+  `check_scim_bearer` — a store and function entirely separate from
+  `tenants.json`/`check_tenant_acl`. Absent config is 501, not an
+  ambiguous 401/403. All SCIM error bodies use the RFC 7644 §3.12
+  shape.
+- **GG3 lifecycle → ACL mapping**: shipped-as-built deviates from the
+  original draft's implicit username/password model — aether's ACL
+  is bearer-token identity, so POST carries the IdP-provisioned
+  bearer in a new `urn:ietf:params:scim:schemas:extension:aether:1.0:User`
+  attribute (`{bearer, tenant, global}`); `userName` is a human label
+  used only for filter/display. New `TenantAclRow.active` field
+  (default true, back-compat via serde default) is enforced by
+  `check_tenant_acl` on every gated route — a SCIM
+  `PATCH .../active false` locks the bearer out of `/v1/messages`
+  and `/v1/trust` immediately, not just SCIM's own routes. DELETE
+  removes the row outright. Every mutation appends to
+  `~/.aether/scim_audit.jsonl` (0600).
+- **GG4 filter**: minimal RFC 7644 §3.4.2.2 `userName eq "..."`
+  subset; any other operator or attribute is a 400 citing the
+  supported subset (never a silent empty result).
+- **GG5 live smoke**: `tests/gg5-scim-smoke.py` drives a real
+  `aether serve` instance through the full lifecycle — unauthed
+  POST → 401; create → 201 + on-disk `tenants.json` row confirmed;
+  filter lookup; Groups membership; privilege separation (the
+  just-created tenant bearer rejected by `/scim/v2/Users`, 401);
+  deactivate → on-disk `active=false` + unsupported PATCH op → 501;
+  delete → on-disk row gone + repeat delete → 404; audit trail
+  `[create, deactivate, delete]`. All 10 steps LIVE-VERIFIED.
+- 9 unit tests (filter parser × 5, User-resource shape × 2, GG2
+  privilege separation, GG3 deactivation lockout). aether-core
+  65+14, aether-cli 164 pass (was 155).
+
 ## v0.9 — enterprise
 
 - SAML / OIDC federation

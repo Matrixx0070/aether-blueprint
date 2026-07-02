@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "aether-abi"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "once_cell",
@@ -21,7 +21,7 @@ dependencies = [
 
 [[package]]
 name = "aether-baseline"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "aether-deps-reach",
  "anyhow",
@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "aether-cli"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "aether-baseline",
  "aether-container",
@@ -117,7 +117,7 @@ dependencies = [
 
 [[package]]
 name = "aether-concolic"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "once_cell",
@@ -128,7 +128,7 @@ dependencies = [
 
 [[package]]
 name = "aether-container"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "hex",
@@ -142,7 +142,7 @@ dependencies = [
 
 [[package]]
 name = "aether-core"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "aether-hook",
  "aether-llm",
@@ -167,7 +167,7 @@ dependencies = [
 
 [[package]]
 name = "aether-crypt"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -177,7 +177,7 @@ dependencies = [
 
 [[package]]
 name = "aether-crypto-audit"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "once_cell",
@@ -188,7 +188,7 @@ dependencies = [
 
 [[package]]
 name = "aether-dast"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "aether-deps-reach"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "once_cell",
@@ -210,7 +210,7 @@ dependencies = [
 
 [[package]]
 name = "aether-difffuzz"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -219,7 +219,7 @@ dependencies = [
 
 [[package]]
 name = "aether-distrib"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -229,7 +229,7 @@ dependencies = [
 
 [[package]]
 name = "aether-drift"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "aether-deps-reach",
  "aether-harden",
@@ -240,7 +240,7 @@ dependencies = [
 
 [[package]]
 name = "aether-ebpf"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "aether-deps-reach",
  "anyhow",
@@ -251,7 +251,7 @@ dependencies = [
 
 [[package]]
 name = "aether-explain"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "aether-deps-reach",
  "anyhow",
@@ -262,7 +262,7 @@ dependencies = [
 
 [[package]]
 name = "aether-flow"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "glob",
@@ -274,7 +274,7 @@ dependencies = [
 
 [[package]]
 name = "aether-harden"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -283,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "aether-hook"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "once_cell",
  "regex",
@@ -293,7 +293,7 @@ dependencies = [
 
 [[package]]
 name = "aether-hwsec"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "aether-incident"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -316,7 +316,7 @@ dependencies = [
 
 [[package]]
 name = "aether-invariant"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -325,7 +325,7 @@ dependencies = [
 
 [[package]]
 name = "aether-license"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "aether-deps-reach",
  "anyhow",
@@ -335,7 +335,7 @@ dependencies = [
 
 [[package]]
 name = "aether-llm"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -355,7 +355,7 @@ dependencies = [
 
 [[package]]
 name = "aether-lockgraph"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "once_cell",
@@ -366,7 +366,7 @@ dependencies = [
 
 [[package]]
 name = "aether-malware"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "hex",
@@ -378,7 +378,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -393,7 +393,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mem"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "aether-tools",
  "async-trait",
@@ -408,7 +408,7 @@ dependencies = [
 
 [[package]]
 name = "aether-muttest"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "once_cell",
@@ -419,7 +419,7 @@ dependencies = [
 
 [[package]]
 name = "aether-netwatch"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "aether-deps-reach",
  "anyhow",
@@ -429,7 +429,7 @@ dependencies = [
 
 [[package]]
 name = "aether-nsd"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -439,7 +439,7 @@ dependencies = [
 
 [[package]]
 name = "aether-overlay"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "aether-hook",
  "aether-selfcheck",
@@ -449,7 +449,7 @@ dependencies = [
 
 [[package]]
 name = "aether-patch"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "aether-deps-reach",
  "anyhow",
@@ -460,7 +460,7 @@ dependencies = [
 
 [[package]]
 name = "aether-perm"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -469,7 +469,7 @@ dependencies = [
 
 [[package]]
 name = "aether-plugin"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "aether-tools",
  "async-trait",
@@ -487,7 +487,7 @@ dependencies = [
 
 [[package]]
 name = "aether-plugin-wasm"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "aether-tools",
  "async-trait",
@@ -503,7 +503,7 @@ dependencies = [
 
 [[package]]
 name = "aether-policy"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "aether-deps-reach",
  "anyhow",
@@ -514,7 +514,7 @@ dependencies = [
 
 [[package]]
 name = "aether-pr-bot"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "aether-deps-reach",
  "anyhow",
@@ -525,7 +525,7 @@ dependencies = [
 
 [[package]]
 name = "aether-redteam"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -535,7 +535,7 @@ dependencies = [
 
 [[package]]
 name = "aether-render"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -546,7 +546,7 @@ dependencies = [
 
 [[package]]
 name = "aether-report"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "aether-deps-reach",
  "anyhow",
@@ -556,7 +556,7 @@ dependencies = [
 
 [[package]]
 name = "aether-reveng"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -566,7 +566,7 @@ dependencies = [
 
 [[package]]
 name = "aether-sbom"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -578,7 +578,7 @@ dependencies = [
 
 [[package]]
 name = "aether-sec"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -592,7 +592,7 @@ dependencies = [
 
 [[package]]
 name = "aether-secrets"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "hex",
@@ -605,7 +605,7 @@ dependencies = [
 
 [[package]]
 name = "aether-selfcheck"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "once_cell",
@@ -619,7 +619,7 @@ dependencies = [
 
 [[package]]
 name = "aether-semgrep-gen"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "aether-deps-reach",
  "anyhow",
@@ -630,7 +630,7 @@ dependencies = [
 
 [[package]]
 name = "aether-shuttle"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -639,7 +639,7 @@ dependencies = [
 
 [[package]]
 name = "aether-skill"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "aether-tools",
  "async-trait",
@@ -652,7 +652,7 @@ dependencies = [
 
 [[package]]
 name = "aether-store"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -662,7 +662,7 @@ dependencies = [
 
 [[package]]
 name = "aether-supply-chain"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -674,7 +674,7 @@ dependencies = [
 
 [[package]]
 name = "aether-symexec"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "once_cell",
@@ -685,7 +685,7 @@ dependencies = [
 
 [[package]]
 name = "aether-taint"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "aether-deps-reach",
  "anyhow",
@@ -698,7 +698,7 @@ dependencies = [
 
 [[package]]
 name = "aether-threat-intel"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -714,7 +714,7 @@ dependencies = [
 
 [[package]]
 name = "aether-threat-model"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -724,7 +724,7 @@ dependencies = [
 
 [[package]]
 name = "aether-tls"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -734,7 +734,7 @@ dependencies = [
 
 [[package]]
 name = "aether-tools"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "aether-sec",
  "async-trait",
@@ -751,7 +751,7 @@ dependencies = [
 
 [[package]]
 name = "aether-triage"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "aether-deps-reach",
  "anyhow",
@@ -766,7 +766,7 @@ dependencies = [
 
 [[package]]
 name = "aether-zk"
-version = "0.38.0"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "hex",
